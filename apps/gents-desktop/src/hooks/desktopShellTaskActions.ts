@@ -9,20 +9,20 @@ import type {
   TriggerSaveRequest,
 } from "@source-inc/gents-desktop-client";
 import { actionFailure, logShellEvent, shownFailure } from "./desktopShellRuntime";
+import { selection, type SelectionStore } from "./selectionStore";
 
 type TaskActionParams = {
-  acceptsComposeIntent: (capturedGeneration: number) => boolean;
   api: DesktopApiAdapter;
-  captureComposeIntent: () => number;
+  /** the selection, whose intent a run's result is checked against */
+  store: SelectionStore;
   mutateSnapshot: <T>(operation: () => Promise<T>) => Promise<T>;
   refreshSnapshot: () => Promise<void>;
   setError: (error: string | null) => void;
 };
 
 export function createDesktopShellTaskActions({
-  acceptsComposeIntent,
   api,
-  captureComposeIntent,
+  store,
   mutateSnapshot,
   refreshSnapshot,
   setError,
@@ -58,14 +58,14 @@ export function createDesktopShellTaskActions({
   }
 
   async function onRunSchedule(request: ScheduleRunRequest): Promise<TaskRunResult> {
-    const intentGeneration = captureComposeIntent();
+    const intentGeneration = selection.captureIntent(store);
     setError(null);
     try {
       const result = await api.runSchedule(request);
       await observeAcceptedRun("schedule");
       return result;
     } catch (err) {
-      if (!acceptsComposeIntent(intentGeneration)) throw err;
+      if (!selection.acceptsIntent(store, intentGeneration)) throw err;
       setError(actionFailure("run the schedule", err));
       throw shownFailure(err);
     }
@@ -80,14 +80,14 @@ export function createDesktopShellTaskActions({
   }
 
   async function onRunTask(request: TaskRunRequest): Promise<TaskRunResult> {
-    const intentGeneration = captureComposeIntent();
+    const intentGeneration = selection.captureIntent(store);
     setError(null);
     try {
       const result = await api.runTask(request);
       await observeAcceptedRun("task");
       return result;
     } catch (err) {
-      if (!acceptsComposeIntent(intentGeneration)) throw err;
+      if (!selection.acceptsIntent(store, intentGeneration)) throw err;
       setError(actionFailure("run the task", err));
       throw shownFailure(err);
     }

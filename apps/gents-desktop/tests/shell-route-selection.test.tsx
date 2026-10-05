@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { DeploymentView } from "@source-inc/gents-desktop-client";
 import { createDesktopShellSelectionActions } from "../src/hooks/desktopShellSelectionActions";
-import { createSelectionStore, selection } from "../src/hooks/selectionStore";
+import { selection } from "../src/hooks/selectionStore";
+import { shellStores } from "./fleet-fixture";
 
 const node = (agentDid: string, sessionIds: string[]) =>
   ({
@@ -10,20 +11,17 @@ const node = (agentDid: string, sessionIds: string[]) =>
     agentPrincipal: { defaultBehaviorId: null },
     behaviors: [],
     sessions: sessionIds.map((sessionId) => ({ agentDid, sessionId })),
+    mailboxItems: [],
   }) as unknown as DeploymentView;
 
 /* the route's owner over nodes a (session a-1) and b (session b-1) */
 function routeOwner(initial = { agentDid: "a", sessionId: "a-1" as string | null }) {
-  const store = createSelectionStore(initial);
-  const setSession = vi.fn();
-  const route = createDesktopShellSelectionActions({
-    store,
-    deployments: () => [node("a", ["a-1"]), node("b", ["b-1"])],
-    setSession,
-    setLocalWorkflow: vi.fn(),
-    setError: vi.fn(),
+  const stores = shellStores({
+    deployments: [node("a", ["a-1"]), node("b", ["b-1"])],
+    selection: initial,
   });
-  return { store, route, setSession };
+  const route = createDesktopShellSelectionActions({ stores, setError: vi.fn() });
+  return { store: stores.selection, route };
 }
 
 describe("following the route", () => {

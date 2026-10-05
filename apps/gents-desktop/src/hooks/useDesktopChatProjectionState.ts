@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useMemo, useState, type SetStateAction } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useStore } from "zustand";
 
 import { reconcileProjectedWorkflow } from "@source-inc/gents-desktop-chat";
 
 import { setterOf } from "./chatStore";
-import { createDraftStore, readDraft, writeDraft } from "./draftStore";
+import { createDraftStore } from "./draftStore";
 import type { SessionHeader } from "./sessionStore";
 import { projectShell, summaryIn, type ShellStores } from "./shellProjection";
 
@@ -37,10 +37,6 @@ export function useDesktopChatProjectionState({
   );
   const { localWorkflow, sending, optimisticPendingTurn } = useStore(stores.chat);
   const [setLocalWorkflow] = useState(() => setterOf(stores.chat, "localWorkflow"));
-  const [setOptimisticPendingTurn] = useState(() =>
-    setterOf(stores.chat, "optimisticPendingTurn"),
-  );
-  const [setSending] = useState(() => setterOf(stores.chat, "sending"));
 
   /* the same pure projection an action reads when it runs */
   const projection = useMemo(
@@ -75,14 +71,6 @@ export function useDesktopChatProjectionState({
   );
   /* the draft itself is read by the composer, not here: the workflow does
      not depend on it, and a keystroke must not re-render the shell */
-  const setDraft = useCallback(
-    (next: SetStateAction<string>) => writeDraft(draftStore, draftContextKey, next),
-    [draftStore, draftContextKey],
-  );
-  const readCurrentDraft = useCallback(
-    () => readDraft(draftStore, draftContextKey),
-    [draftStore, draftContextKey],
-  );
 
   useEffect(() => {
     setLocalWorkflow((current) =>
@@ -104,14 +92,10 @@ export function useDesktopChatProjectionState({
   return {
     draftStore,
     draftContextKey,
-    readCurrentDraft,
-    setDraft,
     localWorkflow,
     setLocalWorkflow,
     sending,
-    setSending,
     optimisticPendingTurn: visiblePendingTurn,
-    setOptimisticPendingTurn,
     operationalState: projection.operationalState,
     behaviorReadiness: projection.behaviorReadiness,
     shellProjection: projection.shellProjection,

@@ -107,7 +107,6 @@ export function useShell(
       /* the composer reads its draft through useDraft(draftStore, draftKey) */
       draftStore: d.draftStore,
       draftKey: d.draftContextKey,
-      setDraft: d.setDraft,
       chatFolder: d.chatFolder,
       setChatFolder: d.setChatFolder,
       // `activeRequestId` is the newest durable request even after it has

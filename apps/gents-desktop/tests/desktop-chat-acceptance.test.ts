@@ -8,27 +8,22 @@ import {
   createDesktopShellChatActions,
   releaseOwnedSubmissionWorkflow,
 } from "../src/hooks/desktopShellChatActions";
-import { createSelectionStore, selection } from "../src/hooks/selectionStore";
+import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
+import { selection } from "../src/hooks/selectionStore";
+import { admittingProjection, historyOf, shellStores } from "./fleet-fixture";
 
 function fixture(
   send: () => Promise<unknown>,
   blocked = false,
   retry: (requestId: string) => Promise<unknown> = async () => null,
 ) {
-  const store = createSelectionStore({ agentDid: "agent", sessionId: "session" });
-  let workflow: ChatWorkflowState = { kind: "ready" };
+  const stores = shellStores({
+    deployments: [{ agentDid: "agent", sessions: [], mailboxItems: [] }],
+    selection: { agentDid: "agent", sessionId: "session" },
+  });
+  const store = stores.selection;
   const effects = {
-    setLocalWorkflow: vi.fn(
-      (
-        next: ChatWorkflowState | ((current: ChatWorkflowState) => ChatWorkflowState),
-      ) => {
-        workflow = typeof next === "function" ? next(workflow) : next;
-      },
-    ),
     setError: vi.fn(),
-    setSending: vi.fn(),
-    setOptimisticPendingTurn: vi.fn(),
-    setDraft: vi.fn(),
     refreshSession: vi.fn(async () => {
       throw new Error("observation unavailable");
     }),
@@ -36,33 +31,21 @@ function fixture(
       throw new Error("observation unavailable");
     }),
   };
+  const sending = historyOf(stores, "sending");
   const actions = createDesktopShellChatActions({
     ...effects,
-    submissionInFlight: { current: false },
-    store,
-    api: { sendChatMessage: send, retryRequest: retry },
-    readDraft: () => "review this",
-    selectedDeployment: { agentDid: "agent" },
-    deployments: [],
-    behaviorReadiness: { kind: "ready", behaviorId: "coding" },
-    shellProjection: {
-      nonEmptyContentSendStatus: blocked
-        ? {
-            kind: "disabled",
-            reason: "behaviorUnavailable",
-            hint: "Behavior is unavailable",
-          }
-        : { kind: "ready" },
-    },
-    retryShellProjection: {
-      nonEmptyContentSendStatus: { kind: "ready" },
-    },
-  } as unknown as Parameters<typeof createDesktopShellChatActions>[0]);
+    api: { sendChatMessage: send, retryRequest: retry } as unknown as DesktopApiAdapter,
+    stores,
+    project: () =>
+      admittingProjection("coding", blocked ? "Behavior is unavailable" : undefined),
+  });
   return {
     actions,
     store,
+    sending,
     advanceComposeIntent: () => selection.advanceIntent(store),
-    getWorkflow: () => workflow,
+    getWorkflow: () => stores.chat.getState().localWorkflow,
+    pendingTurn: () => stores.chat.getState().optimisticPendingTurn,
     ...effects,
   };
 }
@@ -94,7 +77,7 @@ describe("canonical chat submission acceptance", () => {
       expect(send.mock.calls.length + retry.mock.calls.length).toBe(1);
       pending.resolve({ sessionId: "session", requestId: "accepted" });
       await Promise.all([active, duplicateSend, duplicateRetry]);
-      expect(f.setSending.mock.calls).toEqual([[true], [false]]);
+      expect(f.sending).toEqual([true, false]);
     },
   );
   it("releases only the submitting workflow owned by the completed callback", () => {
@@ -169,7 +152,7 @@ describe("canonical chat submission acceptance", () => {
     };
     const f = fixture(async () => accepted);
     await expect(f.actions.submitContent("review this")).resolves.toEqual(accepted);
-    expect(f.setOptimisticPendingTurn).toHaveBeenCalledWith(
+    expect(f.pendingTurn()).toEqual(
       expect.objectContaining({
         requestId: "request",
         lifecycleState: "pending",
@@ -196,8 +179,8 @@ describe("canonical chat submission acceptance", () => {
       "Couldn’t send the message: request rejected",
     );
     expect(f.getWorkflow()).toEqual({ kind: "ready" });
-    expect(f.setOptimisticPendingTurn).not.toHaveBeenCalled();
-    expect(f.setSending).toHaveBeenLastCalledWith(false);
+    expect(f.pendingTurn()).toBeNull();
+    expect(f.sending).toEqual([true, false]);
   });
 
   it("keeps a durable acceptance but ignores its stale presentation effects", async () => {
@@ -222,11 +205,11 @@ describe("canonical chat submission acceptance", () => {
 
     await expect(submitted).resolves.toEqual(accepted);
     expect(f.store.getState().sessionId).toBe("session");
-    expect(f.setOptimisticPendingTurn).not.toHaveBeenCalled();
+    expect(f.pendingTurn()).toBeNull();
     expect(f.getWorkflow()).toEqual({ kind: "ready" });
     expect(f.store.getState().mailboxRoute).toBeNull();
     expect(f.setError).not.toHaveBeenCalled();
-    expect(f.setSending).toHaveBeenLastCalledWith(false);
+    expect(f.sending).toEqual([true, false]);
   });
 
   it("does not publish a stale submission failure into the new compose intent", async () => {
@@ -240,25 +223,7 @@ describe("canonical chat submission acceptance", () => {
     await expect(submitted).resolves.toBeNull();
     expect(f.getWorkflow()).toEqual({ kind: "ready" });
     expect(f.setError).not.toHaveBeenCalled();
-    expect(f.setSending).toHaveBeenLastCalledWith(false);
-  });
-
-  it("clears accepted form text after intent changes without erasing an edit", async () => {
-    const accepted = {
-      sessionId: "origin-session",
-      requestId: "request",
-      agentDid: "agent",
-      behaviorId: "coding",
-    };
-    const f = fixture(async () => accepted);
-    const sending = f.actions.onSendMessage({ preventDefault: vi.fn() } as never);
-    f.advanceComposeIntent();
-    await sending;
-
-    const cleanup = f.setDraft.mock.calls.at(-1)?.[0];
-    expect(cleanup).toBeTypeOf("function");
-    expect(cleanup("review this")).toBe("");
-    expect(cleanup("new edit")).toBe("new edit");
+    expect(f.sending).toEqual([true, false]);
   });
 
   it("ignores a stale retry acknowledgment after selection changes", async () => {
@@ -280,7 +245,7 @@ describe("canonical chat submission acceptance", () => {
     expect(f.store.getState().sessionId).toBe("session");
     expect(f.getWorkflow()).toEqual({ kind: "ready" });
     expect(f.setError).not.toHaveBeenCalled();
-    expect(f.setSending).toHaveBeenLastCalledWith(false);
+    expect(f.sending).toEqual([true, false]);
   });
 
   it("does not publish a stale retry failure into the new selection", async () => {
@@ -299,6 +264,6 @@ describe("canonical chat submission acceptance", () => {
     expect(f.store.getState().sessionId).toBe("session");
     expect(f.getWorkflow()).toEqual({ kind: "ready" });
     expect(f.setError).not.toHaveBeenCalled();
-    expect(f.setSending).toHaveBeenLastCalledWith(false);
+    expect(f.sending).toEqual([true, false]);
   });
 });

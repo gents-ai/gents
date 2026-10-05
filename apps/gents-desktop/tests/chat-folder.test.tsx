@@ -3,10 +3,11 @@ import {
   adoptNewChatFolder,
   loadChatFolders,
   withFolder,
-} from "../src/hooks/useChatFolders";
+} from "../src/hooks/chatFolders";
+import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 import { createDesktopShellChatActions } from "../src/hooks/desktopShellChatActions";
+import { admittingProjection, shellStores } from "./fleet-fixture";
 import { folderLabel } from "../src/ui/screens/ChatFolderPicker";
-import { createSelectionStore } from "../src/hooks/selectionStore";
 
 describe("chat folders", () => {
   it("keeps a pick per chat and clears it with null", () => {
@@ -50,34 +51,30 @@ describe("chat folders", () => {
 });
 
 describe("sending with a chat folder", () => {
-  it("sends the folder as cwd and adopts the session", async () => {
+  it("sends the new chat's folder as cwd and hands it to the session the send created", async () => {
     const sendChatMessage = vi.fn(async () => ({
       sessionId: "s9",
       requestId: "r1",
       agentDid: "agent",
       behaviorId: "coding",
     }));
-    const adoptChatFolder = vi.fn();
+    const stores = shellStores({
+      deployments: [{ agentDid: "agent", sessions: [], mailboxItems: [] }],
+      selection: { agentDid: "agent" },
+    });
     const actions = createDesktopShellChatActions({
-      store: createSelectionStore({ agentDid: "agent" }),
-      setLocalWorkflow: vi.fn(),
+      api: { sendChatMessage } as unknown as DesktopApiAdapter,
+      stores,
+      project: () => admittingProjection(),
+      refreshSession: vi.fn(),
+      refreshSnapshot: vi.fn(),
       setError: vi.fn(),
-      setSending: vi.fn(),
-      setOptimisticPendingTurn: vi.fn(),
-      setDraft: vi.fn(),
-      submissionInFlight: { current: false },
-      api: { sendChatMessage },
-      chatFolder: "/work/notes",
-      adoptChatFolder,
-      selectedDeployment: { agentDid: "agent" },
-      deployments: [],
-      behaviorReadiness: { kind: "ready", behaviorId: "coding" },
-      shellProjection: { nonEmptyContentSendStatus: { kind: "ready" } },
-    } as never);
+    });
+    actions.setChatFolder("/work/notes");
     await actions.submitContent("what is in todo.txt");
     expect(sendChatMessage).toHaveBeenCalledWith(
       expect.objectContaining({ cwd: "/work/notes" }),
     );
-    expect(adoptChatFolder).toHaveBeenCalledWith("s9");
+    expect(stores.chat.getState().folders).toEqual({ s9: "/work/notes" });
   });
 });

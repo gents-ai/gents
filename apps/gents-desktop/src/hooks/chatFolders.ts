@@ -3,7 +3,7 @@
    message of that session carries the same folder. Kept in the webview's
    storage, which is a per-viewer convenience: without it the chat simply
    has no folder and the agent's own tool root applies. */
-import { useCallback, useState } from "react";
+import type { ChatStore } from "./chatStore";
 
 const KEY = "gents.chatFolders";
 const NEW_CHAT = "";
@@ -52,29 +52,22 @@ export function adoptNewChatFolder(
   return withFolder(withFolder(folders, null, null), sessionId, pick);
 }
 
-export function useChatFolders(selectedSessionId: string | null) {
-  const [folders, setFolders] = useState<ChatFolders>(loadChatFolders);
-  const update = useCallback((next: (current: ChatFolders) => ChatFolders) => {
-    setFolders((current) => {
-      const updated = next(current);
-      saveChatFolders(updated);
-      return updated;
-    });
-  }, []);
-  return {
-    chatFolder: folders[selectedSessionId ?? NEW_CHAT] ?? null,
-    setChatFolder: useCallback(
-      (folder: string | null) =>
-        update((current) => withFolder(current, selectedSessionId, folder)),
-      [selectedSessionId, update],
-    ),
-    adoptChatFolder: useCallback(
-      (sessionId: string) => {
-        if (selectedSessionId === null) {
-          update((current) => adoptNewChatFolder(current, sessionId));
-        }
-      },
-      [selectedSessionId, update],
-    ),
-  };
+/** The folder chosen for a session, or for the new chat under null. */
+export function folderOf(
+  folders: ChatFolders,
+  sessionId: string | null,
+): string | null {
+  return folders[sessionId ?? NEW_CHAT] ?? null;
+}
+
+/** Commits the folders and keeps them for the next run. */
+export function writeChatFolders(
+  chat: ChatStore,
+  next: (current: ChatFolders) => ChatFolders,
+) {
+  const current = chat.getState().folders;
+  const updated = next(current);
+  if (updated === current) return;
+  saveChatFolders(updated);
+  chat.setState({ folders: updated });
 }

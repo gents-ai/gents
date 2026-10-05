@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { createDesktopShellTaskActions } from "../src/hooks/desktopShellTaskActions";
-import { acceptsAsyncResult } from "../src/hooks/desktopShellRuntime";
+import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
+import { createSelectionStore, selection } from "../src/hooks/selectionStore";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -14,29 +15,21 @@ function deferred<T>() {
 }
 
 function fixture(runTask: () => Promise<unknown>, runSchedule = runTask) {
-  let generation = 0;
+  const store = createSelectionStore();
   const effects = {
-    refreshSession: vi.fn(async () => null),
     refreshSnapshot: vi.fn(async () => undefined),
     setError: vi.fn(),
-    setSelectedSessionId: vi.fn(),
   };
   const actions = createDesktopShellTaskActions({
     ...effects,
-    acceptsComposeIntent: (captured: number) =>
-      acceptsAsyncResult(generation, captured),
-    advanceComposeIntent: () => {
-      generation += 1;
-    },
-    api: { runTask, runSchedule },
+    api: { runTask, runSchedule } as unknown as DesktopApiAdapter,
+    store,
     mutateSnapshot: async <T>(operation: () => Promise<T>) => operation(),
-    captureComposeIntent: () => generation,
-  } as unknown as Parameters<typeof createDesktopShellTaskActions>[0]);
+  });
   return {
     actions,
-    advanceIntent: () => {
-      generation += 1;
-    },
+    store,
+    advanceIntent: () => selection.advanceIntent(store),
     ...effects,
   };
 }
@@ -57,8 +50,7 @@ describe("task and schedule async intent ordering", () => {
       sessionId: "session-a",
     });
     expect(f.refreshSnapshot).toHaveBeenCalledOnce();
-    expect(f.setSelectedSessionId).not.toHaveBeenCalled();
-    expect(f.refreshSession).not.toHaveBeenCalled();
+    expect(f.store.getState().sessionId).toBeNull();
   });
 
   it("does not publish a stale schedule failure into the current intent", async () => {
@@ -74,7 +66,7 @@ describe("task and schedule async intent ordering", () => {
     await expect(running).rejects.toThrow("old schedule failed");
     expect(f.setError).toHaveBeenCalledTimes(1);
     expect(f.setError).toHaveBeenCalledWith(null);
-    expect(f.setSelectedSessionId).not.toHaveBeenCalled();
+    expect(f.store.getState().sessionId).toBeNull();
   });
 
   it("does not navigate to the result session while the run intent is current", async () => {
@@ -85,8 +77,7 @@ describe("task and schedule async intent ordering", () => {
 
     await f.actions.onRunTask({ taskId: "task-a", args: {} });
 
-    expect(f.setSelectedSessionId).not.toHaveBeenCalled();
-    expect(f.refreshSession).not.toHaveBeenCalled();
+    expect(f.store.getState().sessionId).toBeNull();
   });
 
   it("preserves an accepted mutation when its observation refresh fails", async () => {

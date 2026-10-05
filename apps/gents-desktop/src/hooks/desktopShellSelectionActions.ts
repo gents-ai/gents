@@ -1,42 +1,41 @@
-import type { SetStateAction } from "react";
+import { selectedBehaviorIdForDeployment } from "@source-inc/gents-desktop-client";
 
-import type { ChatWorkflowState } from "@source-inc/gents-desktop-chat";
-import {
-  selectedBehaviorIdForDeployment,
-  type DeploymentView,
-  type DesktopSessionSnapshot,
-} from "@source-inc/gents-desktop-client";
-
-import { selection, type SelectionStore } from "./selectionStore";
+import { setterOf } from "./chatStore";
+import { selection } from "./selectionStore";
+import { writeSession } from "./sessionStore";
+import type { ShellStores } from "./shellProjection";
 
 type SelectionActionParams = {
-  store: SelectionStore;
-  /** the nodes as last read, for a session's node and behavior */
-  deployments: () => readonly DeploymentView[];
-  setSession: (next: SetStateAction<DesktopSessionSnapshot | null>) => void;
-  setLocalWorkflow: (workflow: ChatWorkflowState) => void;
+  stores: ShellStores;
   setError: (error: string | null) => void;
 };
 
 /**
  * Every way the person moves between nodes, sessions and behaviors. Each
- * reads the selection when it runs, so none holds a stale copy, and each
- * drops the session the screen showed when it no longer applies.
+ * reads the selection and the fleet when it runs, so none holds a stale
+ * copy, and each drops the session the screen showed when it no longer
+ * applies.
  */
 export function createDesktopShellSelectionActions({
-  store,
-  deployments,
-  setSession,
-  setLocalWorkflow,
+  stores,
   setError,
 }: SelectionActionParams) {
-  const selectedDeployment = () =>
-    deployments().find((d) => d.agentDid === store.getState().agentDid) ?? null;
+  const store = stores.selection;
+  const fleet = () => stores.fleet.getState();
+  const dropSession = () => writeSession(stores.session, null);
+
+  /** the session as the selected node lists it */
+  const listedOnSelected = (sessionId: string) => {
+    const agentDid = store.getState().agentDid;
+    return agentDid
+      ? fleet().sessionsOf[agentDid]?.find((s) => s.sessionId === sessionId)
+      : undefined;
+  };
 
   /** Explicit node navigation resets its session; a snapshot never guesses
       a replacement session for a newly selected node. */
   function selectAgent(agentDid: string | null) {
-    if (selection.selectAgent(store, agentDid)) setSession(null);
+    if (selection.selectAgent(store, agentDid)) dropSession();
   }
 
   function selectBehavior(behaviorId: string | null) {
@@ -46,25 +45,27 @@ export function createDesktopShellSelectionActions({
   /** A session on the selected node. Selection is behavior-aware: reopening
       an older session restores the behavior it was held under. */
   function selectSession(sessionId: string) {
-    const listed = selectedDeployment()?.sessions.find(
-      (s) => s.sessionId === sessionId,
-    );
+    const listed = listedOnSelected(sessionId);
     selection.selectSession(store, sessionId, listed?.behaviorId);
-    if (!listed) setSession(null);
+    if (!listed) dropSession();
   }
 
   /** The new-session screen on the selected node (or the first one), with
       the behavior asked for or the node's default. */
   function startNewSession(behaviorId?: string | null) {
-    const deployment = selectedDeployment() ?? deployments()[0] ?? null;
-    if (!deployment) return;
+    const { nodes, nodeKeys } = fleet();
+    const selected = store.getState().agentDid;
+    const first = nodeKeys[0];
+    const node =
+      (selected ? nodes[selected] : undefined) ?? (first ? nodes[first] : undefined);
+    if (!node) return;
     selection.startNewSession(
       store,
-      deployment.agentDid,
-      selectedBehaviorIdForDeployment(deployment, behaviorId ?? null),
+      node.agentDid,
+      selectedBehaviorIdForDeployment(node, behaviorId ?? null),
     );
-    setSession(null);
-    setLocalWorkflow({ kind: "ready" });
+    dropSession();
+    setterOf(stores.chat, "localWorkflow")({ kind: "ready" });
     setError(null);
   }
 
@@ -89,13 +90,16 @@ export function createDesktopShellSelectionActions({
       startNewSession();
       return;
     }
-    const owner = deployments().find((d) =>
-      d.sessions.some((s) => s.sessionId === sessionId),
+    const { nodeKeys, nodes, sessionsOf } = fleet();
+    /* the first node, in the snapshot's order, that lists it */
+    const owner = nodeKeys.find((key) =>
+      sessionsOf[key]?.some((s) => s.sessionId === sessionId),
     );
-    if (owner && owner.agentDid !== state.agentDid) {
-      const listed = owner.sessions.find((s) => s.sessionId === sessionId);
-      selection.selectSessionOn(store, owner.agentDid, sessionId, listed?.behaviorId);
-      setSession(null);
+    const ownerDid = owner ? nodes[owner]?.agentDid : undefined;
+    if (owner && ownerDid && ownerDid !== state.agentDid) {
+      const listed = sessionsOf[owner]?.find((s) => s.sessionId === sessionId);
+      selection.selectSessionOn(store, ownerDid, sessionId, listed?.behaviorId);
+      dropSession();
       return;
     }
     if (!owner && fromSnapshot) return;

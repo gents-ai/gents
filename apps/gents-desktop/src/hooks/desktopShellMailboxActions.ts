@@ -1,8 +1,5 @@
-import type { SetStateAction } from "react";
-
 import type {
   DesktopApiAdapter,
-  DesktopSessionSnapshot,
   MailboxItemView,
   MailboxQuestionAnswer,
 } from "@source-inc/gents-desktop-client";
@@ -11,25 +8,26 @@ import {
   dismissMailboxItemAndClearMatchingRoute,
   shownFailure,
 } from "./desktopShellRuntime";
-import { selection, type SelectionStore } from "./selectionStore";
+import { selection } from "./selectionStore";
+import { writeSession } from "./sessionStore";
+import type { ShellStores } from "./shellProjection";
 
 type MailboxActionParams = {
   api: DesktopApiAdapter;
-  store: SelectionStore;
+  stores: ShellStores;
   refreshSnapshot: () => Promise<void>;
   setError: (error: string | null) => void;
-  setSession: (next: SetStateAction<DesktopSessionSnapshot | null>) => void;
 };
 
 /** Opening, dismissing and answering mailbox items. An opened item routes
     the next message to it while the selection is the one it set up. */
 export function createDesktopShellMailboxActions({
   api,
-  store,
+  stores,
   refreshSnapshot,
   setError,
-  setSession,
 }: MailboxActionParams) {
+  const store = stores.selection;
   async function onOpenMailboxItem(itemId: string): Promise<MailboxItemView | null> {
     selection.advanceIntent(store);
     const captured = selection.captureIntent(store);
@@ -42,7 +40,7 @@ export function createDesktopShellMailboxActions({
         behaviorId: item.targetBehaviorId,
         sessionId: item.sessionId ?? null,
       });
-      setSession(null);
+      writeSession(stores.session, null);
       setError(null);
       return item;
     } catch (error) {

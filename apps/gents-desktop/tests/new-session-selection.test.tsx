@@ -4,9 +4,14 @@ import { describe, expect, it, vi } from "vitest";
 import type {
   DeploymentView,
   DesktopApiAdapter,
+  DesktopClientSnapshot,
   DesktopSessionSnapshot,
 } from "@source-inc/gents-desktop-client";
-import type { ChatWorkflowState } from "@source-inc/gents-desktop-chat";
+import { useStore } from "zustand";
+import { setterOf } from "../src/hooks/chatStore";
+import { applyFleetSnapshot } from "../src/hooks/fleetStore";
+import { readSession, writeSession } from "../src/hooks/sessionStore";
+import { admittingProjection, shellStores } from "./fleet-fixture";
 import { useDesktopShellEffects } from "../src/hooks/desktopShellEffects";
 import { createDesktopShellSelectionActions } from "../src/hooks/desktopShellSelectionActions";
 import { createSelectionStore, useSelection } from "../src/hooks/selectionStore";
@@ -23,6 +28,7 @@ const initialDeployment = {
     { sessionId: "first-setup", behaviorId: "setup" },
     { sessionId: "first-coding", behaviorId: "coding" },
   ],
+  mailboxItems: [],
 } as unknown as DeploymentView;
 
 function useHarness(
@@ -30,16 +36,24 @@ function useHarness(
   initialSession: string | null,
   initialAgent: string | null = "agent",
 ) {
-  const [store] = useState(() =>
-    createSelectionStore({
-      agentDid: initialAgent,
-      behaviorId: "setup",
-      sessionId: initialSession,
+  const [stores] = useState(() =>
+    shellStores({
+      selection: {
+        agentDid: initialAgent,
+        behaviorId: "setup",
+        sessionId: initialSession,
+      },
     }),
   );
+  const store = stores.selection;
+  const deployments = deployment ? [deployment] : [];
+  /* the read the shell would have published */
+  applyFleetSnapshot(stores.fleet, {
+    bootstrap: {},
+    client: { deployments },
+  } as unknown as DesktopClientSnapshot);
   const current = useSelection(store);
-  const [workflow, setWorkflow] = useState<ChatWorkflowState>({ kind: "ready" });
-  const [, setSession] = useState<DesktopSessionSnapshot | null>(null);
+  const workflow = useStore(stores.chat, (state) => state.localWorkflow);
   const sendChatMessage = useRef(
     vi.fn(async () => ({
       agentDid: "agent",
@@ -50,36 +64,20 @@ function useHarness(
   ).current;
   const api = useRef({ sendChatMessage }).current as unknown as DesktopApiAdapter;
   const ref = useRef({ current: null }).current;
-  const deployments = deployment ? [deployment] : [];
-  const route = createDesktopShellSelectionActions({
-    store,
-    deployments: () => deployments,
-    setSession,
-    setLocalWorkflow: setWorkflow,
-    setError: vi.fn(),
-  });
-  const actions = {
+  const [route] = useState(() =>
+    createDesktopShellSelectionActions({ stores, setError: vi.fn() }),
+  );
+  const [actions] = useState(() => ({
     ...route,
     ...createDesktopShellChatActions({
-      submissionInFlight: useRef(false),
-      store,
       api,
-      draft: "",
-      selectedDeployment:
-        deployments.find((d) => d.agentDid === current.agentDid) ?? null,
-      deployments,
-      behaviorReadiness: { kind: "ready", behaviorId: "setup", behaviorLabel: "Setup" },
+      stores,
+      project: () => admittingProjection("setup"),
       refreshSession: async () => null,
       refreshSnapshot: async () => {},
-      setDraft: vi.fn(),
       setError: vi.fn(),
-      setLocalWorkflow: setWorkflow,
-      setOptimisticPendingTurn: vi.fn(),
-      setSending: vi.fn(),
-      shellProjection: { nonEmptyContentSendStatus: { kind: "ready" } } as never,
-      retryShellProjection: {} as never,
     }),
-  };
+  }));
   useDesktopShellEffects({
     api,
     autoRestartInFlight: { current: false },
@@ -101,10 +99,10 @@ function useHarness(
     selectedDeployment: deployment,
     selectedSessionId: current.sessionId,
     store,
-    selectedTrackedRequestIdRef: ref,
+    trackedRequestId: () => null,
     selectedTrackedRequestId: null,
     sending: false,
-    setLocalWorkflow: setWorkflow,
+    setLocalWorkflow: setterOf(stores.chat, "localWorkflow"),
     setError: vi.fn(),
     selectAgent: route.selectAgent,
     snapshot: null,
@@ -178,20 +176,17 @@ describe("explicit session selection", () => {
       behaviorId: "setup",
       sessionId: "first-setup",
     });
-    const setSession = vi.fn();
-    const route = createDesktopShellSelectionActions({
-      store,
-      deployments: () => [],
-      setSession,
-      setLocalWorkflow: vi.fn(),
-      setError: vi.fn(),
-    });
+    const stores = { ...shellStores(), selection: store };
+    writeSession(stores.session, {
+      sessionId: "first-setup",
+    } as DesktopSessionSnapshot);
+    const route = createDesktopShellSelectionActions({ stores, setError: vi.fn() });
     route.selectAgent("agent");
     expect(store.getState().sessionId).toBe("first-setup");
-    expect(setSession).not.toHaveBeenCalled();
+    expect(readSession(stores.session)).not.toBeNull();
     route.selectAgent("another-agent");
     expect(store.getState().sessionId).toBeNull();
-    expect(setSession).toHaveBeenCalledWith(null);
+    expect(readSession(stores.session)).toBeNull();
   });
 
   it("keeps a fresh composer after choosing Setup and creates a new session on send", async () => {

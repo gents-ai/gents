@@ -5,7 +5,7 @@ import type {
   MailboxItemView,
 } from "@source-inc/gents-desktop-client";
 import { createDesktopShellMailboxActions } from "../src/hooks/desktopShellMailboxActions";
-import { createSelectionStore } from "../src/hooks/selectionStore";
+import { shellStores } from "./fleet-fixture";
 
 const item = {
   itemId: "item-1",
@@ -17,15 +17,14 @@ const item = {
 } as MailboxItemView;
 
 function mailbox(api: DesktopApiAdapter) {
-  const store = createSelectionStore();
+  const stores = shellStores();
   const actions = createDesktopShellMailboxActions({
     api,
-    store,
+    stores,
     refreshSnapshot: async () => {},
     setError: () => {},
-    setSession: () => {},
   });
-  return { store, actions };
+  return { store: stores.selection, actions };
 }
 
 describe("answering a mailbox question", () => {

@@ -8,7 +8,8 @@ import type {
 } from "@source-inc/gents-desktop-client";
 import { createDesktopShellPeerActions } from "../src/hooks/desktopShellPeerActions";
 import { createDesktopShellSelectionActions } from "../src/hooks/desktopShellSelectionActions";
-import { createSelectionStore, useSelection } from "../src/hooks/selectionStore";
+import { useSelection } from "../src/hooks/selectionStore";
+import { shellStores } from "./fleet-fixture";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -22,32 +23,30 @@ function usePeerRoute(
   api: DesktopApiAdapter,
   ensureDesktopClientStarted = async () => ({ client: {} }) as DesktopClientSnapshot,
 ) {
-  const [store] = useState(() =>
-    createSelectionStore({
-      agentDid: "agent-a",
-      behaviorId: "behavior-a",
-      sessionId: "session-a",
+  const [stores] = useState(() =>
+    shellStores({
+      selection: {
+        agentDid: "agent-a",
+        behaviorId: "behavior-a",
+        sessionId: "session-a",
+      },
     }),
   );
-  const current = useSelection(store);
-  const route = createDesktopShellSelectionActions({
-    store,
-    deployments: () => [],
-    setSession: () => {},
-    setLocalWorkflow: () => {},
-    setError: () => {},
-  });
-  const actions = createDesktopShellPeerActions({
-    api,
-    ensureDesktopClientStarted,
-    mutateSnapshot: async <T,>(operation: () => Promise<T>) => operation(),
-    refreshSnapshot: async () => {},
-    store,
-    selectAgent: route.selectAgent,
-    setError: vi.fn(),
-    setStarting: vi.fn(),
-    snapshot: null,
-  });
+  const current = useSelection(stores.selection);
+  const [route] = useState(() =>
+    createDesktopShellSelectionActions({ stores, setError: () => {} }),
+  );
+  const [actions] = useState(() =>
+    createDesktopShellPeerActions({
+      api,
+      stores,
+      ensureDesktopClientStarted,
+      mutateSnapshot: async <T,>(operation: () => Promise<T>) => operation(),
+      refreshSnapshot: async () => {},
+      selectAgent: route.selectAgent,
+      setError: vi.fn(),
+    }),
+  );
   return {
     actions,
     agent: current.agentDid,

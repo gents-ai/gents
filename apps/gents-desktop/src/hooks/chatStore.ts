@@ -6,13 +6,16 @@ import type {
   OptimisticPendingTurn,
 } from "@source-inc/gents-desktop-chat";
 
+import { loadChatFolders, type ChatFolders } from "./chatFolders";
+
 /** The compose side of a chat: the submission workflow the client runs
-    locally, whether a send is in flight, and the turn shown for a sent
-    message until the transcript holds it. */
+    locally, whether a send is in flight, the turn shown for a sent
+    message until the transcript holds it, and each chat's folder. */
 export type ChatState = {
   localWorkflow: ChatWorkflowState;
   sending: boolean;
   optimisticPendingTurn: OptimisticPendingTurn | null;
+  folders: ChatFolders;
 };
 
 export type ChatStore = StoreApi<ChatState>;
@@ -22,6 +25,7 @@ export function createChatStore(initial: Partial<ChatState> = {}) {
     localWorkflow: { kind: "ready" },
     sending: false,
     optimisticPendingTurn: null,
+    folders: loadChatFolders(),
     ...initial,
   }));
 }

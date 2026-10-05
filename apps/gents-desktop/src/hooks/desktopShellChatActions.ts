@@ -1,48 +1,32 @@
-import type { Dispatch, FormEvent, MutableRefObject, SetStateAction } from "react";
 import {
   selectedBehaviorReadinessDecision,
   type ChatSendResult,
+  type DesktopApiAdapter,
+  type DesktopSessionSnapshot,
 } from "@source-inc/gents-desktop-client";
+import type { ChatWorkflowState } from "@source-inc/gents-desktop-chat";
 
-import type {
-  ChatShellProjection,
-  ChatWorkflowState,
-  OptimisticPendingTurn,
-} from "@source-inc/gents-desktop-chat";
-import type {
-  BehaviorReadinessDecision,
-  DeploymentView,
-  DesktopApiAdapter,
-  DesktopSessionSnapshot,
-} from "@source-inc/gents-desktop-client";
+import {
+  adoptNewChatFolder,
+  folderOf,
+  withFolder,
+  writeChatFolders,
+} from "./chatFolders";
+import { setterOf } from "./chatStore";
 import { actionFailure, shownFailure } from "./desktopShellRuntime";
-import { selection, type SelectionStore } from "./selectionStore";
+import { selection } from "./selectionStore";
+import type { ShellProjection, ShellStores } from "./shellProjection";
 
 type ChatActionParams = {
-  submissionInFlight: MutableRefObject<boolean>;
-  /** the selection, read when an action runs */
-  store: SelectionStore;
   api: DesktopApiAdapter;
-  behaviorReadiness: BehaviorReadinessDecision;
-  /** the composer's draft now, read when a form submit asks for it */
-  readDraft: () => string;
+  stores: ShellStores;
+  /** the shell as the stores hold it now: a send is admitted by it */
+  project: () => ShellProjection;
   refreshSession: (
     nextSessionId: string | null,
   ) => Promise<DesktopSessionSnapshot | null>;
   refreshSnapshot: () => Promise<void>;
-  /** The folder the user works in for this chat, sent with every message. */
-  chatFolder?: string | null;
-  /** Called with the session a send created or continued, to keep its folder. */
-  adoptChatFolder?: (sessionId: string) => void;
-  selectedDeployment: DeploymentView | null;
-  deployments: DeploymentView[];
-  setDraft: Dispatch<SetStateAction<string>>;
   setError: (error: string | null) => void;
-  setLocalWorkflow: Dispatch<SetStateAction<ChatWorkflowState>>;
-  setOptimisticPendingTurn: Dispatch<SetStateAction<OptimisticPendingTurn | null>>;
-  setSending: Dispatch<SetStateAction<boolean>>;
-  shellProjection: ChatShellProjection;
-  retryShellProjection: ChatShellProjection;
 };
 
 export function releaseOwnedSubmissionWorkflow(
@@ -52,57 +36,67 @@ export function releaseOwnedSubmissionWorkflow(
   return current === owned ? { kind: "ready" } : current;
 }
 
+/**
+ * Sending, retrying and renaming in the selected chat. Each reads the
+ * selection, the node and the shell projection when it runs.
+ */
 export function createDesktopShellChatActions({
-  submissionInFlight,
-  store,
   api,
-  behaviorReadiness,
-  readDraft,
-  chatFolder = null,
-  adoptChatFolder,
+  stores,
+  project,
   refreshSession,
   refreshSnapshot,
-  selectedDeployment,
-  deployments,
-  setDraft,
   setError,
-  setLocalWorkflow,
-  setOptimisticPendingTurn,
-  setSending,
-  shellProjection,
-  retryShellProjection,
 }: ChatActionParams) {
+  const store = stores.selection;
+  const setLocalWorkflow = setterOf(stores.chat, "localWorkflow");
+  const setSending = setterOf(stores.chat, "sending");
+  const setOptimisticPendingTurn = setterOf(stores.chat, "optimisticPendingTurn");
+  /* Synchronous admission implements startSubmit before React renders
+     sending. Every send and retry entry point shares it. */
+  let submissionInFlight = false;
+
+  /** the selected node, or for a send with none selected, the first */
+  const selectedNode = () => {
+    const fleet = stores.fleet.getState();
+    const agentDid = store.getState().agentDid;
+    return (agentDid ? fleet.nodes[agentDid] : undefined) ?? null;
+  };
+  const firstNode = () => {
+    const fleet = stores.fleet.getState();
+    const first = fleet.nodeKeys[0];
+    return (first ? fleet.nodes[first] : undefined) ?? null;
+  };
+
   async function submitContent(
     content: string,
     behaviorId?: string | null,
   ): Promise<ChatSendResult | null> {
-    if (submissionInFlight.current) return null;
-    const deployment = selectedDeployment ?? deployments[0] ?? null;
-    if (!deployment || !content.trim()) {
-      return null;
-    }
+    if (submissionInFlight) return null;
+    const node = selectedNode() ?? firstNode();
+    if (!node || !content.trim()) return null;
 
-    if (shellProjection.nonEmptyContentSendStatus.kind !== "ready") {
-      setError(shellProjection.nonEmptyContentSendStatus.hint);
+    const projection = project();
+    const status = projection.shellProjection.nonEmptyContentSendStatus;
+    if (status.kind !== "ready") {
+      setError(status.hint);
       return null;
     }
     const admission =
       behaviorId === undefined
-        ? behaviorReadiness
-        : selectedBehaviorReadinessDecision(deployment, behaviorId);
+        ? projection.behaviorReadiness
+        : selectedBehaviorReadinessDecision(node, behaviorId);
     if (admission.kind !== "ready") {
       setError("The selected behavior is unavailable");
       return null;
     }
 
-    // Synchronous admission implements startSubmit before React renders sending.
-    // Every send and retry entry point shares this owner.
-    submissionInFlight.current = true;
+    submissionInFlight = true;
     const intentGeneration = selection.captureIntent(store);
     const { sessionId: selectedSessionId, mailboxRoute } = store.getState();
     const ownedWorkflow: ChatWorkflowState = {
       kind: "submittingRequest",
-      agentDid: deployment.agentDid,
+      agentDid: node.agentDid,
       sessionId: selectedSessionId,
     };
     setLocalWorkflow(ownedWorkflow);
@@ -110,14 +104,17 @@ export function createDesktopShellChatActions({
     setError(null);
     try {
       const result = await api.sendChatMessage({
-        agentDid: deployment.agentDid,
+        agentDid: node.agentDid,
         behaviorId: admission.behaviorId,
         sessionId: selectedSessionId,
         content,
         causedBySourceDocId: mailboxRoute?.itemId ?? null,
-        cwd: chatFolder,
+        cwd: folderOf(stores.chat.getState().folders, selectedSessionId),
       });
-      adoptChatFolder?.(result.sessionId);
+      if (selectedSessionId === null)
+        writeChatFolders(stores.chat, (folders) =>
+          adoptNewChatFolder(folders, result.sessionId),
+        );
       if (!selection.acceptsIntent(store, intentGeneration)) return result;
       selection.adoptSession(store, result.sessionId);
       setOptimisticPendingTurn({
@@ -130,7 +127,7 @@ export function createDesktopShellChatActions({
       });
       setLocalWorkflow({
         kind: "awaitingObservation",
-        agentDid: deployment.agentDid,
+        agentDid: node.agentDid,
         sessionId: result.sessionId,
         requestId: result.requestId,
       });
@@ -145,46 +142,38 @@ export function createDesktopShellChatActions({
         releaseOwnedSubmissionWorkflow(current, ownedWorkflow),
       );
       setSending(false);
-      submissionInFlight.current = false;
+      submissionInFlight = false;
     }
   }
 
-  async function onSendMessage(event: FormEvent) {
-    event.preventDefault();
-    const draft = readDraft();
-    const result = await submitContent(draft);
-    if (result) {
-      setDraft((current) => (current === draft ? "" : current));
-    }
-  }
-
-  /** Retry the persisted interactive predecessor through the fenced retry API. */
-  async function retryRequest(requestId: string) {
-    if (submissionInFlight.current) return;
-    if (!selectedDeployment) {
+  /** Retry the persisted interactive predecessor through the fenced retry
+      API, admitted under the session's own behavior. */
+  async function onRetryMessage(requestId: string) {
+    if (submissionInFlight) return;
+    const node = selectedNode();
+    if (!node) return;
+    const status = project().retryShellProjection.nonEmptyContentSendStatus;
+    if (status.kind !== "ready") {
+      setError(status.hint);
       return;
     }
-    if (retryShellProjection.nonEmptyContentSendStatus.kind !== "ready") {
-      setError(retryShellProjection.nonEmptyContentSendStatus.hint);
-      return;
-    }
-    submissionInFlight.current = true;
+    submissionInFlight = true;
     const intentGeneration = selection.captureIntent(store);
     const ownedWorkflow: ChatWorkflowState = {
       kind: "submittingRequest",
-      agentDid: selectedDeployment.agentDid,
+      agentDid: node.agentDid,
       sessionId: store.getState().sessionId,
     };
     setLocalWorkflow(ownedWorkflow);
     setSending(true);
     setError(null);
     try {
-      const result = await api.retryRequest(requestId, selectedDeployment.agentDid);
+      const result = await api.retryRequest(requestId, node.agentDid);
       if (!selection.acceptsIntent(store, intentGeneration)) return;
       selection.settleSession(store, result.sessionId);
       setLocalWorkflow({
         kind: "awaitingObservation",
-        agentDid: selectedDeployment.agentDid,
+        agentDid: node.agentDid,
         sessionId: result.sessionId,
         requestId: result.requestId,
       });
@@ -197,25 +186,16 @@ export function createDesktopShellChatActions({
         releaseOwnedSubmissionWorkflow(current, ownedWorkflow),
       );
       setSending(false);
-      submissionInFlight.current = false;
+      submissionInFlight = false;
     }
-  }
-
-  function onRetryMessage(requestId: string) {
-    return retryRequest(requestId);
   }
 
   async function onRenameSessionTitle(sessionId: string, title: string) {
-    if (!selectedDeployment) {
-      return;
-    }
+    const node = selectedNode();
+    if (!node) return;
     setError(null);
     try {
-      await api.renameSession({
-        agentDid: selectedDeployment.agentDid,
-        sessionId,
-        title,
-      });
+      await api.renameSession({ agentDid: node.agentDid, sessionId, title });
       await refreshSnapshot();
       await refreshSession(sessionId);
     } catch (err) {
@@ -224,10 +204,11 @@ export function createDesktopShellChatActions({
     }
   }
 
-  return {
-    submitContent,
-    onRenameSessionTitle,
-    onRetryMessage,
-    onSendMessage,
-  };
+  /** The folder for the selected chat, or for the new chat. */
+  function setChatFolder(folder: string | null) {
+    const sessionId = store.getState().sessionId;
+    writeChatFolders(stores.chat, (folders) => withFolder(folders, sessionId, folder));
+  }
+
+  return { submitContent, onRetryMessage, onRenameSessionTitle, setChatFolder };
 }

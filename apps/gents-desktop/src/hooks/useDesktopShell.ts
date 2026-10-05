@@ -1,18 +1,13 @@
-import { useCallback, useMemo, useRef, useState, type SetStateAction } from "react";
+import { useMemo, useState, type SetStateAction } from "react";
 
 import { setDesktopShellTimingConfigForTests } from "./desktopShellRuntime";
-import { createDesktopShellChatActions } from "./desktopShellChatActions";
-import { createDesktopShellConfigActions } from "./desktopShellConfigActions";
 import { useDesktopShellEffects } from "./desktopShellEffects";
-import { useChatFolders } from "./useChatFolders";
 import { useDesktopClientLifecycle } from "./useDesktopClientLifecycle";
 import { useDesktopChatProjectionState } from "./useDesktopChatProjectionState";
-import { createDesktopShellMailboxActions } from "./desktopShellMailboxActions";
-import { createDesktopShellSelectionActions } from "./desktopShellSelectionActions";
 import { createChatStore } from "./chatStore";
 import { createClientStore } from "./clientStore";
 import { createFleetStore } from "./fleetStore";
-import { createSelectionStore, selection, useSelection } from "./selectionStore";
+import { createSelectionStore, useSelection } from "./selectionStore";
 import { projectShell, projectionInputsOf, type ShellStores } from "./shellProjection";
 import {
   createSessionStore,
@@ -23,8 +18,9 @@ import {
 } from "./sessionStore";
 import { selectedIn } from "../ui/hooks/useSelectedSession";
 import { createSessionReads } from "./sessionReads";
-import { createDesktopShellPeerActions } from "./desktopShellPeerActions";
-import { createDesktopShellTaskActions } from "./desktopShellTaskActions";
+import { createShellActions } from "./shellActions";
+import { folderOf } from "./chatFolders";
+import { useStore } from "zustand";
 import type {
   DesktopApiAdapter,
   DesktopClientUpdatedListenerFactory,
@@ -69,36 +65,23 @@ export function useDesktopShell({
   const selectedSessionId = current.sessionId;
   const selectedBehaviorId = current.behaviorId;
   const pendingMailboxCauseId = current.mailboxRoute?.itemId ?? null;
-  const captureComposeIntent = () => selection.captureIntent(store);
-  const acceptsComposeIntent = (captured: number) =>
-    selection.acceptsIntent(store, captured);
-  const submissionInFlight = useRef(false);
   const [error, setError] = useState<string | null>(null);
-  // A failed action is reported once, as a toast, by the action itself:
-  // it happened where the person clicked and is over. Only the client's own
-  // state belongs in the banner with Reconnect: the lifecycle, the session
-  // reads and the effects that refresh in the background, so a repeated
-  // poll failure does not raise a toast every interval. Actions clear an
-  // earlier error with null; a toast has nothing to clear.
-  const setActionError = useCallback(
-    (message: string | null) => {
-      if (message) reportFailure?.(message);
-    },
-    [reportFailure],
-  );
+  /* A failed action is reported once, as a toast, by the action itself:
+     it happened where the person clicked and is over. Only the client's own
+     state belongs in the banner with Reconnect: the lifecycle, the session
+     reads and the effects that refresh in the background, so a repeated
+     poll failure does not raise a toast every interval. Actions clear an
+     earlier error with null; a toast has nothing to clear. The bridge is
+     the app's for its life, so this is made once. */
+  const [setActionError] = useState(() => (message: string | null) => {
+    if (message) reportFailure?.(message);
+  });
   const sessionStore = stores.session;
   const [setSession] = useState(
     () => (next: SetStateAction<DesktopSessionSnapshot | null>) =>
       writeSession(sessionStore, next),
   );
-  const [
-    {
-      refreshSession,
-      retrySessionHydration,
-      refreshSessionLiveDelta,
-      loadOlderSessionTimeline,
-    },
-  ] = useState(() =>
+  const [reads] = useState(() =>
     createSessionReads({
       api,
       store,
@@ -107,6 +90,7 @@ export function useDesktopShell({
       setError,
     }),
   );
+  const { refreshSession, refreshSessionLiveDelta } = reads;
   const sessionLoad = useSessionValue(sessionStore, (state) => state.load);
   const {
     autostartAttempted,
@@ -118,7 +102,6 @@ export function useDesktopShell({
     mutateSnapshot,
     startupPhase,
     starting,
-    setStarting,
     stopping,
     refreshSnapshot,
     ensureDesktopClientStarted,
@@ -141,14 +124,18 @@ export function useDesktopShell({
     setError,
     setSession,
   });
-  const { onOpenMailboxItem, onDismissMailboxItem, onAnswerMailboxQuestion } =
-    createDesktopShellMailboxActions({
+  /* every action, made once: each reads the stores when it runs */
+  const [actions] = useState(() =>
+    createShellActions({
       api,
-      store,
-      refreshSnapshot,
+      stores,
+      project: projectNow,
+      reads,
+      client: { refreshSnapshot, mutateSnapshot, ensureDesktopClientStarted },
       setError: setActionError,
-      setSession,
-    });
+    }),
+  );
+  const { selectAgent } = actions;
   const deployments = snapshot?.client?.deployments ?? [];
   const selectedDeployment =
     deployments.find((deployment) => deployment.agentDid === selectedAgentDid) ?? null;
@@ -170,14 +157,10 @@ export function useDesktopShell({
   const {
     draftStore,
     draftContextKey,
-    readCurrentDraft,
-    setDraft,
     localWorkflow,
     setLocalWorkflow,
     sending,
-    setSending,
     optimisticPendingTurn,
-    setOptimisticPendingTurn,
     operationalState,
     behaviorReadiness,
     shellProjection,
@@ -205,15 +188,6 @@ export function useDesktopShell({
       sessionLoad,
     ],
   );
-  const { selectAgent, selectBehavior, selectSession, startNewSession, followRoute } =
-    createDesktopShellSelectionActions({
-      store,
-      deployments: () => deployments,
-      setSession,
-      setLocalWorkflow,
-      setError: setActionError,
-    });
-
   useDesktopShellEffects({
     api,
     autoRestartInFlight,
@@ -247,103 +221,16 @@ export function useDesktopShell({
     stopping,
   });
 
-  const {
-    onFetchPeerStatus,
-    onRequestStatusEnrollment,
-    onInitLocalRuntime,
-    onRemovePeer,
-    onRenamePeer,
-  } = createDesktopShellPeerActions({
-    api,
-    mutateSnapshot,
-    refreshSnapshot,
-    snapshot,
-    ensureDesktopClientStarted,
-    setError: setActionError,
-    store,
-    selectAgent,
-    setStarting,
-  });
-  const { chatFolder, setChatFolder, adoptChatFolder } =
-    useChatFolders(selectedSessionId);
-
-  const {
-    onSaveAgentConfig,
-    onSetDefaultBehavior,
-    onSaveBackendConfig,
-    onPatchConfigComponents,
-    onApplyConfigComponents,
-    onSaveBehaviorConfig,
-    onDeleteSkillConfig,
-    onDeleteContextConfig,
-    onDeleteTaskConfig,
-    onDeleteScheduleConfig,
-    onDeleteEventSourceConfig,
-    onDeleteTriggerConfig,
-    onDeleteBackendConfig,
-    onDeleteInferenceProfileConfig,
-    onDeleteToolsConfig,
-    onDeleteToolServiceConfig,
-    onDeleteBehaviorConfig,
-    onProbeInferenceEndpoint,
-    onCodexLogin,
-    onCancelCodexLogin,
-    onGrokLogin,
-    onCancelGrokLogin,
-    onSaveInferenceProfileConfig,
-    onSaveSkillConfig,
-    onSaveToolsConfig,
-    onSaveToolServiceConfig,
-    onTestToolService,
-  } = createDesktopShellConfigActions({
-    api,
-    mutateSnapshot,
-    setError: setActionError,
-  });
-
-  const { submitContent, onRenameSessionTitle, onRetryMessage, onSendMessage } =
-    createDesktopShellChatActions({
-      submissionInFlight,
-      store,
-      api,
-      behaviorReadiness,
-      chatFolder,
-      adoptChatFolder,
-      readDraft: readCurrentDraft,
-      refreshSession,
-      refreshSnapshot,
-      selectedDeployment,
-      deployments,
-      setDraft,
-      setError: setActionError,
-      setLocalWorkflow,
-      setOptimisticPendingTurn,
-      setSending,
-      shellProjection,
-      retryShellProjection,
-    });
-
-  const {
-    onRunSchedule,
-    onRunTask,
-    onSaveEventSourceConfig,
-    onSaveScheduleConfig,
-    onSaveTaskConfig,
-    onSaveTriggerConfig,
-  } = createDesktopShellTaskActions({
-    acceptsComposeIntent,
-    api,
-    mutateSnapshot,
-    captureComposeIntent,
-    refreshSnapshot,
-    setError: setActionError,
-  });
+  const chatFolder = useStore(stores.chat, (state) =>
+    folderOf(state.folders, selectedSessionId),
+  );
 
   function onDismissError() {
     setError(null);
   }
 
   return {
+    ...actions,
     snapshot,
     fleet: stores.fleet,
     sessionStore,
@@ -384,67 +271,8 @@ export function useDesktopShell({
       shellProjection.workflow.kind === "awaitingObservation" ||
       shellProjection.workflow.kind === "turnInProgress",
     activityStatus: shellProjection.activityStatus,
-    submitContent,
-    captureComposeIntent,
-    acceptsComposeIntent,
     nonEmptyContentSendStatus: shellProjection.nonEmptyContentSendStatus,
     retryStatus: retryShellProjection.nonEmptyContentSendStatus,
-    selectAgent,
-    selectSession,
-    selectBehavior,
-    startNewSession,
-    followRoute,
-    setDraft,
     chatFolder,
-    setChatFolder,
-    clearPendingMailboxCause: () => selection.releaseMailboxRoute(store),
-    onOpenMailboxItem,
-    onDismissMailboxItem,
-    onAnswerMailboxQuestion,
-    refreshSession,
-    retrySessionHydration,
-    loadOlderSessionTimeline,
-    refreshSnapshot,
-    onRemovePeer,
-    onRenamePeer,
-    onFetchPeerStatus,
-    onRequestStatusEnrollment,
-    onInitLocalRuntime,
-    onSendMessage,
-    onRetryMessage,
-    onRenameSessionTitle,
-    onSaveAgentConfig,
-    onSetDefaultBehavior,
-    onSaveBehaviorConfig,
-    onDeleteSkillConfig,
-    onDeleteContextConfig,
-    onDeleteTaskConfig,
-    onDeleteScheduleConfig,
-    onDeleteEventSourceConfig,
-    onDeleteTriggerConfig,
-    onDeleteBackendConfig,
-    onDeleteInferenceProfileConfig,
-    onDeleteToolsConfig,
-    onDeleteToolServiceConfig,
-    onDeleteBehaviorConfig,
-    onSaveSkillConfig,
-    onSaveBackendConfig,
-    onPatchConfigComponents,
-    onApplyConfigComponents,
-    onProbeInferenceEndpoint,
-    onCodexLogin,
-    onCancelCodexLogin,
-    onGrokLogin,
-    onCancelGrokLogin,
-    onSaveInferenceProfileConfig,
-    onSaveToolsConfig,
-    onSaveToolServiceConfig,
-    onTestToolService,
-    onSaveTaskConfig,
-    onSaveScheduleConfig,
-    onRunSchedule,
-    onSaveEventSourceConfig,
-    onSaveTriggerConfig,
-    onRunTask,
   };
 }

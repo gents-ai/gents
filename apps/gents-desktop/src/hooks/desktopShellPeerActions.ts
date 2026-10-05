@@ -3,40 +3,39 @@ import type {
   DesktopApiAdapter,
   DesktopClientSnapshot,
 } from "@source-inc/gents-desktop-client";
+import { clientSetter } from "./clientStore";
 import { shownFailure } from "./desktopShellRuntime";
-import type { SelectionStore } from "./selectionStore";
+import type { ShellStores } from "./shellProjection";
 
 type PeerActionParams = {
   api: DesktopApiAdapter;
-  snapshot: DesktopClientSnapshot | null;
+  stores: ShellStores;
   /** Shared single-flight start used by autostart and peer actions. */
   ensureDesktopClientStarted: () => Promise<DesktopClientSnapshot>;
   mutateSnapshot: <T>(operation: () => Promise<T>) => Promise<T>;
   refreshSnapshot: () => Promise<void>;
   setError: (error: string | null) => void;
-  /** the selection, read when an action lands */
-  store: SelectionStore;
   selectAgent: (agentDid: string | null) => void;
-  setStarting: (starting: boolean) => void;
 };
 
 export function createDesktopShellPeerActions({
   api,
-  snapshot,
+  stores,
   ensureDesktopClientStarted,
   mutateSnapshot,
   refreshSnapshot,
   setError,
-  store,
   selectAgent,
-  setStarting,
 }: PeerActionParams) {
+  const setStarting = clientSetter(stores.client, "starting");
+  /** whether the client runs, as last read */
+  const clientRuns = () => Boolean(stores.client.getState().snapshot?.client);
   async function onInitLocalRuntime(label?: string | null) {
-    const clientWasRunning = Boolean(snapshot?.client);
+    const clientWasRunning = clientRuns();
     setStarting(true);
     setError(null);
     try {
-      if (snapshot?.client) {
+      if (clientWasRunning) {
         await mutateSnapshot(() => api.shutdownDesktopClient());
       }
       const summary = await api.initLocalStandardRuntime({
@@ -79,7 +78,7 @@ export function createDesktopShellPeerActions({
   async function onRequestStatusEnrollment(serverAddress: string) {
     setError(null);
     try {
-      if (!snapshot?.client) {
+      if (!clientRuns()) {
         await ensureDesktopClientStarted();
       }
       const request = await api.requestStatusEnrollment(serverAddress);
@@ -96,7 +95,7 @@ export function createDesktopShellPeerActions({
     setError(null);
     try {
       const next = await mutateSnapshot(() => api.removePeer(peerId));
-      if (agentDid && store.getState().agentDid === agentDid) {
+      if (agentDid && stores.selection.getState().agentDid === agentDid) {
         selectAgent(null);
       }
       return next;

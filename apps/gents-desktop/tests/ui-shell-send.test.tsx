@@ -1,8 +1,10 @@
 import { act, renderHook } from "@testing-library/react";
-import { useRef, useState } from "react";
+import { useState } from "react";
+import { useStore } from "zustand";
 import { describe, expect, it, vi } from "vitest";
 import { createDesktopShellChatActions } from "../src/hooks/desktopShellChatActions";
-import { createSelectionStore } from "../src/hooks/selectionStore";
+import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
+import { admittingProjection, shellStores } from "./fleet-fixture";
 
 const desktopShell = vi.hoisted(() => ({
   deployments: [
@@ -54,23 +56,27 @@ const desktopShell = vi.hoisted(() => ({
 
 vi.mock("../src/hooks/useDesktopShell", () => ({
   useDesktopShell: ({ api }: { api: unknown }) => {
-    const [sending, setSending] = useState(false);
-    const submissionInFlight = useRef(false);
+    const [stores] = useState(() =>
+      shellStores({
+        deployments: [
+          { ...desktopShell.deployments[0], sessions: [], mailboxItems: [] },
+        ],
+        selection: { agentDid: "did:key:agent" },
+      }),
+    );
+    const sending = useStore(stores.chat, (state) => state.sending);
     // Keep admission real: a mocked submitContent cannot prove that the adapter
     // and retry share the same synchronous owner.
-    const actions = createDesktopShellChatActions({
-      ...desktopShell,
-      api,
-      selectedDeployment: desktopShell.deployments[0],
-      submissionInFlight,
-      store: createSelectionStore({ agentDid: "did:key:agent" }),
-      setSending,
-      setLocalWorkflow: vi.fn(),
-      setOptimisticPendingTurn: vi.fn(),
-      setError: vi.fn(),
-      shellProjection: { nonEmptyContentSendStatus: { kind: "ready" } },
-      retryShellProjection: { nonEmptyContentSendStatus: { kind: "ready" } },
-    } as unknown as Parameters<typeof createDesktopShellChatActions>[0]);
+    const [actions] = useState(() =>
+      createDesktopShellChatActions({
+        api: api as DesktopApiAdapter,
+        stores,
+        project: () => admittingProjection(),
+        refreshSession: desktopShell.refreshSession,
+        refreshSnapshot: desktopShell.refreshSnapshot,
+        setError: vi.fn(),
+      }),
+    );
     desktopShell.submitContent.mockImplementation(actions.submitContent);
     return { ...desktopShell, sending, onRetryMessage: actions.onRetryMessage };
   },
