@@ -244,3 +244,20 @@ pub(crate) struct LeanBackendHealthCase {
     /// consumes the vetoed set at request admission time (#640).
     pub(crate) blocks_routing: bool,
 }
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct LeanBackendProbeConfiguration {
+    pub(crate) backend_id: u32,
+    pub(crate) revision: u32,
+    pub(crate) enabled: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct LeanBackendProbeScheduleCase {
+    pub(crate) name: String,
+    pub(crate) known: Vec<LeanBackendProbeConfiguration>,
+    pub(crate) current: Vec<LeanBackendProbeConfiguration>,
+    pub(crate) periodic: bool,
+    pub(crate) due: Vec<u32>,
+    pub(crate) observed: Vec<LeanBackendProbeConfiguration>,
+}

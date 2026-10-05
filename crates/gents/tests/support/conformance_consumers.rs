@@ -847,6 +847,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_backend_health_cases_match_prober_transitions",
         },
         ConformanceConsumer::RustTest {
+            id: "backend_health::tests::generated_backend_probe_schedule_cases_match_runtime_selection",
+            package: "gents",
+            source_path: "crates/gents/src/backend_health.rs",
+            module_path: "backend_health::tests",
+            function: "generated_backend_probe_schedule_cases_match_runtime_selection",
+        },
+        ConformanceConsumer::RustTest {
             id: "http::prometheus::tests::backend_probe_status_metric_reflects_measured_health",
             package: "gents-cli",
             source_path: "crates/gents-cli/src/http/prometheus.rs",

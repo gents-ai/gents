@@ -490,6 +490,9 @@ def snapshotJson : String :=
     ++ "\"backend_health_cases\":"
       ++ jsonArray
         (Proofs.BackendHealth.transitionCases.map backendHealthCaseJson) ++ ","
+    ++ "\"backend_probe_schedule_cases\":"
+      ++ jsonArray
+        (Proofs.BackendHealth.scheduleCases.map backendProbeScheduleCaseJson) ++ ","
     ++ "\"follow_up_hooks\":"
       ++ followUpHooksJson ++ ","
     ++ "\"trigger_delivery\":" ++ Conformance.TriggerDelivery.casesJson ++ ","
