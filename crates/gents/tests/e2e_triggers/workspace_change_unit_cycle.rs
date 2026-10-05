@@ -48,7 +48,7 @@ async fn change_unit_pack_completes_writer_seal_review_and_host_integration() {
     let (base_sha, base_tree) = create_repository(&repo);
 
     install_inference(&access, &owner, backend.endpoint()).await;
-    install_pack(&access, &owner, &repo, root.path()).await;
+    install_pack(&access, &owner, &repo).await;
     select_default_behavior(&access, &db.node, &owner).await;
     gents::backend_registry::set_backend_probe_status(
         &db.node,
@@ -343,7 +343,7 @@ async fn change_unit_pack_rejection_records_terminal_result_without_integration(
     let (base_sha, _) = create_repository(&repo);
 
     install_inference(&access, &owner, backend.endpoint()).await;
-    install_pack(&access, &owner, &repo, root.path()).await;
+    install_pack(&access, &owner, &repo).await;
     select_default_behavior(&access, &db.node, &owner).await;
     gents::backend_registry::set_backend_probe_status(
         &db.node,
@@ -501,7 +501,7 @@ async fn failed_stage_outcome_reaches_the_existing_supervisor_session() {
     let (base_sha, _) = create_repository(&repo);
 
     install_inference(&access, &owner, backend.endpoint()).await;
-    install_pack(&access, &owner, &repo, root.path()).await;
+    install_pack(&access, &owner, &repo).await;
     select_default_behavior(&access, &db.node, &owner).await;
     gents::backend_registry::set_backend_probe_status(
         &db.node,
@@ -969,7 +969,7 @@ async fn install_inference(access: &ConfigAccess, owner: &str, endpoint: &str) {
         .unwrap();
 }
 
-async fn install_pack(access: &ConfigAccess, owner: &str, repo: &Path, tool_root: &Path) {
+async fn install_pack(access: &ConfigAccess, owner: &str, repo: &Path) {
     let pack_dir =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/workspace_cycle_pack");
     let manifest: PackManifest =
@@ -993,12 +993,18 @@ async fn install_pack(access: &ConfigAccess, owner: &str, repo: &Path, tool_root
         &|name| (name == "GENTS_CHANGE_UNIT_ROOT").then(|| repo.to_string_lossy().into_owned()),
     )
     .unwrap();
-    let mut config = config;
-    config.agent_principal.default_behavior_id = Some("change-unit-writer".to_owned());
-    for tools in &mut config.tools {
-        if let Some(host) = tools.host.as_mut() {
-            host.root = Some(tool_root.to_string_lossy().into_owned());
-        }
+    let expected_root = repo.to_string_lossy();
+    for id in ["change-unit-writer-tools", "change-unit-review-tools"] {
+        let tools = config
+            .tools
+            .iter()
+            .find(|tools| tools.tools_id == id)
+            .unwrap_or_else(|| panic!("pack is missing {id}"));
+        assert_eq!(
+            tools.host.as_ref().and_then(|host| host.root.as_deref()),
+            Some(expected_root.as_ref()),
+            "the pack loader must resolve {id} from GENTS_CHANGE_UNIT_ROOT"
+        );
     }
 
     for path in document_pack_schema_paths(&manifest).unwrap() {

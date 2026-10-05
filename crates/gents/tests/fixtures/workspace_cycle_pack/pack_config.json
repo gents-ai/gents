@@ -841,7 +841,7 @@
         "files": {
           "mode": "ReadWrite"
         },
-        "root": "."
+        "root": "${GENTS_CHANGE_UNIT_ROOT:-.}"
       },
       "tools_id": "change-unit-writer-tools"
     },
@@ -883,7 +883,7 @@
         "files": {
           "mode": "ReadOnly"
         },
-        "root": "."
+        "root": "${GENTS_CHANGE_UNIT_ROOT:-.}"
       },
       "tools_id": "change-unit-review-tools"
     },
