@@ -10,7 +10,7 @@ type EvalTrial @branchable @index(fields: ["owner_node_did", "trial_id"], unique
     case_id: String @immutable
     trial_index: Int @immutable
     attempt: Int @immutable
-    trial_agent_did: String @immutable
+    trial_node_did: String @immutable
     session_id: String @immutable
     seed: Int @immutable
     home_hint: String
