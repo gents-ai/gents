@@ -672,6 +672,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_goal_readiness_gate_cases_fence_retry_accounting",
         },
         ConformanceConsumer::RustTest {
+            id: "trigger_engine::goal_source::claimed_readiness_tests::generated_claimed_readiness_cases_drive_goal_source",
+            package: "gents",
+            source_path: "crates/gents/src/trigger_engine/goal_source/claimed_readiness_tests.rs",
+            module_path: "trigger_engine::goal_source::claimed_readiness_tests",
+            function: "generated_claimed_readiness_cases_drive_goal_source",
+        },
+        ConformanceConsumer::RustTest {
             id: "conformance::goals::generated_goal_transition_cases_fence_runtime_state_machine",
             package: "gents",
             source_path: "crates/gents/tests/conformance/goals.rs",

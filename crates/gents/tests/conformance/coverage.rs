@@ -1429,6 +1429,15 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "GoalReadinessGateCases".to_string(),
         ));
     }
+    if !crate::lean_vocab_test::lean_contract_snapshot()
+        .goal_claimed_readiness_cases
+        .is_empty()
+    {
+        emitted.insert((
+            "goal_claimed_readiness_cases".to_string(),
+            "GoalClaimedReadinessCases".to_string(),
+        ));
+    }
     if !lean_goal_transition_cases().is_empty() {
         emitted.insert((
             "goal_transition_cases".to_string(),

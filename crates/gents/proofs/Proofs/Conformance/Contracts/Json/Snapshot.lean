@@ -28,6 +28,7 @@ import Proofs.Conformance.Contracts.Json.Workspace
 import Proofs.Conformance.Contracts.Json.Callback
 import Proofs.Conformance.Contracts.Json.SelfConfig
 import Proofs.Conformance.Contracts.Json.Goal
+import Proofs.Conformance.GoalClaimedReadiness
 import Proofs.Conformance.Contracts.Json.SessionHydration
 import Proofs.Conformance.Contracts.Json.PairingReconcile
 import Proofs.Conformance.Contracts.Json.Enrollment
@@ -157,6 +158,8 @@ def snapshotJson : String :=
       ++ goalDecisionCasesJson ++ ","
     ++ "\"goal_readiness_gate_cases\":"
       ++ goalReadinessGateCasesJson ++ ","
+    ++ "\"goal_claimed_readiness_cases\":"
+      ++ Conformance.GoalClaimedReadiness.casesJson ++ ","
     ++ "\"goal_transition_cases\":"
       ++ goalTransitionCasesJson ++ ","
     ++ "\"goal_create_cases\":" ++ goalCreateCasesJson ++ ","

@@ -96,6 +96,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) budget_rehydration_cases: Vec<LeanBudgetRehydrationCase>,
     pub(crate) goal_decision_cases: Vec<LeanGoalDecisionCase>,
     pub(crate) goal_readiness_gate_cases: Vec<LeanGoalReadinessGateCase>,
+    pub(crate) goal_claimed_readiness_cases: Vec<serde_json::Value>,
     pub(crate) goal_transition_cases: Vec<LeanGoalTransitionCase>,
     pub(crate) goal_create_cases: Vec<LeanGoalCreateCase>,
     pub(crate) task_goal_publication_cases: Vec<LeanTaskGoalPublicationCase>,
