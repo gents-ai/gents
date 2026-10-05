@@ -1,4 +1,5 @@
 import type { NodeView } from "../../hooks/fleetStore";
+import { agentOf } from "@/lib/agents";
 
 /* two-letter initials on a pastel chip; the ink stays fixed like a marker */
 /* a leading article is not a name: "The Engineer" is En, not Te */
@@ -14,10 +15,7 @@ export function initials(name: string) {
 }
 
 export function behaviorName(behaviorId: string | null, deployment: NodeView | null) {
-  return (
-    deployment?.behaviors.find((b) => b.behaviorId === behaviorId)?.displayName ??
-    "Default"
-  );
+  return agentOf(deployment, behaviorId)?.displayName ?? "Default";
 }
 
 /* A pastel per behavior: one lightness and chroma, a hue spread around

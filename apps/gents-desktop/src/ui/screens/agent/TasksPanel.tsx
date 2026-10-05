@@ -31,6 +31,7 @@ import { sourceInWords, triggerReadiness } from "./automation";
 import { Switch } from "@gents/ui/components/switch";
 import { ExternalLink, Plus } from "lucide-react";
 import { toastFailure } from "@/lib/failure";
+import { agentOf } from "@/lib/agents";
 
 const when = (iso: string | null | undefined) =>
   iso ? new Date(iso).toLocaleString() : "—";
@@ -493,7 +494,7 @@ export function TasksPanel({
             id: t.taskId,
             title: t.name ?? t.taskId,
             tags: t.tags,
-            meta: `${w.when} · with ${deployment.behaviors.find((b) => b.behaviorId === t.behaviorId)?.displayName ?? "no behavior"}`,
+            meta: `${w.when} · with ${agentOf(deployment, t.behaviorId)?.displayName ?? "no behavior"}`,
             badge:
               w.problem ??
               (t.recentRuns.lastStatus === "failed" ? "last run failed" : undefined),

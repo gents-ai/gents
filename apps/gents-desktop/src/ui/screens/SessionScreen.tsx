@@ -127,6 +127,7 @@ import {
 } from "../hooks/useSelectedSession";
 import { useDraft } from "../../hooks/draftStore";
 import { useFleet, workersOfId } from "../hooks/useFleet";
+import { agentOf } from "@/lib/agents";
 
 function formatTokens(value: number) {
   if (value < 1_000) return String(value);
@@ -1415,7 +1416,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
   };
 
   const contextFor = (behaviorId?: string | null) => {
-    const b = deployment?.behaviors.find((x) => x.behaviorId === behaviorId);
+    const b = agentOf(deployment, behaviorId);
     return deployment?.contexts.find((c) => c.context_id === b?.contextId);
   };
   const startSlash = useSlashSkills(

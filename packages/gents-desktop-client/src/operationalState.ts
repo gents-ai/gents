@@ -118,7 +118,7 @@ function fallbackBehaviorId(deployment: DeploymentSettings): string | null {
 
 /** Keep an explicit selection only while its database behavior row exists. */
 export function selectedBehaviorIdForDeployment(
-  deployment: DeploymentView | null,
+  deployment: DeploymentSettings | null,
   selectedBehaviorId: string | null,
 ): string | null {
   if (!deployment) return null;

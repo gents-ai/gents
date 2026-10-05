@@ -60,6 +60,7 @@ import { initTheme } from "./ui/theme";
 import "./App.css";
 import { useSelectedSessionValue } from "./ui/hooks/useSelectedSession";
 import { useFleet } from "./ui/hooks/useFleet";
+import { defaultAgentOf } from "./ui/lib/agents";
 
 function NavBinder({ children }: { children: ReactNode }) {
   const nav = useNav();
@@ -192,9 +193,7 @@ function AppHost({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
               const deployment = snapshot.client?.deployments[0];
               if (deployment) {
                 shell.selectAgent(deployment.agentDid);
-                const behavior =
-                  deployment.behaviors.find((row) => row.isDefault) ??
-                  deployment.behaviors[0];
+                const behavior = defaultAgentOf(deployment) ?? deployment.behaviors[0];
                 if (behavior) shell.selectBehavior(behavior.behaviorId);
               }
               void shell.refreshSnapshot().then(() => {

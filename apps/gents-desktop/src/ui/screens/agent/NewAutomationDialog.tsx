@@ -49,6 +49,8 @@ import type { Shell } from "@/hooks/useShell";
 import { navigate } from "@/lib/router";
 import { cadenceInWords, eventInWords } from "./automation";
 import { newId, validateCronSchedule } from "./draft";
+import { defaultAgentOf } from "@/lib/agents";
+import { agentOf } from "@/lib/agents";
 
 const NEW = "new:";
 export const TZ = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
@@ -126,9 +128,7 @@ export function NewAutomationDialog({
   onCreated?: (triggerId: string) => void;
 }) {
   const defaultBehavior =
-    deployment.behaviors.find((b) => b.isDefault)?.behaviorId ??
-    deployment.behaviors[0]?.behaviorId ??
-    "";
+    defaultAgentOf(deployment)?.behaviorId ?? deployment.behaviors[0]?.behaviorId ?? "";
   const [name, setName] = useState("");
   const startKind = forTask ? "manual" : (initialKind ?? "schedule");
   const [kind, setKind] = useState<"schedule" | "event" | "manual">(startKind);
@@ -176,8 +176,7 @@ export function NewAutomationDialog({
     taskId === NEW
       ? behaviorId
       : deployment.tasks.find((t) => t.taskId === taskId)?.behaviorId;
-  const behavior =
-    deployment.behaviors.find((b) => b.behaviorId === runningBehaviorId) ?? null;
+  const behavior = agentOf(deployment, runningBehaviorId) ?? null;
   /* whether the behavior can run is the bridge's readiness decision */
   const readiness = behavior
     ? behaviorReadiness(deployment, behavior.behaviorId)

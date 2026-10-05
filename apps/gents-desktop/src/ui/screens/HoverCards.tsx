@@ -16,6 +16,7 @@ import { cn } from "@gents/ui/lib/utils";
 import { href } from "@/lib/router";
 import { behaviorReadiness } from "@/lib/behavior-readiness";
 import { access, bashAccess, behaviorName, fileAccess, network } from "./behavior";
+import { agentOf } from "@/lib/agents";
 
 function Line({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -101,7 +102,7 @@ export function BehaviorHoverCard({
   children: ReactElement;
 }) {
   const [open, setOpen] = useState(false);
-  const b = deployment?.behaviors.find((x) => x.behaviorId === behaviorId);
+  const b = agentOf(deployment, behaviorId);
   const env = deployment?.behaviorEnvironments.find((e) => e.behaviorId === behaviorId);
   if (!deployment || !b) return children;
   const readiness = behaviorReadiness(deployment, b.behaviorId);

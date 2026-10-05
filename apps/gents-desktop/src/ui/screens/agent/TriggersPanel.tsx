@@ -36,6 +36,7 @@ import { TaskEditor } from "./TasksPanel";
 import { ScheduleEditor } from "./SchedulesPanel";
 import { EventSourceEditor } from "./EventSourcesPanel";
 import { RowMenu } from "./RowMenu";
+import { agentOf } from "@/lib/agents";
 
 const SECTION = "triggers";
 const when = (iso: string | null | undefined) =>
@@ -168,7 +169,7 @@ export function TriggerEditor({
         }
         description={
           besideTask
-            ? `Runs with ${deployment.behaviors.find((b) => b.behaviorId === besideTask.behaviorId)?.displayName ?? "no behavior"}`
+            ? `Runs with ${agentOf(deployment, besideTask.behaviorId)?.displayName ?? "no behavior"}`
             : besideSchedule
               ? cadenceInWords(besideSchedule)
               : besideSource

@@ -7,6 +7,7 @@ import type {
 
 import sharedSetupPrompt from "../../../../../crates/gents-protocol/prompts/setup.md?raw";
 import setupSelfConfig from "../../../../../crates/gents-protocol/presets/setup-self-config.json";
+import { defaultAgentOf } from "./agents";
 
 export const SETUP_STEWARD_PROMPT = sharedSetupPrompt;
 
@@ -19,7 +20,7 @@ export function setupStewardPatches(
 ): ConfigComponentPatch[] {
   const behavior =
     deployment.behaviors.find((row) => row.tags.includes(SETUP_STEWARD_BEHAVIOR_TAG)) ??
-    deployment.behaviors.find((row) => row.isDefault) ??
+    defaultAgentOf(deployment) ??
     deployment.behaviors[0];
   if (!behavior) return [];
   const context = deployment.contexts.find(

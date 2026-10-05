@@ -9,6 +9,7 @@ import type {
   Tools,
   TriggerView,
 } from "@source-inc/gents-desktop-client";
+import { agentOf } from "@/lib/agents";
 
 const DAYS = [
   "Sunday",
@@ -101,7 +102,7 @@ export function triggerReadiness(
   const task = deployment.tasks.find((x) => x.taskId === cfg.task_id);
   if (!task) return { ok: false, reason: "Task is missing" };
   if (task.enabled === false) return { ok: false, reason: "Task is disabled" };
-  const b = deployment.behaviors.find((x) => x.behaviorId === task.behaviorId);
+  const b = agentOf(deployment, task.behaviorId);
   if (!b) return { ok: false, reason: "Behavior is missing" };
   /* whether the behavior can run is the bridge's readiness decision, not a
      guess from the documents here */
@@ -122,7 +123,7 @@ export function triggerReadiness(
 export function actionInWords(deployment: DeploymentView, t: TriggerView): string {
   const task = deployment.tasks.find((x) => x.taskId === t.config.task_id);
   if (!task) return "run a missing task";
-  const b = deployment.behaviors.find((x) => x.behaviorId === task.behaviorId);
+  const b = agentOf(deployment, task.behaviorId);
   return `run ${task.name ?? task.taskId}${b ? ` with ${b.displayName}` : ""}`;
 }
 

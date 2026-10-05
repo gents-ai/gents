@@ -23,6 +23,7 @@ import { DeleteButton, ListDetail } from "./ListDetail";
 import { Group } from "./rows";
 import { contextOrigin, forgetContextOrigins } from "./contextOrigin";
 import { RowMenu } from "./RowMenu";
+import { agentOf } from "@/lib/agents";
 
 /* a context's detail names this many of its behaviors, then counts the rest */
 const USERS_SHOWN = 8;
@@ -279,7 +280,7 @@ export function ContextsPanel({
   };
   /* a context opened from its behavior goes back to that behavior */
   const originId = item ? contextOrigin(item) : null;
-  const origin = deployment.behaviors.find((b) => b.behaviorId === originId);
+  const origin = agentOf(deployment, originId);
   const back = origin
     ? {
         route: { ...base, section: "behaviors", item: origin.behaviorId },

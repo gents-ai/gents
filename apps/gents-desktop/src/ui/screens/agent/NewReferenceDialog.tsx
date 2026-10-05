@@ -33,6 +33,7 @@ import { Textarea } from "@gents/ui/components/textarea";
 import { cadenceInWords, eventInWords } from "./automation";
 import { newId, validateCronSchedule } from "./draft";
 import { PRESETS, TZ, type Task } from "./NewAutomationDialog";
+import { defaultAgentOf } from "@/lib/agents";
 
 export type NewReference =
   | { kind: "task"; document: Task }
@@ -60,9 +61,7 @@ export function NewReferenceDialog({
   const [name, setName] = useState("");
   const [prompt, setPrompt] = useState("");
   const [behaviorId, setBehaviorId] = useState(
-    deployment.behaviors.find((b) => b.isDefault)?.behaviorId ??
-      deployment.behaviors[0]?.behaviorId ??
-      "",
+    defaultAgentOf(deployment)?.behaviorId ?? deployment.behaviors[0]?.behaviorId ?? "",
   );
   const [preset, setPreset] = useState<(typeof PRESETS)[number]["id"]>("daily");
   const [cron, setCron] = useState("");

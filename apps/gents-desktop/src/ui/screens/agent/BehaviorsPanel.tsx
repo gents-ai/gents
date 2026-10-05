@@ -76,6 +76,8 @@ import { Group } from "./rows";
 import { rememberContextOrigin } from "./contextOrigin";
 import { clearPromptFocus, promptFocusRequested } from "./promptFocus";
 import { toastFailure } from "@/lib/failure";
+import { defaultAgentOf } from "@/lib/agents";
+import { agentOf } from "@/lib/agents";
 
 /* the access modes at a glance, short enough for one line */
 const short = (mode: string | null | undefined) =>
@@ -429,7 +431,7 @@ export function newBehaviorView(deployment: DeploymentView): BehaviorView {
     description: null,
     contextId: null,
     inferenceProfileId:
-      deployment.behaviors.find((b) => b.isDefault)?.inferenceProfileId ??
+      defaultAgentOf(deployment)?.inferenceProfileId ??
       deployment.inferenceProfiles[0]?.profile_id ??
       null,
     enabled: false,
@@ -1406,7 +1408,7 @@ export function BehaviorsPanel({
         base={base}
         item={behaviorId}
         toolbar={(id) => {
-          const b = deployment.behaviors.find((x) => x.behaviorId === id);
+          const b = agentOf(deployment, id);
           return b ? (
             <RowControls shell={shell} deployment={deployment} behavior={b} inEditor />
           ) : null;
@@ -1436,7 +1438,7 @@ export function BehaviorsPanel({
         empty="No behaviors yet. A behavior is what an agent is told, what it may use, and what runs it."
         onCreate={() => setDraft(newBehaviorView(deployment))}
         detail={(id) => {
-          const behavior = deployment.behaviors.find((b) => b.behaviorId === id)!;
+          const behavior = agentOf(deployment, id)!;
           return (
             <BehaviorEditor
               key={behavior.behaviorId}

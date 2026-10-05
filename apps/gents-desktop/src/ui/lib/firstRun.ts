@@ -6,6 +6,7 @@ import type {
   DesktopClientSnapshot,
   InferenceBackendView,
 } from "@source-inc/gents-desktop-client";
+import { agentOf } from "./agents";
 
 export function isLocalAgent(
   deployment: Pick<DeploymentView, "agentDid" | "source">,
@@ -50,8 +51,9 @@ export function shouldRebindSetupDefault(
   addingExtra: boolean,
 ): boolean {
   if (!addingExtra) return true;
-  const defaultBehavior = deployment.behaviors.find(
-    (behavior) => behavior.behaviorId === deployment.agentPrincipal.defaultBehaviorId,
+  const defaultBehavior = agentOf(
+    deployment,
+    deployment.agentPrincipal.defaultBehaviorId,
   );
   const defaultProfile = deployment.inferenceProfiles.find(
     (profile) => profile.profile_id === defaultBehavior?.inferenceProfileId,
