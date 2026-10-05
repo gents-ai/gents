@@ -2370,6 +2370,75 @@ async fn provider_usage_limit_moves_active_goal_to_usage_limited() {
 }
 
 #[tokio::test]
+async fn openrouter_credits_402_moves_active_goal_to_usage_limited() {
+    let db = test_db("goal-openrouter-credits-402").await;
+    create_request_for_agent_with_signed_fields(
+        db.node.as_ref(),
+        db.node_identity.did(),
+        "openrouter-credits-request",
+        SESSION,
+        "failed",
+        "2026-07-15T00:00:00Z",
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+    let reason = gents_loop::provider_limit::persisted_failure_reason(
+        r#"HttpError: Invalid status code 402 Payment Required with message: {"error":{"code":402,"message":"Insufficient credits. Add more using https://openrouter.ai/credits"}}"#,
+        chrono::Utc::now(),
+    );
+    let response = db
+        .node
+        .execute(&format!(
+            r#"mutation {{
+                add_InferenceCall(input: {{
+                    call_id: "openrouter-credits-call",
+                    request_id: "openrouter-credits-request",
+                    call_seq: 1,
+                    attempt: 1,
+                    call_state: "failed",
+                    failure_reason: {}
+                }}) {{ _docID }}
+            }}"#,
+            serde_json::to_string(&reason).expect("reason literal")
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "seed credits 402: {:?}",
+        response.errors
+    );
+    set_goal(
+        db.node.as_ref(),
+        db.node_identity.did(),
+        SESSION,
+        Some("Stop on OpenRouter credits exhaustion"),
+        Some(GoalStatus::Active),
+        None,
+    )
+    .await
+    .expect("set goal");
+
+    let (mut source, _snapshot_tx) = source(&db).await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), source.next_fire())
+            .await
+            .is_err()
+    );
+    let goal = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
+        .await
+        .expect("load goal")
+        .expect("goal exists");
+    assert_eq!(goal.parsed_status(), Some(GoalStatus::UsageLimited));
+    assert!(goal
+        .last_failure
+        .as_deref()
+        .is_some_and(|reason| reason.contains("Insufficient credits")));
+}
+
+#[tokio::test]
 async fn failed_wrapup_retries_twice_then_is_durably_abandoned() {
     let db = test_db("goal-wrapup-retry-bound").await;
     seed_completed_request(&db, "parent-wrapup-retry").await;

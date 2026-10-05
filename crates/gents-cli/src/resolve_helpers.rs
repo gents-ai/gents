@@ -34,7 +34,7 @@ pub(crate) fn resolve_backend_config_with_preset(
 
     let endpoint = resolve_backend_endpoint(explicit_endpoint, preset, mode)?;
     let provider_kind = resolve_backend_provider_kind(explicit_provider_kind, preset)?;
-    let openai_wire_api = if provider_kind == BackendProviderKind::ClaudeCliSubscription {
+    let openai_wire_api = if provider_kind.uses_messages_wire() {
         // Claude is not an OpenAI-wire provider. Never persist a sticky wire
         // value when migrating an existing OpenAiCompatible backend.
         None
@@ -228,6 +228,31 @@ mod tests {
         assert_eq!(
             resolved.openai_wire_api, None,
             "Claude migration must not persist sticky openai_wire_api"
+        );
+    }
+
+    #[test]
+    fn anthropic_preset_resolves_a_key_backend() {
+        let resolved = resolve_backend_config_with_preset(
+            Some(BackendPresetArg::Anthropic),
+            None,
+            None,
+            Some(OpenAiWireApiArg::ChatCompletions),
+            None,
+            None,
+            BackendResolutionMode::ConfigWrite,
+        )
+        .expect("resolve anthropic preset");
+
+        assert_eq!(resolved.provider_kind, BackendProviderKind::AnthropicApiKey);
+        assert_eq!(
+            resolved.endpoint,
+            gents::claude_subscription::ANTHROPIC_API_ENDPOINT
+        );
+        assert_eq!(resolved.openai_wire_api, None);
+        assert_eq!(
+            resolved.api_key_env_var.as_deref(),
+            Some("ANTHROPIC_API_KEY")
         );
     }
 }

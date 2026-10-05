@@ -191,6 +191,19 @@ source consistency checks, not a separate runtime compatibility version.
   never enter the sandbox. Bind with `gents pack install --inference-slot SLOT=PROFILE`,
   `gents plugin bind NAME PROFILE` or the desktop Packs panel; `gents plugin
   unbind` and "Not set" leave it unbound, and the plugin runs as before.
+
+- Anthropic API keys as a backend (#2122): provider kind `AnthropicApiKey` on
+  the native Messages wire, with `api_key` or `environment` auth. Each key is
+  its own backend with its own admission, health and model catalog.
+  `gents config backend --backend-preset anthropic` defaults to
+  `ANTHROPIC_API_KEY`. Requests send `authorization: Bearer` and
+  `anthropic-version`; the OAuth beta header is now sent only for Claude
+  sign-ins. The endpoint is fixed at `https://api.anthropic.com/v1`; a
+  different endpoint is refused. Keys that need `anthropic-workspace-id` are
+  not supported. The desktop shows such a backend as an API-key backend; the
+  setup wizard does not offer it yet. Nodes on a build without the tolerant
+  backend decode (under Changed) fail to list backends once a peer has one.
+
 - `gents pack remove` works for every pack kind, not only documents packs
   (#2067). Assets and plugins packs record their install at
   `<home>/pack-installs/<namespace>/<name>.json` and remove locally, with no
@@ -281,6 +294,15 @@ source consistency checks, not a separate runtime compatibility version.
 
 ### Changed
 
+- Backend lists skip a backend whose `provider_kind` this build does not know,
+  with a warning, instead of failing the whole list (#2122). A newer peer's
+  backend no longer breaks an older node's fleet probe, directory projection,
+  self-config listing or agent runtime snapshot. Behaviors and profiles on
+  such a backend are left out of the directory, and in the agent's runtime
+  they are reported unavailable (not pending). Looking up that backend by ID
+  and `gents config` export still fail, naming the kind. Update older nodes
+  before adding a backend of a new kind.
+
 - Interrupting a thread stops only its foreground turn and in-flight
   foreground calls. Background processes and subagents, including one the
   thread was waiting on, keep running and stay attached; an awaited subagent
@@ -359,6 +381,13 @@ source consistency checks, not a separate runtime compatibility version.
   operations. Trigger ownership errors no longer recommend the removed plan
   command. Schema-limit errors explain why deleting configuration cannot change
   an installed schema; host-root errors name the exact Tools field.
+- An OpenRouter 402 no longer spends the transport retry budget. An exhausted
+  key limit or credit balance (`error.metadata.limit_source`
+  `openrouter_key_limit` or `openrouter_credits`, or a plain "Insufficient
+  credits" 402) fails the turn at once with `provider usage limit reached
+  (reset time not reported)`, and Goals pause as usage-limited. An in-flight
+  budget 402 retries after its `Retry-After`; without one it is unchanged
+  (#2118).
 - A document trigger whose fire cannot be admitted no longer re-fires the same
   document without bound (#2094). A refused fire, such as an `emit_outcome`
   Task delivered a document without `handoff_id` or a template that fails to

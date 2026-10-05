@@ -113,6 +113,14 @@ impl InferenceBackend {
             violations
                 .push("backend auth selection is incompatible with the provider adapter".into());
         }
+        let anthropic_endpoint = crate::claude_subscription::ANTHROPIC_API_ENDPOINT;
+        if self.provider_kind == BackendProviderKind::AnthropicApiKey
+            && self.endpoint.trim_end_matches('/') != anthropic_endpoint
+        {
+            violations.push(format!(
+                "AnthropicApiKey endpoint must be {anthropic_endpoint}; a different endpoint is not supported"
+            ));
+        }
         violations
     }
 
@@ -235,7 +243,7 @@ pub(crate) async fn lookup_backend_record(
     backend_id: &str,
 ) -> Result<Option<(String, InferenceBackend)>> {
     let filter = scope_filter(agent_did, backend_id)?;
-    let mut records = query_backend_records(node, &format!("filter: {filter}")).await?;
+    let mut records = query_backend_records(node, &format!("filter: {filter}"), false).await?;
     anyhow::ensure!(
         records.len() <= 1,
         "ambiguous backend reference {backend_id:?} for {agent_did:?}"
@@ -243,9 +251,20 @@ pub(crate) async fn lookup_backend_record(
     Ok(records.pop())
 }
 
+/// A stored row whose provider_kind this build does not know (a newer
+/// peer wrote it). Lists skip it; single-document decodes stay strict.
+pub(crate) fn unknown_provider_kind(row: &serde_json::Value) -> Option<&str> {
+    let kind = row.get("provider_kind")?.as_str()?;
+    (!BackendProviderKind::ALL
+        .iter()
+        .any(|known| known.as_str() == kind))
+    .then_some(kind)
+}
+
 async fn query_backend_records(
     node: &EmbeddedNode,
     arguments: &str,
+    skip_unknown_kind: bool,
 ) -> Result<Vec<(String, InferenceBackend)>> {
     let query =
         format!("query {{ InferenceBackend({arguments}) {{ _docID {BACKEND_CONFIG_FIELDS} }} }}");
@@ -262,6 +281,18 @@ async fn query_backend_records(
         .and_then(serde_json::Value::as_array)
         .context("InferenceBackend query did not return rows")?
         .iter()
+        .filter(|row| {
+            let Some(provider_kind) = unknown_provider_kind(row).filter(|_| skip_unknown_kind)
+            else {
+                return true;
+            };
+            tracing::warn!(
+                backend_id = row.get("backend_id").and_then(serde_json::Value::as_str),
+                provider_kind,
+                "skipping backend of a provider kind this build does not know"
+            );
+            false
+        })
         .map(|row| {
             let doc_id = row
                 .get("_docID")
@@ -277,7 +308,7 @@ async fn query_backend_records(
 pub(crate) async fn list_backend_records(
     node: &EmbeddedNode,
 ) -> Result<Vec<(String, InferenceBackend)>> {
-    query_backend_records(node, "order: { backend_id: ASC }").await
+    query_backend_records(node, "order: { backend_id: ASC }", true).await
 }
 
 pub async fn list_all_backends(node: &EmbeddedNode) -> Result<Vec<InferenceBackend>> {
@@ -290,7 +321,7 @@ pub async fn list_all_backends(node: &EmbeddedNode) -> Result<Vec<InferenceBacke
 
 pub async fn list_enabled_backends(node: &EmbeddedNode) -> Result<Vec<InferenceBackend>> {
     Ok(
-        query_backend_records(node, "filter: { enabled: { _eq: true } }")
+        query_backend_records(node, "filter: { enabled: { _eq: true } }", true)
             .await?
             .into_iter()
             .map(|(_, backend)| backend)
@@ -311,7 +342,7 @@ pub async fn list_enabled_backends_for_agent(
         r#"filter: {{ agent_did: {{ _eq: "{}" }}, enabled: {{ _eq: true }} }}"#,
         escape_graphql_string(agent_did)
     );
-    let records = query_backend_records(node, &filter).await?;
+    let records = query_backend_records(node, &filter, true).await?;
     let mut ids = std::collections::BTreeSet::new();
     records
         .into_iter()

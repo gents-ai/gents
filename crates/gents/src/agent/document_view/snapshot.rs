@@ -43,6 +43,15 @@ macro_rules! owned_doc {
     }};
 }
 
+/// A behavior on a backend this build cannot run is unavailable, not pending:
+/// no arriving document repairs it.
+#[derive(Debug, thiserror::Error)]
+#[error("backend {backend_id} has provider kind {kind} this build does not know")]
+struct UnknownKindBackend {
+    backend_id: String,
+    kind: String,
+}
+
 struct BehaviorResolutionError {
     code: BehaviorReadinessUnavailableReason,
     detail: anyhow::Error,
@@ -444,7 +453,9 @@ pub(super) fn collect_unresolved_behavior_references(
         Ok(())
     })();
     if let Err(error) = result {
-        details.push(format!("behavior {}: {error:#}", behavior.behavior_id));
+        if error.downcast_ref::<UnknownKindBackend>().is_none() {
+            details.push(format!("behavior {}: {error:#}", behavior.behavior_id));
+        }
     }
 }
 
@@ -468,6 +479,13 @@ fn select_inference_documents<'a>(
 ) -> Result<SelectedInferenceDocuments<'a>> {
     let scope = view.principal.value.agent_did.as_str();
     let profile = owned_doc!(&view.inference_profiles, id, scope)?;
+    if let Some(kind) = view.unknown_kind_backends.get(&profile.backend_id) {
+        return Err(UnknownKindBackend {
+            backend_id: profile.backend_id.clone(),
+            kind: kind.clone(),
+        }
+        .into());
+    }
     let backend = owned_doc!(&view.backends, profile.backend_id.as_str(), scope)?;
     let sampling = profile
         .sampling_id

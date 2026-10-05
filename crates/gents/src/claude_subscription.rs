@@ -24,6 +24,8 @@ use crate::oauth_credential::{BearerSource, DbCredentialBearer, OAuthRefreshKind
 
 /// Placeholder endpoint for ClaudeCliSubscription InferenceBackend rows.
 pub const DEFAULT_BACKEND_ENDPOINT: &str = "claude-cli://subscription";
+/// The fixed Anthropic API base for AnthropicApiKey backends.
+pub const ANTHROPIC_API_ENDPOINT: &str = "https://api.anthropic.com/v1";
 /// Default client-facing model slug for ClaudeCliSubscription.
 pub const DEFAULT_MODEL_ID: &str = "claude-opus-5-5";
 
@@ -72,6 +74,16 @@ impl ClaudeSubscriptionClient<DbCredentialBearer> {
             bearer,
             http: ReqwestClient::new(),
         })
+    }
+}
+
+impl ClaudeSubscriptionClient<ApiKeyBearer> {
+    /// A Messages client authenticated with an Anthropic API key. No I/O.
+    pub fn with_api_key(key: String) -> Self {
+        Self {
+            bearer: Arc::new(ApiKeyBearer::new(key)),
+            http: ReqwestClient::new(),
+        }
     }
 }
 
@@ -203,6 +215,25 @@ impl<S: BearerSource + 'static> CompletionModel for ClaudeSubscriptionModel<S> {
         )
         .await?;
         Ok(StreamingCompletionResponse::stream(Box::pin(stream)))
+    }
+}
+
+/// An Anthropic API key as the bearer. No `Debug`, so the key cannot reach logs.
+pub struct ApiKeyBearer(String);
+
+impl ApiKeyBearer {
+    pub fn new(key: impl Into<String>) -> Self {
+        Self(key.into())
+    }
+}
+
+impl BearerSource for ApiKeyBearer {
+    async fn current_bearer(&self) -> Result<String> {
+        Ok(self.0.clone())
+    }
+
+    fn is_oauth(&self) -> bool {
+        false
     }
 }
 

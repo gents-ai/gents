@@ -1450,6 +1450,60 @@ async fn chatgpt_codex_behavior_without_credential_is_unavailable() {
 }
 
 #[tokio::test]
+async fn runtime_snapshot_skips_an_unknown_provider_kind_backend() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("document-view-unknown-kind"));
+    let did = identity.did();
+    bind_default_behavior_backend(node.as_ref(), did, "known").await;
+    crate::test_support::install_test_behavior(node.as_ref(), did, "future").await;
+    // A raw write bypasses validate(), like a row a newer peer wrote.
+    let response = node
+        .execute(&format!(
+            r#"mutation {{ update_InferenceBackend(filter: {{agent_did: {{_eq: "{}"}}, backend_id: {{_eq: "future:backend"}}}}, input: {{provider_kind: "FutureProviderKind"}}) {{ _docID }} }}"#,
+            escape_graphql_string(did)
+        ))
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+
+    let view = load_document_runtime_view(node.as_ref(), did)
+        .await
+        .expect("an unknown provider kind must not fail the whole view");
+    assert!(
+        !view.has_unresolved_behavior_references(),
+        "a behavior on an unknown kind is unavailable, not pending: {:?}",
+        view.pending_visibility_details()
+    );
+    let resolve_context = DocumentResolveContext {
+        identity: identity.clone(),
+        tool_ceiling: ToolCeiling::readonly(),
+        backend_health: crate::backend_health::BackendHealthMap::new(),
+    };
+    let snapshot =
+        resolve_document_runtime_snapshot_from_view(node.as_ref(), &resolve_context, &view)
+            .await
+            .expect("snapshot");
+    assert!(
+        snapshot.behaviors.contains_key("known"),
+        "unavailable: {:?}",
+        snapshot.unavailable_behaviors
+    );
+    let future = snapshot
+        .unavailable_behaviors
+        .get("future")
+        .expect("future behavior is reported unavailable");
+    assert_eq!(
+        future.public_reason,
+        gents_protocol::row::BehaviorReadinessUnavailableReason::InferenceProfileInvalid
+    );
+    assert!(
+        future.diagnostic.contains("FutureProviderKind"),
+        "{}",
+        future.diagnostic
+    );
+}
+
+#[tokio::test]
 async fn chatgpt_codex_behavior_with_enabled_credential_is_runnable() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
@@ -1736,6 +1790,7 @@ fn empty_runtime_view(agent_did: &str) -> DocumentRuntimeView {
         callback_modules: Default::default(),
         repository_placements: Default::default(),
         backend_observations: Default::default(),
+        unknown_kind_backends: Default::default(),
     }
 }
 

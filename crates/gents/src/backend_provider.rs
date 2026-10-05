@@ -46,6 +46,7 @@ fn provider_display_name(kind: BackendProviderKind) -> &'static str {
         BackendProviderKind::ChatGptCodex => "ChatGPT Codex",
         BackendProviderKind::XaiGrokOAuth => "Grok / xAI OAuth",
         BackendProviderKind::ClaudeCliSubscription => "Claude CLI subscription",
+        BackendProviderKind::AnthropicApiKey => "Anthropic API key",
     }
 }
 
@@ -55,7 +56,7 @@ const XAI_GROK_MODEL_DISCOVERY_PATH: &str = "/models-v2";
 /// Claude subscription catalog base. The backend document's endpoint is the
 /// `claude-cli://subscription` placeholder; an `http(s)://` endpoint (tests)
 /// overrides this.
-const CLAUDE_MODELS_BASE: &str = "https://api.anthropic.com/v1";
+const CLAUDE_MODELS_BASE: &str = crate::claude_subscription::ANTHROPIC_API_ENDPOINT;
 
 fn claude_models_base(endpoint: &str) -> String {
     if endpoint.starts_with("http://") || endpoint.starts_with("https://") {
@@ -118,7 +119,7 @@ impl OpenAiModelRecord {
 
     /// Preserve provider-advertised limits without inferring them from model IDs.
     fn into_advertised(self, kind: BackendProviderKind) -> Option<AdvertisedModel> {
-        let reasoning_efforts = if kind == BackendProviderKind::ClaudeCliSubscription {
+        let reasoning_efforts = if kind.uses_messages_wire() {
             self.capabilities.as_ref().map(|caps| {
                 ["low", "medium", "high", "xhigh", "max"]
                     .into_iter()
@@ -135,7 +136,7 @@ impl OpenAiModelRecord {
                 BackendProviderKind::XaiGrokOAuth | BackendProviderKind::OpenRouter
             ) {
                 self.name.clone()
-            } else if kind == BackendProviderKind::ClaudeCliSubscription {
+            } else if kind.uses_messages_wire() {
                 self.display_name.clone()
             } else {
                 None
@@ -146,7 +147,7 @@ impl OpenAiModelRecord {
                 self.context_length
             } else if kind == BackendProviderKind::OpenAiCompatible {
                 self.max_model_len
-            } else if kind == BackendProviderKind::ClaudeCliSubscription {
+            } else if kind.uses_messages_wire() {
                 self.max_input_tokens
             } else {
                 None
@@ -157,7 +158,7 @@ impl OpenAiModelRecord {
                 .as_ref()
                 .and_then(|provider| provider.max_completion_tokens)
                 .filter(|value| *value > 0)
-        } else if kind == BackendProviderKind::ClaudeCliSubscription {
+        } else if kind.uses_messages_wire() {
             self.max_tokens.filter(|value| *value > 0)
         } else {
             None
@@ -323,6 +324,16 @@ pub async fn discover_models(
                     crate::claude_messages::ANTHROPIC_VERSION,
                 )
                 .header("anthropic-beta", crate::claude_messages::OAUTH_BETA)
+                .query(&[("limit", "100")]);
+        } else if kind == BackendProviderKind::AnthropicApiKey {
+            if let Some(api_key) = api_key {
+                request = request.bearer_auth(api_key);
+            }
+            request = request
+                .header(
+                    "anthropic-version",
+                    crate::claude_messages::ANTHROPIC_VERSION,
+                )
                 .query(&[("limit", "100")]);
         } else if let Some(api_key) = api_key {
             request = request.bearer_auth(api_key);
@@ -835,6 +846,59 @@ mod tests {
         ] {
             assert!(request.contains(header), "{header} missing from {request}");
         }
+    }
+
+    #[tokio::test]
+    async fn discover_models_reads_anthropic_key_models_without_oauth_beta() {
+        let (endpoint, requests) = spawn_model_discovery_server(
+            r#"{"data":[{"id":"claude-fable-5-1","display_name":"Claude Fable 5.1","max_input_tokens":1000000,"max_tokens":128000,"capabilities":{"effort":{"supported":true,"low":{"supported":true},"high":{"supported":true},"xhigh":{"supported":true}}},"type":"model"},{"id":"claude-opus-5","type":"model"},{"id":"claude-sonnet-5","type":"model"}],"has_more":false}"#,
+        )
+        .await;
+
+        let models = discover_models(
+            &Client::new(),
+            BackendProviderKind::AnthropicApiKey,
+            &format!("{endpoint}/v1"),
+            Some("placeholder-key"),
+            None,
+        )
+        .await
+        .expect("Anthropic key model discovery should read /v1/models");
+
+        assert_eq!(
+            model_names(&models),
+            vec!["claude-fable-5-1", "claude-opus-5", "claude-sonnet-5"]
+        );
+        assert_eq!(models[0].context_window, Some(1_000_000));
+        assert_eq!(models[0].max_output_tokens, Some(128_000));
+        assert_eq!(models[0].display_name.as_deref(), Some("Claude Fable 5.1"));
+        assert_eq!(
+            models[0].reasoning_efforts.as_deref(),
+            Some(
+                [
+                    crate::config::ReasoningEffort::Low,
+                    crate::config::ReasoningEffort::High,
+                    crate::config::ReasoningEffort::XHigh,
+                ]
+                .as_slice()
+            )
+        );
+        let requests = requests.lock().expect("requests lock");
+        let request = requests
+            .first()
+            .expect("captured request")
+            .to_ascii_lowercase();
+        assert!(
+            request.starts_with("get /v1/models?limit=100 "),
+            "key discovery must query /v1/models?limit=100: {request}"
+        );
+        for header in [
+            "authorization: bearer placeholder-key",
+            "anthropic-version: 2023-06-01",
+        ] {
+            assert!(request.contains(header), "{header} missing from {request}");
+        }
+        assert!(!request.contains("anthropic-beta"), "{request}");
     }
 
     #[tokio::test]

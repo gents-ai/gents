@@ -106,6 +106,7 @@ const KINDS = [
   { value: "ChatGptCodex", label: "ChatGPT / Codex (subscription)" },
   { value: "XaiGrokOAuth", label: "Grok (subscription)" },
   { value: "ClaudeCliSubscription", label: "Anthropic / Claude (subscription)" },
+  { value: "AnthropicApiKey", label: "Anthropic API key" },
 ];
 /* subscription kinds, and the provider name their account carries */
 const SUBSCRIPTION: Record<
