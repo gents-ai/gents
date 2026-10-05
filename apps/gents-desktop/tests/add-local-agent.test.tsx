@@ -99,7 +99,10 @@ function fleet(listed: DeploymentView[]) {
 }
 
 async function openAddAgent(shell: Shell) {
-  renderIn(testApp({ api: shell.api }), <AgentsScreen shell={shell} />);
+  renderIn(
+    testApp({ api: shell.api, snapshot: shell.snapshot }),
+    <AgentsScreen shell={shell} />,
+  );
   await userEvent.click(screen.getByRole("button", { name: /Add agent/ }));
   return screen.findByRole("dialog");
 }
@@ -208,6 +211,11 @@ describe("first-run local agent name", () => {
         bootstrap: forgeBootstrap,
         client: { deployments: [forge] },
       })),
+      initLocalStandardRuntime: vi.fn(async () => ({ agentDid: FORGE_DID })),
+      startDesktopClient: vi.fn(async () => ({
+        bootstrap: forgeBootstrap,
+        client: { deployments: [forge] },
+      })),
       listProviderAccounts: vi.fn(async () => []),
       getInferenceSetupCatalog: vi.fn(async () => ({
         contractVersion: 1,
@@ -229,14 +237,16 @@ describe("first-run local agent name", () => {
       snapshot: { bootstrap: snapshotBootstrap },
       deployments: [],
       refreshSnapshot: vi.fn(async () => undefined),
-      initLocalRuntime: vi.fn(async () => ({ agentDid: FORGE_DID })),
     } as unknown as Shell;
-    renderIn(testApp({ api }), <SetupScreen shell={shell} onDone={vi.fn()} />);
+    renderIn(
+      testApp({ api, snapshot: shell.snapshot }),
+      <SetupScreen shell={shell} onDone={vi.fn()} />,
+    );
     return { api, shell };
   }
 
   it("shows an existing home's agent by name instead of asking for one it would ignore", async () => {
-    const { api, shell } = setup({ existingHome: true, runtimeName: "Forge" });
+    const { api } = setup({ existingHome: true, runtimeName: "Forge" });
     const name = screen.getByLabelText("Agent name");
     expect(name).toHaveValue("Forge");
     expect(name).toHaveAttribute("readonly");
@@ -246,12 +256,16 @@ describe("first-run local agent name", () => {
     const next = screen.getByTestId("setup-next");
     await waitFor(() => expect(next).toBeEnabled());
     await userEvent.click(next);
-    await waitFor(() => expect(shell.initLocalRuntime).toHaveBeenCalledWith("Forge"));
+    await waitFor(() =>
+      expect(api.initLocalStandardRuntime).toHaveBeenCalledWith(
+        expect.objectContaining({ label: "Forge" }),
+      ),
+    );
     expect(api.startManagedServer).toHaveBeenCalledWith("Forge", expect.anything());
   });
 
   it("persists the entered name for a new home", async () => {
-    const { api, shell } = setup({ existingHome: false, runtimeName: "Scout" });
+    const { api } = setup({ existingHome: false, runtimeName: "Scout" });
     const name = screen.getByLabelText("Agent name");
     await userEvent.clear(name);
     await userEvent.type(name, "Scout");
@@ -259,13 +273,17 @@ describe("first-run local agent name", () => {
     await waitFor(() => expect(next).toBeEnabled());
     await userEvent.click(next);
 
-    await waitFor(() => expect(shell.initLocalRuntime).toHaveBeenCalledWith("Scout"));
+    await waitFor(() =>
+      expect(api.initLocalStandardRuntime).toHaveBeenCalledWith(
+        expect.objectContaining({ label: "Scout" }),
+      ),
+    );
     expect(api.startManagedServer).toHaveBeenCalledWith("Scout", expect.anything());
     expect(await screen.findByText(/Scout is running as/)).toBeInTheDocument();
   });
 
   it("fails clearly instead of continuing under another agent's name", async () => {
-    const { shell } = setup({ existingHome: false, runtimeName: "Forge" });
+    const { api } = setup({ existingHome: false, runtimeName: "Forge" });
     const name = screen.getByLabelText("Agent name");
     await userEvent.clear(name);
     await userEvent.type(name, "Scout");
@@ -278,8 +296,8 @@ describe("first-run local agent name", () => {
         "This computer already has a local agent named Forge, so Scout was not created. Go back to continue with Forge.",
       ),
     ).toBeInTheDocument();
-    expect(shell.initLocalRuntime).not.toHaveBeenCalled();
-    expect(shell.refreshSnapshot).toHaveBeenCalled();
+    expect(api.initLocalStandardRuntime).not.toHaveBeenCalled();
+    expect(api.fetchDesktopSnapshot).toHaveBeenCalled();
     expect(screen.queryByText(/Saved the local connection/)).not.toBeInTheDocument();
     expect(screen.getByText("Try again")).toBeInTheDocument();
   });

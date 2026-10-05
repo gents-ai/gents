@@ -381,8 +381,10 @@ describe("a home this version cannot open", () => {
 
 describe("setup start on a home this version cannot open", () => {
   it("hands the typed start failure to the incompatible-home flow", async () => {
-    const adopt = vi.fn(async () => true);
+    const resetManagedServer = vi.fn(async () => preview());
     const api = {
+      resetManagedServer,
+      initLocalStandardRuntime: vi.fn(),
       managedServerStatus: vi.fn(async () => managedStatus()),
       startManagedServer: vi.fn(async () => {
         throw incompatible();
@@ -398,19 +400,18 @@ describe("setup start on a home this version cannot open", () => {
       api,
       snapshot: { bootstrap: { ...bootstrap, initAgentName: "Forge" } },
       deployments: [],
-      refreshSnapshot: vi.fn(async () => undefined),
-      initLocalRuntime: vi.fn(async () => undefined),
-      incompatibleHome: { adopt },
     } as unknown as Shell;
-    renderIn(testApp({ api }), <SetupScreen shell={shell} onDone={vi.fn()} />);
+    const app = testApp({ api, snapshot: shell.snapshot });
+    renderIn(app, <SetupScreen shell={shell} onDone={vi.fn()} />);
     const next = screen.getByTestId("setup-next");
     await waitFor(() => expect(next).toBeEnabled());
 
     await userEvent.click(next);
 
-    await waitFor(() => expect(adopt).toHaveBeenCalledOnce());
-    const [error] = adopt.mock.calls[0] as unknown as [BridgeInvokeError];
-    expect(error.code).toBe("incompatibleLocalStore");
-    expect(shell.initLocalRuntime).not.toHaveBeenCalled();
+    /* the typed refusal is the incompatible-home flow's: the home is
+       previewed for a reset, and no local agent is created over it */
+    await waitFor(() => expect(resetManagedServer).toHaveBeenCalledOnce());
+    expect(app.stores.client.getState().home.report).not.toBeNull();
+    expect(api.initLocalStandardRuntime).not.toHaveBeenCalled();
   });
 });

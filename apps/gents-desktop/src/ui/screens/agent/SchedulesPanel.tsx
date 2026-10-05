@@ -3,7 +3,6 @@ import { dependentsWarning } from "./dependents";
 import { toast } from "sonner";
 import type { DeploymentView, Schedule } from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
-import type { Shell } from "@/hooks/useShell";
 import { navigate } from "@/lib/router";
 import {
   ChoiceRow,
@@ -27,18 +26,18 @@ function cadenceLabel(s: Schedule) {
 }
 
 export function ScheduleEditor({
-  shell,
   deployment,
   schedule,
   embedded = false,
 }: {
-  shell: Shell;
   deployment: DeploymentView;
   schedule: Schedule;
   /* in a sheet beside another page: no Danger zone */
   embedded?: boolean;
 }) {
-  const { changeConfig } = useApp().actions;
+  const {
+    actions: { acceptsComposeIntent, captureComposeIntent, runSchedule, changeConfig },
+  } = useApp();
   const base = {
     name: "agent" as const,
     agentDid: deployment.agentDid,
@@ -83,18 +82,18 @@ export function ScheduleEditor({
   const id = (f: string) => `${schedule.schedule_id}-${f}`;
   const run = async () => {
     setRunning(true);
-    const pending = shell.runSchedule({
+    const pending = runSchedule({
       scheduleId: schedule.schedule_id,
       agentDid: schedule.agent_did,
     });
-    const intentGeneration = shell.captureComposeIntent();
+    const intentGeneration = captureComposeIntent();
     try {
       const result = await pending;
-      if (!shell.acceptsComposeIntent(intentGeneration)) return;
+      if (!acceptsComposeIntent(intentGeneration)) return;
       setLastRun(result.requestId);
       toast(`Schedule started · ${result.requestId}`);
     } catch (error) {
-      if (!shell.acceptsComposeIntent(intentGeneration)) return;
+      if (!acceptsComposeIntent(intentGeneration)) return;
       toastFailure("start the schedule", error);
     } finally {
       setRunning(false);
@@ -205,11 +204,9 @@ export function ScheduleEditor({
 }
 
 export function SchedulesPanel({
-  shell,
   deployment,
   item,
 }: {
-  shell: Shell;
   deployment: DeploymentView;
   item?: string;
 }) {
@@ -280,7 +277,7 @@ export function SchedulesPanel({
         return (
           <ScheduleEditor
             key={schedule.schedule_id}
-            shell={shell}
+
             deployment={deployment}
             schedule={schedule}
           />

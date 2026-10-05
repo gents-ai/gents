@@ -52,7 +52,6 @@ import {
   SETUP_COMPLETE_DWELL_MS,
   SetupProgress,
 } from "./SetupProgress";
-import type { Shell } from "@/hooks/useShell";
 import { setupStewardPatches } from "@/lib/setupSteward";
 import { supportsLocalManagedServer } from "../../../lib/shellPlatform";
 import { AgentAvatar } from "@/screens/AgentAvatar";
@@ -86,6 +85,12 @@ import {
   type InferenceSettingsDraft,
 } from "../inference/InferenceModelControls";
 import { useApp } from "@/app/AppContext";
+import {
+  useDeployments,
+  useSelectedDeployment,
+  useStartup,
+  useSnapshot,
+} from "@/hooks/useClient";
 
 type Step = "welcome" | "starting" | "inference";
 
@@ -358,7 +363,6 @@ const notAdded = (label: string) =>
   `This sign-in refreshed the account stored as ${label}. No account was added.`;
 
 export function SetupScreen({
-  shell,
   onDone,
   initialStep = "welcome",
   purpose = "onboarding",
@@ -366,7 +370,6 @@ export function SetupScreen({
   onCancel,
   provider: fixedProvider,
 }: {
-  shell: Shell;
   onDone: (snapshot: DesktopClientSnapshot) => void;
   initialStep?: Step;
   purpose?: "onboarding" | "add-backend";
@@ -375,35 +378,42 @@ export function SetupScreen({
   /* a catalog row was chosen, so the form is that provider's inputs only */
   provider?: ProviderId;
 }) {
-  const { changeConfig } = useApp().actions;
+  const clientSnapshot = useSnapshot();
+  const {
+    api,
+    actions: { initLocalRuntime, refreshSnapshot, changeConfig },
+  } = useApp();
+  const deployments = useDeployments();
+  const { diagnosticsHint } = useStartup();
+  const { incompatibleHome } = useStartup();
+  const selectedDeployment = useSelectedDeployment();
   const [step, setStep] = useState<Step>(initialStep);
   const allowLocal = supportsLocalManagedServer();
-  const api = shell.api;
   const [where, setWhere] = useState<"local" | "remote">(
     allowLocal ? "local" : "remote",
   );
   const [address, setAddress] = useState("");
   const existingHome = Boolean(
-    shell.snapshot?.bootstrap.agentHomeExists &&
-    shell.snapshot?.bootstrap.initAgentDid?.trim(),
+    clientSnapshot?.bootstrap.agentHomeExists &&
+    clientSnapshot?.bootstrap.initAgentDid?.trim(),
   );
   const [name, setName] = useState(
-    shell.snapshot?.bootstrap.initAgentName?.trim() || "Forge",
+    clientSnapshot?.bootstrap.initAgentName?.trim() || "Forge",
   );
   /* An initialized home keeps its identity: provisioning never renames it,
      so its name is shown, not asked for. */
   const existingName = existingHome
-    ? shell.snapshot?.bootstrap.initAgentName?.trim() || null
+    ? clientSnapshot?.bootstrap.initAgentName?.trim() || null
     : null;
   const agentName = existingName ?? name;
   const [homeRoot, setHomeRoot] = useState<string | null>(
-    api.managedServerStatus ? null : (shell.snapshot?.bootstrap.initToolRoot ?? null),
+    api.managedServerStatus ? null : (clientSnapshot?.bootstrap.initToolRoot ?? null),
   );
   const [toolCeiling, setToolCeiling] = useState<
     ManagedServerAuthorityInput["toolCeiling"]
-  >(() => ceilingFromInit(shell.snapshot?.bootstrap.initToolCeiling));
+  >(() => ceilingFromInit(clientSnapshot?.bootstrap.initToolCeiling));
   const [selectedDirectory, setSelectedDirectory] = useState<string | null | undefined>(
-    shell.snapshot?.bootstrap.initToolRoot ?? undefined,
+    clientSnapshot?.bootstrap.initToolRoot ?? undefined,
   );
   const [authorityError, setAuthorityError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -436,14 +446,14 @@ export function SetupScreen({
   const accountRevision = useRef(0);
   const setupAgentDid =
     agentDid ??
-    shell.selectedDeployment?.agentDid ??
-    shell.snapshot?.client?.deployments[0]?.agentDid;
+    selectedDeployment?.agentDid ??
+    clientSnapshot?.client?.deployments[0]?.agentDid;
   const setupAgentDidRef = useRef(setupAgentDid);
   setupAgentDidRef.current = setupAgentDid;
   /* Setup re-entry opens at the provider step without first run's
      provisioning, so a local agent's managed runtime may not be serving.
      Provider sign-in and the final save both write through it. */
-  const setupDeployment = (shell.deployments ?? []).find(
+  const setupDeployment = (deployments ?? []).find(
     (deployment) => deployment.agentDid === setupAgentDid,
   );
   const requiresManagedRuntime = Boolean(
@@ -451,13 +461,13 @@ export function SetupScreen({
     allowLocal &&
     api.managedServerStatus &&
     setupDeployment &&
-    isLocalAgent(setupDeployment, shell.snapshot?.bootstrap.initAgentDid),
+    isLocalAgent(setupDeployment, clientSnapshot?.bootstrap.initAgentDid),
   );
   const [runtimeGate, setRuntimeGate] = useState<
     "idle" | "checking" | "ready" | "unavailable"
   >("idle");
   const runtimeFallbackName =
-    shell.snapshot?.bootstrap.initAgentName?.trim() || "Local Agent";
+    clientSnapshot?.bootstrap.initAgentName?.trim() || "Local Agent";
   const checkManagedRuntime = async () => {
     setRuntimeGate("checking");
     setError(null);
@@ -522,7 +532,7 @@ export function SetupScreen({
   /* The provider the user just chose, whose sign-in starts without a click. */
   const autoSignIn = useRef<ProviderId | null>(fixedProvider ?? null);
   const [autoSignInRequest, setAutoSignInRequest] = useState(0);
-  const root = shell.snapshot?.bootstrap.defaultAgentHome ?? "~/.gents";
+  const root = clientSnapshot?.bootstrap.defaultAgentHome ?? "~/.gents";
   const toolRoot = selectedDirectory === undefined ? homeRoot : selectedDirectory;
   const authority = authorityForSelection(toolCeiling, toolRoot);
 
@@ -564,7 +574,7 @@ export function SetupScreen({
         patches: steward,
       });
     } else {
-      await shell.refreshSnapshot();
+      await refreshSnapshot();
     }
     setStartupDetails((current) => ({
       ...current,
@@ -626,7 +636,7 @@ export function SetupScreen({
         );
         if (status.agentName && status.agentName !== requestedName) {
           /* Welcome then shows the existing agent's name. */
-          void shell.refreshSnapshot();
+          void refreshSnapshot();
           throw new Error(
             `This computer already has a local agent named ${status.agentName}, so ${requestedName} was not created. Go back to continue with ${status.agentName}.`,
           );
@@ -649,7 +659,7 @@ export function SetupScreen({
       }
       setPhase("loading-configuration");
       failedPhase = "configuration-error";
-      await shell.initLocalRuntime(requestedName);
+      await initLocalRuntime(requestedName);
       setStartupDetails((current) => ({
         ...current,
         configuration: `Saved the local connection to ${requestedName}`,
@@ -664,7 +674,7 @@ export function SetupScreen({
     } catch (e) {
       setPhase(failedPhase);
       setError(setupErrorMessage(e));
-      await shell.incompatibleHome?.adopt(e);
+      await incompatibleHome?.adopt(e);
     } finally {
       setBusy(false);
     }
@@ -1125,8 +1135,8 @@ export function SetupScreen({
               {existingHome ? (
                 <p className="text-xs text-muted-foreground">
                   Found an existing Gents home
-                  {shell.snapshot?.bootstrap.initAgentName
-                    ? ` for ${shell.snapshot.bootstrap.initAgentName}`
+                  {clientSnapshot?.bootstrap.initAgentName
+                    ? ` for ${clientSnapshot.bootstrap.initAgentName}`
                     : ""}
                   . Next keeps that identity, native service, and reviewed host
                   authority.
@@ -1222,9 +1232,7 @@ export function SetupScreen({
             setStep("inference");
           }}
           onOpenLoginItems={api.openManagedServerLoginItems}
-          diagnosticsHint={
-            shell.diagnosticsHint ?? shell.snapshot?.bootstrap.diagnosticsHint
-          }
+          diagnosticsHint={diagnosticsHint ?? clientSnapshot?.bootstrap.diagnosticsHint}
         />
       </Frame>
     );

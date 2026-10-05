@@ -1524,7 +1524,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
             disabled={shell.nonEmptyContentSendStatus.kind === "disabled"}
             above={
               <>
-                <ReplyingTo shell={shell} />
+                <ReplyingTo />
                 <SlashSkillMenu
                   items={startSlash.items}
                   active={startSlash.active}
@@ -1536,7 +1536,6 @@ export function SessionScreen({ shell }: { shell: Shell }) {
             leading={
               <>
                 <BehaviorPicker
-                  shell={shell}
                   deployment={deployment}
                   behaviorId={choice.behaviorId}
                   onChange={choice.setPicked}
@@ -1844,7 +1843,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                     <ArrowDown />
                   </Button>
                 )}
-                <LoadingStatus shell={shell} />
+                <LoadingStatus />
                 <div data-testid="composer">
                   <Composer
                     value={draft}
@@ -1856,7 +1855,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                     }
                     above={
                       <>
-                        <ReplyingTo shell={shell} />
+                        <ReplyingTo />
                         <SlashSkillMenu
                           items={slash.items}
                           active={slash.active}

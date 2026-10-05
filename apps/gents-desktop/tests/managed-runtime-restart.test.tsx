@@ -1,12 +1,12 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { renderIn, testApp } from "./app-fixture";
 import type {
   DesktopApiAdapter,
   ManagedServerStatus,
 } from "@source-inc/gents-desktop-client";
 import { LocalServer } from "../src/ui/screens/agent/LocalServer";
-import type { Shell } from "../src/ui/hooks/useShell";
 
 // Match the existing switch-control harness: jsdom has no PointerEvent.
 const originalPointerEvent = window.PointerEvent;
@@ -44,12 +44,7 @@ describe("managed runtime restart settings", () => {
       startManagedServer: vi.fn(),
       stopManagedServer: vi.fn(),
     } as unknown as DesktopApiAdapter;
-    const shell = {
-      api,
-      snapshot: {},
-      refreshSnapshot: vi.fn(),
-    } as unknown as Shell;
-    render(<LocalServer shell={shell} />);
+    renderIn(testApp({ api }), <LocalServer />);
     await screen.findByText("running");
     await user.click(screen.getByRole("switch", { name: "Start at login" }));
     expect(api.setManagedServerAutoStart).toHaveBeenCalledWith(false);
@@ -64,8 +59,7 @@ describe("managed runtime restart settings", () => {
         throw new Error("user service manager unavailable");
       }),
     } as unknown as DesktopApiAdapter;
-    const shell = { api, snapshot: {}, refreshSnapshot: vi.fn() } as unknown as Shell;
-    render(<LocalServer shell={shell} />);
+    renderIn(testApp({ api }), <LocalServer />);
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Could not check the background agent",
     );
@@ -88,13 +82,8 @@ describe("managed runtime restart settings", () => {
       restartManagedServer: vi.fn(async () => restarted),
       validateManagedServerRoot: vi.fn(),
     } as unknown as DesktopApiAdapter;
-    const shell = {
-      api,
-      snapshot: {},
-      refreshSnapshot: vi.fn(),
-    } as unknown as Shell;
 
-    render(<LocalServer shell={shell} />);
+    renderIn(testApp({ api }), <LocalServer />);
     expect(
       screen.getByText(/Quit Desktop closes only this frontend/),
     ).toBeInTheDocument();

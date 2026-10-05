@@ -35,7 +35,7 @@ function setup(
     "applyConfigComponents",
   ] as const)
     vi.spyOn(api, name);
-  const app = testApp({ api });
+  const app = testApp({ api, snapshot: null });
   const shell = {
     api,
     snapshot: null,

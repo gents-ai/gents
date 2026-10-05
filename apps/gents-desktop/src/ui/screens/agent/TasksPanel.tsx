@@ -6,7 +6,6 @@ import { toast } from "sonner";
 import type { DeploymentView, TaskView } from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
 import { Textarea } from "@gents/ui/components/textarea";
-import type { Shell } from "@/hooks/useShell";
 import {
   AreaRow,
   DraftActions,
@@ -38,18 +37,18 @@ const when = (iso: string | null | undefined) =>
   iso ? new Date(iso).toLocaleString() : "—";
 
 export function TaskEditor({
-  shell,
   deployment,
   task,
   embedded = false,
 }: {
-  shell: Shell;
   deployment: DeploymentView;
   task: TaskView;
   /* in a sheet beside another page: no Danger zone */
   embedded?: boolean;
 }) {
-  const { changeConfig } = useApp().actions;
+  const {
+    actions: { acceptsComposeIntent, captureComposeIntent, runTask, changeConfig },
+  } = useApp();
   const base = {
     name: "agent" as const,
     agentDid: deployment.agentDid,
@@ -131,19 +130,19 @@ export function TaskEditor({
       return;
     }
     setRunning(true);
-    const pending = shell.runTask({
+    const pending = runTask({
       taskId: task.taskId,
       agentDid: deployment.agentDid,
       args: parsed,
     });
-    const intentGeneration = shell.captureComposeIntent();
+    const intentGeneration = captureComposeIntent();
     try {
       const r = await pending;
-      if (!shell.acceptsComposeIntent(intentGeneration)) return;
+      if (!acceptsComposeIntent(intentGeneration)) return;
       setLastRun(r.requestId);
       toast(`Task started · ${r.requestId}`);
     } catch (error) {
-      if (!shell.acceptsComposeIntent(intentGeneration)) return;
+      if (!acceptsComposeIntent(intentGeneration)) return;
       toastFailure("start the task", error);
     } finally {
       setRunning(false);
@@ -184,7 +183,6 @@ export function TaskEditor({
           })}
         />
         <BehaviorSheet
-          shell={shell}
           deployment={deployment}
           open={newBehavior !== null}
           onClose={(behaviorId) => {
@@ -355,7 +353,6 @@ export function TaskEditor({
         {besideTriggerView && (
           <TriggerEditor
             key={besideTriggerView.config.trigger_id}
-            shell={shell}
             deployment={deployment}
             trigger={besideTriggerView}
             embedded
@@ -457,11 +454,9 @@ function taskDocument(deployment: DeploymentView, t: TaskView) {
 }
 
 export function TasksPanel({
-  shell,
   deployment,
   item,
 }: {
-  shell: Shell;
   deployment: DeploymentView;
   item?: string;
 }) {
@@ -537,14 +532,7 @@ export function TasksPanel({
         onCreate={() => setCreating(true)}
         detail={(id) => {
           const task = deployment.tasks.find((t) => t.taskId === id)!;
-          return (
-            <TaskEditor
-              key={task.taskId}
-              shell={shell}
-              deployment={deployment}
-              task={task}
-            />
-          );
+          return <TaskEditor key={task.taskId} deployment={deployment} task={task} />;
         }}
       />
     </>

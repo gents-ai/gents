@@ -10,7 +10,6 @@ import { Badge } from "@gents/ui/components/badge";
 import { Button } from "@gents/ui/components/button";
 import { Spinner } from "@gents/ui/components/spinner";
 import { Switch } from "@gents/ui/components/switch";
-import type { Shell } from "@/hooks/useShell";
 import {
   ManagedRuntimeAuthorityPicker,
   ManagedRuntimeAuthorityReview,
@@ -24,9 +23,16 @@ import {
   type ManagedServerWait,
 } from "../../../lib/managedServerStartup";
 import { Fact, Group, Row } from "./rows";
+import { useApp } from "@/app/AppContext";
+import { useSnapshot, useStartup } from "@/hooks/useClient";
 
-export function LocalServer({ shell }: { shell: Shell }) {
-  const api = shell.api;
+export function LocalServer() {
+  const {
+    api,
+    actions: { refreshSnapshot },
+  } = useApp();
+  const { incompatibleHome } = useStartup();
+  const snapshot = useSnapshot();
   const [status, setStatus] = useState<ManagedServerStatus | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -50,7 +56,7 @@ export function LocalServer({ shell }: { shell: Shell }) {
   useEffect(() => {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shell.snapshot]);
+  }, [snapshot]);
   if (!api.managedServerStatus) return null;
   const act = async (
     label: string,
@@ -60,10 +66,10 @@ export function LocalServer({ shell }: { shell: Shell }) {
     try {
       const next = await run();
       if (next) setStatus(next);
-      await shell.refreshSnapshot();
+      await refreshSnapshot();
       toast(label);
     } catch (e) {
-      if (!(await shell.incompatibleHome?.adopt(e))) {
+      if (!(await incompatibleHome?.adopt(e))) {
         toast(`${label} failed: ${String(e)}`);
       }
     } finally {
@@ -117,11 +123,11 @@ export function LocalServer({ shell }: { shell: Shell }) {
         );
       }
       setEditingAuthority(false);
-      await shell.refreshSnapshot();
+      await refreshSnapshot();
       toast("Managed runtime restarted with the reviewed access");
     } catch (cause) {
       setAuthorityError(cause instanceof Error ? cause.message : String(cause));
-      await shell.incompatibleHome?.adopt(cause);
+      await incompatibleHome?.adopt(cause);
     } finally {
       setBusy(false);
     }
@@ -223,7 +229,7 @@ export function LocalServer({ shell }: { shell: Shell }) {
         label="Native logs"
         description="Agent runtime diagnostics are separate from desktop connectivity and pairing observations."
       >
-        <Fact mono>{shell.snapshot?.bootstrap?.diagnosticsHint ?? "System logs"}</Fact>
+        <Fact mono>{snapshot?.bootstrap?.diagnosticsHint ?? "System logs"}</Fact>
       </Row>
       <Row
         label="Host access"

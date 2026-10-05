@@ -17,7 +17,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@gents/ui/components/select";
-import type { Shell } from "@/hooks/useShell";
 import { href, navigate } from "@/lib/router";
 import { AgentPanel } from "./AgentPanel";
 import { BehaviorsPanel } from "./BehaviorsPanel";
@@ -34,18 +33,18 @@ import { TriggersPanel } from "./TriggersPanel";
 import { AllowedFoldersPanel } from "./AllowedFoldersPanel";
 import { PacksPanel } from "./PacksPanel";
 import { SECTIONS, type SectionId } from "./sections";
+import { useDeployments } from "@/hooks/useClient";
 
 export function AgentScreen({
-  shell,
   agentDid,
   section,
   item,
 }: {
-  shell: Shell;
   agentDid: string;
   section: string;
   item?: string;
 }) {
+  const deployments = useDeployments();
   /* a new section or document starts at the top; the scroll area keeps its
      position across hash changes otherwise */
   const page = useRef<HTMLDivElement>(null);
@@ -54,7 +53,7 @@ export function AgentScreen({
       ?.querySelector("[data-slot=scroll-area-viewport]")
       ?.scrollTo({ top: 0 });
   }, [section, item]);
-  const deployment = shell.deployments.find((d) => d.agentDid === agentDid) ?? null;
+  const deployment = deployments.find((d) => d.agentDid === agentDid) ?? null;
   if (!deployment) {
     return (
       <p className="p-8 text-sm text-muted-foreground">
@@ -151,40 +150,36 @@ export function AgentScreen({
           {section === "agent" && (
             <AgentPanel
               key={deployment.agentPrincipal.agentDid}
-              shell={shell}
+
               deployment={deployment}
             />
           )}
           {section === "behaviors" && (
-            <BehaviorsPanel shell={shell} deployment={deployment} behaviorId={item} />
+            <BehaviorsPanel deployment={deployment} behaviorId={item} />
           )}
           {section === "contexts" && (
-            <ContextsPanel shell={shell} deployment={deployment} item={item} />
+            <ContextsPanel deployment={deployment} item={item} />
           )}
           {section === "skills" && <SkillsPanel deployment={deployment} item={item} />}
           {section === "inference" && (
-            <InferencePanel shell={shell} deployment={deployment} item={item} />
+            <InferencePanel deployment={deployment} item={item} />
           )}
           {section === "profiles" && (
-            <ProfilesPanel shell={shell} deployment={deployment} item={item} />
+            <ProfilesPanel deployment={deployment} item={item} />
           )}
-          {section === "tools" && (
-            <ToolsPanel shell={shell} deployment={deployment} item={item} />
-          )}
+          {section === "tools" && <ToolsPanel deployment={deployment} item={item} />}
           {section === "tool-services" && (
-            <ToolServicesPanel shell={shell} deployment={deployment} item={item} />
+            <ToolServicesPanel deployment={deployment} item={item} />
           )}
-          {section === "tasks" && (
-            <TasksPanel shell={shell} deployment={deployment} item={item} />
-          )}
+          {section === "tasks" && <TasksPanel deployment={deployment} item={item} />}
           {section === "schedules" && (
-            <SchedulesPanel shell={shell} deployment={deployment} item={item} />
+            <SchedulesPanel deployment={deployment} item={item} />
           )}
           {section === "event-sources" && (
             <EventSourcesPanel deployment={deployment} item={item} />
           )}
           {(section === "automations" || section === "triggers") && (
-            <TriggersPanel shell={shell} deployment={deployment} item={item} />
+            <TriggersPanel deployment={deployment} item={item} />
           )}
           {section === "folders" && <AllowedFoldersPanel />}
           {section === "packs" && <PacksPanel />}

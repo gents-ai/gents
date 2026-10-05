@@ -22,10 +22,14 @@ export function node(overrides: Record<string, unknown> = {}) {
 /** A read of the nodes, published as the client lifecycle would: the
     client's snapshot, and its fleet by key. */
 export function publish(app: DesktopApp, deployments: unknown[]) {
-  const snapshot = {
-    bootstrap: {},
+  publishSnapshot(app, {
+    bootstrap: app.stores.client.getState().snapshot?.bootstrap ?? {},
     client: { deployments },
-  } as unknown as DesktopClientSnapshot;
+  } as unknown as DesktopClientSnapshot);
+}
+
+/** A whole read of the client, bootstrap included. */
+export function publishSnapshot(app: DesktopApp, snapshot: DesktopClientSnapshot) {
   app.stores.client.setState({ snapshot });
   applyFleetSnapshot(app.stores.fleet, snapshot);
 }
@@ -37,12 +41,15 @@ export function publish(app: DesktopApp, deployments: unknown[]) {
  */
 export function testApp({
   api = {},
+  snapshot,
   deployments,
   session,
   selection,
   reportFailure,
 }: {
   api?: object;
+  /** the client as read, when a test gives more than its nodes */
+  snapshot?: unknown;
   /** where a failed action is shown; the app passes its toast */
   reportFailure?: (message: string) => void;
   deployments?: unknown[];
@@ -50,6 +57,7 @@ export function testApp({
   selection?: Partial<SelectionState>;
 } = {}): DesktopApp {
   const app = createDesktopApp({ api: api as DesktopApiAdapter, reportFailure });
+  if (snapshot) publishSnapshot(app, snapshot as DesktopClientSnapshot);
   if (deployments) publish(app, deployments);
   app.stores.selection.setState({
     ...(session

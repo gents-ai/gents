@@ -10,6 +10,7 @@ import { PROVIDER_VISUALS, SetupScreen, type ProviderId } from "../setup/SetupSc
 import type { InferenceProviderOption } from "@source-inc/gents-desktop-client";
 import { toast } from "sonner";
 import type {
+  DesktopApiAdapter,
   BackendProviderKind,
   BackendSaveRequest,
   BackendUsageView,
@@ -24,7 +25,6 @@ import type {
 } from "@source-inc/gents-desktop-client";
 import { Badge } from "@gents/ui/components/badge";
 import { Button } from "@gents/ui/components/button";
-import type { Shell } from "@/hooks/useShell";
 import {
   bridgeErrorCode,
   CREDENTIAL_NOT_SAVED,
@@ -64,6 +64,7 @@ import { ProviderLogo } from "../ProviderLogo";
 import { RenameDialog } from "../AgentsScreen";
 import { useApp } from "@/app/AppContext";
 import { toastFailure } from "@/lib/failure";
+import { useSnapshot } from "@/hooks/useClient";
 
 export function backendSave(
   agentDid: string,
@@ -159,9 +160,10 @@ const SUBSCRIPTION: Record<
   },
 };
 
-export function useAccounts(shell: Shell, agentDid: string) {
+export function useAccounts(agentDid: string) {
+  const { api } = useApp();
+  const snapshot = useSnapshot();
   const [accounts, setAccounts] = useState<ProviderAccountView[]>([]);
-  const api = shell.api;
   const latest = useRef(0);
   const load = useCallback(() => {
     const read = ++latest.current;
@@ -182,21 +184,22 @@ export function useAccounts(shell: Shell, agentDid: string) {
     return () => {
       latest.current += 1;
     };
-  }, [load, shell.snapshot]);
+  }, [load, snapshot]);
   return { accounts, reload: load };
 }
 
 /* usage, read when the panel opens and on Refresh (both skip accounts read
    in the last five minutes); nothing polls, and a snapshot change does not
    read again */
-function useProviderUsage(shell: Shell, agentDid: string) {
+function useProviderUsage(agentDid: string) {
+  const { api } = useApp();
   const [usage, setUsage] = useState<BackendUsageView[]>([]);
   /* only the latest read draws: an older one, or another agent's, may land later */
   const latest = useRef(0);
   useEffect(() => {
     const read = ++latest.current;
     setUsage([]);
-    shell.api.readProviderUsage?.(agentDid, false, null).then(
+    api.readProviderUsage?.(agentDid, false, null).then(
       (views) => {
         if (latest.current === read) setUsage(views);
       },
@@ -205,10 +208,10 @@ function useProviderUsage(shell: Shell, agentDid: string) {
     return () => {
       latest.current += 1;
     };
-  }, [shell.api, agentDid]);
+  }, [api, agentDid]);
   const refresh = async (provider: string | null) => {
     const read = ++latest.current;
-    const views = await shell.api.readProviderUsage?.(agentDid, true, provider);
+    const views = await api.readProviderUsage?.(agentDid, true, provider);
     if (views && latest.current === read) setUsage(views);
   };
   return { usage, refresh };
@@ -370,22 +373,20 @@ type AccountAction = {
 /* rename, disconnect and remove for an account, opened from its row's menu;
    none of them edits a profile or a backend */
 function AccountDialogs({
-  shell,
   deployment,
   accounts,
   reload,
   acting,
   onClose,
 }: {
-  shell: Shell;
   deployment: DeploymentView;
   accounts: ProviderAccountView[];
   reload: () => Promise<void>;
   acting: AccountAction | null;
   onClose: () => void;
 }) {
+  const { api } = useApp();
   const [busy, setBusy] = useState(false);
-  const api = shell.api;
   const account = acting?.account;
   const warnings = account && accountWarnings(deployment, accounts, account);
   const rename = async (label: string) => {
@@ -457,7 +458,7 @@ function AccountDialogs({
           noun="account"
           open={acting?.action === "remove"}
           onOpenChange={(open) => !open && onClose()}
-          onDelete={() => removeAccount(shell, deployment, account, reload)}
+          onDelete={() => removeAccount(api, deployment, account, reload)}
           warning={warnings?.remove}
         />
       )}
@@ -466,31 +467,30 @@ function AccountDialogs({
 }
 
 async function removeAccount(
-  shell: Shell,
+  api: DesktopApiAdapter,
   deployment: DeploymentView,
   account: ProviderAccountView,
   reload: () => Promise<void>,
 ) {
-  await shell.api.removeProviderAccount?.(deployment.agentDid, account.credentialId);
+  await api.removeProviderAccount?.(deployment.agentDid, account.credentialId);
   await reload();
 }
 
 /* the account card for a subscription backend */
 function AccountRows({
-  shell,
   deployment,
   kind,
   accountRef,
   accounts,
   reload,
 }: {
-  shell: Shell;
   deployment: DeploymentView;
   kind: string;
   accountRef: string | null;
   accounts: ProviderAccountView[];
   reload: () => Promise<void>;
 }) {
+  const { api } = useApp();
   const sub = SUBSCRIPTION[kind]!;
   const stored = referencedAccount(accounts, sub.provider, accountRef);
   const account = stored?.enabled ? stored : undefined;
@@ -499,7 +499,6 @@ function AccountRows({
   const unsaved = accounts.some((a) => a.provider === sub.provider && a.pendingSave);
   const [busy, setBusy] = useState(false);
   const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
-  const api = shell.api;
   const signIn = async () => {
     setBusy(true);
     try {
@@ -620,7 +619,6 @@ function AccountRows({
 }
 
 export function BackendEditor({
-  shell,
   deployment,
   backend,
   accounts,
@@ -628,7 +626,6 @@ export function BackendEditor({
   usage,
   embedded = false,
 }: {
-  shell: Shell;
   deployment: DeploymentView;
   backend: InferenceBackendView;
   accounts: ProviderAccountView[];
@@ -641,7 +638,10 @@ export function BackendEditor({
   /* in a sheet beside another page: no Danger zone */
   embedded?: boolean;
 }) {
-  const { changeConfig } = useApp().actions;
+  const {
+    api,
+    actions: { changeConfig },
+  } = useApp();
   const base = {
     name: "agent" as const,
     agentDid: deployment.agentDid,
@@ -770,7 +770,7 @@ export function BackendEditor({
                   if (subscription) {
                     setProbe("Discovering models…");
                     const connection = SUBSCRIPTION[d.draft.providerKind]!;
-                    const result = await shell.api.discoverInferenceModels({
+                    const result = await api.discoverInferenceModels({
                       requestKey: `backend-${backend.backendId}-${Date.now()}`,
                       agentDid: deployment.agentDid,
                       provider: connection.providerId,
@@ -790,7 +790,7 @@ export function BackendEditor({
                   }
                   const endpoint = requiredHttpUrl("Endpoint", d.draft.endpoint);
                   setProbe("probing…");
-                  const r = await shell.api.probeInferenceEndpoint(endpoint);
+                  const r = await api.probeInferenceEndpoint(endpoint);
                   if (discoveryRevision.current !== revision) return;
                   setProbe(
                     r.reachable
@@ -855,7 +855,6 @@ export function BackendEditor({
       <Group title={subscription ? "Subscription" : "Credential"}>
         {subscription ? (
           <AccountRows
-            shell={shell}
             deployment={deployment}
             kind={d.draft.providerKind}
             accountRef={backend.accountRef ?? null}
@@ -1030,7 +1029,7 @@ export function BackendEditor({
           noun="account"
           warning={accountWarnings(deployment, accounts, removable).remove}
           base={base}
-          onDelete={() => removeAccount(shell, deployment, removable, reload)}
+          onDelete={() => removeAccount(api, deployment, removable, reload)}
         />
       )}
       {!embedded && !removable && (
@@ -1052,14 +1051,15 @@ export function BackendEditor({
 
 /* the provider catalog the bridge publishes, once per mount */
 /* the provider catalog; a failed read is said, with a way to ask again */
-function useSetupCatalog(shell: Shell) {
+function useSetupCatalog() {
+  const { api } = useApp();
   const [providers, setProviders] = useState<InferenceProviderOption[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     let live = true;
     setError(null);
-    const read = shell.api.getInferenceSetupCatalog?.();
+    const read = api.getInferenceSetupCatalog?.();
     if (!read) return;
     read.then(
       (c) => {
@@ -1072,7 +1072,7 @@ function useSetupCatalog(shell: Shell) {
     return () => {
       live = false;
     };
-  }, [shell.api, attempt]);
+  }, [api, attempt]);
   return { providers, error, retry: () => setAttempt((n) => n + 1) };
 }
 
@@ -1100,14 +1100,12 @@ function providerOf(b: InferenceBackendView): ProviderId {
    provider step with it chosen. The editor sits behind the `inference`
    route; Back from it goes to Models. */
 export function InferencePanel({
-  shell,
   deployment,
   item,
   onAddingChange,
   under,
   orphans = [],
 }: {
-  shell: Shell;
   deployment: DeploymentView;
   item?: string;
   /* tells the Models page the New backend form is open, so it steps aside */
@@ -1128,12 +1126,12 @@ export function InferencePanel({
     agentDid: deployment.agentDid,
     section: "profiles",
   };
-  const { accounts, reload } = useAccounts(shell, deployment.agentDid);
+  const { accounts, reload } = useAccounts(deployment.agentDid);
   const [acting, setActing] = useState<AccountAction | null>(null);
-  const providerUsage = useProviderUsage(shell, deployment.agentDid);
+  const providerUsage = useProviderUsage(deployment.agentDid);
   const usageOf = (backendId: string) =>
     providerUsage.usage.find((u) => u.backendId === backendId);
-  const catalog = useSetupCatalog(shell);
+  const catalog = useSetupCatalog();
   const providers = catalog.providers;
   /* the provider whose inputs are open, from a catalog row or Add another */
   const [adding, setAddingState] = useState<ProviderId | null>(null);
@@ -1144,7 +1142,6 @@ export function InferencePanel({
   if (adding)
     return (
       <SetupScreen
-        shell={shell}
         initialStep="inference"
         purpose="add-backend"
         provider={adding}
@@ -1341,7 +1338,7 @@ export function InferencePanel({
           return (
             <BackendEditor
               key={backend.backendId}
-              shell={shell}
+
               deployment={deployment}
               backend={backend}
               accounts={accounts}
@@ -1355,7 +1352,6 @@ export function InferencePanel({
         }}
       />
       <AccountDialogs
-        shell={shell}
         deployment={deployment}
         accounts={accounts}
         reload={reload}

@@ -207,7 +207,6 @@ function AppBody({
         {titlebar}
         <TooltipProvider>
           <SetupScreen
-            shell={shell}
             initialStep={hasLocalAgent ? "inference" : "welcome"}
             onDone={(snapshot) => {
               setSetup("done");
@@ -300,7 +299,6 @@ function AppBody({
             )}
             {route.name === "agent" && (
               <AgentScreen
-                shell={shell}
                 agentDid={route.agentDid}
                 section={route.section}
                 item={route.item}
@@ -312,7 +310,7 @@ function AppBody({
         {shell.deployments.some((deployment) =>
           isLocalAgent(deployment, shell.snapshot?.bootstrap.initAgentDid),
         ) && <PluginAccessPrompt />}
-        <Shortcuts shell={shell} />
+        <Shortcuts />
       </TooltipProvider>
     </>
   );

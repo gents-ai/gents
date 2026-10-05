@@ -2,7 +2,6 @@
    node, with its state and a way in. The same lineage the sessions list
    folds under a parent, shown flat beside the parent. */
 import type { SurfaceContext } from "@/app/surfaces";
-import { useShellContext } from "@/app/ShellContext";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { href } from "@/lib/router";
 import { nodeOfSession } from "@/lib/nodes";
@@ -10,9 +9,12 @@ import { NodeBehaviorStack } from "./NodeBehaviorStack";
 import { SessionStatus } from "./SessionStatus";
 import { when } from "./time";
 import { useFleet, workersOfId } from "../hooks/useFleet";
+import { useDeployments, useHomeDid, useSelectedDeployment } from "@/hooks/useClient";
 
 export function WorkersSurface({ sessionId }: SurfaceContext) {
-  const shell = useShellContext();
+  const deployments = useDeployments();
+  const selectedDeployment = useSelectedDeployment();
+  const homeDid = useHomeDid();
   const workers = useFleet((s) => workersOfId(s, sessionId));
   return (
     <ScrollArea className="h-full">
@@ -32,11 +34,11 @@ export function WorkersSurface({ sessionId }: SurfaceContext) {
                 <SessionStatus turnState={w.turnState} />
                 <span className="truncate">{w.title ?? "Untitled"}</span>
                 <NodeBehaviorStack
-                  nodes={shell.deployments}
-                  homeDid={shell.snapshot?.bootstrap.initAgentDid}
+                  nodes={deployments}
+                  homeDid={homeDid}
                   nodeDid={nodeOfSession(w)}
                   behaviorId={w.behaviorId}
-                  deployment={shell.selectedDeployment}
+                  deployment={selectedDeployment}
                   size="sm"
                 />
                 <span className="w-8 text-right text-xs text-muted-foreground">

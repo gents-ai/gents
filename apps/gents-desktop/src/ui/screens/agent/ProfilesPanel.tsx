@@ -9,7 +9,6 @@ import type {
   InferenceProfile,
   InferenceSampling,
 } from "@source-inc/gents-desktop-client";
-import type { Shell } from "@/hooks/useShell";
 import { href, navigate } from "@/lib/router";
 import {
   AreaRow,
@@ -111,13 +110,11 @@ export function newProfileDocument(
 }
 
 export function ProfileEditor({
-  shell,
   deployment,
   profile,
   embedded = false,
   draft: draftMode,
 }: {
-  shell: Shell;
   deployment: DeploymentView;
   /* in a sheet beside another page: no Danger zone */
   embedded?: boolean;
@@ -125,7 +122,10 @@ export function ProfileEditor({
   /* a new profile that exists only here until Create */
   draft?: { onSaved: (profileId: string) => void; onCancel: () => void };
 }) {
-  const { changeConfig } = useApp().actions;
+  const {
+    api,
+    actions: { changeConfig },
+  } = useApp();
   const base = {
     name: "agent" as const,
     agentDid: deployment.agentDid,
@@ -231,7 +231,7 @@ export function ProfileEditor({
       .find((backend) => backend.backendId === backendId)
       ?.advertisedModels?.find((model) => model.model_name === modelName.trim())
       ?.max_context_window ?? undefined;
-  const { accounts } = useAccounts(shell, deployment.agentDid);
+  const { accounts } = useAccounts(deployment.agentDid);
   const d = useDraft(
     saved,
     async (next) => {
@@ -413,8 +413,8 @@ export function ProfileEditor({
   );
   useEffect(() => {
     let canceled = false;
-    if (shell.api.getInferenceSetupCatalog)
-      void shell.api.getInferenceSetupCatalog().then(
+    if (api.getInferenceSetupCatalog)
+      void api.getInferenceSetupCatalog().then(
         (catalog) => {
           if (!canceled) {
             setExecutionDefaults(catalog.executionDefaults ?? {});
@@ -429,7 +429,7 @@ export function ProfileEditor({
     return () => {
       canceled = true;
     };
-  }, [shell.api]);
+  }, [api]);
   const executionDefault = (key: string) =>
     executionDefaults[key] == null ? "Unlimited" : String(executionDefaults[key]);
   const [editedExecution, setEditedExecution] = useState<Set<string>>(new Set());
@@ -481,7 +481,7 @@ export function ProfileEditor({
     setRecommendationError(null);
     let canceled = false;
     const timeout = window.setTimeout(() => {
-      void shell.api
+      void api
         .getInferenceBackendRecommendation({
           providerKind: backend.providerKind as BackendProviderKind,
           endpoint: backend.endpoint!,
@@ -534,7 +534,7 @@ export function ProfileEditor({
     selectedBackend?.endpoint,
     selectedBackend?.maxConcurrent,
     advertisedModelKey,
-    shell.api,
+    api,
   ]);
   const updateGuided = (next: InferenceSettingsDraft) => {
     if (guided) {
@@ -580,7 +580,6 @@ export function ProfileEditor({
     const before = new Set(deployment.inferenceBackends.map((b) => b.backendId));
     return (
       <SetupScreen
-        shell={shell}
         initialStep="inference"
         purpose="add-backend"
         agentDid={deployment.agentDid}
@@ -604,7 +603,6 @@ export function ProfileEditor({
   return (
     <>
       <BackendSheet
-        shell={shell}
         deployment={deployment}
         backendId={besideBackend}
         onClose={() => setBesideBackend(null)}
@@ -952,11 +950,9 @@ function modelProblem(deployment: DeploymentView, p: InferenceProfile): string |
 }
 
 export function ProfilesPanel({
-  shell,
   deployment,
   item,
 }: {
-  shell: Shell;
   deployment: DeploymentView;
   item?: string;
 }) {
@@ -1042,7 +1038,6 @@ export function ProfilesPanel({
           detail={() => (
             <ProfileEditor
               key={profile.profile_id}
-              shell={shell}
               deployment={deployment}
               profile={profile}
             />
@@ -1053,7 +1048,6 @@ export function ProfilesPanel({
   return (
     <>
       <ProfileSheet
-        shell={shell}
         deployment={deployment}
         open={creating !== null}
         backendId={creating ?? undefined}
@@ -1063,7 +1057,6 @@ export function ProfilesPanel({
         }}
       />
       <InferencePanel
-        shell={shell}
         deployment={deployment}
         under={modelRows}
         /* a profile whose backend is gone has no row to sit under; it stays

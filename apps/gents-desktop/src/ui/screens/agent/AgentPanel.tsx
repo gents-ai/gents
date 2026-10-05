@@ -1,6 +1,5 @@
 /* The agent itself: editable principal fields and identity/runtime facts. */
 import type { DeploymentView } from "@source-inc/gents-desktop-client";
-import type { Shell } from "@/hooks/useShell";
 import { isLocalAgent } from "@/lib/firstRun";
 import { DraftActions, RefRow, SwitchRow, TagsRow, TextRow } from "./editors";
 import { useDraft } from "./draft";
@@ -9,14 +8,10 @@ import { LocalServer } from "./LocalServer";
 import { AgentCard } from "./AgentCard";
 import { saveDefault } from "./BehaviorsPanel";
 import { useApp } from "@/app/AppContext";
+import { useSnapshot } from "@/hooks/useClient";
 
-export function AgentPanel({
-  shell,
-  deployment,
-}: {
-  shell: Shell;
-  deployment: DeploymentView;
-}) {
+export function AgentPanel({ deployment }: { deployment: DeploymentView }) {
+  const snapshot = useSnapshot();
   const { changeConfig } = useApp().actions;
   const agent = deployment.agentPrincipal;
   const behaviors = deployment.behaviors.map((b) => ({
@@ -55,7 +50,7 @@ export function AgentPanel({
 
   return (
     <div>
-      <AgentCard shell={shell} deployment={deployment} />
+      <AgentCard deployment={deployment} />
       <Group title="Agent details">
         <TextRow
           id="agent-name"
@@ -112,16 +107,16 @@ export function AgentPanel({
           <Fact mono>{agent.agentDid}</Fact>
         </Row>
         <Row label="Install name">
-          <Fact>{shell.snapshot?.bootstrap.initAgentName}</Fact>
+          <Fact>{snapshot?.bootstrap.initAgentName}</Fact>
         </Row>
         <Row
           label="Tool ceiling"
           description="The most any behavior on this agent may do."
         >
-          <Fact>{shell.snapshot?.bootstrap.initToolCeiling ?? "not configured"}</Fact>
+          <Fact>{snapshot?.bootstrap.initToolCeiling ?? "not configured"}</Fact>
         </Row>
         <Row label="Tool root" description="The directory tools are confined to.">
-          <Fact mono>{shell.snapshot?.bootstrap.initToolRoot ?? "not configured"}</Fact>
+          <Fact mono>{snapshot?.bootstrap.initToolRoot ?? "not configured"}</Fact>
         </Row>
         <Row label="Peer" description="Where the agent's node runs.">
           <Fact mono>{deployment.peerId}</Fact>
@@ -150,9 +145,7 @@ export function AgentPanel({
           </Fact>
         </Row>
       </Group>
-      {isLocalAgent(deployment, shell.snapshot?.bootstrap.initAgentDid) && (
-        <LocalServer shell={shell} />
-      )}
+      {isLocalAgent(deployment, snapshot?.bootstrap.initAgentDid) && <LocalServer />}
     </div>
   );
 }

@@ -10,7 +10,6 @@ import { Button } from "@gents/ui/components/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@gents/ui/components/popover";
 import { cn } from "@gents/ui/lib/utils";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
-import type { Shell } from "@/hooks/useShell";
 import { BehaviorSheet } from "./agent/BehaviorSheet";
 import { BehaviorAvatar } from "./parts";
 import { behaviorReadiness } from "@/lib/behavior-readiness";
@@ -23,12 +22,10 @@ const short = (mode: string | null | undefined) =>
   ] ?? mode;
 
 export function BehaviorPicker({
-  shell,
   deployment,
   behaviorId,
   onChange,
 }: {
-  shell: Shell;
   deployment: DeploymentView | null;
   behaviorId: string | null;
   onChange: (behaviorId: string) => void;
@@ -39,7 +36,6 @@ export function BehaviorPicker({
   if (!chosen) return null;
   return (
     <MountedBehaviorPicker
-      shell={shell}
       deployment={deployment}
       behaviors={behaviors}
       chosen={chosen}
@@ -49,13 +45,11 @@ export function BehaviorPicker({
 }
 
 function MountedBehaviorPicker({
-  shell,
   deployment,
   behaviors,
   chosen,
   onChange,
 }: {
-  shell: Shell;
   deployment: DeploymentView;
   behaviors: DeploymentView["behaviors"];
   chosen: DeploymentView["behaviors"][number];
@@ -75,7 +69,9 @@ function MountedBehaviorPicker({
   useEffect(() => {
     if (searching) input.current?.focus();
   }, [searching]);
-  const describe = (id: string) => shell.behaviorDescriptions[id] ?? "";
+  /* described by the node whose behaviors are listed */
+  const describe = (id: string) =>
+    deployment.behaviors.find((b) => b.behaviorId === id)?.description ?? "";
   const readiness = (id: string) => behaviorReadiness(deployment, id);
   const env = (id: string) =>
     deployment.behaviorEnvironments.find((e) => e.behaviorId === id);
@@ -258,7 +254,6 @@ function MountedBehaviorPicker({
       </Popover>
       {deployment && (
         <BehaviorSheet
-          shell={shell}
           deployment={deployment}
           open={creating}
           enabled

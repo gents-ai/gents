@@ -4,7 +4,6 @@ import type {
   SubagentTargetDocument,
 } from "@source-inc/gents-desktop-client";
 import { dependentsWarning } from "./dependents";
-import type { Shell } from "@/hooks/useShell";
 import { navigate } from "@/lib/router";
 import {
   AreaRow,
@@ -38,13 +37,11 @@ export function newToolsDocument(deployment: DeploymentView): Tools {
 }
 
 export function ToolsEditor({
-  shell,
   deployment,
   tools,
   embedded = false,
   draft: draftMode,
 }: {
-  shell: Shell;
   deployment: DeploymentView;
   /* in a sheet beside another page: no Danger zone */
   embedded?: boolean;
@@ -349,7 +346,7 @@ export function ToolsEditor({
       <ToolGroupControls
         key={controlsGeneration}
         onInvalid={reportInvalidLimit}
-        shell={shell}
+
         value={d.draft.advanced}
         onChange={(value) => d.set("advanced", value)}
         deployment={{
@@ -442,11 +439,9 @@ export function ToolsEditor({
 }
 
 export function ToolsPanel({
-  shell,
   deployment,
   item,
 }: {
-  shell: Shell;
   deployment: DeploymentView;
   item?: string;
 }) {
@@ -516,7 +511,7 @@ export function ToolsPanel({
         return (
           <ToolsEditor
             key={tools.tools_id}
-            shell={shell}
+
             deployment={deployment}
             tools={tools}
           />

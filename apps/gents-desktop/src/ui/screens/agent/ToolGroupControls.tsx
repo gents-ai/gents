@@ -2,9 +2,9 @@ import type { DeploymentView, Tools } from "@source-inc/gents-desktop-client";
 import { AreaRow, ChoiceRow, NumberRow, SwitchRow } from "./editors";
 import { DocumentSelection } from "./DocumentSelection";
 import { Group } from "./rows";
-import type { Shell } from "@/hooks/useShell";
 import { RemoteToolDiscovery } from "./RemoteToolDiscovery";
 import { useEffect, useState, type ReactNode } from "react";
+import { useApp } from "@/app/AppContext";
 
 // Mirrors the canonical effective defaults used by Tools::validation_violations.
 // The desktop bridge does not currently publish these values in its catalog.
@@ -137,16 +137,15 @@ export function ToolGroupControls({
   onChange,
   deployment,
   onCreateTarget,
-  shell,
   onInvalid,
 }: {
   value: string;
   onChange: (value: string) => void;
   deployment: DeploymentView;
   onCreateTarget: (behaviorId: string) => void;
-  shell: Shell;
   onInvalid: (id: string, label: string | null) => void;
 }) {
+  const { api } = useApp();
   const groups = parseToolGroups(value);
   if (!groups)
     return (
@@ -414,7 +413,7 @@ export function ToolGroupControls({
                   (row) => row.service_id === service.mcp_service_id,
                 );
                 if (!config) throw new Error("Remote service is unavailable");
-                const result = await shell.api.testToolService({
+                const result = await api.testToolService({
                   serviceId: config.service_id,
                   hostname: config.hostname ?? null,
                   tailscaleIp: config.tailscale_ip ?? null,

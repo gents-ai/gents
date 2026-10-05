@@ -437,13 +437,16 @@ describe("first-run local agent startup", () => {
         providers: [],
       })),
       patchConfigComponents: vi.fn(async () => ({})),
+      initLocalStandardRuntime: vi.fn(async () => ({ agentDid: deployment.agentDid })),
+      startDesktopClient: vi.fn(async () => ({
+        bootstrap,
+        client: { deployments: [deployment] },
+      })),
     };
     const shell = {
       api,
       snapshot: { bootstrap: { ...bootstrap, initAgentName: "Forge" } },
       deployments: [],
-      refreshSnapshot: vi.fn(async () => undefined),
-      initLocalRuntime: vi.fn(async () => undefined),
     } as unknown as Shell;
     return {
       api,
@@ -479,7 +482,7 @@ describe("first-run local agent startup", () => {
   it("waits for macOS approval and a slow boot, then keeps the step log readable", async () => {
     const run = firstRun();
     renderIn(
-      testApp({ api: run.api }),
+      testApp({ api: run.api, snapshot: run.shell.snapshot }),
       <SetupScreen shell={run.shell} onDone={vi.fn()} />,
     );
     const next = screen.getByTestId("setup-next");
@@ -526,7 +529,7 @@ describe("first-run local agent startup", () => {
   it("keeps observing a runtime its start left migrating, then continues without restarting it", async () => {
     const run = firstRun();
     renderIn(
-      testApp({ api: run.api }),
+      testApp({ api: run.api, snapshot: run.shell.snapshot }),
       <SetupScreen shell={run.shell} onDone={vi.fn()} />,
     );
     const next = screen.getByTestId("setup-next");
@@ -552,7 +555,7 @@ describe("first-run local agent startup", () => {
     ).not.toBeInTheDocument();
 
     run.observe(run.readyStatus());
-    await waitFor(() => expect(run.shell.initLocalRuntime).toHaveBeenCalled(), {
+    await waitFor(() => expect(run.api.initLocalStandardRuntime).toHaveBeenCalled(), {
       timeout: 5_000,
     });
     expect(run.api.startManagedServer).toHaveBeenCalledOnce();
@@ -561,11 +564,11 @@ describe("first-run local agent startup", () => {
 
   it("keeps earlier steps and their results visible when a later step fails", async () => {
     const run = firstRun();
-    (run.shell.initLocalRuntime as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+    run.api.initLocalStandardRuntime.mockRejectedValueOnce(
       new Error("saved connections could not be written"),
     );
     renderIn(
-      testApp({ api: run.api }),
+      testApp({ api: run.api, snapshot: run.shell.snapshot }),
       <SetupScreen shell={run.shell} onDone={vi.fn()} />,
     );
     const next = screen.getByTestId("setup-next");
@@ -590,7 +593,7 @@ describe("first-run local agent startup", () => {
   it("pauses on the completed step log before moving on by itself", async () => {
     const run = firstRun();
     renderIn(
-      testApp({ api: run.api }),
+      testApp({ api: run.api, snapshot: run.shell.snapshot }),
       <SetupScreen shell={run.shell} onDone={vi.fn()} />,
     );
     const next = screen.getByTestId("setup-next");

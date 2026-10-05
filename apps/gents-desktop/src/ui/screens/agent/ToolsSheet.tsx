@@ -2,17 +2,14 @@
    editor, nothing saved until Create, and the caller gets the id. */
 import { useState } from "react";
 import type { DeploymentView } from "@source-inc/gents-desktop-client";
-import type { Shell } from "@/hooks/useShell";
 import { EditorSheet } from "./EditorSheet";
 import { ToolsEditor, newToolsDocument } from "./ToolsPanel";
 
 export function ToolsSheet({
-  shell,
   deployment,
   open,
   onClose,
 }: {
-  shell: Shell;
   deployment: DeploymentView;
   open: boolean;
   /* the new document's id, or null when discarded */
@@ -33,7 +30,7 @@ export function ToolsSheet({
       {open && (
         <ToolsEditor
           key={draft.tools_id}
-          shell={shell}
+
           deployment={deployment}
           tools={draft}
           draft={{ onSaved: (id) => close(id), onCancel: () => close(null) }}

@@ -18,10 +18,11 @@ import {
 } from "@gents/ui/components/hover-card";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { cn } from "@gents/ui/lib/utils";
-import type { Shell } from "@/hooks/useShell";
 import { href } from "@/lib/router";
 import { useState } from "react";
 import { span, when } from "./time";
+import { useApp } from "@/app/AppContext";
+import { useMailboxCause, useSelectedDeployment } from "@/hooks/useClient";
 
 const KIND_LABEL: Record<string, string> = {
   ask: "Question",
@@ -31,13 +32,13 @@ const KIND_LABEL: Record<string, string> = {
   flag: "Flag",
 };
 
-export function ReplyingTo({ shell }: { shell: Shell }) {
+export function ReplyingTo() {
+  const cause = useMailboxCause();
+  const selectedDeployment = useSelectedDeployment();
+  const { clearMailboxCause } = useApp().actions;
   const [open, setOpen] = useState(false);
-  const cause = shell.mailboxCause;
   if (!cause) return null;
-  const item = shell.selectedDeployment?.mailboxItems.find(
-    (m) => m.itemId === cause.itemId,
-  );
+  const item = selectedDeployment?.mailboxItems.find((m) => m.itemId === cause.itemId);
   return (
     <div
       className="flex items-center px-2 pt-2"
@@ -98,7 +99,7 @@ export function ReplyingTo({ shell }: { shell: Shell }) {
           title="Send an ordinary message instead"
           className="mr-1 grid size-4 shrink-0 cursor-default place-items-center rounded-full text-muted-foreground opacity-0 outline-none transition-opacity duration-100 group-focus-within/chip:opacity-100 group-hover/chip:opacity-100 hover:bg-muted hover:text-foreground focus-visible:opacity-100 motion-reduce:transition-none"
           data-testid="replying-to-clear"
-          onClick={() => shell.clearMailboxCause()}
+          onClick={() => clearMailboxCause()}
         >
           <X className="size-3" />
         </button>

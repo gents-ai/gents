@@ -114,7 +114,10 @@ function harness() {
     cancelClaudeLogin: vi.fn().mockResolvedValue(undefined),
     retrySaveProviderAccount: vi.fn(),
   };
-  const app = testApp({ api });
+  const app = testApp({
+    api,
+    snapshot: { bootstrap, client: { deployments: [deployment] } },
+  });
   const shell = {
     api: api as unknown as DesktopApiAdapter,
     snapshot: { bootstrap, client: { deployments: [deployment] } },

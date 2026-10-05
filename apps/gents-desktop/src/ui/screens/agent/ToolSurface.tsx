@@ -8,8 +8,8 @@ import { Badge } from "@gents/ui/components/badge";
 import { Button } from "@gents/ui/components/button";
 import { Spinner } from "@gents/ui/components/spinner";
 import { cn } from "@gents/ui/lib/utils";
-import type { Shell } from "@/hooks/useShell";
 import { Group, Row } from "./rows";
+import { useApp } from "@/app/AppContext";
 
 const strings = (v: unknown): string[] =>
   Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && !!x) : [];
@@ -19,14 +19,13 @@ const groups = (v: unknown): [string, string[]][] =>
     : [];
 
 export function ToolSurface({
-  shell,
   agentDid,
   behaviorId,
 }: {
-  shell: Shell;
   agentDid: string;
   behaviorId: string;
 }) {
+  const { api } = useApp();
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -37,7 +36,7 @@ export function ToolSurface({
     setLoading(true);
     setError(null);
     try {
-      setExplanation(await shell.api.explainToolSurface(agentDid, behaviorId));
+      setExplanation(await api.explainToolSurface(agentDid, behaviorId));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {

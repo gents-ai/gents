@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { dependentsWarning } from "./dependents";
 import { ArrowLeft } from "lucide-react";
 import type { AgentContext, DeploymentView } from "@source-inc/gents-desktop-client";
-import type { Shell } from "@/hooks/useShell";
 import { href, type Route } from "@/lib/router";
 import {
   AreaRow,
@@ -30,12 +29,10 @@ import { useApp } from "@/app/AppContext";
 const USERS_SHOWN = 8;
 
 function Editor({
-  shell,
   deployment,
   context,
   after,
 }: {
-  shell: Shell;
   deployment: DeploymentView;
   context: AgentContext;
   after?: Route;
@@ -96,7 +93,6 @@ function Editor({
   return (
     <>
       <ToolsSheet
-        shell={shell}
         deployment={deployment}
         open={newTools !== null}
         onClose={(toolsId) => {
@@ -118,7 +114,7 @@ function Editor({
         {besideDoc && (
           <ToolsEditor
             key={besideDoc.tools_id}
-            shell={shell}
+
             deployment={deployment}
             tools={besideDoc}
             embedded
@@ -263,11 +259,9 @@ function Editor({
 }
 
 export function ContextsPanel({
-  shell,
   deployment,
   item,
 }: {
-  shell: Shell;
   deployment: DeploymentView;
   item?: string;
 }) {
@@ -350,7 +344,7 @@ export function ContextsPanel({
           return (
             <Editor
               key={context.context_id}
-              shell={shell}
+
               deployment={deployment}
               context={context}
               after={back?.route}

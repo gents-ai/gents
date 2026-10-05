@@ -3,7 +3,6 @@ import type {
   ToolServiceRegistry,
 } from "@source-inc/gents-desktop-client";
 import { dependentsWarning } from "./dependents";
-import type { Shell } from "@/hooks/useShell";
 import { Button } from "@gents/ui/components/button";
 import { toast } from "sonner";
 import { navigate } from "@/lib/router";
@@ -23,15 +22,16 @@ import { RowMenu } from "./RowMenu";
 import { useApp } from "@/app/AppContext";
 
 function Editor({
-  shell,
   deployment,
   service,
 }: {
-  shell: Shell;
   deployment: DeploymentView;
   service: ToolServiceRegistry;
 }) {
-  const { changeConfig } = useApp().actions;
+  const {
+    api,
+    actions: { changeConfig },
+  } = useApp();
   const base = {
     name: "agent" as const,
     agentDid: deployment.agentDid,
@@ -88,7 +88,7 @@ function Editor({
   const test = async () => {
     try {
       const endpoint = validatedEndpoint(d.draft);
-      const result = await shell.api.testToolService({
+      const result = await api.testToolService({
         serviceId: service.service_id,
         ...endpoint,
       });
@@ -215,11 +215,9 @@ function Editor({
 }
 
 export function ToolServicesPanel({
-  shell,
   deployment,
   item,
 }: {
-  shell: Shell;
   deployment: DeploymentView;
   item?: string;
 }) {
@@ -279,7 +277,7 @@ export function ToolServicesPanel({
         return (
           <Editor
             key={service.service_id}
-            shell={shell}
+
             deployment={deployment}
             service={service}
           />

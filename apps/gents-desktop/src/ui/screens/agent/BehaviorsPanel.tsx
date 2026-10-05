@@ -48,7 +48,6 @@ import {
   ComboboxTrigger,
 } from "@gents/ui/components/combobox";
 import { toast } from "sonner";
-import type { Shell } from "@/hooks/useShell";
 import { href, navigate } from "@/lib/router";
 import { behaviorReadiness } from "@/lib/behavior-readiness";
 import { bashAccess, fileAccess, network } from "../behavior";
@@ -454,13 +453,11 @@ export type DraftMode = {
 };
 
 export function BehaviorEditor({
-  shell,
   deployment,
   behavior,
   draft: draftMode,
   embedded = false,
 }: {
-  shell: Shell;
   deployment: DeploymentView;
   behavior: BehaviorView;
   /* a new behavior that exists only on this page until Save */
@@ -1145,7 +1142,6 @@ export function BehaviorEditor({
         />
       </Group>
       <ProfileSheet
-        shell={shell}
         deployment={deployment}
         open={newProfile !== null}
         onClose={(profileId) => {
@@ -1154,7 +1150,6 @@ export function BehaviorEditor({
         }}
       />
       <ToolsSheet
-        shell={shell}
         deployment={deployment}
         open={newTools !== null}
         onClose={(toolsId) => {
@@ -1199,7 +1194,7 @@ export function BehaviorEditor({
           (() => {
             const t = deployment.tools.find((x) => x.tools_id === configure.id);
             return t ? (
-              <ToolsEditor shell={shell} deployment={deployment} tools={t} embedded />
+              <ToolsEditor deployment={deployment} tools={t} embedded />
             ) : null;
           })()}
         {configure?.kind === "profile" &&
@@ -1208,12 +1203,7 @@ export function BehaviorEditor({
               (x) => x.profile_id === configure.id,
             );
             return p ? (
-              <ProfileEditor
-                shell={shell}
-                deployment={deployment}
-                profile={p}
-                embedded
-              />
+              <ProfileEditor deployment={deployment} profile={p} embedded />
             ) : null;
           })()}
       </EditorSheet>
@@ -1323,11 +1313,9 @@ export function BehaviorEditor({
 }
 
 export function BehaviorsPanel({
-  shell,
   deployment,
   behaviorId,
 }: {
-  shell: Shell;
   deployment: DeploymentView;
   behaviorId?: string;
 }) {
@@ -1384,7 +1372,6 @@ export function BehaviorsPanel({
         </div>
         <BehaviorEditor
           key={draft.behaviorId}
-          shell={shell}
           deployment={deployment}
           behavior={draft}
           draft={{
@@ -1435,7 +1422,6 @@ export function BehaviorsPanel({
           return (
             <BehaviorEditor
               key={behavior.behaviorId}
-              shell={shell}
               deployment={deployment}
               behavior={behavior}
             />

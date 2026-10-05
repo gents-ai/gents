@@ -8,7 +8,8 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { renderIn, testApp } from "./app-fixture";
+import { selection } from "../src/hooks/selectionStore";
+import { publishSnapshot, renderIn, testApp, withApp } from "./app-fixture";
 
 import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 import type { Shell } from "../src/ui/hooks/useShell";
@@ -91,9 +92,12 @@ function harness() {
     deleteTriggerConfig: vi.fn().mockResolvedValue({}),
     deleteInferenceProfileConfig: vi.fn().mockResolvedValue({}),
     fetchOperationsSnapshot: vi.fn().mockResolvedValue(null),
+    fetchDesktopSnapshot: vi
+      .fn()
+      .mockResolvedValue({ bootstrap, client: { deployments: [deployment] } }),
   };
   const refreshSnapshot = vi.fn().mockResolvedValue(undefined);
-  const app = testApp({ api });
+  const app = testApp({ api, snapshot: { bootstrap } });
   const shell = {
     api: api as unknown as DesktopApiAdapter,
     snapshot: { bootstrap },
@@ -609,15 +613,16 @@ describe("configuration panels", () => {
       ];
 
       it("clears another agent's accounts and ignores its late response", async () => {
-        const { api, shell, app } = harness();
+        const { api, app } = harness();
         let oldRead: (views: typeof accounts) => void = () => {};
         let newRead: (views: typeof accounts) => void = () => {};
         api.listProviderAccounts
           .mockResolvedValueOnce(accounts)
           .mockReturnValueOnce(new Promise((resolve) => (oldRead = resolve)))
           .mockReturnValueOnce(new Promise((resolve) => (newRead = resolve)));
-        const { result, rerender } = renderHook(({ did }) => useAccounts(shell, did), {
+        const { result, rerender } = renderHook(({ did }) => useAccounts(did), {
           initialProps: { did: "agent-a" },
+          wrapper: withApp(app),
         });
         await waitFor(() => expect(result.current.accounts).toEqual(accounts));
         act(() => {
@@ -632,19 +637,23 @@ describe("configuration panels", () => {
       });
 
       it("keeps the latest reload when a snapshot read fails later", async () => {
-        const { api, shell, app } = harness();
+        const { api, app } = harness();
         let oldFailure: (error: Error) => void = () => {};
         let newRead: (views: typeof accounts) => void = () => {};
         api.listProviderAccounts
           .mockResolvedValueOnce(accounts)
           .mockReturnValueOnce(new Promise((_, reject) => (oldFailure = reject)))
           .mockReturnValueOnce(new Promise((resolve) => (newRead = resolve)));
-        const { result, rerender } = renderHook(
-          ({ current }) => useAccounts(current, "agent-a"),
-          { initialProps: { current: shell } },
-        );
+        const { result } = renderHook(() => useAccounts("agent-a"), {
+          wrapper: withApp(app),
+        });
         await waitFor(() => expect(result.current.accounts).toEqual(accounts));
-        rerender({ current: { ...shell, snapshot: { ...shell.snapshot } } });
+        /* a later snapshot read asks again */
+        act(() =>
+          publishSnapshot(app, {
+            ...app.stores.client.getState().snapshot!,
+          }),
+        );
         expect(result.current.accounts).toEqual(accounts);
         act(() => {
           void result.current.reload();
@@ -2062,29 +2071,25 @@ describe("configuration panels", () => {
   });
 
   it("does not publish a task result after the user changes compose intent", async () => {
-    const { shell, app } = harness();
-    let generation = 0;
+    const { api, shell, app } = harness();
     let resolve!: (result: { requestId: string; sessionId: string }) => void;
     const pending = new Promise<{ requestId: string; sessionId: string }>((next) => {
       resolve = next;
     });
-    Object.assign(shell, {
-      runTask: vi.fn(() => pending),
-      captureComposeIntent: () => generation,
-      acceptsComposeIntent: (captured: number) => captured === generation,
-    });
+    api.runTask.mockReturnValueOnce(pending);
     renderIn(app, <TasksPanel shell={shell} deployment={deployment} item="task-a" />);
 
     await act(async () => {
       screen.getByRole("button", { name: "Run task" }).click();
       await Promise.resolve();
     });
-    expect(shell.runTask).toHaveBeenCalledWith({
+    expect(api.runTask).toHaveBeenCalledWith({
       taskId: "task-a",
       agentDid: deployment.agentDid,
       args: {},
     });
-    generation += 1;
+    /* the person navigates while the run is in flight */
+    act(() => selection.advanceIntent(app.stores.selection));
     await act(async () => {
       resolve({ requestId: "stale-request", sessionId: "stale-session" });
       await pending;
@@ -2135,7 +2140,8 @@ describe("configuration panels", () => {
       agentDid: deployment.agentDid,
     });
     expect(await screen.findByText("request-schedule")).toBeInTheDocument();
-    expect(shell.refreshSnapshot).toHaveBeenCalledTimes(1);
+    /* the accepted run is observed with one fresh read */
+    expect(api.fetchDesktopSnapshot).toHaveBeenCalledTimes(1);
   });
 
   it("validates grouped event invariants before persistence", async () => {

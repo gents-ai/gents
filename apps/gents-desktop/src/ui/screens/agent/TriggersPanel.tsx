@@ -8,7 +8,6 @@ import type {
   Trigger,
   TriggerView,
 } from "@source-inc/gents-desktop-client";
-import type { Shell } from "@/hooks/useShell";
 import {
   AreaRow,
   ChoiceRow,
@@ -44,12 +43,10 @@ const when = (iso: string | null | undefined) =>
   iso ? new Date(iso).toLocaleString() : "—";
 
 export function TriggerEditor({
-  shell,
   deployment,
   trigger,
   embedded = false,
 }: {
-  shell: Shell;
   deployment: DeploymentView;
   trigger: TriggerView;
   /* in a sheet beside a task: no Danger zone */
@@ -194,7 +191,6 @@ export function TriggerEditor({
         {besideTask && (
           <TaskEditor
             key={besideTask.taskId}
-            shell={shell}
             deployment={deployment}
             task={besideTask}
             embedded
@@ -203,7 +199,7 @@ export function TriggerEditor({
         {besideSchedule && (
           <ScheduleEditor
             key={besideSchedule.schedule_id}
-            shell={shell}
+
             deployment={deployment}
             schedule={besideSchedule}
             embedded
@@ -440,11 +436,9 @@ export function TriggerEditor({
 }
 
 export function TriggersPanel({
-  shell,
   deployment,
   item,
 }: {
-  shell: Shell;
   deployment: DeploymentView;
   item?: string;
 }) {
@@ -532,7 +526,6 @@ export function TriggersPanel({
           return (
             <TriggerEditor
               key={trigger.config.trigger_id}
-              shell={shell}
               deployment={deployment}
               trigger={trigger}
             />

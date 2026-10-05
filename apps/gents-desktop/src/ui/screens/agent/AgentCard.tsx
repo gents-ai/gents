@@ -10,10 +10,11 @@ import type {
   DesktopOperationsSnapshot,
 } from "@source-inc/gents-desktop-client";
 import { Badge } from "@gents/ui/components/badge";
-import type { Shell } from "@/hooks/useShell";
 import { href } from "@/lib/router";
 import { AgentAvatar } from "../AgentAvatar";
 import { isLive } from "@/lib/live";
+import { useApp } from "@/app/AppContext";
+import { useSnapshot } from "@/hooks/useClient";
 
 function pulse(deployment: DeploymentView, ops: DesktopOperationsSnapshot | null) {
   const live = deployment.sessions.filter((s) => isLive(s.turnState)).length;
@@ -37,29 +38,25 @@ function pulse(deployment: DeploymentView, ops: DesktopOperationsSnapshot | null
   };
 }
 
-export function AgentCard({
-  shell,
-  deployment,
-}: {
-  shell: Shell;
-  deployment: DeploymentView;
-}) {
+export function AgentCard({ deployment }: { deployment: DeploymentView }) {
+  const { api } = useApp();
+  const snapshot = useSnapshot();
   const agent = deployment.agentPrincipal;
   const name = agent.displayName ?? deployment.label;
-  const boot = shell.snapshot?.bootstrap;
+  const boot = snapshot?.bootstrap;
   const [ops, setOps] = useState<DesktopOperationsSnapshot | null>(null);
   /* the snapshot changes with every store ping; the session list is the cue */
   const sessions = deployment.sessions;
   useEffect(() => {
     let alive = true;
-    void shell.api.fetchOperationsSnapshot({ agentDid: deployment.agentDid }).then(
+    void api.fetchOperationsSnapshot({ agentDid: deployment.agentDid }).then(
       (o) => alive && setOps(o),
       () => alive && setOps(null),
     );
     return () => {
       alive = false;
     };
-  }, [shell.api, deployment.agentDid, sessions]);
+  }, [api, deployment.agentDid, sessions]);
   const now = pulse(deployment, ops);
   const facts = [
     boot?.initToolCeiling ?? null,
