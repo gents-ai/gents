@@ -275,6 +275,67 @@ pub(crate) fn trial_text(view: &TrialView, out: &mut dyn Write) -> io::Result<()
                 .map_or_else(String::new, |id| format!(" (regrades {id})"))
         )?;
     }
+    if let Some(requests) = &view.requests {
+        writeln!(out, "requests {}", requests.len())?;
+        for retained in requests {
+            let request = &retained.request;
+            writeln!(
+                out,
+                "request {} document {} session {} state {}",
+                request.request_id,
+                retained.request_doc_id,
+                request.session_id.as_deref().unwrap_or("-"),
+                request
+                    .lifecycle_state
+                    .map_or_else(|| "-".to_owned(), |state| wire(&state)),
+            )?;
+            for (label, value) in [
+                ("retry_root", request.retry_root_request.as_deref()),
+                ("retry_parent", request.retry_parent_request.as_deref()),
+                (
+                    "parent_request",
+                    request.caused_by_parent_request_id.as_deref(),
+                ),
+                (
+                    "parent_request_document",
+                    request.caused_by_parent_request_doc_id.as_deref(),
+                ),
+                (
+                    "parent_tool_call",
+                    request.caused_by_parent_tool_call_id.as_deref(),
+                ),
+                (
+                    "parent_tool_document",
+                    request.caused_by_parent_tool_call_doc_id.as_deref(),
+                ),
+                (
+                    "source_request",
+                    request.runtime_source_request_id.as_deref(),
+                ),
+                ("source_kind", request.runtime_source_kind.as_deref()),
+                ("trigger", request.caused_by_trigger_id.as_deref()),
+                (
+                    "source_document",
+                    request.caused_by_source_doc_id.as_deref(),
+                ),
+                ("correlation", request.caused_by_correlation.as_deref()),
+            ] {
+                if let Some(value) = value {
+                    writeln!(out, "  {label} {value}")?;
+                }
+            }
+            if let Some(content) = &request.content {
+                writeln!(out, "  content:\n{content}")?;
+            }
+            if let Some(input) = &request.input {
+                writeln!(
+                    out,
+                    "  input {}",
+                    serde_json::to_string(input).map_err(io::Error::other)?
+                )?;
+            }
+        }
+    }
     Ok(())
 }
 
