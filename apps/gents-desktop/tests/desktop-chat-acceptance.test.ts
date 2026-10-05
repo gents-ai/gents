@@ -41,7 +41,7 @@ function fixture(
     submissionInFlight: { current: false },
     store,
     api: { sendChatMessage: send, retryRequest: retry },
-    draft: "review this",
+    readDraft: () => "review this",
     selectedDeployment: { agentDid: "agent" },
     deployments: [],
     behaviorReadiness: { kind: "ready", behaviorId: "coding" },

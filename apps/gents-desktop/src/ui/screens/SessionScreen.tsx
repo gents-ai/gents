@@ -125,6 +125,7 @@ import {
   useSelectedSessionFields,
   type SessionSelection,
 } from "../hooks/useSelectedSession";
+import { useDraft } from "../../hooks/draftStore";
 
 function formatTokens(value: number) {
   if (value < 1_000) return String(value);
@@ -1283,7 +1284,7 @@ export const TranscriptPanel = memo(function TranscriptPanel({
 export function SessionScreen({ shell }: { shell: Shell }) {
   const session = useSelectedSessionFields(shell, selectScreenFacts);
   const homeDid = shell.snapshot?.bootstrap.initAgentDid;
-  const { draft, setDraft } = shell;
+  const [draft, setDraft] = useDraft(shell.draftStore, shell.draftKey);
   const [requestedStop, setRequestedStop] = useState<string | null>(null);
   /* the transcript column follows new content while the reader is near
      the bottom; a reader who has scrolled up is left where they are */

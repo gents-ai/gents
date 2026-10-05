@@ -24,7 +24,8 @@ type ChatActionParams = {
   store: SelectionStore;
   api: DesktopApiAdapter;
   behaviorReadiness: BehaviorReadinessDecision;
-  draft: string;
+  /** the composer's draft now, read when a form submit asks for it */
+  readDraft: () => string;
   refreshSession: (
     nextSessionId: string | null,
   ) => Promise<DesktopSessionSnapshot | null>;
@@ -56,7 +57,7 @@ export function createDesktopShellChatActions({
   store,
   api,
   behaviorReadiness,
-  draft,
+  readDraft,
   chatFolder = null,
   adoptChatFolder,
   refreshSession,
@@ -150,6 +151,7 @@ export function createDesktopShellChatActions({
 
   async function onSendMessage(event: FormEvent) {
     event.preventDefault();
+    const draft = readDraft();
     const result = await submitContent(draft);
     if (result) {
       setDraft((current) => (current === draft ? "" : current));

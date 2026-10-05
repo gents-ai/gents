@@ -115,7 +115,7 @@ function existingSessionShell(status: Shell["nonEmptyContentSendStatus"]): Shell
 
 // Exercise the real context-keyed draft owner as well as the real kit Composer.
 function OwnedSessionScreen({ shell }: { shell: Shell }) {
-  const { draft, setDraft } = useDesktopChatProjectionState({
+  const { draftStore, draftContextKey, setDraft } = useDesktopChatProjectionState({
     clientAvailable: true,
     selectedAgentDid: shell.selectedAgentDid,
     selectedBehaviorId: shell.selectedBehaviorId,
@@ -132,7 +132,9 @@ function OwnedSessionScreen({ shell }: { shell: Shell }) {
     <MemoryNavProvider
       initial={{ name: "session", sessionId: shell.selectedSessionId }}
     >
-      <SessionScreen shell={{ ...shell, draft, setDraft }} />
+      <SessionScreen
+        shell={{ ...shell, draftStore, draftKey: draftContextKey, setDraft }}
+      />
     </MemoryNavProvider>
   );
 }

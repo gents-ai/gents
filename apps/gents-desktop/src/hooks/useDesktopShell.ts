@@ -134,7 +134,9 @@ export function useDesktopShell({
   const behaviorOptions = selectedDeployment?.behaviors ?? [];
   const runtimeHealth = snapshot?.client?.p2pHealth ?? null;
   const {
-    draft,
+    draftStore,
+    draftContextKey,
+    readCurrentDraft,
     setDraft,
     localWorkflow,
     setLocalWorkflow,
@@ -157,7 +159,6 @@ export function useDesktopShell({
     userRequestIds,
     syncHealth: snapshot?.client?.syncHealth ?? null,
   });
-  const canSendMessage = shellProjection.sendStatus.kind === "ready";
   const sessionLoadingStatus = useMemo(
     () =>
       projectSessionLoadingStatus({
@@ -280,7 +281,7 @@ export function useDesktopShell({
       behaviorReadiness,
       chatFolder,
       adoptChatFolder,
-      draft,
+      readDraft: readCurrentDraft,
       refreshSession,
       refreshSnapshot,
       selectedDeployment,
@@ -338,7 +339,8 @@ export function useDesktopShell({
     selectedSessionId,
     selectedBehaviorId,
     pendingMailboxCauseId,
-    draft,
+    draftStore,
+    draftContextKey,
     deployments,
     selectedDeployment,
     selectedSessionSummary,
@@ -346,7 +348,6 @@ export function useDesktopShell({
     runtimeHealth,
     operationalState,
     behaviorReadiness,
-    canSendMessage,
     chatWorkflow: shellProjection.workflow,
     activeRequestId: shellProjection.activeRequestId,
     selectedTrackedRequestId,
@@ -358,7 +359,6 @@ export function useDesktopShell({
     submitContent,
     captureComposeIntent,
     acceptsComposeIntent,
-    sendStatus: shellProjection.sendStatus,
     nonEmptyContentSendStatus: shellProjection.nonEmptyContentSendStatus,
     retryStatus: retryShellProjection.nonEmptyContentSendStatus,
     selectAgent,

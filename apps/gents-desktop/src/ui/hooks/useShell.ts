@@ -102,7 +102,9 @@ export function useShell(
       /* the selected session lives in this store; screens select what they
          draw through useSelectedSession, so a chunk reaches only its readers */
       sessionStore: d.sessionStore,
-      draft: d.draft,
+      /* the composer reads its draft through useDraft(draftStore, draftKey) */
+      draftStore: d.draftStore,
+      draftKey: d.draftContextKey,
       setDraft: d.setDraft,
       chatFolder: d.chatFolder,
       setChatFolder: d.setChatFolder,

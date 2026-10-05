@@ -126,6 +126,7 @@ import { TooltipProvider } from "@gents/ui/components/tooltip";
 import { SessionScreen } from "../src/ui/screens/SessionScreen";
 import { MemoryNavProvider } from "@gents/shell";
 import { selectedSessionFields } from "./session-store-fixture";
+import { createDraftStore } from "../src/hooks/draftStore";
 
 const healthy: SyncHealthView = {
   state: "healthy",
@@ -170,7 +171,8 @@ function sessionShell(): Shell {
     selectedAgentDid: "did:key:agent",
     deployments: [],
     selectedDeployment: null,
-    draft: "",
+    draftStore: createDraftStore(),
+    draftKey: "session",
     setDraft: vi.fn(),
     mailboxCause: null,
     sending: false,

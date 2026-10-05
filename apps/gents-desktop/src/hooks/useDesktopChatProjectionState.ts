@@ -17,6 +17,7 @@ import {
   selectedBehaviorReadinessDecision,
 } from "@source-inc/gents-desktop-client";
 import { trackedRequestIdForSession } from "./desktopShellRuntime";
+import { createDraftStore, readDraft, writeDraft } from "./draftStore";
 import type { SessionHeader } from "./sessionStore";
 
 type ChatProjectionStateOptions = {
@@ -51,7 +52,7 @@ export function useDesktopChatProjectionState({
   });
   const [optimisticPendingTurn, setOptimisticPendingTurn] =
     useState<OptimisticPendingTurn | null>(null);
-  const [draftsByContext, setDraftsByContext] = useState<Record<string, string>>({});
+  const [draftStore] = useState(createDraftStore);
   const operationalState = useMemo(
     () =>
       selectedDeployment
@@ -82,29 +83,22 @@ export function useDesktopChatProjectionState({
       ? ["session", selectedAgentDid, selectedSessionId]
       : ["new", selectedAgentDid, behaviorReadiness.behaviorId],
   );
-  const draft = draftsByContext[draftContextKey] ?? "";
+  /* the draft itself is read by the composer, not here: the workflow does
+     not depend on it, and a keystroke must not re-render the shell */
   const setDraft = useCallback(
-    (next: SetStateAction<string>) => {
-      setDraftsByContext((current) => {
-        const currentDraft = current[draftContextKey] ?? "";
-        const nextDraft = typeof next === "function" ? next(currentDraft) : next;
-        if (nextDraft === currentDraft) return current;
-        if (!nextDraft) {
-          const remaining = { ...current };
-          delete remaining[draftContextKey];
-          return remaining;
-        }
-        return { ...current, [draftContextKey]: nextDraft };
-      });
-    },
-    [draftContextKey],
+    (next: SetStateAction<string>) => writeDraft(draftStore, draftContextKey, next),
+    [draftStore, draftContextKey],
+  );
+  const readCurrentDraft = useCallback(
+    () => readDraft(draftStore, draftContextKey),
+    [draftStore, draftContextKey],
   );
   const shellProjection = useMemo(() => {
     return projectChatShell({
       clientAvailable,
       selectedAgentDid,
       selectedSessionId,
-      draft,
+      draft: "",
       sending,
       session,
       selectedSessionSummary,
@@ -113,7 +107,6 @@ export function useDesktopChatProjectionState({
     });
   }, [
     clientAvailable,
-    draft,
     localWorkflow,
     selectedAgentDid,
     selectedSessionSummary,
@@ -170,7 +163,9 @@ export function useDesktopChatProjectionState({
       : null);
 
   return {
-    draft,
+    draftStore,
+    draftContextKey,
+    readCurrentDraft,
     setDraft,
     localWorkflow,
     setLocalWorkflow,
