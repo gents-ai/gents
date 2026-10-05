@@ -10,7 +10,9 @@ import {
   type DeploymentView,
 } from "@source-inc/gents-desktop-client";
 import { projectChatShell } from "@source-inc/gents-desktop-chat";
-import { useDesktopChatProjectionState } from "../src/hooks/useDesktopChatProjectionState";
+import { useStore } from "zustand";
+import { createDraftStore } from "../src/hooks/draftStore";
+import { createShellView } from "../src/hooks/shellView";
 import { MemoryNavProvider } from "@gents/shell";
 import { selectedSessionFields } from "./session-store-fixture";
 import { readSession, writeSession } from "../src/hooks/sessionStore";
@@ -144,18 +146,14 @@ function OwnedSessionScreen({ shell }: { shell: Shell }) {
     shell.selectedSessionId,
     shell.selectedBehaviorId,
   ]);
-  const { draftStore, draftContextKey, setDraft } = useDesktopChatProjectionState({
-    stores,
-    session: null,
-    userRequestIds: NO_REQUESTS,
-  });
+  const [view] = useState(() => createShellView(stores));
+  const [draftStore] = useState(createDraftStore);
+  const draftKey = useStore(view, (state) => state.draftKey);
   return (
     <MemoryNavProvider
       initial={{ name: "session", sessionId: shell.selectedSessionId }}
     >
-      <SessionScreen
-        shell={{ ...shell, draftStore, draftKey: draftContextKey, setDraft }}
-      />
+      <SessionScreen shell={{ ...shell, draftStore, draftKey }} />
     </MemoryNavProvider>
   );
 }
@@ -442,5 +440,3 @@ function reselect(shell: Shell, patch: Partial<DesktopSessionSnapshot>): Shell {
     ...selectedSessionFields({ ...readSession(shell.sessionStore)!, ...patch }),
   };
 }
-
-const NO_REQUESTS: ReadonlySet<string> = new Set();

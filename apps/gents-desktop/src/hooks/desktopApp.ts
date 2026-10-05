@@ -8,7 +8,9 @@ import { createSelectionStore } from "./selectionStore";
 import { createSessionReads } from "./sessionReads";
 import { createSessionStore } from "./sessionStore";
 import { createShellActions } from "./shellActions";
-import { projectShell, projectionInputsOf, type ShellStores } from "./shellProjection";
+import { createDraftStore } from "./draftStore";
+import type { ShellStores } from "./shellProjection";
+import { createShellView } from "./shellView";
 
 export type DesktopAppParams = {
   api: DesktopApiAdapter;
@@ -37,8 +39,9 @@ export function createDesktopApp({
     ),
     chat: createChatStore(),
   };
-  /** the projection as the stores hold it now */
-  const project = () => projectShell(projectionInputsOf(stores));
+  /** what the shell decides, kept in step with the stores */
+  const view = createShellView(stores);
+  const project = () => view.getState();
   /** the request being tracked now, read when an update or a read lands */
   const trackedRequestId = () => project().trackedRequestId;
   /* A failed action is reported once, as a toast, by the action itself: it
@@ -71,7 +74,9 @@ export function createDesktopApp({
     client: lifecycle,
     setError: reportAction,
   });
-  return { api, stores, project, trackedRequestId, lifecycle, actions };
+  /* the composer's drafts, kept apart so a keystroke reaches only it */
+  const drafts = createDraftStore();
+  return { api, stores, view, drafts, project, trackedRequestId, lifecycle, actions };
 }
 
 export type DesktopApp = ReturnType<typeof createDesktopApp>;

@@ -164,12 +164,19 @@ function sameRecord<T>(a: Readonly<Record<string, T>>, b: Readonly<Record<string
   );
 }
 
+const isPlain = (value: object) => {
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+};
+
 /** Equality of JSON values, as the bridge returns them. */
 export function equal(a: unknown, b: unknown): boolean {
   if (Object.is(a, b)) return true;
   if (typeof a !== "object" || typeof b !== "object" || a === null || b === null)
     return false;
   if (Array.isArray(a) !== Array.isArray(b)) return false;
+  /* anything but a plain object or array (a Set, a Date) is equal only to itself */
+  if (!Array.isArray(a) && (!isPlain(a) || !isPlain(b))) return false;
   if (Array.isArray(a)) {
     const list = b as unknown[];
     return a.length === list.length && a.every((item, i) => equal(item, list[i]));

@@ -1,6 +1,9 @@
-import { useEffect } from "react";
+import { useEffect, type SetStateAction } from "react";
 
-import type { ChatWorkflowState } from "@source-inc/gents-desktop-chat";
+import {
+  reconcileProjectedWorkflow,
+  type ChatWorkflowState,
+} from "@source-inc/gents-desktop-chat";
 import type {
   DeploymentView,
   DesktopApiAdapter,
@@ -45,7 +48,9 @@ type DesktopShellEffectsArgs = {
   trackedRequestId: () => string | null;
   selectedTrackedRequestId: string | null;
   sending: boolean;
-  setLocalWorkflow: (workflow: ChatWorkflowState) => void;
+  /** the workflow the durable projection shows */
+  projectedWorkflow: ChatWorkflowState;
+  setLocalWorkflow: (next: SetStateAction<ChatWorkflowState>) => void;
   setError: (error: string | null) => void;
   selectAgent: (agentDid: string | null) => void;
   snapshot: DesktopClientSnapshot | null;
@@ -75,6 +80,7 @@ export function useDesktopShellEffects({
   trackedRequestId,
   selectedTrackedRequestId,
   sending,
+  projectedWorkflow,
   setLocalWorkflow,
   setError,
   selectAgent,
@@ -219,6 +225,13 @@ export function useDesktopShellEffects({
     // hydration/error presentation handles its availability (ClientShell's
     // snapshot_preserves_selection contract).
   }, [composingFor, selectedBehaviorId, selectedDeployment, store]);
+
+  /* the local workflow follows what the transcript shows once it shows it */
+  useEffect(() => {
+    setLocalWorkflow((current) =>
+      reconcileProjectedWorkflow(current, projectedWorkflow),
+    );
+  }, [projectedWorkflow, setLocalWorkflow]);
 
   useEffect(() => {
     if (localWorkflow.kind === "submittingRequest" && !sending) {

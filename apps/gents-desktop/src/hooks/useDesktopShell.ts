@@ -1,20 +1,19 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useStore } from "zustand";
+import { useShallow } from "zustand/react/shallow";
 
 import type {
   DesktopApiAdapter,
   DesktopClientUpdatedListenerFactory,
 } from "@source-inc/gents-desktop-client";
 
-import { projectSessionLoadingStatus } from "../lib/loadingStatus";
-import { selectedIn } from "../ui/hooks/useSelectedSession";
 import { folderOf } from "./chatFolders";
 import { createDesktopApp } from "./desktopApp";
 import { useDesktopShellEffects } from "./desktopShellEffects";
 import { setDesktopShellTimingConfigForTests } from "./desktopShellRuntime";
 import { useSelection } from "./selectionStore";
-import { headerOf, useSessionFields, useSessionValue } from "./sessionStore";
-import { useDesktopChatProjectionState } from "./useDesktopChatProjectionState";
+import { setterOf } from "./chatStore";
+import { useSessionValue } from "./sessionStore";
 import { useDesktopClientLifecycle } from "./useDesktopClientLifecycle";
 
 export { setDesktopShellTimingConfigForTests };
@@ -67,51 +66,26 @@ export function useDesktopShell({
     selectedDeployment?.sessions.find(
       (session) => session.sessionId === selectedSessionId,
     ) ?? null;
-  /* the selected session's header and transcript facts: a streamed chunk
-     changes neither, so it does not re-render the shell */
-  const selectedSessionHeader = useSessionFields(sessionStore, (state) =>
-    headerOf(selectedIn(state, { selectedSessionId, selectedAgentDid })),
-  );
-  const userRequestIds = useSessionValue(
-    sessionStore,
-    (state) => state.facts.userRequestIds,
-  );
   const behaviorOptions = selectedDeployment?.behaviors ?? [];
   const runtimeHealth = snapshot?.client?.p2pHealth ?? null;
+  const [setLocalWorkflow] = useState(() => setterOf(stores.chat, "localWorkflow"));
+  const { localWorkflow, sending } = useStore(
+    stores.chat,
+    useShallow((state) => ({
+      localWorkflow: state.localWorkflow,
+      sending: state.sending,
+    })),
+  );
   const {
-    draftStore,
-    draftContextKey,
-    localWorkflow,
-    setLocalWorkflow,
-    sending,
-    optimisticPendingTurn,
     operationalState,
     behaviorReadiness,
     shellProjection,
     retryShellProjection,
-    selectedTrackedRequestId,
-  } = useDesktopChatProjectionState({
-    stores,
-    session: selectedSessionHeader,
-    userRequestIds,
-  });
-  const sessionLoadingStatus = useMemo(
-    () =>
-      projectSessionLoadingStatus({
-        selectedSessionId,
-        selectedAgentDid,
-        session: selectedSessionHeader,
-        sessionLoad,
-        operationalState,
-      }),
-    [
-      operationalState,
-      selectedAgentDid,
-      selectedSessionId,
-      selectedSessionHeader,
-      sessionLoad,
-    ],
-  );
+    trackedRequestId: selectedTrackedRequestId,
+    loadingStatus: sessionLoadingStatus,
+    pendingTurn: optimisticPendingTurn,
+    draftKey: draftContextKey,
+  } = useStore(app.view);
   useDesktopShellEffects({
     api,
     recovery: lifecycle.recovery,
@@ -135,6 +109,7 @@ export function useDesktopShell({
     selectedTrackedRequestId,
     sending,
     setLocalWorkflow,
+    projectedWorkflow: shellProjection.workflow,
     setError: lifecycle.setError,
     selectAgent,
     snapshot,
@@ -175,7 +150,7 @@ export function useDesktopShell({
     selectedSessionId,
     selectedBehaviorId,
     pendingMailboxCauseId,
-    draftStore,
+    draftStore: app.drafts,
     draftContextKey,
     deployments,
     selectedDeployment,

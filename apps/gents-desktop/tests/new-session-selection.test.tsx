@@ -103,6 +103,7 @@ function useHarness(
     trackedRequestId: () => null,
     selectedTrackedRequestId: null,
     sending: false,
+    projectedWorkflow: workflow,
     setLocalWorkflow: setterOf(stores.chat, "localWorkflow"),
     setError: vi.fn(),
     selectAgent: route.selectAgent,
