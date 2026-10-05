@@ -113,9 +113,9 @@ impl UsageReadCommand {
 
 /// The runtime's answer to a [`UsageReadCommand`].
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct UsageReads {
-    pub(crate) agent_did: String,
-    pub(crate) reads: Vec<AccountUsageRead>,
+pub struct UsageReads {
+    pub agent_did: String,
+    pub reads: Vec<AccountUsageRead>,
 }
 
 pub(crate) async fn dispatch(command: AccountsCommand) -> Result<()> {
@@ -406,7 +406,7 @@ pub(crate) async fn account_rows(
 }
 
 /// Asks the runtime behind `graphql` to read usage now.
-pub(crate) async fn request_usage_reads(
+pub async fn request_usage_reads(
     identity: &dyn gents::AgentIdentity,
     graphql: &gents::config_client::GraphqlEndpoint,
     trigger: UsageTrigger,
@@ -536,16 +536,11 @@ fn usage_cells(row: &AccountRow) -> Vec<[String; 5]> {
     }
     .map(|reason| format!("(read: {reason})"));
     if usage.windows.is_empty() {
-        let source = match (reason, &row.read) {
-            (Some(reason), _) => reason,
-            (None, Some(UsageRead::SkippedUntilRefresh)) => "refresh to read".to_owned(),
-            (None, _) => dash(),
-        };
         return vec![[
             dash(),
             usage.note.unwrap_or("unknown").to_owned(),
             dash(),
-            source,
+            reason.unwrap_or_else(dash),
             dash(),
         ]];
     }
@@ -718,7 +713,7 @@ pub(crate) async fn disable_account(
 /// Delete the account's row and, in the same transaction, the backends
 /// sign-in created for it (its reference) that no profile uses. A backend
 /// with no reference is never deleted: it is the provider's own backend.
-pub(crate) async fn remove_account(
+pub async fn remove_account(
     access: &ConfigAccess,
     agent_did: &str,
     account: &str,
@@ -1553,7 +1548,7 @@ mod tests {
                     None,
                     UsageRead::Unavailable("throttled".to_owned()),
                 ),
-                usage_read(CLAUDE, None, None, UsageRead::SkippedUntilRefresh),
+                usage_read(CLAUDE, None, None, UsageRead::SkippedRecent),
                 usage_read("OpenRouter", None, Some("openrouter"), UsageRead::Read),
             ],
         };
@@ -1566,10 +1561,7 @@ mod tests {
             row(&rows, "Grok 2").read,
             Some(UsageRead::Unavailable("throttled".to_owned()))
         );
-        assert_eq!(
-            row(&rows, "Personal").read,
-            Some(UsageRead::SkippedUntilRefresh)
-        );
+        assert_eq!(row(&rows, "Personal").read, Some(UsageRead::SkippedRecent));
         assert_eq!(row(&rows, "OpenRouter").read, Some(UsageRead::Read));
         assert_eq!(row(&rows, "Grok").read, None);
 
@@ -1582,7 +1574,6 @@ mod tests {
                 .to_owned()
         };
         assert!(line("Grok 2").contains("(read: throttled)"), "{table}");
-        assert!(line("Personal").contains("refresh to read"), "{table}");
     }
 
     #[test]

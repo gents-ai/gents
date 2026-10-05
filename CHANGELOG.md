@@ -238,8 +238,8 @@ source consistency checks, not a separate runtime compatibility version.
   them "account not on this node". On the desktop, Reconnect to a different
   account adds it instead of replacing the one shown, and each backend row
   shows and disconnects the account it references (a backend with no account
-  reference: the provider's original account); add and manage extra accounts
-  from the CLI until the account cards land. After you remove a provider's
+  reference: the provider's original account); and the desktop adds and
+  manages them from each provider's rows (#2124). After you remove a provider's
   last account, the next sign-in becomes its original account again, and
   backends with no account reference use it, deliberately. Any sign-in that
   becomes a provider's original account (the first one on a node, or the first
@@ -270,9 +270,9 @@ source consistency checks, not a separate runtime compatibility version.
   Claude subscription responses and OpenAI-compatible API-key responses record
   the usage headers the provider sends in a new local `ProviderAccountUsage`
   collection, owned by the agent and never stored on the sign-in. Usage for
-  ChatGPT, Grok and OpenRouter accounts can also be read on demand; the Claude
-  read runs only on an explicit refresh, reads within the last few minutes are
-  skipped, and nothing polls. An on-demand read renews an expired sign-in the
+  ChatGPT, Claude, Grok and OpenRouter accounts can also be read on demand;
+  reads within the last few minutes are skipped, and nothing polls. An
+  on-demand read renews an expired sign-in the
   same way a request would; if renewal fails the account shows its sign-in as
   expired.
   Usage is stale after 15 minutes and dropped after 60 minutes or at its reset
@@ -281,14 +281,13 @@ source consistency checks, not a separate runtime compatibility version.
   builds open the store unchanged and ignore the new collection.
 - `gents accounts list` shows each account's usage (#1525): the window, the
   percent used, the reset time with a countdown, where the number came from
-  and how old it is, or "unknown", "not reported", "no cap on this key" or
-  "not verified" when there is no number. `--output json` adds `usage` and
+  and how old it is, or "unknown", "not reported" or "no cap on this key"
+  when there is no number. `--output json` adds `usage` and
   `read` to every row. With a runtime running, listing asks it to read
-  ChatGPT, Grok and OpenRouter usage, skipping disabled accounts and accounts
-  read in the last five minutes; `--refresh` also reads Claude and needs a
-  running runtime. The request is signed with the home identity and accepted
-  only from the runtime's own operator, once. Claude windows read from its
-  usage endpoint are not shown until their scale is verified. The model's
+  ChatGPT, Claude, Grok and OpenRouter usage, skipping disabled accounts and
+  accounts read in the last five minutes; `--refresh` fails instead when no
+  runtime is running. The request is signed with the home identity and
+  accepted only from the runtime's own operator, once. The model's
   config tool gains `backend accounts`, a read-only list of accounts and
   account-free backends with their state, the profiles that use them and
   their last stored usage; it shows no tokens, sign-in identities or ids,
@@ -331,6 +330,23 @@ source consistency checks, not a separate runtime compatibility version.
   when that account is disabled or removed. A Goal limited again resumes at
   its new reset. A restart keeps the schedule. `gents goal show` shows
   `auto_resume_at_reset`.
+
+- The desktop draws every signed-in account as its own backend row (#2124):
+  its label, whether it is signed in, disabled or not on this node (or "off"
+  when the backend is switched off), and a usage bar from the last stored
+  observation. Opening the row shows each usage window with its reset
+  countdown, source and age, or "unknown", "not reported" or "no cap on this
+  key", and a Refresh button; opening the Providers page asks the runtime to
+  read usage, and nothing polls. "Add another <Provider>" and "New backend"
+  sign in a
+  further account for every provider, with an optional label, and say whether
+  the sign-in added an account or refreshed one already stored. The row menu
+  renames, disconnects and removes an account. A row no longer shows a
+  subscription as expired when its access token lapses, since the runtime
+  renews it on use. The profile editor names subscription backends by provider
+  and label, skips disabled and missing accounts, and a new profile starts on
+  the provider's earliest-connected enabled account. "Refresh models" reads the
+  row's own account.
 
 - `gents pack remove` works for every pack kind, not only documents packs
   (#2067). Assets and plugins packs record their install at

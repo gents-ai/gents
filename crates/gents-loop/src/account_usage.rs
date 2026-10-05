@@ -383,7 +383,8 @@ pub fn openrouter_key(body: &Value, now: DateTime<Utc>) -> Option<UsageReport> {
 
 /// Claude `GET /api/oauth/usage`: `five_hour`, `seven_day` and
 /// `seven_day_<model>`, each `{utilization, resets_at}` or null. Utilization
-/// is read as a percent, as the open-source decoders do (unverified live).
+/// is read as a percent, as the open-source decoders do (verified live on
+/// 2026-10-02: a 7d utilization of 72).
 /// `None` when the body is not an object.
 pub fn claude_oauth_usage(body: &Value, now: DateTime<Utc>) -> Option<UsageReport> {
     let mut report = UsageReport::default();

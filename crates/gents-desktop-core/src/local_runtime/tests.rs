@@ -3,9 +3,9 @@ use super::{
     augment_peer_status_payload_for_desktop, await_serving_runtime_within,
     dangerously_overwrite_desktop_home, default_agent_home, graphql_endpoint_for_desktop_access,
     init_standard_local_runtime, load_operator_principal, load_standard_runtime_identity,
-    render_human_summary, reset_desktop_runtime_state, runtime_graphql_url, runtime_status_url,
-    serving_runtime, DesktopInitOptions, DesktopInitSummary, StoredRuntimeState,
-    LOCAL_STANDARD_SOURCE,
+    operator_signer, render_human_summary, reset_desktop_runtime_state, runtime_graphql_url,
+    runtime_status_url, serving_runtime, DesktopInitOptions, DesktopInitSummary,
+    StoredRuntimeState, LOCAL_STANDARD_SOURCE,
 };
 use crate::client::DesktopPaths;
 use gents_protocol::serve_lifecycle::ObservedServeLifecycle;
@@ -426,31 +426,42 @@ async fn discovery_fails_at_once_for_a_runtime_that_predates_readiness() {
     server.abort();
 }
 
-/// The desktop signs as a co-hosted runtime's principal only toward the
-/// endpoint that runtime's home currently serves.
-#[test]
-fn operator_principal_requires_the_homes_own_runtime_endpoint() {
+const HOSTED_GRAPHQL: &str = "http://127.0.0.1:9191/api/v0/graphql";
+
+/// A runtime home under `dir` with a file principal key, serving
+/// `HOSTED_GRAPHQL`. Returns the home and its DID.
+fn hosted_home(dir: &std::path::Path) -> (std::path::PathBuf, String) {
     use gents::identity::AgentIdentity as _;
 
-    let tempdir = tempfile::tempdir().unwrap();
-    let home = tempdir.path().join("agent");
+    let home = dir.join("agent");
     std::fs::create_dir_all(&home).unwrap();
     let key_path = home.join("principal.key");
     let identity = gents::identity::KeyIdentity::load_or_create(&key_path, None).unwrap();
     let did = identity.did().to_string();
-    let served = "http://127.0.0.1:9191/api/v0/graphql";
-    seed_home(&home, &did, served);
+    seed_home(&home, &did, HOSTED_GRAPHQL);
     std::fs::write(
         home.join("init.json"),
         json!({ "agent_name": "Local", "agent_did": did, "key_path": key_path }).to_string(),
     )
     .unwrap();
-    let record = |graphql: &str| {
-        let mut record =
-            crate::client::PeerRecord::local_standard("Local", "iroh://peer", &did, graphql);
-        record.local_agent_home = Some(home.to_string_lossy().into_owned());
-        record
-    };
+    (home, did)
+}
+
+fn hosted_record(home: &std::path::Path, did: &str, graphql: &str) -> crate::client::PeerRecord {
+    let mut record =
+        crate::client::PeerRecord::local_standard("Local", "iroh://peer", did, graphql);
+    record.local_agent_home = Some(home.to_string_lossy().into_owned());
+    record
+}
+
+/// The desktop signs as a co-hosted runtime's principal only toward the
+/// endpoint that runtime's home currently serves.
+#[test]
+fn operator_principal_requires_the_homes_own_runtime_endpoint() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let (home, did) = hosted_home(tempdir.path());
+    let served = HOSTED_GRAPHQL;
+    let record = |graphql: &str| hosted_record(&home, &did, graphql);
 
     load_operator_principal(&record(served)).expect("the home's own runtime endpoint");
 
@@ -468,4 +479,32 @@ fn operator_principal_requires_the_homes_own_runtime_endpoint() {
     let mut homeless = record(served);
     homeless.local_agent_home = None;
     assert!(load_operator_principal(&homeless).is_err());
+}
+
+/// The usage read is signed by the hosted runtime's own identity, loaded
+/// under the same checks as its operator principal.
+#[test]
+fn operator_signer_is_the_hosted_runtimes_own_identity() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let (home, did) = hosted_home(tempdir.path());
+    let record = |graphql: &str| hosted_record(&home, &did, graphql);
+
+    let signer = operator_signer(&record(HOSTED_GRAPHQL)).expect("the hosted runtime's signer");
+    assert_eq!(signer.did(), did);
+
+    let elsewhere = operator_signer(&record("http://127.0.0.1:9999/api/v0/graphql"))
+        .err()
+        .expect("an endpoint the home does not serve");
+    assert!(
+        elsewhere.to_string().contains("does not serve"),
+        "{elsewhere:#}"
+    );
+
+    let mut remote = record(HOSTED_GRAPHQL);
+    remote.source = Some("manual".to_string());
+    assert!(operator_signer(&remote).is_err());
+
+    let mut homeless = record(HOSTED_GRAPHQL);
+    homeless.local_agent_home = None;
+    assert!(operator_signer(&homeless).is_err());
 }

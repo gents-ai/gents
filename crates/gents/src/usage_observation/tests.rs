@@ -802,12 +802,17 @@ async fn read_openrouter_uses_the_backend_key_and_endpoint() {
 }
 
 #[tokio::test]
-async fn read_claude_waits_for_refresh() {
+async fn read_claude_on_open_then_skips_a_recent_read() {
     let did = "did:key:z6MkUsageReadClaudeOpen";
     let node = node().await;
     let provider = crate::claude_oauth::CLAUDE_OAUTH_PROVIDER;
-    sign_in(&node, did, provider, Utc::now() + Duration::hours(1), None).await;
-    let (url, handle) = test_support::one_shot_token_server(200, "{}").await;
+    let now = Utc::now();
+    sign_in(&node, did, provider, now + Duration::hours(1), None).await;
+    let (url, handle) = test_support::one_shot_token_server(
+        200,
+        r#"{"five_hour":{"utilization":25.0,"resets_at":"2100-01-01T00:00:00Z"}}"#,
+    )
+    .await;
     let endpoints = UsageEndpoints {
         claude_usage: format!("{}/api/oauth/usage", origin(&url)),
         ..UsageEndpoints::default()
@@ -820,18 +825,25 @@ async fn read_claude_waits_for_refresh() {
     );
 
     assert_eq!(
+        read(&node, did, &claude, UsageTrigger::Open, &endpoints, now).await,
+        UsageRead::Read
+    );
+    assert_eq!(
+        first_line(&handle.await.unwrap()),
+        "GET /api/oauth/usage HTTP/1.1"
+    );
+    assert_eq!(
         read(
             &node,
             did,
             &claude,
             UsageTrigger::Open,
             &endpoints,
-            Utc::now()
+            now + Duration::minutes(1)
         )
         .await,
-        UsageRead::SkippedUntilRefresh
+        UsageRead::SkippedRecent
     );
-    never_called(handle).await;
 }
 
 #[tokio::test]
@@ -1383,23 +1395,16 @@ fn usage_view_plan_and_read_state_carry_over() {
 }
 
 #[test]
-fn usage_view_claude_endpoint_windows_are_not_verified() {
+fn usage_view_claude_endpoint_windows_show_as_read() {
     let kind = crate::BackendProviderKind::ClaudeCliSubscription;
     let now = view_now();
-    let mut endpoint = window("5h", 0.4, now);
+    let mut endpoint = window("7d", 72.0, now);
     endpoint.source = UsageSource::Endpoint;
-    let view = usage_view(Some(&stored_with(vec![endpoint.clone()])), kind, now);
-    assert!(view.windows.is_empty(), "{view:?}");
-    assert_eq!(view.note, Some("not verified"));
-
-    let header = window("7d", 30.0, now);
-    let view = usage_view(Some(&stored_with(vec![endpoint, header])), kind, now);
-    let labels: Vec<_> = view
-        .windows
-        .iter()
-        .map(|shown| shown.label.as_str())
-        .collect();
-    assert_eq!(labels, ["7d"]);
+    let view = usage_view(Some(&stored_with(vec![endpoint])), kind, now);
+    assert_eq!(view.windows.len(), 1, "{view:?}");
+    assert_eq!(view.windows[0].label, "7d");
+    assert_eq!(view.windows[0].used_pct, 72.0);
+    assert_eq!(view.windows[0].source, UsageSource::Endpoint);
     assert_eq!(view.note, None);
 }
 
@@ -1521,7 +1526,7 @@ async fn principal_read_skips_disabled_accounts_without_a_request() {
 }
 
 #[tokio::test]
-async fn principal_read_open_leaves_claude_until_refresh() {
+async fn principal_read_open_reads_claude_once_within_the_window() {
     let did = "did:key:z6MkUsageSurfClaude";
     let node = node().await;
     sign_in(&node, did, CLAUDE, Utc::now() + Duration::hours(1), None).await;
@@ -1547,13 +1552,13 @@ async fn principal_read_open_leaves_claude_until_refresh() {
     };
 
     let open = principal_read(&node, did, UsageTrigger::Open, None, &endpoints).await;
-    assert_eq!(outcome(&open, None), &UsageRead::SkippedUntilRefresh);
-    let refresh = principal_read(&node, did, UsageTrigger::Refresh, None, &endpoints).await;
-    assert_eq!(outcome(&refresh, None), &UsageRead::Read);
+    assert_eq!(outcome(&open, None), &UsageRead::Read);
     assert_eq!(
         first_line(&handle.await.unwrap()),
         "GET /api/oauth/usage HTTP/1.1"
     );
+    let again = principal_read(&node, did, UsageTrigger::Open, None, &endpoints).await;
+    assert_eq!(outcome(&again, None), &UsageRead::SkippedRecent);
 }
 
 #[tokio::test]

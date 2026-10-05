@@ -82,7 +82,7 @@ const healthy: SyncHealthView = {
   quarantinedDagCount: 0,
 };
 
-const shell = { behaviorDescriptions: {} } as Shell;
+const shell = { api: {}, behaviorDescriptions: {} } as Shell;
 
 async function acknowledgeClose() {
   await act(async () => {

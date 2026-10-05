@@ -13,8 +13,7 @@ use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 pub use gents_loop::account_usage;
 use gents_loop::account_usage::{
-    usage_from_headers, UsagePlan, UsageReport, UsageSource, UsageWindow, READ_SKIP_WINDOW,
-    REWRITE_AFTER,
+    usage_from_headers, UsagePlan, UsageReport, UsageSource, READ_SKIP_WINDOW, REWRITE_AFTER,
 };
 use gents_protocol::schemas::PROVIDER_ACCOUNT_USAGE_NAME as COLLECTION;
 use rig::http_client::HeaderMap;
@@ -144,14 +143,8 @@ pub fn usage_view(
     let empty = StoredUsage::default();
     let stored = stored.unwrap_or(&empty);
     let visible = account_usage::visible_windows(&stored.report, now);
-    // Claude's `/api/oauth/usage` scale is unverified live (percent or
-    // fraction); its windows stay hidden until a live check confirms it.
-    let unverified = |window: &UsageWindow| {
-        kind == Kind::ClaudeCliSubscription && window.source == UsageSource::Endpoint
-    };
     let windows: Vec<_> = visible
         .iter()
-        .filter(|(window, _)| !unverified(window))
         .map(|(window, freshness)| WindowView {
             label: window.label.clone(),
             window_minutes: window.window_minutes,
@@ -167,7 +160,6 @@ pub fn usage_view(
     let read_ok = stored.read_at.is_some() && stored.read_error.is_none();
     let note = match kind {
         _ if !windows.is_empty() => None,
-        _ if visible.iter().any(|(window, _)| unverified(window)) => Some("not verified"),
         Kind::OpenAiCompatible if stored.report.is_empty() && stored.read_at.is_none() => {
             Some("not reported")
         }
@@ -485,8 +477,6 @@ pub enum UsageTrigger {
 pub enum UsageRead {
     Read,
     SkippedRecent,
-    /// Claude's usage endpoint is read only on an explicit refresh.
-    SkippedUntilRefresh,
     /// The provider has no usage read.
     NotReported,
     Disabled,
@@ -520,14 +510,15 @@ type UsageParser = fn(&Value, DateTime<Utc>) -> Option<UsageReport>;
 /// an OAuth account's bearer comes from the refresh owner, so an expired
 /// sign-in is renewed here like a request would renew it (one credential
 /// write, one runtime view reload). Every skip happens before any bearer is
-/// touched, so a skipped read never refreshes.
+/// touched, so a skipped read never refreshes. Open and Refresh read alike,
+/// Claude included: an account read within `READ_SKIP_WINDOW` is skipped.
 // ponytail: the skip check is not atomic, so two concurrent Opens of one
 // account can both read upstream; add a per-account in-flight guard if it shows.
 pub async fn read_account_usage(
     node: Arc<EmbeddedNode>,
     agent_did: &str,
     backend: &InferenceBackend,
-    trigger: UsageTrigger,
+    _trigger: UsageTrigger,
     endpoints: &UsageEndpoints,
     now: DateTime<Utc>,
 ) -> Result<UsageRead> {
@@ -536,12 +527,8 @@ pub async fn read_account_usage(
     if !backend.enabled {
         return Ok(UsageRead::Disabled);
     }
-    match (kind, trigger) {
-        (Kind::OpenAiCompatible, _) => return Ok(UsageRead::NotReported),
-        (Kind::ClaudeCliSubscription, UsageTrigger::Open) => {
-            return Ok(UsageRead::SkippedUntilRefresh)
-        }
-        _ => {}
+    if matches!(kind, Kind::OpenAiCompatible) {
+        return Ok(UsageRead::NotReported);
     }
     let api_key = match kind {
         Kind::OpenRouter => match backend.auth.resolve_api_key() {

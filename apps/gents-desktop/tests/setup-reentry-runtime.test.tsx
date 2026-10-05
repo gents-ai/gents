@@ -71,6 +71,7 @@ const account = {
   lastRefresh: null,
   enabled: true,
   pendingSave: false,
+  accountRef: null,
 };
 
 const NOT_SAVED = new BridgeInvokeError({

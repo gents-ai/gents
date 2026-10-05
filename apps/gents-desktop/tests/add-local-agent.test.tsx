@@ -165,6 +165,26 @@ describe("Add agent enrollment", () => {
   });
 });
 
+describe("renaming a deployment", () => {
+  it("renaming a deployment saves its trimmed label", async () => {
+    const { shell } = fleet([remote]);
+    const renamePeer = vi.fn(async () => undefined);
+    Object.assign(shell, { renamePeer });
+    render(<AgentsScreen shell={shell} />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Remote actions" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Rename" }));
+    const dialog = await screen.findByRole("dialog");
+    const input = within(dialog).getByRole("textbox");
+    await userEvent.clear(input);
+    await userEvent.type(input, " Edge 2 ");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(renamePeer).toHaveBeenCalledTimes(1));
+    expect(renamePeer).toHaveBeenCalledWith("peer-remote", "Edge 2");
+  });
+});
+
 describe("first-run local agent name", () => {
   function setup(opts: { existingHome: boolean; runtimeName: string }) {
     let reviewed: ManagedServerAuthorityInput | undefined;

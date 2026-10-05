@@ -12,6 +12,7 @@ import { toast } from "sonner";
 import type {
   BackendProviderKind,
   BackendSaveRequest,
+  BackendUsageView,
   DeploymentView,
   InferenceBackend,
   InferenceBackendView,
@@ -19,6 +20,7 @@ import type {
   ProviderAccountView,
   InferenceAuthMethod,
   InferenceProviderId,
+  UsageWindowView,
 } from "@source-inc/gents-desktop-client";
 import { Badge } from "@gents/ui/components/badge";
 import { Button } from "@gents/ui/components/button";
@@ -39,7 +41,7 @@ import {
   TextRow,
   TagsRow,
 } from "./editors";
-import { DeleteButton, ListDetail, type ListRow } from "./ListDetail";
+import { ConfirmDelete, DeleteButton, ListDetail, type ListRow } from "./ListDetail";
 import { Group, Row } from "./rows";
 import { RowMenu } from "./RowMenu";
 import {
@@ -49,8 +51,17 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@gents/ui/components/dropdown-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@gents/ui/components/dialog";
 import { Plus } from "lucide-react";
 import { ProviderLogo } from "../ProviderLogo";
+import { RenameDialog } from "../AgentsScreen";
 
 export function backendSave(
   agentDid: string,
@@ -161,6 +172,112 @@ export function useAccounts(shell: Shell, agentDid: string) {
   return { accounts, reload: load };
 }
 
+/* usage, read when the panel opens and on Refresh (both skip accounts read
+   in the last five minutes); nothing polls, and a snapshot change does not
+   read again */
+function useProviderUsage(shell: Shell, agentDid: string) {
+  const [usage, setUsage] = useState<BackendUsageView[]>([]);
+  /* only the latest read draws: an older one, or another agent's, may land later */
+  const latest = useRef(0);
+  useEffect(() => {
+    const read = ++latest.current;
+    setUsage([]);
+    shell.api.readProviderUsage?.(agentDid, false, null).then(
+      (views) => {
+        if (latest.current === read) setUsage(views);
+      },
+      () => undefined,
+    );
+    return () => {
+      latest.current += 1;
+    };
+  }, [shell.api, agentDid]);
+  const refresh = async (provider: string | null) => {
+    const read = ++latest.current;
+    const views = await shell.api.readProviderUsage?.(agentDid, true, provider);
+    if (views && latest.current === read) setUsage(views);
+  };
+  return { usage, refresh };
+}
+
+/* "2h13m", "3m", "<1m": the CLI's short durations */
+function shortDuration(ms: number) {
+  const total = Math.max(0, Math.floor(ms / 60_000));
+  const [days, hours, minutes] = [
+    Math.floor(total / 1440),
+    Math.floor((total % 1440) / 60),
+    total % 60,
+  ];
+  if (days) return hours ? `${days}d${hours}h` : `${days}d`;
+  if (hours) return minutes ? `${hours}h${minutes}m` : `${hours}h`;
+  return minutes ? `${minutes}m` : "<1m";
+}
+
+const USAGE_SOURCE: Record<string, string> = {
+  header: "from response headers",
+  endpoint: "from the usage endpoint",
+  error: "from a rejected request",
+};
+
+function windowText(w: UsageWindowView, now: number) {
+  const parts = [`${Math.round(w.usedPct)}% used`];
+  if (w.resetsAt) {
+    const at = new Date(w.resetsAt);
+    const time = at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    parts.push(`resets in ${shortDuration(at.getTime() - now)} (${time})`);
+  }
+  parts.push(
+    `${USAGE_SOURCE[w.source] ?? w.source}, ${shortDuration(now - Date.parse(w.observedAt))} ago`,
+  );
+  if (w.lastKnown) parts.push("last known");
+  return parts.join(" · ");
+}
+
+/* a row's usage: its most-used window, labelled, the one that blocks first */
+function UsageBar({ view }: { view?: BackendUsageView }) {
+  const top = view?.windows.reduce<UsageWindowView | undefined>(
+    (most, w) => (!most || w.usedPct > most.usedPct ? w : most),
+    undefined,
+  );
+  if (!top) return null;
+  const pct = Math.round(top.usedPct);
+  return (
+    <span className="flex items-center gap-1.5 px-1 text-xs text-muted-foreground tabular-nums">
+      {top.label}{" "}
+      <span aria-hidden className="h-1.5 w-12 overflow-hidden rounded-full bg-muted">
+        <span
+          className="block h-full bg-foreground/60"
+          style={{ width: `${Math.min(pct, 100)}%` }}
+        />
+      </span>
+      {pct}%
+    </span>
+  );
+}
+
+/* the opened row's usage: each window, or why there is no number, and how
+   this read went */
+function UsageRows({ view }: { view?: BackendUsageView }) {
+  const now = Date.now();
+  const read = view?.read?.startsWith("unavailable: ")
+    ? `Not read: ${view.read.slice("unavailable: ".length)}`
+    : view?.readError;
+  return (
+    <>
+      {view?.windows.length ? (
+        view.windows.map((w) => (
+          <FactRow key={w.label} label={w.label}>
+            {windowText(w, now)}
+          </FactRow>
+        ))
+      ) : (
+        <FactRow label="Reported">{view?.note ?? "unknown"}</FactRow>
+      )}
+      {read && <FactRow label="Last read">{read}</FactRow>}
+    </>
+  );
+}
+
 /* the stored account a subscription backend runs on: the one with the
    backend's reference; no reference is the provider's original account */
 function referencedAccount(
@@ -174,6 +291,174 @@ function referencedAccount(
       !a.pendingSave &&
       (a.accountRef ?? null) === (accountRef ?? null),
   );
+}
+
+/* the account a subscription backend runs on, if it is stored here */
+function backendAccount(accounts: ProviderAccountView[], b: InferenceBackendView) {
+  const sub = SUBSCRIPTION[b.providerKind ?? ""];
+  return sub ? referencedAccount(accounts, sub.provider, b.accountRef) : undefined;
+}
+
+/* a backend as a profile sees it: a subscription backend serves only on its
+   enabled account and is named "<label> · <provider>"; others always serve */
+export function profileBackend(
+  accounts: ProviderAccountView[],
+  b: InferenceBackendView,
+) {
+  const sub = SUBSCRIPTION[b.providerKind ?? ""];
+  const account = backendAccount(accounts, b);
+  return {
+    provider: sub?.provider,
+    account,
+    usable: !sub || Boolean(account?.enabled),
+    label: sub && account ? `${account.label} · ${sub.title}` : (b.name ?? b.backendId),
+  };
+}
+
+/* what an account action leaves behind: the profiles that fail their next
+   turn, in the CLI's words, and for remove which backends go with it (an
+   added account's backends that no profile uses, as the CLI's remove) */
+function accountWarnings(
+  deployment: DeploymentView,
+  accounts: ProviderAccountView[],
+  account: ProviderAccountView,
+) {
+  const backends = deployment.inferenceBackends.filter(
+    (b) => backendAccount(accounts, b)?.credentialId === account.credentialId,
+  );
+  const usedBy = (b: InferenceBackendView) =>
+    deployment.inferenceProfiles.filter((p) => p.backend_id === b.backendId);
+  const profiles = backends.flatMap(usedBy).map((p) => p.display_name ?? p.profile_id);
+  const names = (list: InferenceBackendView[]) =>
+    list.map((b) => b.name ?? b.backendId).join(", ");
+  const gone = account.accountRef ? backends.filter((b) => !usedBy(b).length) : [];
+  const kept = backends.filter((b) => !gone.includes(b));
+  const disconnect = profiles.length
+    ? `These profiles use this account and fail their next turn until moved to another backend: ${profiles.join(", ")}.`
+    : "";
+  const remove = [
+    disconnect,
+    gone.length ? `Deletes its unused backends: ${names(gone)}.` : "",
+    kept.length
+      ? `${account.accountRef ? "Keeps the backends a profile uses" : "Keeps its backends"}: ${names(kept)}.`
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return { disconnect, remove };
+}
+
+type AccountAction = {
+  action: "rename" | "disconnect" | "remove";
+  account: ProviderAccountView;
+};
+
+/* rename, disconnect and remove for an account, opened from its row's menu;
+   none of them edits a profile or a backend */
+function AccountDialogs({
+  shell,
+  deployment,
+  accounts,
+  reload,
+  acting,
+  onClose,
+}: {
+  shell: Shell;
+  deployment: DeploymentView;
+  accounts: ProviderAccountView[];
+  reload: () => Promise<void>;
+  acting: AccountAction | null;
+  onClose: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const api = shell.api;
+  const account = acting?.account;
+  const warnings = account && accountWarnings(deployment, accounts, account);
+  const rename = async (label: string) => {
+    if (!account) return;
+    if (
+      accounts.some(
+        (a) =>
+          a.provider === account.provider &&
+          !a.pendingSave &&
+          a.credentialId !== account.credentialId &&
+          a.label === label,
+      )
+    )
+      throw new Error(
+        `Another account is already labelled “${label}”. Choose another label.`,
+      );
+    await api.renameProviderAccount?.(deployment.agentDid, account.credentialId, label);
+    toast("Renamed");
+    await reload();
+  };
+  const disconnect = async () => {
+    if (!account) return;
+    setBusy(true);
+    try {
+      await api.disconnectProviderAccount?.(deployment.agentDid, account.credentialId);
+      toast("Disconnected");
+      onClose();
+      await reload();
+    } catch (error) {
+      toast(`Disconnect failed: ${setupErrorMessage(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <RenameDialog
+        key={account?.credentialId ?? "none"}
+        title="Rename account"
+        description="The label this account goes by on this agent."
+        value={acting?.action === "rename" ? account!.label : null}
+        onSave={rename}
+        onClose={onClose}
+      />
+      <Dialog
+        open={acting?.action === "disconnect"}
+        onOpenChange={(open) => !open && !busy && onClose()}
+      >
+        <DialogContent aria-modal="true">
+          <DialogHeader>
+            <DialogTitle>Disconnect {account?.label}?</DialogTitle>
+            <DialogDescription>
+              Signing in to it again reconnects it. {warnings?.disconnect}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" disabled={busy} onClick={onClose}>
+              Keep connected
+            </Button>
+            <Button variant="destructive" disabled={busy} onClick={disconnect}>
+              {busy ? "Disconnecting…" : "Disconnect now"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      {account && (
+        <ConfirmDelete
+          label={account.label}
+          noun="account"
+          open={acting?.action === "remove"}
+          onOpenChange={(open) => !open && onClose()}
+          onDelete={() => removeAccount(shell, deployment, account, reload)}
+          warning={warnings?.remove}
+        />
+      )}
+    </>
+  );
+}
+
+async function removeAccount(
+  shell: Shell,
+  deployment: DeploymentView,
+  account: ProviderAccountView,
+  reload: () => Promise<void>,
+) {
+  await shell.api.removeProviderAccount?.(deployment.agentDid, account.credentialId);
+  await reload();
 }
 
 /* the account card for a subscription backend */
@@ -198,12 +483,6 @@ function AccountRows({
   /* signing in here would add a new account, never this one */
   const elsewhere = accountRef !== null && !stored;
   const unsaved = accounts.some((a) => a.provider === sub.provider && a.pendingSave);
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), 60_000);
-    return () => window.clearInterval(timer);
-  }, []);
-  const expired = account ? Date.parse(account.accessTokenExpiresAt) < now : false;
   const [busy, setBusy] = useState(false);
   const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
   const api = shell.api;
@@ -262,10 +541,8 @@ function AccountRows({
     <>
       <Row label="Account" description={sub.note}>
         <span className="flex items-center gap-2">
-          {account && (
-            <Badge variant={expired ? "destructive" : "secondary"}>
-              {expired ? "Expired" : "Connected"}
-            </Badge>
+          {stored && (
+            <Badge variant="secondary">{account ? "Connected" : "Disabled"}</Badge>
           )}
           {account && !confirmingDisconnect && (
             <Button
@@ -307,26 +584,21 @@ function AccountRows({
           ) : null}
           <Button
             size="sm"
-            variant={account || unsaved ? "outline" : "brand"}
+            variant={stored || unsaved ? "outline" : "brand"}
             disabled={busy}
             onClick={signIn}
           >
-            {busy ? "Signing in…" : account ? "Reconnect" : "Connect"}
+            {busy ? "Signing in…" : stored ? "Reconnect" : "Connect"}
           </Button>
         </span>
       </Row>
-      {account && (
+      {stored && (
         <>
           <FactRow label="Signed in as">
-            {account.accountId ?? "Account identity unavailable — reconnect to refresh"}
-            {account.planType ? ` · ${account.planType}` : ""}
+            {stored.accountId ?? "Account identity unavailable — reconnect to refresh"}
+            {stored.planType ? ` · ${stored.planType}` : ""}
           </FactRow>
-          <FactRow label="Expires">
-            {new Date(account.accessTokenExpiresAt).toLocaleString()} ·{" "}
-            {expired
-              ? "expired"
-              : `in ${Math.max(1, Math.ceil((Date.parse(account.accessTokenExpiresAt) - Date.now()) / 60000))} minutes`}
-          </FactRow>
+          <FactRow label="Label">{stored.label}</FactRow>
         </>
       )}
     </>
@@ -339,6 +611,7 @@ export function BackendEditor({
   backend,
   accounts,
   reload,
+  usage,
   embedded = false,
 }: {
   shell: Shell;
@@ -346,6 +619,11 @@ export function BackendEditor({
   backend: InferenceBackendView;
   accounts: ProviderAccountView[];
   reload: () => Promise<void>;
+  /* this backend's usage and the read again; absent, no Usage group */
+  usage?: {
+    view?: BackendUsageView;
+    refresh: (provider: string | null) => Promise<void>;
+  };
   /* in a sheet beside another page: no Danger zone */
   embedded?: boolean;
 }) {
@@ -436,6 +714,22 @@ export function BackendEditor({
     setDiscoveredModels(null);
     setProbe(null);
   }, [d.draft.providerKind, d.draft.endpoint]);
+  /* an added account's backend is deleted by removing the account */
+  const removable = backend.accountRef ? backendAccount(accounts, backend) : undefined;
+  const signIn = SUBSCRIPTION[backend.providerKind ?? ""];
+  /* a disabled or missing account draws no usage */
+  const usable = !signIn || backendAccount(accounts, backend)?.enabled;
+  const [refreshing, setRefreshing] = useState(false);
+  const refreshUsage = async () => {
+    setRefreshing(true);
+    try {
+      await usage?.refresh(signIn?.provider ?? null);
+    } catch (error) {
+      toast(`Refresh failed: ${setupErrorMessage(error)}`);
+    } finally {
+      setRefreshing(false);
+    }
+  };
   const users = deployment.inferenceProfiles
     .filter((p) => p.backend_id === backend.backendId)
     .map((p) => p.display_name ?? p.profile_id);
@@ -470,6 +764,7 @@ export function BackendEditor({
                       authMethod: connection.authMethod,
                       endpoint: d.draft.endpoint,
                       apiKey: null,
+                      accountRef: backend.accountRef ?? null,
                     });
                     if (!result.reachable)
                       throw new Error(result.failure?.message ?? "Discovery failed");
@@ -616,6 +911,23 @@ export function BackendEditor({
           </>
         )}
       </Group>
+      {usage && usable && (
+        <Group
+          title="Usage"
+          action={
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={refreshing}
+              onClick={refreshUsage}
+            >
+              Refresh
+            </Button>
+          }
+        >
+          <UsageRows view={usage.view} />
+        </Group>
+      )}
       <Group title="Endpoint and models">
         <TextRow
           id={id("endpoint")}
@@ -702,7 +1014,16 @@ export function BackendEditor({
         onSave={d.save}
         onCancel={d.reset}
       />
-      {!embedded && (
+      {!embedded && removable && (
+        <DeleteButton
+          label={removable.label}
+          noun="account"
+          warning={accountWarnings(deployment, accounts, removable).remove}
+          base={base}
+          onDelete={() => removeAccount(shell, deployment, removable, reload)}
+        />
+      )}
+      {!embedded && !removable && (
         <DeleteButton
           label={backend.name ?? backend.backendId}
           warning={dependentsWarning(deployment, "backend", backend.backendId)}
@@ -799,6 +1120,10 @@ export function InferencePanel({
     section: "profiles",
   };
   const { accounts, reload } = useAccounts(shell, deployment.agentDid);
+  const [acting, setActing] = useState<AccountAction | null>(null);
+  const providerUsage = useProviderUsage(shell, deployment.agentDid);
+  const usageOf = (backendId: string) =>
+    providerUsage.usage.find((u) => u.backendId === backendId);
   const catalog = useSetupCatalog(shell);
   const providers = catalog.providers;
   /* the provider whose inputs are open, from a catalog row or Add another */
@@ -828,16 +1153,21 @@ export function InferencePanel({
   /* backends in the catalog's provider order, so two of one provider sit together */
   const order = (id: ProviderId) => providers.findIndex((p) => p.id === id);
   const configured = deployment.inferenceBackends
-    .map((b) => ({ b, provider: providerOf(b) }))
+    .map((b) => ({ b, provider: providerOf(b), stored: backendAccount(accounts, b) }))
     .sort((x, y) => order(x.provider) - order(y.provider));
   const missing = providers.filter((p) => !configured.some((c) => c.provider === p.id));
   const rowMeta = (b: InferenceBackendView) => {
     const sub = SUBSCRIPTION[b.providerKind ?? ""];
-    const stored = sub && referencedAccount(accounts, sub.provider, b.accountRef);
+    const stored = backendAccount(accounts, b);
+    /* the label only where the row's title does not already say it */
+    const label =
+      stored?.label && stored.label !== (b.name ?? b.backendId)
+        ? `${stored.label} · `
+        : "";
     const cred = sub
-      ? stored?.enabled
-        ? "signed in"
-        : b.accountRef && !stored
+      ? stored
+        ? `${label}${b.enabled === false ? "off" : stored.enabled ? "signed in" : "disabled"}`
+        : b.accountRef
           ? "account not on this node"
           : "not signed in"
       : b.apiKeyConfigured
@@ -868,7 +1198,7 @@ export function InferencePanel({
         item={item}
         back={{ route: models, label: "Providers" }}
         rows={[
-          ...configured.map(({ b, provider }) => ({
+          ...configured.map(({ b, provider, stored }) => ({
             id: b.backendId,
             children: under?.(b),
             metaLeadToggles: true,
@@ -888,46 +1218,74 @@ export function InferencePanel({
             badge: healthy(b.probeStatus) ? undefined : (b.probeStatus ?? undefined),
             badgeTone: "bad" as const,
             trailing: (
-              <RowMenu
-                name={b.name ?? b.backendId}
-                base={base}
-                id={b.backendId}
-                enabled={{
-                  checked: b.enabled !== false,
-                  onChange: (enabled) =>
-                    shell.applyConfig((api) =>
-                      api.patchConfigComponents({
-                        agentDid: deployment.agentDid,
-                        patches: [
-                          {
-                            collection: "InferenceBackend",
-                            id: b.backendId,
-                            changes: { enabled },
-                          },
-                        ],
-                      }),
-                    ),
-                }}
-                onDelete={() =>
-                  shell.applyConfig((api) =>
-                    api.deleteBackendConfig({
-                      backendId: b.backendId,
-                      agentDid: deployment.agentDid,
-                    }),
-                  )
-                }
-                warning={dependentsWarning(deployment, "backend", b.backendId)}
-              >
-                {/* another local server or a second key, yes; a second subscription, no:
-                    a principal_oauth backend has no account of its own, it uses the
-                    agent's one sign-in for that provider */}
-                {provider !== "anthropic" && provider !== "grok" && (
+              <>
+                {(!SUBSCRIPTION[b.providerKind ?? ""] || stored?.enabled) && (
+                  <UsageBar view={usageOf(b.backendId)} />
+                )}
+                <RowMenu
+                  name={b.name ?? b.backendId}
+                  base={base}
+                  id={b.backendId}
+                  enabled={{
+                    checked: b.enabled !== false,
+                    onChange: (enabled) =>
+                      shell.applyConfig((api) =>
+                        api.patchConfigComponents({
+                          agentDid: deployment.agentDid,
+                          patches: [
+                            {
+                              collection: "InferenceBackend",
+                              id: b.backendId,
+                              changes: { enabled },
+                            },
+                          ],
+                        }),
+                      ),
+                  }}
+                  /* an added account's backend goes with Remove account */
+                  onDelete={
+                    b.accountRef && stored
+                      ? undefined
+                      : () =>
+                          shell.applyConfig((api) =>
+                            api.deleteBackendConfig({
+                              backendId: b.backendId,
+                              agentDid: deployment.agentDid,
+                            }),
+                          )
+                  }
+                  warning={dependentsWarning(deployment, "backend", b.backendId)}
+                >
                   <DropdownMenuItem onClick={() => setAdding(provider)}>
                     Add another{" "}
                     {providers.find((x) => x.id === provider)?.displayName ?? "backend"}
                   </DropdownMenuItem>
-                )}
-              </RowMenu>
+                  {stored && (
+                    <>
+                      <DropdownMenuItem
+                        onClick={() => setActing({ action: "rename", account: stored })}
+                      >
+                        Rename account…
+                      </DropdownMenuItem>
+                      {stored.enabled && (
+                        <DropdownMenuItem
+                          onClick={() =>
+                            setActing({ action: "disconnect", account: stored })
+                          }
+                        >
+                          Disconnect…
+                        </DropdownMenuItem>
+                      )}
+                      <DropdownMenuItem
+                        variant="destructive"
+                        onClick={() => setActing({ action: "remove", account: stored })}
+                      >
+                        Remove account…
+                      </DropdownMenuItem>
+                    </>
+                  )}
+                </RowMenu>
+              </>
             ),
           })),
           ...orphans,
@@ -979,9 +1337,21 @@ export function InferencePanel({
               backend={backend}
               accounts={accounts}
               reload={reload}
+              usage={{
+                view: usageOf(backend.backendId),
+                refresh: providerUsage.refresh,
+              }}
             />
           );
         }}
+      />
+      <AccountDialogs
+        shell={shell}
+        deployment={deployment}
+        accounts={accounts}
+        reload={reload}
+        acting={acting}
+        onClose={() => setActing(null)}
       />
     </>
   );
