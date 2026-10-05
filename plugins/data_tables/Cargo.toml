@@ -1,0 +1,46 @@
+[workspace]
+
+[package]
+name = "data_tables"
+version = "1.0.0"
+edition = "2024"
+rust-version = "1.94"
+
+[[bin]]
+name = "data_tables"
+path = "source/main.rs"
+
+[dependencies]
+arrow = { version = "59", default-features = false, features = ["json", "ipc", "ipc_compression"] }
+async-trait = "0.1"
+base64 = "0.22"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+datafusion = { version = "55", default-features = false, features = ["sql", "datetime_expressions", "string_expressions", "unicode_expressions", "regex_expressions", "nested_expressions", "math_expressions"] }
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+futures = "0.3"
+memchr = "2"
+parquet = { version = "59", default-features = false, features = ["arrow", "snap", "brotli", "lz4", "zstd", "flate2-rust_backened"] }
+quick-xml = "0.42"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip", "preserve_order"] }
+tokio = { version = "1", default-features = false, features = ["rt", "macros", "sync"] }
+zip = { version = "8", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+proptest = { version = "1", default-features = false, features = ["std"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# Tests run the SQL engine natively; unoptimized it is unusably slow.
+[profile.dev]
+opt-level = 1
+debug = false
+
+[[example]]
+name = "gen_fixtures"
+path = "tools/gen_fixtures.rs"

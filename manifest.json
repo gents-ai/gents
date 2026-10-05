@@ -1,0 +1,23 @@
+{
+  "manifest_version": 1,
+  "name": "data_tables",
+  "namespace": "gents",
+  "version": "1.0.0",
+  "description": "probe",
+  "authors": ["gents contributors"],
+  "tags": ["data"],
+  "kind": "plugins",
+  "assets": ["plugins/data_tables.afb"],
+  "plugins": [
+    {
+      "name": "data_tables",
+      "description": "probe",
+      "artifact": "plugins/data_tables.afb",
+      "source": "plugins/data_tables",
+      "language": "rust",
+      "input_schema": {"type":"object","properties":{"path":{"type":"string"}}},
+      "bind_dir": {"input_field":"path","description":"folder","access":"read"},
+      "limits": {"memory_mib": 2048, "wall_clock_secs": 900, "max_output_mib": 4}
+    }
+  ]
+}
