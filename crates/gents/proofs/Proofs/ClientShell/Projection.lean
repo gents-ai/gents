@@ -55,6 +55,53 @@ def projectTransportIndicator : TransportHealth → TransportIndicator
   | .degraded => .degradedNotice
   | .wedged   => .wedgedNotice
 
+inductive RecoveryStatusKind where
+  | ready
+  | waiting
+  | blocked
+  deriving DecidableEq, Repr
+
+/-- Transport and route readiness are observations of automatic native recovery.
+Enrolled peers are reconciled automatically by the existing native owner.
+Waiting neither promises a recovery deadline nor grants enrollment authority.
+These observations do not establish that a user command is required; explicit
+credential or configuration errors retain their separate action owners. -/
+structure RecoveryStatus where
+  kind : RecoveryStatusKind
+  action : Option Unit
+  deriving DecidableEq, Repr
+
+def projectTransportRecovery (connected : Bool) : RecoveryStatus :=
+  { kind := if connected then .ready else .waiting, action := none }
+
+def projectRouteRecovery (routeReady : Bool) (_pairingPending : Bool) : RecoveryStatus :=
+  { kind := if routeReady then .ready else .waiting, action := none }
+
+/-- Failed P2P observations remain visible blockers. Recovery is automatic;
+operator remediation for credentials or configuration belongs to its own action. -/
+def projectConnectionFailure : RecoveryStatus :=
+  { kind := .blocked, action := none }
+
+theorem connection_failure_preserves_block_without_reconnect :
+    projectConnectionFailure.kind = .blocked ∧ projectConnectionFailure.action = none := by
+  exact ⟨rfl, rfl⟩
+
+theorem transport_recovery_requires_no_action (connected : Bool) :
+    (projectTransportRecovery connected).action = none := by
+  rfl
+
+theorem route_recovery_requires_no_action (ready pairingPending : Bool) :
+    (projectRouteRecovery ready pairingPending).action = none := by
+  rfl
+
+theorem offline_transport_waits :
+    (projectTransportRecovery false).kind = .waiting := by
+  rfl
+
+theorem unready_route_waits (pairingPending : Bool) :
+    (projectRouteRecovery false pairingPending).kind = .waiting := by
+  rfl
+
 /-- Request progress is projected directly from the persisted request
 lifecycle. Clients may choose presentation, but must not collapse the active
 states into one generic spinner. -/

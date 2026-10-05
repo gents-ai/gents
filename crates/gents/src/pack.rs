@@ -19,9 +19,10 @@ pub use inference::{
     PackInferenceProfileOption,
 };
 pub use installation::{
-    installed_packs, list_installed_packs, read_installed_pack, referenced_pack_digests,
-    remove_pack, DriftPolicy, InstallReport, InstalledPack, InstalledPackPlugin, PackIdentity,
-    RemoveReport, Retained,
+    document_pack_schema_paths, install_prepared_document_pack, installed_packs,
+    list_installed_packs, prepare_document_pack_install, read_installed_pack,
+    referenced_pack_digests, remove_pack, DriftPolicy, InstallReport, InstalledPack,
+    InstalledPackPlugin, PackIdentity, PreparedDocumentPackInstall, RemoveReport, Retained,
 };
 pub(crate) use installation::{observe_graph_install_in_txn, record_graph_install_in_txn};
 pub use loader::{decode_pack_config, load_pack_config, pin_pack_plugins};

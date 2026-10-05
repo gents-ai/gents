@@ -24,6 +24,7 @@ pub(crate) fn owned_replay_input(
             let request = request.clone();
             let request_commit_cid = request_commit_cid.clone();
             Box::pin(async move {
+                let started = std::time::Instant::now();
                 let boundary = crate::provider_context_reduction::capture_source_boundary(
                     &node,
                     &request.session_id,
@@ -33,6 +34,7 @@ pub(crate) fn owned_replay_input(
                     &request_commit_cid,
                 )
                 .await?;
+                let boundary_elapsed_ms = started.elapsed().as_millis() as u64;
                 let resolved = crate::session::resolve_canonical_replay_tags(
                     &node,
                     crate::session::CanonicalReplayScope {
@@ -48,6 +50,16 @@ pub(crate) fn owned_replay_input(
                     &tags,
                 )
                 .await?;
+                tracing::info!(
+                    target: "gents::provider_input",
+                    request_id = %request.request_id,
+                    request_doc_id = %request.doc_id,
+                    session_id = %request.session_id,
+                    tag_count = tags.len(),
+                    boundary_elapsed_ms,
+                    elapsed_ms = started.elapsed().as_millis() as u64,
+                    "resolved canonical provider replay evidence"
+                );
                 Ok(resolved
                     .into_iter()
                     .flat_map(|(tag, evidence)| {

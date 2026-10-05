@@ -1092,16 +1092,6 @@ export function createDesktopUiHarness(
       enrollmentRequests = [request];
       return request;
     },
-    async repairP2P() {
-      p2pStatus = "healthy";
-      syncHealth = {
-        ...syncHealth,
-        state: "healthy",
-        connectedPeerCount: 1,
-        lastError: null,
-      };
-      return snapshot();
-    },
     async fetchSessionSnapshot(_sessionId, _agentDid, _requestId, timelinePage) {
       const sessionId = _sessionId;
       const session = sessions.get(sessionId);

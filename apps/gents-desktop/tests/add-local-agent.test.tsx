@@ -74,7 +74,9 @@ function fleet(listed: DeploymentView[]) {
       bootstrap: forgeBootstrap,
       client: { deployments },
     })),
-    requestStatusEnrollment: vi.fn(),
+    requestStatusEnrollment: vi.fn(async (_address: string) => ({
+      requestId: "request-1",
+    })),
   };
   const shell = {
     api,
@@ -103,90 +105,63 @@ async function openAddAgent(shell: Shell) {
 
 beforeEach(() => vi.clearAllMocks());
 
-describe("Add agent on a desktop that already runs its local agent", () => {
-  it("does not offer to create a second, differently named local agent", async () => {
-    const { api, shell } = fleet([forge]);
-    const dialog = await openAddAgent(shell);
+describe("Add agent enrollment", () => {
+  it.each([[forge], [remote]])(
+    "does not offer local reconnect for existing or removed local agents",
+    async (listed) => {
+      const { api, shell } = fleet([listed]);
+      const dialog = await openAddAgent(shell);
+      expect(
+        within(dialog).queryByRole("button", { name: /reconnect/i }),
+      ).not.toBeInTheDocument();
+      expect(
+        within(dialog).queryByRole("radio", { name: /Local agent/ }),
+      ).not.toBeInTheDocument();
+      expect(within(dialog).getByLabelText("Agent server")).toBeInTheDocument();
+      expect(api.startManagedServer).not.toHaveBeenCalled();
+      expect(shell.onInitLocalRuntime).not.toHaveBeenCalled();
+    },
+  );
 
-    const local = within(dialog).getByRole("radio", { name: /Local agent/ });
-    await waitFor(() => expect(local).toBeDisabled());
-    expect(local).toHaveTextContent("Forge already runs on this computer");
-    expect(within(dialog).getByRole("radio", { name: /Remote connect/ })).toBeChecked();
-    expect(within(dialog).queryByLabelText("Name")).not.toBeInTheDocument();
-    expect(api.startManagedServer).not.toHaveBeenCalled();
-  });
+  it.each(["local-standard", "enrollment"])(
+    "hides impossible Remove for the managed agent with source %s",
+    async (source) => {
+      const { shell } = fleet([{ ...forge, source }]);
+      render(<AgentsScreen shell={shell} />);
+      await userEvent.click(screen.getByRole("button", { name: "Forge actions" }));
+      expect(
+        await screen.findByRole("menuitem", { name: "Rename" }),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole("menuitem", { name: "Remove peer" }),
+      ).not.toBeInTheDocument();
+    },
+  );
 
-  it("reconnects the removed local agent and reports success only once it is listed", async () => {
-    const { api, shell } = fleet([remote]);
-    const dialog = await openAddAgent(shell);
-
-    const local = within(dialog).getByRole("radio", { name: /Local agent/ });
-    await waitFor(() => expect(local).toBeEnabled());
-    expect(local).toHaveTextContent("Reconnect Forge");
-    await userEvent.click(local);
-    await userEvent.click(within(dialog).getByRole("button", { name: "Reconnect" }));
-
-    await waitFor(() => expect(toast).toHaveBeenCalledWith("Forge reconnected"));
-    expect(api.startManagedServer).toHaveBeenCalledWith("Forge");
-    expect(shell.onInitLocalRuntime).toHaveBeenCalledWith("Forge");
-    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-  });
-
-  it("names the local agent from its home, not a stale remembered name", async () => {
-    const { api, shell } = fleet([remote]);
-    api.managedServerStatus.mockImplementation(async () =>
-      status({ state: "stopped", agentName: "Scout", agentDid: null }),
-    );
-    const dialog = await openAddAgent(shell);
-    const local = within(dialog).getByRole("radio", { name: /Local agent/ });
-    await waitFor(() => expect(local).toBeEnabled());
-    expect(local).toHaveTextContent("Reconnect Forge");
-    expect(local).not.toHaveTextContent("Scout");
-    await userEvent.click(local);
-    await userEvent.click(within(dialog).getByRole("button", { name: "Reconnect" }));
-    await waitFor(() => expect(api.startManagedServer).toHaveBeenCalledWith("Forge"));
-  });
-
-  it("keeps the dialog open with the reason when reconnecting fails, and a retry works", async () => {
+  it("retains Remove for a remote enrolled peer", async () => {
     const { shell } = fleet([remote]);
-    (shell.onInitLocalRuntime as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
-      new Error("saved connections could not be written"),
-    );
-    const dialog = await openAddAgent(shell);
-    const local = within(dialog).getByRole("radio", { name: /Local agent/ });
-    await waitFor(() => expect(local).toBeEnabled());
-    await userEvent.click(local);
-    await userEvent.click(within(dialog).getByRole("button", { name: "Reconnect" }));
-
-    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
-      "Couldn't reconnect the local agent: saved connections could not be written",
-    );
-    expect(toast).not.toHaveBeenCalled();
-    expect(local).toBeChecked();
-
-    await userEvent.click(within(dialog).getByRole("button", { name: "Reconnect" }));
-    await waitFor(() => expect(toast).toHaveBeenCalledWith("Forge reconnected"));
-    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    render(<AgentsScreen shell={shell} />);
+    await userEvent.click(screen.getByRole("button", { name: "Remote actions" }));
+    expect(
+      await screen.findByRole("menuitem", { name: "Remove peer" }),
+    ).toBeInTheDocument();
   });
 
-  it("does not claim success when the agent never reaches the agent list", async () => {
-    const { shell, lose } = fleet([remote]);
-    (shell.onInitLocalRuntime as ReturnType<typeof vi.fn>).mockImplementationOnce(
-      async () => {
-        lose();
-        return { agentDid: FORGE_DID };
-      },
-    );
+  it("retains initial remote enrollment", async () => {
+    const { api, shell } = fleet([forge]);
+    api.requestStatusEnrollment.mockResolvedValue({ requestId: "request-1" });
     const dialog = await openAddAgent(shell);
-    const local = within(dialog).getByRole("radio", { name: /Local agent/ });
-    await waitFor(() => expect(local).toBeEnabled());
-    await userEvent.click(local);
-    await userEvent.click(within(dialog).getByRole("button", { name: "Reconnect" }));
-
-    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
-      "does not appear in the agent list",
+    await userEvent.type(
+      within(dialog).getByLabelText("Agent server"),
+      "server.example:9191",
     );
-    expect(toast).not.toHaveBeenCalled();
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Request enrolment" }),
+    );
+    await waitFor(() =>
+      expect(api.requestStatusEnrollment).toHaveBeenCalledWith("server.example:9191"),
+    );
+    expect(shell.refreshSnapshot).toHaveBeenCalled();
   });
 });
 

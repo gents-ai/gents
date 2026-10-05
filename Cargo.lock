@@ -6085,8 +6085,7 @@ dependencies = [
 [[package]]
 name = "iroh"
 version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1a2e38557969901f8b356d1ebd882253bab98cc81500d53e7bcbf33f56082303"
+source = "git+https://github.com/jackzampolin/iroh?rev=bd3405911703981a3fb5edc957a383b6c9cc4764#bd3405911703981a3fb5edc957a383b6c9cc4764"
 dependencies = [
  "backon",
  "blake3",
@@ -6136,8 +6135,7 @@ dependencies = [
 [[package]]
 name = "iroh-base"
 version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "61cdf012298adc13f5c2c821ad87214fecc9ac54c751301d45bf62b229a85da1"
+source = "git+https://github.com/jackzampolin/iroh?rev=bd3405911703981a3fb5edc957a383b6c9cc4764#bd3405911703981a3fb5edc957a383b6c9cc4764"
 dependencies = [
  "curve25519-dalek 5.0.0-rc.0",
  "data-encoding",
@@ -6155,8 +6153,7 @@ dependencies = [
 [[package]]
 name = "iroh-dns"
 version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c24b83aae5ed4eced1c3724204c083c28c84c5d225a88e277eceeccce3dc3bd"
+source = "git+https://github.com/jackzampolin/iroh?rev=bd3405911703981a3fb5edc957a383b6c9cc4764#bd3405911703981a3fb5edc957a383b6c9cc4764"
 dependencies = [
  "arc-swap",
  "cfg_aliases",
@@ -6233,8 +6230,7 @@ dependencies = [
 [[package]]
 name = "iroh-relay"
 version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9f16a5505939f9250297ff2f1210b5142d13618f496eab03ce3f964fc47e2e2b"
+source = "git+https://github.com/jackzampolin/iroh?rev=bd3405911703981a3fb5edc957a383b6c9cc4764#bd3405911703981a3fb5edc957a383b6c9cc4764"
 dependencies = [
  "blake3",
  "bytes",
@@ -10156,7 +10152,7 @@ dependencies = [
 [[package]]
 name = "rig-core"
 version = "0.35.0"
-source = "git+https://github.com/vertexclique/rig?rev=36a4c7fa5dcc450659d88556f3b4ba2be8b6a079#36a4c7fa5dcc450659d88556f3b4ba2be8b6a079"
+source = "git+https://github.com/jackzampolin/rig?rev=7e44b7a9ce081fa1b54a4012c1691ebe04ca1845#7e44b7a9ce081fa1b54a4012c1691ebe04ca1845"
 dependencies = [
  "as-any",
  "async-stream",

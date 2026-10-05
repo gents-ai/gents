@@ -1787,6 +1787,10 @@ def caseCoverage : List CoverageEntry :=
       "conformance::request_input::lean_request_inputs_decode_without_losing_explicit_issuance_facts"
       "Canonical input serde only. Signed canonical_input_fields/bytes, context whitelist, title materialization and verified goal receipt checks need the migrated admission/signing owners.")
       "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp "session_document_cases" "SessionDocumentCases"
+      "lean_vocab_test::support::session_documents::tests::generated_pending_timeline_cases_preserve_request_identities_and_order"
+      "Generated pending timeline cases bind physical identity, admission order, same or following request anchors, hidden or missing anchor fallback, tool-first replication, orphan groups and overlay ownership to the shared protocol ordering owner. Durable request lookup and authored-message suppression remain bridge-owner obligations.")
+      "client-shell" [Surface.runtimeInternal]
   , tagged (followUpCoverage "session_document_cases" "SessionDocumentCases"
       "Canonical session DB/lifecycle and fork tests specify target behavior; the generated interned-ID selection/projection/retry/fork rows still need real-owner adapters, including exact physical references and transactional freshness. No fixture-local state machine may substitute.")
       "request-lifecycle" [Surface.runtimeInternal]

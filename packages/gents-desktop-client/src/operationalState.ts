@@ -18,8 +18,7 @@ export type OperationalStatusLayer =
   | "inference"
   | "reconcile";
 
-export type OperationalRecoveryAction =
-  "reconnect" | "configureInference" | null;
+export type OperationalRecoveryAction = "configureInference" | null;
 
 /** Shared presentation-safe status. Surfaces choose density, not meaning. */
 export type OperationalStatus = {
@@ -87,22 +86,29 @@ function fallbackBehaviorId(deployment: DeploymentView): string | null {
   const principalDefault = deployment.agentPrincipal.defaultBehaviorId?.trim();
   if (
     principalDefault &&
-    deployment.behaviors.some((behavior) => behavior.behaviorId === principalDefault)
+    deployment.behaviors.some(
+      (behavior) => behavior.behaviorId === principalDefault,
+    )
   ) {
     return principalDefault;
   }
-  const markedDefault = deployment.behaviors.find((behavior) => behavior.isDefault);
+  const markedDefault = deployment.behaviors.find(
+    (behavior) => behavior.isDefault,
+  );
   if (markedDefault) {
     return markedDefault.behaviorId;
   }
   const conventional = `${deployment.agentDid}:default`;
   if (
-    deployment.behaviors.some((behavior) => behavior.behaviorId === conventional)
+    deployment.behaviors.some(
+      (behavior) => behavior.behaviorId === conventional,
+    )
   ) {
     return conventional;
   }
   return (
-    deployment.behaviors.find((behavior) => behavior.enabled)?.behaviorId ?? null
+    deployment.behaviors.find((behavior) => behavior.enabled)?.behaviorId ??
+    null
   );
 }
 
@@ -133,8 +139,7 @@ export function selectedBehaviorReadinessDecision(
   }
 
   const readiness = deployment.behaviorReadiness;
-  const behaviorId =
-    selectedBehaviorId ?? fallbackBehaviorId(deployment);
+  const behaviorId = selectedBehaviorId ?? fallbackBehaviorId(deployment);
   const replicaLag =
     readiness.source.state === "unknown" &&
     readiness.source.reason === "readiness_stale" &&
@@ -301,13 +306,12 @@ export function projectDeploymentTransportStatus(
         detail: "The secure P2P transport is connected.",
       })
     : status({
-        kind: "blocked",
+        kind: "waiting",
         layer: "p2p",
         reason: "disconnected",
         label: "Agent connection is offline",
         shortLabel: "Not connected",
-        detail: "Reconnect the secure P2P connection to continue.",
-        action: "reconnect",
+        detail: "The secure P2P connection is recovering automatically.",
       });
 }
 
@@ -344,7 +348,6 @@ export function projectRouteOperationalStatus(
     shortLabel: "Preparing",
     detail:
       "The agent is connected, but its signed conversation route is not ready yet.",
-    action: "reconnect",
   });
 }
 
@@ -392,8 +395,7 @@ export function projectDeploymentOperationalState(
           detail: "No runtime configuration reconciliation is pending.",
         });
 
-  const behaviorBlocker =
-    behavior.kind === "ready" ? null : behavior;
+  const behaviorBlocker = behavior.kind === "ready" ? null : behavior;
   const admissionBlocker =
     transport.kind !== "ready"
       ? transport
@@ -411,7 +413,6 @@ export function projectDeploymentOperationalState(
         label: "Agent connection error",
         shortLabel: "Error",
         detail: error,
-        action: "reconnect",
       })
     : (admissionBlocker ??
       (sync.kind !== "ready" ? sync : null) ??
@@ -467,11 +468,7 @@ export function projectClientOperationalStatus(
 }
 
 export type SyncHealthStateName =
-  | "healthy"
-  | "syncing"
-  | "offline"
-  | "failed"
-  | "incompatible";
+  "healthy" | "syncing" | "offline" | "failed" | "incompatible";
 
 export function syncHealthState(
   syncHealth: SyncHealthView | null | undefined,
@@ -523,10 +520,7 @@ export function projectSyncOperationalStatus(
     reason: state,
     label,
     shortLabel: state === "healthy" ? "Sync healthy" : label,
-    detail:
-      syncHealth?.lastError ??
-      `Database synchronization is ${state}.`,
-    action: state === "offline" || state === "failed" ? "reconnect" : null,
+    detail: syncHealth?.lastError ?? `Database synchronization is ${state}.`,
   });
 }
 

@@ -30,7 +30,7 @@ pub const XAI_OAUTH_PROVIDER: &str = "xai-oauth";
 /// Subscription inference proxy (not the metered developer API).
 pub const XAI_GROK_OAUTH_BASE_URL: &str = "https://cli-chat-proxy.grok.com/v1";
 
-const GROK_CLIENT_VERSION: &str = "0.2.93";
+const GROK_CLIENT_VERSION: &str = "1.0.13";
 const GROK_CLIENT_VERSION_ENV: &str = "GENTS_XAI_GROK_CLIENT_VERSION";
 
 pub fn default_backend_endpoint() -> &'static str {

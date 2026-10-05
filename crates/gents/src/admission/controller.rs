@@ -353,6 +353,7 @@ impl BackendAdmissionController {
                     "cancelled",
                     Some("BackendGone"),
                     None,
+                    gents_loop::rig_compat::CachedInputTokensObservation::NotAvailable,
                 )
                 .await
                 {
@@ -513,9 +514,15 @@ impl Drop for QueuedCallGuard {
         let node = self.node.clone();
         let call = self.call.clone();
         spawn_persistence(async move {
-            if let Err(error) =
-                persist_existing_call_terminal(node, &call, "cancelled", Some("Cancelled"), None)
-                    .await
+            if let Err(error) = persist_existing_call_terminal(
+                node,
+                &call,
+                "cancelled",
+                Some("Cancelled"),
+                None,
+                gents_loop::rig_compat::CachedInputTokensObservation::NotAvailable,
+            )
+            .await
             {
                 tracing::warn!(call_id = %call.call_id, error = %error, "failed to persist cancelled queued inference call");
             }

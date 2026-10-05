@@ -21,6 +21,7 @@ pub async fn desktop_session_snapshot(
     timeline_before_item_key: Option<String>,
     state: State<'_, DesktopAppState>,
 ) -> Result<Option<DesktopSessionSnapshot>, BridgeError> {
+    let started = std::time::Instant::now();
     let Some(core) = current_core(&state) else {
         return Ok(None);
     };
@@ -40,6 +41,7 @@ pub async fn desktop_session_snapshot(
         )
     });
 
+    let hydrate_started = std::time::Instant::now();
     if let Some(agent_did) = agent_did.as_deref() {
         // Its transcript reads as empty here and a hydration request would be
         // refused, so the local header alone answers without any remote read.
@@ -73,6 +75,8 @@ pub async fn desktop_session_snapshot(
             );
         }
     }
+    let hydrate_start_ms = hydrate_started.elapsed().as_millis() as u64;
+    let refresh_started = std::time::Instant::now();
     if let (Some(agent_did), Some(request_id)) = (agent_did.as_deref(), request_id.as_deref()) {
         if let Err(error) = core.refresh_local_request(agent_did, request_id).await {
             tracing::warn!(
@@ -84,6 +88,8 @@ pub async fn desktop_session_snapshot(
             );
         }
     }
+    let request_refresh_ms = refresh_started.elapsed().as_millis() as u64;
+    let transcript_started = std::time::Instant::now();
     let principal_scope = agent_did
         .as_deref()
         .and_then(|agent_did| core.transcript_principal_scope(agent_did));
@@ -184,6 +190,8 @@ pub async fn desktop_session_snapshot(
             None,
         )
     };
+    let transcript_page_tip_ms = transcript_started.elapsed().as_millis() as u64;
+    let projection_started = std::time::Instant::now();
     let context_store = context_store.map(|tip| transcript_page.store.merge_snapshot(tip));
     let mut snapshot = build_session_snapshot_for_agent_with_transcript(
         core.as_ref(),
@@ -205,6 +213,20 @@ pub async fn desktop_session_snapshot(
             Some(&transcript_page),
         )
         .map_err(BridgeError::untyped)?;
+    }
+    let projection_ms = projection_started.elapsed().as_millis() as u64;
+    let elapsed = started.elapsed();
+    if elapsed > std::time::Duration::from_secs(1) {
+        tracing::info!(
+            target: "gents_desktop::chat",
+            session_id,
+            hydrate_start_ms,
+            request_refresh_ms,
+            transcript_page_tip_ms,
+            projection_ms,
+            elapsed_ms = elapsed.as_millis() as u64,
+            "loaded slow desktop session snapshot"
+        );
     }
     Ok(snapshot)
 }

@@ -801,12 +801,13 @@ async fn reconstruct_scoped_message_with_facts(
 /// A source boundary limits this read, but does not itself prove that an
 /// independently stored checkpoint was causally derived from the whole view.
 /// The caller must not select a candidate by comparing native message bytes.
+#[cfg(test)]
 pub(crate) async fn load_canonical_assistant_candidates(
     node: &EmbeddedNode,
     scope: CanonicalReplayScope<'_>,
     boundary: &crate::provider_context_reduction::SourceBoundary,
 ) -> Result<Vec<CanonicalAssistantCandidate>> {
-    load_canonical_assistant_candidates_with(node, node, scope, boundary).await
+    load_canonical_assistant_candidates_with(node, node, scope, boundary, None).await
 }
 
 /// Physical-request reads for replay. A failed store read is an error, never
@@ -842,8 +843,9 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
     requests: &impl ReplayRequestReader,
     scope: CanonicalReplayScope<'_>,
     boundary: &crate::provider_context_reduction::SourceBoundary,
+    selected_tags: Option<&[gents_loop::claude_messages_body::ReplayTag]>,
 ) -> Result<Vec<CanonicalAssistantCandidate>> {
-    let (_, high_water) =
+    let (request_commits, high_water) =
         validated_canonical_replay_boundary(node, requests, scope, boundary).await?;
     // None records the empty canonical view at capture time. A later current
     // read cannot turn that historical empty boundary into an unbounded scan.
@@ -851,6 +853,16 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
         return Ok(Vec::new());
     };
     let mut cache = ReadCache::default();
+    let mut request_facts = BTreeMap::from([(
+        (
+            scope.request_doc_id.to_owned(),
+            scope.agent_did.to_owned(),
+            scope.requester_did.map(str::to_owned),
+            scope.session_id.to_owned(),
+        ),
+        (scope.request_id.to_owned(), request_commits),
+    )]);
+    let mut capture_cache = crate::rendered_request::CaptureReadCache::default();
 
     let session_filter =
         session_scope_filter(scope.agent_did, scope.session_id, scope.requester_did);
@@ -930,15 +942,48 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
             .request_doc_id
             .as_deref()
             .context("canonical provider header has no physical request")?;
-        let (request_id, request_commits) = match load_replay_physical_request(
-            requests,
-            request_doc_id,
-            &origin_header.agent_did,
-            origin_header.requester_did.as_deref(),
-            &origin_header.session_id,
-        )
-        .await
-        {
+        // Filter only after bounded-header and physical-coordinate validation
+        // so unrequested history cannot bypass canonical-view checks.
+        if let Some(tags) = selected_tags {
+            let selected = tags.iter().any(|tag| {
+                if tag.request_doc_id != request_doc_id {
+                    return false;
+                }
+                matches!(
+                    &tag.source,
+                    OutputSource::ProviderTurn {
+                        scope: tag_scope,
+                        turn_index,
+                        attempt,
+                    } if tag_scope == &coordinate.scope
+                        && *turn_index == coordinate.turn_index
+                        && *attempt == coordinate.attempt
+                )
+            });
+            if !selected {
+                continue;
+            }
+        }
+        let request_scope = (
+            request_doc_id.to_owned(),
+            origin_header.agent_did.clone(),
+            origin_header.requester_did.clone(),
+            origin_header.session_id.clone(),
+        );
+        let loaded = match request_facts.get(&request_scope) {
+            Some(facts) => Ok(facts.clone()),
+            None => {
+                load_replay_physical_request(
+                    requests,
+                    request_doc_id,
+                    &origin_header.agent_did,
+                    origin_header.requester_did.as_deref(),
+                    &origin_header.session_id,
+                )
+                .await
+            }
+        };
+        let (request_id, request_commits) = match loaded {
             Ok(request) => request,
             // A historical request that is verifiably missing or out of scope
             // makes only its turn non-replayable; the current request is
@@ -959,6 +1004,9 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
             }
             Err(error) => return Err(error),
         };
+        request_facts
+            .entry(request_scope)
+            .or_insert_with(|| (request_id.clone(), request_commits.clone()));
         let capture = replay_capture_for_candidate(
             node,
             &origin_header.agent_did,
@@ -968,6 +1016,7 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
             request_doc_id,
             &request_commits,
             coordinate,
+            &mut capture_cache,
         )
         .await?;
         candidates.push(CanonicalAssistantCandidate {
@@ -1083,7 +1132,8 @@ pub(crate) async fn resolve_canonical_replay_tags(
             "canonical replay tag is not a provider source"
         );
     }
-    let candidates = load_canonical_assistant_candidates(node, scope, boundary).await?;
+    let candidates =
+        load_canonical_assistant_candidates_with(node, node, scope, boundary, Some(tags)).await?;
     tags.iter()
         .map(|tag| {
             let OutputSource::ProviderTurn {
@@ -1325,6 +1375,7 @@ async fn replay_capture_for_candidate(
     request_doc_id: &str,
     request_commits: &BTreeSet<String>,
     coordinate: CanonicalProviderCoordinate,
+    cache: &mut crate::rendered_request::CaptureReadCache,
 ) -> Result<Option<CanonicalReplayCapture>> {
     let CanonicalProviderCoordinate {
         scope: capture_scope,
@@ -1368,6 +1419,7 @@ async fn replay_capture_for_candidate(
         request_doc_id,
         request_commits,
         coordinate,
+        cache,
     )
     .await
     {
@@ -1426,6 +1478,7 @@ async fn verify_replay_capture(
     request_doc_id: &str,
     request_commits: &BTreeSet<String>,
     coordinate: CanonicalProviderCoordinate,
+    cache: &mut crate::rendered_request::CaptureReadCache,
 ) -> Result<Option<CanonicalReplayCapture>> {
     let CanonicalProviderCoordinate {
         scope: capture_scope,
@@ -1498,11 +1551,12 @@ async fn verify_replay_capture(
     else {
         return Ok(None);
     };
-    let body = crate::rendered_request::decode_capture_json_embedded(
+    let body = crate::rendered_request::decode_capture_json_embedded_cached(
         node,
         gents_protocol::rendered_request::CAPTURE_VERSION,
         required_row_str(capture, "request_json")?,
         crate::rendered_request::CapturePayloadKind::RequestBody,
+        cache,
     )
     .await?;
     Ok(Some(CanonicalReplayCapture { issuer, wire, body }))

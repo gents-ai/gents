@@ -182,7 +182,7 @@ function AppHost({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
         <StartupScreen
           error={shell.error}
           managedServerSupported={bridge.supportsManagedServer === true}
-          onRetry={shell.reconnect}
+          onRetry={shell.retryStartup}
           managedServerWait={shell.managedServerWait}
           diagnosticsHint={shell.diagnosticsHint}
           onSkipManagedServerWait={shell.skipManagedServerWait}
@@ -236,7 +236,6 @@ function AppHost({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
             syncHealth={shell.snapshot?.client?.syncHealth}
             error={shell.error}
             onDismissError={shell.clearError}
-            onReconnect={shell.reconnect}
             onOpenDbExplorer={openDbExplorer}
           >
             {route.name === "sessions" && <SessionsScreen shell={shell} />}
