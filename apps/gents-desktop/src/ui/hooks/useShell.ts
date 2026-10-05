@@ -29,6 +29,11 @@ export function useShell(
     // Session selection is behavior-aware. The route must use the same owner
     // as every other session selection so reopening an older configurator
     // chat also restores that session's behavior before consistency checks run.
+    // Unless the shell already holds this session: then the route is only
+    // catching up with a selection made a moment ago, such as a mailbox item
+    // that opened its session, and selecting it again would reset what was
+    // set up for it, such as the item the next message answers.
+    if (shell.selectedSessionId === routeSessionId) return;
     shell.onSelectSession(routeSessionId);
   }, [routeSessionId]);
 
@@ -99,6 +104,7 @@ export function useShell(
       selectedDeployment,
       selectedAgentDid: d.selectedAgentDid ?? selectedDeployment?.agentDid ?? null,
       selectAgent: d.setSelectedAgentDid,
+      selectSession: d.onSelectSession,
       selectBehavior: d.setSelectedBehaviorId,
       selectedBehaviorId: d.behaviorReadiness.behaviorId,
       selectedSessionId: d.selectedSessionId,
@@ -131,6 +137,9 @@ export function useShell(
       dismissMailboxItem: d.onDismissMailboxItem,
       openMailboxItem: d.onOpenMailboxItem,
       answerMailboxQuestion: d.onAnswerMailboxQuestion,
+      // Putting the armed reply down makes the next message an ordinary one
+      // and leaves the item open.
+      clearMailboxCause: d.clearPendingMailboxCause,
       mailboxCause: d.pendingMailboxCauseId
         ? {
             itemId: d.pendingMailboxCauseId,
