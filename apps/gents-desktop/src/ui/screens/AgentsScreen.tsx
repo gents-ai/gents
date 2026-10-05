@@ -5,12 +5,7 @@
    the desktop's status enrolment: a server address, a request the
    server's admin approves, then the peer joins. */
 import { useEffect, useState } from "react";
-import {
-  EllipsisVertical,
-  Inbox,
-  Plus,
-  SlidersHorizontal,
-} from "lucide-react";
+import { EllipsisVertical, Inbox, Plus, SlidersHorizontal } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@gents/ui/components/button";
 import {
