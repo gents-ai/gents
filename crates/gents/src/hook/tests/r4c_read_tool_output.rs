@@ -237,14 +237,17 @@ async fn read_tool_output_running_returns_live_stream_tail() {
         registry(tools, &["bash_unrestricted"]),
     )
     .await;
+    // Removing the gate releases the child, including when an assertion unwinds.
+    let gate = tempfile::NamedTempFile::new_in(tempdir.path()).expect("process release gate");
+    let gate_name = gate.path().file_name().unwrap().to_str().unwrap();
     let handle = background_tool_with_args(
         &hook,
         "bg-running",
         "bash_unrestricted",
         json!({
-            "command": "printf live; sleep 2; printf done",
+            "command": format!("printf live; while [ -e '{gate_name}' ]; do sleep 0.01; done; printf done"),
             "args": [],
-            "timeout_secs": 5
+            "timeout_secs": 30
         }),
     )
     .await;
@@ -276,6 +279,7 @@ async fn read_tool_output_running_returns_live_stream_tail() {
     assert_eq!(result["exited"].as_bool(), Some(false));
     assert!(result["exit_code"].is_null());
 
+    gate.close().expect("release the background process");
     let waited = wait_tool(&hook, "wait-running-terminal", tool_call_id).await;
     assert_eq!(waited["status"].as_str(), Some("completed"));
     let terminal = read_tool_output(
@@ -286,7 +290,9 @@ async fn read_tool_output_running_returns_live_stream_tail() {
     .await;
     assert_eq!(terminal["status"].as_str(), Some("completed"));
     assert_eq!(terminal["output"].as_str(), Some("livedone"));
+    assert_eq!(terminal["next_offset"].as_u64(), Some(8));
     assert_eq!(terminal["total_bytes"].as_u64(), Some(8));
+    assert_eq!(terminal["has_more"].as_bool(), Some(false));
     assert_eq!(terminal["exited"].as_bool(), Some(true));
 }
 
