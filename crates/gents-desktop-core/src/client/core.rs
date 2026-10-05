@@ -98,6 +98,18 @@ impl ClientCoreOptions {
             ..Self::default()
         }
     }
+
+    /// `local_only` for fixtures that publish a simulated peer route with
+    /// `ClientCore::add_local_standard_peer_for_test`. Supervisor route
+    /// reconciliation would dial the unreachable simulated address and
+    /// revoke the fixture's readiness at a load-dependent moment.
+    #[doc(hidden)]
+    pub fn local_simulated_route() -> Self {
+        Self {
+            install_replicators_on_bootstrap: false,
+            ..Self::local_only()
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -391,6 +403,10 @@ impl ClientCore {
     /// readiness through the signed route owner.
     #[doc(hidden)]
     pub async fn add_local_standard_peer_for_test(&self, agent_did: &str) -> Result<()> {
+        anyhow::ensure!(
+            !self.options.install_replicators_on_bootstrap,
+            "a simulated peer route requires ClientCoreOptions::local_simulated_route()"
+        );
         self.add_local_standard_peer_route_for_test(
             "Test Local Runtime",
             "127.0.0.1:56000/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb",

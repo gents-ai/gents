@@ -157,7 +157,8 @@ async fn initial_session_hydration_starts_when_local_transcript_rows_already_exi
     let tempdir = tempfile::tempdir()?;
     let paths = DesktopPaths::from_root(tempdir.path());
     let core =
-        ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only()).await?;
+        ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_simulated_route())
+            .await?;
     let requester_did = gents::graphql::escape_graphql_string(core.principal().did());
     let agent_did = "did:test:amy";
     persist_local_route(&core, agent_did).await?;
@@ -235,7 +236,7 @@ async fn initial_session_hydration_waits_for_existing_or_terminal_session_eviden
     let tempdir = tempfile::tempdir()?;
     let core = ClientCore::start_with_paths_and_options(
         DesktopPaths::from_root(tempdir.path()),
-        ClientCoreOptions::local_only(),
+        ClientCoreOptions::local_simulated_route(),
     )
     .await?;
     let requester_did = gents::graphql::escape_graphql_string(core.principal().did());
@@ -416,9 +417,11 @@ async fn forged_terminal_hydration_receipt_fails_closed() -> Result<()> {
 async fn passive_hydration_observation_preserves_rejection_until_explicit_retry() -> Result<()> {
     let tempdir = tempfile::tempdir()?;
     let paths = DesktopPaths::from_root(tempdir.path());
-    let core =
-        ClientCore::start_with_paths_and_options(paths.clone(), ClientCoreOptions::local_only())
-            .await?;
+    let core = ClientCore::start_with_paths_and_options(
+        paths.clone(),
+        ClientCoreOptions::local_simulated_route(),
+    )
+    .await?;
     let requester_did = gents::graphql::escape_graphql_string(core.principal().did());
     let agent_did = core.principal().did().to_string();
     persist_local_route(&core, &agent_did).await?;
@@ -497,7 +500,8 @@ async fn passive_hydration_observation_preserves_rejection_until_explicit_retry(
     core.shutdown().await?;
     drop(core);
     let core =
-        ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only()).await?;
+        ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_simulated_route())
+            .await?;
     core.add_local_standard_peer_for_test(&agent_did).await?;
     assert_eq!(
         core.local_peer_id(),
