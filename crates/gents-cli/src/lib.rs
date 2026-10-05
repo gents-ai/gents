@@ -71,6 +71,7 @@ const DEFAULT_LOG_FILTER: &str = concat!(
     "gents::agent::reconcile=info,",
     "gents::agent::loop_stream=info,",
     "gents::provider_input=info,",
+    "gents::chatgpt_codex=info,",
     "gents::hook=info,",
     "gents::session::sessions=info,",
     "gents::streaming=info,",

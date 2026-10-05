@@ -1702,6 +1702,16 @@ async fn turn_retraction_retains_old_bytes_but_publishes_only_the_retry() {
         .await
         .unwrap();
     processor.process_item(text_item("Hel")).await.unwrap();
+    processor
+        .process_item(tool_call_item_with_ids(
+            "read_file",
+            r#"{"path":"abandoned.rs"}"#,
+            "abandoned-result",
+            "abandoned-internal",
+            Some("abandoned-call"),
+        ))
+        .await
+        .unwrap();
 
     processor
         .process_item(turn_retracted_item(0, 0))
@@ -1745,6 +1755,12 @@ async fn turn_retraction_retains_old_bytes_but_publishes_only_the_retry() {
     let history = crate::session::load_history(&node, &session_id, "did:test:test", None)
         .await
         .unwrap();
+    assert!(history.iter().all(|message| match message {
+        Message::Assistant { content, .. } => !content
+            .iter()
+            .any(|item| matches!(item, AssistantContent::ToolCall(_))),
+        _ => true,
+    }));
     let assistant_texts = history
         .iter()
         .filter_map(|message| match message {
@@ -1804,7 +1820,7 @@ async fn turn_retraction_retains_old_bytes_but_publishes_only_the_retry() {
         None,
     )
     .unwrap();
-    assert_eq!(prefix.streams.len(), 1);
+    assert_eq!(prefix.streams.len(), 2);
     assert_eq!(prefix.streams[0].text, "Hel");
 
     node.shutdown().await;
