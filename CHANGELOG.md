@@ -4,7 +4,7 @@ All desktop crates and npm packages release together at `workspace.package.versi
 (lockstep train). The bundled frontend and Rust bridge use generated types and
 source consistency checks, not a separate runtime compatibility version.
 
-## Unreleased
+## 0.20.0 - 2026-10-05
 
 - Desktop shell (macOS): a two-finger swipe goes back or forward. AppKit
   recognises the gesture, an arrow handle travels in from the pane's edge
