@@ -318,7 +318,7 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
         let mut extra = serde_json::Map::new();
         extra.insert(
             "sum".into(),
-            json!(crate::num::round_to(finite.iter().sum::<f64>(), 9)),
+            json!(crate::num::round_sig(finite.iter().sum::<f64>(), 12)),
         );
         info.push(SeriesInfo {
             name: g.name.clone(),

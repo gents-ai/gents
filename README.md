@@ -118,14 +118,15 @@ jq -r '.parts[0].data' chart.json | base64 -d > chart.png
 jq -r '.response.alt' chart.json
 ```
 
-`--bind-dir` names the folder (or one file) the call may read, read-only. To
-let the plugin write the files itself, use `charts_save` with a folder you
-allow: `gents plugin dirs add ./reports --access read_write`, then
-`gents plugin run charts_save --bind-dir ./reports --input '{"chart": "bar",
-"file": "sales.csv", "save": "revenue"}'` (the folder is given to the call
-read and write only when its declaration says so; `--bind-dir` itself is
-read-only, so call `charts_save` through an agent or a graph node, or from the
-desktop, which ask for the grant).
+`--bind-dir` names the folder (or one file) the call may use. With `charts` it
+is read-only. To get the files written, run `charts_save` the same way, which
+gets the folder read and write:
+
+```sh
+gents plugin run charts_save --home <home> --bind-dir ./reports \
+  --input '{"chart": "bar", "file": "sales.csv", "x": "month", "y": ["revenue"], "save": "revenue"}'
+ls reports   # revenue.svg  revenue.png  sales.csv
+```
 
 ## Installation
 
@@ -256,10 +257,12 @@ same bytes (the pack's CI runs the cases on all three).
 
 ## Performance
 
-Not benchmarked. One sanity check, run once through the host: a 2 000 000 row
-CSV drawn as a line chart finishes within the plugin's declared limits (see the
-change that introduced the pack for the number it measured); everything else is
-not measured.
+Not benchmarked. One sanity check was run once through the host on Linux
+x86_64: a 29 MB CSV of 2 000 000 rows drawn as a line chart (`gents plugin run
+charts --bind-dir ...`) finished in 3.2 s wall clock with a 298 MiB peak
+resident set for the whole gents process, inside the plugin's declared limits
+(1024 MiB, 300 s). The line was drawn from 1501 of those points. Everything
+else (other chart types, other sizes, other machines) is not measured.
 
 ## Models and licences
 

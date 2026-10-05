@@ -62,6 +62,19 @@ pub fn round_to(v: f64, decimals: i32) -> f64 {
     if r == 0.0 { 0.0 } else { r }
 }
 
+/// Rounds `v` to `digits` significant digits, so a summary number keeps its
+/// precision at any magnitude (1e-12 stays 1e-12, not 0).
+pub fn round_sig(v: f64, digits: i32) -> f64 {
+    if v == 0.0 || !v.is_finite() {
+        return v;
+    }
+    // Formatting rounds the exact decimal value and parsing returns the nearest
+    // double, so the result is the double a person would write for that number.
+    format!("{:.*e}", (digits.max(1) - 1) as usize, v)
+        .parse()
+        .unwrap_or(v)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -113,6 +126,22 @@ mod tests {
         assert_eq!(floor_log10(0.1), -1);
         assert_eq!(floor_log10(0.0999), -2);
         assert_eq!(floor_log10(1e-5), -5);
+    }
+
+    #[test]
+    fn round_sig_keeps_significant_digits_at_any_magnitude() {
+        assert_eq!(round_sig(0.1 + 0.2, 12), 0.3);
+        assert_eq!(
+            round_sig(1.234_567_890_123_45e-12, 12),
+            1.234_567_890_12e-12
+        );
+        assert_eq!(round_sig(-9.87654321987654e9, 6), -9.87654e9);
+        assert_eq!(round_sig(123_456.0, 3), 123_000.0);
+        assert_eq!(round_sig(0.0, 12), 0.0);
+        assert!(round_sig(f64::NAN, 12).is_nan());
+        assert_eq!(round_sig(f64::INFINITY, 12), f64::INFINITY);
+        assert_eq!(round_sig(5e-324, 12), 5e-324);
+        assert_eq!(round_sig(1.5e300, 12), 1.5e300);
     }
 
     #[test]

@@ -294,7 +294,7 @@ pub fn aggregate(values: &[f64], agg: Agg) -> f64 {
                 (v[n / 2 - 1] + v[n / 2]) / 2.0
             }
         }
-        Agg::Count => unreachable!("handled above"),
+        Agg::Count => values.len() as f64,
     }
 }
 

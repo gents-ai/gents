@@ -626,10 +626,7 @@ fn plan(
 
     let mut x_draw = Vec::new();
     match (&x.kind, &xs) {
-        (AxisKind::Cont { .. }, AxisScale::Cont(s)) => {
-            let AxisKind::Cont { ticks, .. } = &x.kind else {
-                unreachable!()
-            };
+        (AxisKind::Cont { ticks, .. }, AxisScale::Cont(s)) => {
             let mut prev_end = f64::NEG_INFINITY;
             for (t, (text, _)) in ticks.iter().zip(&x_labels) {
                 let pos = s.map(t.value);

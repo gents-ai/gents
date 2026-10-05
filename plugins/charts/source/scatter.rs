@@ -8,7 +8,7 @@ use crate::ctx::Ctx;
 use crate::err::{Res, fail};
 use crate::format::compact;
 use crate::frame::{self, FrameSpec, Laid, LegendItem, Swatch};
-use crate::num::round_to;
+use crate::num::{round_sig, round_to};
 use crate::reduce::bin_scatter;
 use crate::shape::{self, XKind, XPolicy};
 use crate::spec::{Kind, Legend, MAX_SCATTER_POINTS, ScaleKind};
@@ -263,8 +263,8 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
         let (min, max) = common::range(pts.iter().map(|q| q.1)).unzip();
         let mut extra = serde_json::Map::new();
         if let Some((a, b)) = common::range(pts.iter().map(|q| q.0)) {
-            extra.insert("x_min".into(), json!(round_to(a, 9)));
-            extra.insert("x_max".into(), json!(round_to(b, 9)));
+            extra.insert("x_min".into(), json!(round_sig(a, 12)));
+            extra.insert("x_max".into(), json!(round_sig(b, 12)));
         }
         if let Some(c) = correlation(pts) {
             extra.insert("correlation".into(), json!(round_to(c, 4)));

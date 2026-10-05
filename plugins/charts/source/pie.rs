@@ -9,7 +9,7 @@ use crate::det::{radians, sin_cos};
 use crate::err::{Res, fail};
 use crate::format::compact;
 use crate::frame::{self, LegendItem, Swatch};
-use crate::num::round_to;
+use crate::num::{round_sig, round_to};
 use crate::palette::{parse_hex, readable_on};
 use crate::spec::{Kind, Legend, MAX_SLICES};
 use crate::stats::pie_angles;
@@ -212,7 +212,7 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
             );
         }
         let mut extra = serde_json::Map::new();
-        extra.insert("value".into(), json!(round_to(s.1, 9)));
+        extra.insert("value".into(), json!(round_sig(s.1, 12)));
         extra.insert("share".into(), json!(round_to(share, 6)));
         info.push(SeriesInfo {
             name: s.0.clone(),

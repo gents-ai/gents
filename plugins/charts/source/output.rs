@@ -6,7 +6,7 @@ use serde_json::{Map, Value, json};
 
 use crate::common::SeriesInfo;
 use crate::err::{Res, fail};
-use crate::num::round_to;
+use crate::num::round_sig;
 use crate::raster::{self, Png};
 use crate::spec::Output;
 
@@ -48,7 +48,7 @@ pub struct Rendered {
 
 fn num(v: f64) -> Value {
     if v.is_finite() && v.abs() < 1e15 {
-        json!(round_to(v, 9))
+        json!(round_sig(v, 12))
     } else {
         json!(v)
     }

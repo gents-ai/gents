@@ -9,7 +9,7 @@ use crate::ctx::Ctx;
 use crate::err::{Res, fail};
 use crate::format::compact;
 use crate::frame::{self, FrameSpec, Laid, LegendItem, Swatch};
-use crate::num::round_to;
+use crate::num::round_sig;
 use crate::spec::{Legend, MAX_SERIES};
 use crate::stats::{bin_edges, histogram};
 use crate::svg::{Style, Svg};
@@ -169,7 +169,7 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
         let mut extra = serde_json::Map::new();
         extra.insert(
             "edges".into(),
-            json!(edges.iter().map(|e| round_to(*e, 9)).collect::<Vec<_>>()),
+            json!(edges.iter().map(|e| round_sig(*e, 12)).collect::<Vec<_>>()),
         );
         extra.insert("counts".into(), json!(c));
         info.push(SeriesInfo {

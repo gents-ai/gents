@@ -8,7 +8,7 @@ use crate::ctx::Ctx;
 use crate::err::{Res, fail};
 use crate::format::compact;
 use crate::frame::{self, FrameSpec, Laid};
-use crate::num::round_to;
+use crate::num::round_sig;
 use crate::spec::{Legend, MAX_BOXES};
 use crate::stats::{BoxStats, box_stats};
 use crate::svg::{Style, Svg};
@@ -227,7 +227,7 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
             ("whisker_low", s.whisker_lo),
             ("whisker_high", s.whisker_hi),
         ] {
-            extra.insert(k.into(), json!(round_to(v, 9)));
+            extra.insert(k.into(), json!(round_sig(v, 12)));
         }
         extra.insert("outlier_count".into(), json!(s.outliers.len()));
         extra.insert(
@@ -236,7 +236,7 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
                 s.outliers
                     .iter()
                     .take(20)
-                    .map(|o| round_to(*o, 9))
+                    .map(|o| round_sig(*o, 12))
                     .collect::<Vec<_>>()
             ),
         );
