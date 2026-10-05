@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { createSpring } from "./spring";
 
 /* The divider between the pane and the dock, as one continuous number: the
@@ -18,6 +25,7 @@ export function useDivider({
   container,
   rail,
   open,
+  scope,
   onClosed,
 }: {
   key: string;
@@ -34,6 +42,8 @@ export function useDivider({
   rail: number;
   /** the store's word on whether the dock is open */
   open: boolean;
+  /** whose dock this is; a change of scope shows the new one as it stands */
+  scope?: string;
   /** the divider settled shut: the store should close the dock */
   onClosed: () => void;
 }) {
@@ -95,15 +105,26 @@ export function useDivider({
     [key],
   );
 
-  /* the store opens or closes the dock: the divider follows through the spring */
+  /* the store opens or closes the dock: the divider follows through the
+     spring. Arriving at another scope's dock is not an opening or a
+     closing, so it is shown as it stands, before paint. */
   const openRef = useRef(open);
-  useEffect(() => {
+  const scopeRef = useRef(scope);
+  useLayoutEffect(() => {
+    const arrived = scope !== scopeRef.current;
+    scopeRef.current = scope;
     if (open === openRef.current) return;
     openRef.current = open;
     atEnd.current = false;
-    if (open) settle(clampOpen(rest.current));
+    const to = open ? clampOpen(rest.current) : 0;
+    if (arrived) {
+      spring.stop();
+      heading.current = null;
+      setSettling(false);
+      set(to);
+    } else if (open) settle(to);
     else if (posRef.current > 0) settle(0);
-  }, [open, settle, clampOpen]);
+  }, [open, scope, settle, clampOpen, spring, set]);
   /* the store closed it while it could not be seen (leaving the route): no motion */
   const jumpClosed = useCallback(() => {
     spring.stop();

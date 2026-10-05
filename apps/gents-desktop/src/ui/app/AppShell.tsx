@@ -38,7 +38,7 @@ import "@/screens/surfaces";
 import { Dock, DockTabs } from "./Dock";
 import { dockView } from "./dock-scope";
 import { PaneBarSlotContext } from "./PaneBar";
-import { useWorkspace, workspace } from "./workspace";
+import { dockScope, useDockFor } from "./workspace";
 import { useDivider } from "@/lib/divider";
 import { ROOMY_WINDOW, useMediaQuery } from "@/lib/media";
 import {
@@ -249,7 +249,7 @@ export function AppShell({
   children: ReactNode;
 }) {
   const [nav, setNav] = useState<NavMode>(navPreference);
-  const { dock } = useWorkspace();
+  const { dock, scope: dockOwner, closeDock } = useDockFor(dockScope(route));
   const dockOpen = dockView(dock, route.name).shown;
   /* the dock is the pane's: leaving for a route where none of its tabs
      apply closes it, and it opens again only when asked */
@@ -285,7 +285,7 @@ export function AppShell({
   /* below md the dock is a sheet, and it takes its turn with the shell's
      popovers like any other dialog (#1778): the store says it is wanted,
      the owner says when it is on screen */
-  const dockSheet = useExclusivePopover(() => workspace.closeDock());
+  const dockSheet = useExclusivePopover(closeDock);
   const roomy = useMediaQuery(ROOMY_WINDOW);
   /* the preference is kept; a narrow window shows the rail in its place */
   const shownNav: NavMode = nav === "expanded" && !roomy ? "hover" : nav;
@@ -304,7 +304,8 @@ export function AppShell({
     container: shellWidth,
     rail,
     open: docked && dockOpen,
-    onClosed: () => workspace.closeDock(),
+    scope: dockOwner,
+    onClosed: closeDock,
   });
   const paneHidden = divider.paneHidden;
   /* the bar cross-fades as the dock takes the pane's last stretch: the
@@ -323,10 +324,10 @@ export function AppShell({
   }, [wantSheet, sheetOpen, setSheetOpen]);
   useEffect(() => {
     if (dock.open && !dockView(dock, route.name).shown) {
-      workspace.closeDock();
+      closeDock();
       jumpClosed();
     }
-  }, [route.name, dock, jumpClosed]);
+  }, [route.name, dock, jumpClosed, closeDock]);
   const markInBar = wide && !lights;
   useEffect(() => {
     document.documentElement.dataset.windowLights = lights ? "inline" : "native";

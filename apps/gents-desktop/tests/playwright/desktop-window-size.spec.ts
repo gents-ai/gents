@@ -159,7 +159,7 @@ test.describe("half-screen window", () => {
         element.getAnimations({ subtree: true }).forEach((a) => a.finish()),
       );
       await expectInsideViewport(page, sheet);
-      await expect(page.getByRole("separator", { name: "Resize trace" })).toHaveCount(
+      await expect(page.getByRole("separator", { name: "Resize panel" })).toHaveCount(
         0,
       );
       await page.keyboard.press("Escape");

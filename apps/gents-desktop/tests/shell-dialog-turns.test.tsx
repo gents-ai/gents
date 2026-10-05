@@ -121,6 +121,7 @@ import type { Shell } from "../src/ui/hooks/useShell";
 import { AppShell } from "../src/ui/app/AppShell";
 import { TooltipProvider } from "@gents/ui/components/tooltip";
 import { SessionScreen } from "../src/ui/screens/SessionScreen";
+import { MemoryNavProvider } from "@gents/shell";
 
 const healthy: SyncHealthView = {
   state: "healthy",
@@ -195,19 +196,21 @@ function sessionShell(forkSession = vi.fn().mockResolvedValue("fork-1")): Shell 
 /* the shell around the screen: the side panel is the shell's dock sheet */
 function Harness({ shell }: { shell: Shell }) {
   return (
-    <TooltipProvider>
-      <AppShell
-        route={{ name: "session", sessionId: "session-1" }}
-        agentName={null}
-        agentDid={null}
-        deployment={null}
-        online
-        mailboxCount={0}
-        syncHealth={healthy}
-      >
-        <SessionScreen shell={shell} />
-      </AppShell>
-    </TooltipProvider>
+    <MemoryNavProvider initial={{ name: "session", sessionId: "session-1" }}>
+      <TooltipProvider>
+        <AppShell
+          route={{ name: "session", sessionId: "session-1" }}
+          agentName={null}
+          agentDid={null}
+          deployment={null}
+          online
+          mailboxCount={0}
+          syncHealth={healthy}
+        >
+          <SessionScreen shell={shell} />
+        </AppShell>
+      </TooltipProvider>
+    </MemoryNavProvider>
   );
 }
 

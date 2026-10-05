@@ -15,7 +15,7 @@ import {
 import { Hint } from "@/screens/Hint";
 import { listSurfaces } from "./surfaces";
 import { inScope } from "./dock-scope";
-import { useWorkspace, workspace } from "./workspace";
+import { useDock } from "./workspace";
 
 export function PanelMenu({
   routeName,
@@ -27,7 +27,7 @@ export function PanelMenu({
   /** the screen's own actions on what it shows (menu items), below the surfaces */
   actions?: ReactNode;
 }) {
-  const { dock } = useWorkspace();
+  const { dock, closeTab, openSurface, closeDock, reopenDock } = useDock();
   const surfaces = listSurfaces("dock").filter((s) => inScope(s, routeName));
   const showing =
     dock.open && dock.tabs.some((id) => surfaces.some((s) => s.id === id));
@@ -59,9 +59,7 @@ export function PanelMenu({
               <DropdownMenuItem
                 key={s.id}
                 onClick={() =>
-                  open && dock.active === s.id
-                    ? workspace.closeTab(s.id)
-                    : workspace.openSurface(s.id)
+                  open && dock.active === s.id ? closeTab(s.id) : openSurface(s.id)
                 }
               >
                 <s.icon className="size-4" />
@@ -77,9 +75,7 @@ export function PanelMenu({
             <DropdownMenuSeparator className="max-md:hidden" />
             <DropdownMenuItem
               className="max-md:hidden"
-              onClick={() =>
-                dock.open ? workspace.closeDock() : workspace.reopenDock()
-              }
+              onClick={() => (dock.open ? closeDock() : reopenDock())}
             >
               {dock.open ? "Hide panel" : "Show panel"}
             </DropdownMenuItem>

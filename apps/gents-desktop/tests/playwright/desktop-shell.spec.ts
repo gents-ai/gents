@@ -528,3 +528,66 @@ test.describe("kit shell", () => {
     await expect(page.getByText(/received "inspect the runtime"/)).toBeVisible();
   });
 });
+
+test.describe("each session's dock", () => {
+  test("is as it was when a session is left and come back to", async ({
+    page,
+  }, testInfo) => {
+    test.skip(
+      testInfo.project.name !== "chromium-desktop",
+      "the dock is a column only in a roomy window",
+    );
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await gotoHarness(page);
+    await page
+      .getByTestId("sessions-screen")
+      .getByRole("link", { name: /introduction-and-greetings/ })
+      .click();
+    await page
+      .getByRole("button", { name: "More" })
+      .filter({ visible: true })
+      .first()
+      .click();
+    await page.getByRole("menuitem", { name: "Trace" }).click();
+    const resize = page.getByRole("separator", { name: "Resize panel" });
+    await expect(resize).toBeVisible();
+    const cell = page.getByTestId("dock-cell");
+    /* settled: the opening spring has stopped moving */
+    let restingWidth = 0;
+    await expect
+      .poll(async () => {
+        const before = (await cell.boundingBox())?.width ?? 0;
+        await page.waitForTimeout(150);
+        const after = (await cell.boundingBox())?.width ?? 0;
+        restingWidth = after;
+        return after > 300 && Math.abs(after - before) < 1;
+      })
+      .toBe(true);
+
+    /* away from the session: its dock is not this screen's */
+    await page.getByRole("link", { name: "Sessions" }).first().click();
+    await expect(page.getByTestId("sessions-screen")).toBeVisible();
+    await expect(resize).toHaveCount(0);
+
+    /* back: open as it stood, at its width in the first frame, no spring */
+    await page.getByTestId("window-bar").getByRole("button", { name: "Back" }).click();
+    const firstFrameWidth = await page.evaluate(
+      () =>
+        new Promise<number>((resolve) =>
+          requestAnimationFrame(() =>
+            resolve(
+              document
+                .querySelector('[data-testid="dock-cell"]')
+                ?.getBoundingClientRect().width ?? 0,
+            ),
+          ),
+        ),
+    );
+    expect(Math.abs(firstFrameWidth - restingWidth)).toBeLessThan(2);
+    await expect(resize).toBeVisible();
+
+    /* and the screens outside a session still have no dock open */
+    await page.getByRole("link", { name: "Sessions" }).first().click();
+    await expect(resize).toHaveCount(0);
+  });
+});
