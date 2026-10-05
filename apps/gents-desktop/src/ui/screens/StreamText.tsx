@@ -8,6 +8,7 @@ import {
   revealedText,
   stepReveal,
   type Handoff,
+  type RevealState,
 } from "./stream-reveal";
 
 /* a person who asked for less motion sees text as it lands */
@@ -36,12 +37,21 @@ export function StreamText({
   onShown?: (shown: string) => void;
 }) {
   const [enabled] = useState(smoothingOn);
-  const [state, setState] = useState(() =>
+  /* The pace advances every frame, in a ref; React hears about it only when
+     a frame reaches the next word boundary and the drawn text changes. A
+     state update per frame kept React committing about sixty times a
+     second while a reply streamed, which every keystroke had to wait on. */
+  const [initial] = useState(() =>
     initialReveal(enabled ? startFrom : text.length, text.length),
   );
+  const reveal = useRef<RevealState>(initial);
+  const [visible, setVisible] = useState(() =>
+    enabled ? revealedText(text, initial.shown).length : text.length,
+  );
+  const drawn = useRef(visible);
   const target = useRef(text);
   target.current = text;
-  const running = enabled && state.shown < text.length;
+  const running = enabled && visible < text.length;
 
   useEffect(() => {
     if (!running) return;
@@ -53,14 +63,20 @@ export function StreamText({
       /* every frame's result is kept, fractions included: at the slowest
          pace a frame is worth less than one character, and a frame that
          dropped its fraction would never reach the next one */
-      setState((s) => stepReveal(s, target.current.length, now, dt));
+      const next = stepReveal(reveal.current, target.current.length, now, dt);
+      reveal.current = next;
+      const length = revealedText(target.current, next.shown).length;
+      if (length !== drawn.current) {
+        drawn.current = length;
+        setVisible(length);
+      }
       frame = requestAnimationFrame(tick);
     };
     frame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame);
   }, [running]);
 
-  const shown = enabled ? revealedText(text, state.shown) : text;
+  const shown = !enabled || visible >= text.length ? text : text.slice(0, visible);
   const display = shown.length < text.length ? closeOpenFence(shown) : shown;
   useEffect(() => {
     onShown?.(shown);
