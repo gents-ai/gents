@@ -74,7 +74,7 @@ describe("desktop snapshot publication", () => {
       saveBackendConfig,
     } as unknown as DesktopApiAdapter;
     const { result } = renderLifecycle(api);
-    await waitFor(() => expect(result.current.loading).toBe(false));
+    await waitFor(() => expect(result.current.snapshot).not.toBeNull());
     const actions = configActions(api, result.current.mutateSnapshot);
 
     const older = actions.onSaveBackendConfig({} as BackendSaveRequest);
@@ -111,7 +111,7 @@ describe("desktop snapshot publication", () => {
       saveBackendConfig: vi.fn(() => failedSave.promise),
     } as unknown as DesktopApiAdapter;
     const { result } = renderLifecycle(api);
-    await waitFor(() => expect(result.current.loading).toBe(false));
+    await waitFor(() => expect(result.current.snapshot).not.toBeNull());
     const actions = configActions(api, result.current.mutateSnapshot);
 
     let reading!: Promise<void>;

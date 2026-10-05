@@ -74,7 +74,8 @@ describe("the fleet store", () => {
     applyFleetSnapshot(store, read());
     const before = store.getState();
     applyFleetSnapshot(store, read());
-    expect(store.getState()).toEqual(before);
+    /* the state itself, so subscribers are not notified at all */
+    expect(store.getState()).toBe(before);
     for (const key of Object.keys(before) as (keyof typeof before)[])
       expect(store.getState()[key]).toBe(before[key]);
   });

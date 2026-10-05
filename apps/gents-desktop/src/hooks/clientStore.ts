@@ -17,7 +17,6 @@ import type {
 export type ClientState = {
   snapshot: DesktopClientSnapshot | null;
   startupPhase: DesktopStartupPhase;
-  loading: boolean;
   starting: boolean;
   stopping: boolean;
   managedServerWait: ManagedServerWait | null;
@@ -41,7 +40,6 @@ export function createClientStore(
   return createStore<ClientState>(() => ({
     snapshot: null,
     startupPhase,
-    loading: true,
     starting: false,
     stopping: false,
     managedServerWait: null,

@@ -25,7 +25,7 @@ import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 
 import { clientSetter, type ClientStore } from "./clientStore";
-import { applyFleetSnapshot, type FleetStore } from "./fleetStore";
+import { applyFleetSnapshot, equal, type FleetStore } from "./fleetStore";
 
 export type { DesktopStartupPhase } from "../lib/loadingStatus";
 
@@ -72,25 +72,30 @@ export function useDesktopClientLifecycle({
     ReturnType<typeof createSnapshotPublicationOwner> | undefined
   >(undefined);
   snapshotPublicationRef.current ??= createSnapshotPublicationOwner((next) => {
-    /* by key first, so a screen reading the fleet sees the same read */
+    /* by key first, so a screen reading the fleet sees the same read. A
+       read that changed nothing keeps the snapshot it repeats, so no one
+       reading the client is notified either. */
+    const fleetBefore = fleet.getState();
     applyFleetSnapshot(fleet, next);
-    client.setState({ snapshot: next });
-    setLoading(false);
+    const before = client.getState().snapshot;
+    const unchanged =
+      before !== null &&
+      fleet.getState() === fleetBefore &&
+      equal(withoutDeployments(before), withoutDeployments(next));
+    if (!unchanged) client.setState({ snapshot: next });
     resolveStartupPhase(next);
   });
   /* startup's state lives in the client store: functions read it there when
      they run, and screens select it */
-  const { startupPhase, loading, starting, stopping, managedServerWait } = useStore(
+  const { startupPhase, starting, stopping, managedServerWait } = useStore(
     client,
     useShallow((state) => ({
       startupPhase: state.startupPhase,
-      loading: state.loading,
       starting: state.starting,
       stopping: state.stopping,
       managedServerWait: state.managedServerWait,
     })),
   );
-  const [setLoading] = useState(() => clientSetter(client, "loading"));
   const [setStarting] = useState(() => clientSetter(client, "starting"));
   const [setStopping] = useState(() => clientSetter(client, "stopping"));
   const [setManagedServerWait] = useState(() =>
@@ -148,7 +153,6 @@ export function useDesktopClientLifecycle({
 
   async function refreshSnapshot() {
     const publish = snapshotPublicationRef.current!.begin();
-    setLoading(true);
     try {
       const next = await api.fetchDesktopSnapshot();
       if (publish.publish(next)) {
@@ -164,8 +168,6 @@ export function useDesktopClientLifecycle({
       } else if (client.getState().startupPhase === "starting-client") {
         setStartupPhase("client-error");
       }
-    } finally {
-      if (publish.isCurrent()) setLoading(false);
     }
   }
 
@@ -358,7 +360,6 @@ export function useDesktopClientLifecycle({
     snapshot,
     mutateSnapshot,
     startupPhase,
-    loading,
     starting,
     setStarting,
     stopping,
@@ -378,4 +379,11 @@ export function useDesktopClientLifecycle({
     onRestartManagedServer,
     restartDesktopClient,
   };
+}
+
+/* the read without its deployments, which the fleet store compares by key */
+function withoutDeployments(snapshot: DesktopClientSnapshot) {
+  return snapshot.client
+    ? { ...snapshot, client: { ...snapshot.client, deployments: null } }
+    : snapshot;
 }

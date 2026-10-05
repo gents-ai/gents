@@ -93,7 +93,6 @@ describe("desktop client restart selection ordering", () => {
     await act(async () => starting);
     expect(result.current.snapshot).toBe(newer);
     expect(result.current.startupPhase).toBe("ready");
-    expect(result.current.loading).toBe(false);
 
     refresh.resolve({
       bootstrap: { clientStateExists: false, savedPeers: [] },
@@ -102,7 +101,6 @@ describe("desktop client restart selection ordering", () => {
     await act(async () => refresh.promise);
     expect(result.current.snapshot).toBe(newer);
     expect(result.current.startupPhase).toBe("ready");
-    expect(result.current.loading).toBe(false);
   });
 
   it.each(["start", "restart"])(
@@ -130,7 +128,7 @@ describe("desktop client restart selection ordering", () => {
           setSession: vi.fn(),
         } as unknown as Parameters<typeof useDesktopClientLifecycle>[0]),
       );
-      await waitFor(() => expect(result.current.loading).toBe(false));
+      await waitFor(() => expect(result.current.snapshot).not.toBeNull());
       let pending!: Promise<unknown>;
       act(() => {
         pending =
@@ -180,7 +178,7 @@ describe("desktop client restart selection ordering", () => {
         setSession: vi.fn(),
       } as unknown as Parameters<typeof useDesktopClientLifecycle>[0]),
     );
-    await waitFor(() => expect(result.current.loading).toBe(false));
+    await waitFor(() => expect(result.current.snapshot).not.toBeNull());
 
     let starting!: Promise<Record<string, unknown>>;
     act(() => {
@@ -219,7 +217,7 @@ describe("desktop client restart selection ordering", () => {
         setSession: vi.fn(),
       } as unknown as Parameters<typeof useDesktopClientLifecycle>[0]),
     );
-    await waitFor(() => expect(result.current.loading).toBe(false));
+    await waitFor(() => expect(result.current.snapshot).not.toBeNull());
     let pending!: Promise<unknown>;
     act(() => {
       pending = result.current.ensureDesktopClientStarted();
@@ -300,7 +298,7 @@ describe("desktop client restart selection ordering", () => {
         setSession: vi.fn(),
       } as unknown as Parameters<typeof useDesktopClientLifecycle>[0]),
     );
-    await waitFor(() => expect(result.current.loading).toBe(false));
+    await waitFor(() => expect(result.current.snapshot).not.toBeNull());
     await act(async () => result.current.ensureDesktopClientStarted());
     expect(result.current.startupPhase).toBe("client-error");
     await act(async () => result.current.refreshSnapshot());

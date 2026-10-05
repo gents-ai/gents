@@ -100,7 +100,7 @@ function reconcile(prev: FleetState, snapshot: DesktopClientSnapshot): FleetStat
         workersOf: prev.workersOf,
         bySessionId: prev.bySessionId,
       };
-  return {
+  const next: FleetState = {
     nodeKeys: keepList(prev.nodeKeys, nodeKeys),
     nodes: sameRecord(prev.nodes, nodes) ? prev.nodes : nodes,
     sessions: sessionsChanged ? sessions : prev.sessions,
@@ -108,6 +108,12 @@ function reconcile(prev: FleetState, snapshot: DesktopClientSnapshot): FleetStat
     mailboxOf: sameRecord(prev.mailboxOf, mailboxOf) ? prev.mailboxOf : mailboxOf,
     ...lineage,
   };
+  /* a read that changed nothing leaves the state, so no one is notified */
+  return (Object.keys(next) as (keyof FleetState)[]).every(
+    (key) => next[key] === prev[key],
+  )
+    ? prev
+    : next;
 }
 
 /* The bridge names a worker's starting session exactly (node, session,
@@ -158,8 +164,8 @@ function sameRecord<T>(a: Readonly<Record<string, T>>, b: Readonly<Record<string
   );
 }
 
-/* equality of JSON values, as the bridge returns them */
-function equal(a: unknown, b: unknown): boolean {
+/** Equality of JSON values, as the bridge returns them. */
+export function equal(a: unknown, b: unknown): boolean {
   if (Object.is(a, b)) return true;
   if (typeof a !== "object" || typeof b !== "object" || a === null || b === null)
     return false;
