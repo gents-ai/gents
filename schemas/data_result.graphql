@@ -1,0 +1,15 @@
+type DataResult {
+  run_id: String @index
+  mode: String
+  complete: Boolean
+  cursor: String
+  columns: String
+  row_count: Int
+  offset: Int
+  order: String
+  markdown: String
+  warnings: [String]
+  error: String
+  file: String
+  rows_written: Int
+}

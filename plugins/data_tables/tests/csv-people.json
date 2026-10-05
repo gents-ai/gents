@@ -1,0 +1,51 @@
+{
+  "bind": "fixtures/formats",
+  "expect": {
+    "columns": [
+      {
+        "name": "name",
+        "type": "text"
+      },
+      {
+        "name": "score",
+        "type": "int64"
+      },
+      {
+        "name": "joined",
+        "type": "date"
+      },
+      {
+        "name": "active",
+        "type": "bool"
+      }
+    ],
+    "markdown": "| name | score | joined | active |\n| --- | --- | --- | --- |\n| Ana | 9 | 2024-01-05 | true |\n| Bo, Jr. | 7 | 2024-02-10 | false |\n| Cy | NULL | 2024-03-01 | true |",
+    "offset": 0,
+    "order": "file",
+    "row_count": 3,
+    "rows": [
+      [
+        "Ana",
+        9,
+        "2024-01-05",
+        true
+      ],
+      [
+        "Bo, Jr.",
+        7,
+        "2024-02-10",
+        false
+      ],
+      [
+        "Cy",
+        null,
+        "2024-03-01",
+        true
+      ]
+    ],
+    "warnings": []
+  },
+  "input": {
+    "sql": "SELECT * FROM people"
+  }
+}

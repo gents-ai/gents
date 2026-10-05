@@ -1,0 +1,26 @@
+{
+  "bind": "fixtures/formats",
+  "expect": {
+    "result": {
+      "complete": true,
+      "markdown": "### events (3 rows)\n\n| column | type | non_null | distinct | min | max | mean |\n| --- | --- | --- | --- | --- | --- | --- |\n| t | int64 | 3 | 3 | 1 | 3 | 2.0 |\n| kind | text | 3 | 2 | a | b |  |",
+      "mode": "describe",
+      "warnings": []
+    },
+    "tables": [
+      {
+        "columns": "[{\"name\":\"t\",\"type\":\"int64\",\"non_null\":3,\"nulls\":0,\"distinct\":3,\"min\":1,\"max\":3,\"mean\":2.0},{\"name\":\"kind\",\"type\":\"text\",\"non_null\":3,\"nulls\":0,\"distinct\":2,\"min\":\"a\",\"max\":\"b\"}]",
+        "format": "json",
+        "profile": "{\"name\":\"events\",\"source\":\"events.ndjson\",\"format\":\"json\",\"row_count\":3,\"rows_scanned\":3,\"sampled\":false,\"columns\":[{\"name\":\"t\",\"type\":\"int64\",\"non_null\":3,\"nulls\":0,\"distinct\":3,\"min\":1,\"max\":3,\"mean\":2.0},{\"name\":\"kind\",\"type\":\"text\",\"non_null\":3,\"nulls\":0,\"distinct\":2,\"min\":\"a\",\"max\":\"b\"}],\"sample\":{\"columns\":[\"t\",\"kind\"],\"rows\":[[1,\"a\"],[2,\"b\"],[3,\"a\"]]}}",
+        "row_count": 3,
+        "source": "events.ndjson",
+        "table": "events"
+      }
+    ]
+  },
+  "input": {
+    "mode": "describe",
+    "run_id": "r1",
+    "table": "events"
+  }
+}

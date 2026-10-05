@@ -1,23 +1,252 @@
 {
+  "assets": [
+    "README.md",
+    "agent_behaviors/data_analyst/system_prompt.md",
+    "notice.md",
+    "pack_config.json",
+    "plugins/data_tables.afb",
+    "plugins/data_tables/TOOL.md",
+    "plugins/data_tables/TOOL_EXPORT.md",
+    "schemas/data_job.graphql",
+    "schemas/data_result.graphql",
+    "schemas/data_row.graphql",
+    "schemas/data_table.graphql",
+    "tests/graph_query.json",
+    "tests/graph_tables.json",
+    "tests/install.json",
+    "tests/pack_content.json"
+  ],
+  "authors": [
+    "gents contributors"
+  ],
+  "config": "pack_config.json",
+  "dependencies": [],
+  "description": "Runs SQL over CSV, TSV, JSON, NDJSON, Parquet, XLSX and ODS files, a folder of them, or rows sent inline, with bounded memory and exact types, as a Data analyst agent and two plugins.",
+  "inference_slots": [
+    {
+      "behaviors": [
+        "data-analyst"
+      ],
+      "description": "Explores the data files the user names with the data_tables tool and answers from SQL results. Any capable profile.",
+      "name": "data_analyst"
+    }
+  ],
+  "kind": "documents",
   "manifest_version": 1,
   "name": "data_tables",
   "namespace": "gents",
-  "version": "1.0.0",
-  "description": "probe",
-  "authors": ["gents contributors"],
-  "tags": ["data"],
-  "kind": "plugins",
-  "assets": ["plugins/data_tables.afb"],
   "plugins": [
     {
-      "name": "data_tables",
-      "description": "probe",
       "artifact": "plugins/data_tables.afb",
-      "source": "plugins/data_tables",
+      "bind_dir": {
+        "access": "read",
+        "description": "The folder holding the data files, or the one data file to query",
+        "input_field": "path",
+        "original_field": "path_original"
+      },
+      "description": "Runs SQL (Apache DataFusion) over CSV, TSV, JSON, NDJSON, Parquet, XLSX and ODS files, a folder of them, or inline rows: lists tables, describes columns with statistics, and returns query results with exact types, stable paging and a Markdown table.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "columns": {
+            "description": "For describe: the columns to report, at most 200; default the first 200.",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 200,
+            "type": "array"
+          },
+          "cursor": {
+            "description": "The next.cursor value of the previous call, to continue it. Repeat every other field unchanged (max_rows may change).",
+            "type": "string"
+          },
+          "delimiter": {
+            "description": "The CSV field delimiter, one character or tab; detected when omitted.",
+            "type": "string"
+          },
+          "files": {
+            "description": "Relative paths inside the folder path to use as tables, in this order; without it every readable file below path is a table.",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 10000,
+            "minItems": 1,
+            "type": "array"
+          },
+          "header": {
+            "description": "Whether the first CSV row is a header; detected when omitted.",
+            "type": "boolean"
+          },
+          "markdown_rows": {
+            "default": 50,
+            "description": "The most rows shown in the Markdown table.",
+            "maximum": 1000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_bytes": {
+            "default": 1000000,
+            "description": "The most bytes of row data one page returns.",
+            "maximum": 3000000,
+            "minimum": 4096,
+            "type": "integer"
+          },
+          "max_rows": {
+            "default": 200,
+            "description": "The most rows one page returns.",
+            "maximum": 100000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "mode": {
+            "description": "tables lists the tables and their columns; describe adds statistics and sample rows; query runs sql. Default: query with sql, else tables.",
+            "enum": [
+              "tables",
+              "describe",
+              "query"
+            ],
+            "type": "string"
+          },
+          "path": {
+            "description": "Path of the data file or folder; a relative path starts at the working folder. Without it only inline tables are available.",
+            "type": "string"
+          },
+          "path_original": {
+            "description": "Set by the host to the real path of the file or folder named in path; leave it out.",
+            "type": "string"
+          },
+          "sample_rows": {
+            "default": 100000,
+            "description": "For describe: how many rows the statistics read.",
+            "maximum": 10000000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "sql": {
+            "description": "One SELECT to run (at most 64 KiB). Names keep their case; quote names with spaces.",
+            "type": "string"
+          },
+          "table": {
+            "description": "For tables and describe: only this table.",
+            "type": "string"
+          },
+          "tables": {
+            "description": "Rows sent inline: a list of {name, columns, rows} tables, one such table, or an object of name to rows. Rows are lists or objects; columns may declare types.",
+            "type": [
+              "array",
+              "object"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "instructions": "plugins/data_tables/TOOL.md",
       "language": "rust",
-      "input_schema": {"type":"object","properties":{"path":{"type":"string"}}},
-      "bind_dir": {"input_field":"path","description":"folder","access":"read"},
-      "limits": {"memory_mib": 2048, "wall_clock_secs": 900, "max_output_mib": 4}
+      "limits": {
+        "max_output_mib": 4,
+        "memory_mib": 3072,
+        "wall_clock_secs": 900
+      },
+      "name": "data_tables",
+      "source": "plugins/data_tables"
+    },
+    {
+      "artifact": "plugins/data_tables.afb",
+      "bind_dir": {
+        "access": "read_write",
+        "description": "The folder holding the data files, where the exported file is written",
+        "input_field": "path",
+        "original_field": "path_original"
+      },
+      "description": "Runs one SELECT over data files like data_tables and writes the whole result as a CSV or Parquet file in the folder.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "delimiter": {
+            "description": "The CSV field delimiter, one character or tab; detected when omitted.",
+            "type": "string"
+          },
+          "files": {
+            "description": "Relative paths inside the folder path to use as tables, in this order; without it every readable file below path is a table.",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 10000,
+            "minItems": 1,
+            "type": "array"
+          },
+          "format": {
+            "description": "The file format; taken from output when it ends in .csv or .parquet.",
+            "enum": [
+              "csv",
+              "parquet"
+            ],
+            "type": "string"
+          },
+          "header": {
+            "description": "Whether the first CSV row is a header; detected when omitted.",
+            "type": "boolean"
+          },
+          "output": {
+            "description": "The file name to write inside the folder path, such as result.csv: no folders, not starting with a dot.",
+            "type": "string"
+          },
+          "overwrite": {
+            "default": false,
+            "description": "Replace output when it already exists; otherwise an existing file is an error.",
+            "type": "boolean"
+          },
+          "path": {
+            "description": "Path of the data file or folder; a relative path starts at the working folder. Without it only inline tables are available.",
+            "type": "string"
+          },
+          "path_original": {
+            "description": "Set by the host to the real path of the file or folder named in path; leave it out.",
+            "type": "string"
+          },
+          "sql": {
+            "description": "One SELECT whose whole result is written.",
+            "type": "string"
+          },
+          "tables": {
+            "description": "Rows sent inline: a list of {name, columns, rows} tables, one such table, or an object of name to rows. Rows are lists or objects; columns may declare types.",
+            "type": [
+              "array",
+              "object"
+            ]
+          }
+        },
+        "required": [
+          "path",
+          "sql",
+          "output"
+        ],
+        "type": "object"
+      },
+      "instructions": "plugins/data_tables/TOOL_EXPORT.md",
+      "language": "rust",
+      "limits": {
+        "max_output_mib": 4,
+        "memory_mib": 3072,
+        "wall_clock_secs": 900
+      },
+      "name": "data_tables_export",
+      "source": "plugins/data_tables"
     }
-  ]
+  ],
+  "schemas": [
+    "schemas/data_job.graphql",
+    "schemas/data_row.graphql",
+    "schemas/data_result.graphql",
+    "schemas/data_table.graphql"
+  ],
+  "tags": [
+    "data",
+    "sql",
+    "csv",
+    "parquet",
+    "xlsx",
+    "plugin"
+  ],
+  "version": "1.0.0"
 }

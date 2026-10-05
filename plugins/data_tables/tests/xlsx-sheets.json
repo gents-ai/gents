@@ -1,0 +1,60 @@
+{
+  "bind": "fixtures/formats",
+  "expect": {
+    "columns": [
+      {
+        "name": "region",
+        "type": "text"
+      },
+      {
+        "name": "units",
+        "type": "int64"
+      },
+      {
+        "name": "price",
+        "type": "float64"
+      },
+      {
+        "name": "day",
+        "type": "timestamp"
+      },
+      {
+        "name": "ok",
+        "type": "bool"
+      }
+    ],
+    "markdown": "| region | units | price | day | ok |\n| --- | --- | --- | --- | --- |\n| north | 10 | 2.5 | 2024-01-01T00:00:00 | true |\n| south | 7 | 3.0 | 2024-01-02T00:00:00 | false |\n| east | 5 | NULL | 2024-01-03T12:00:00 | NULL |",
+    "offset": 0,
+    "order": "file",
+    "row_count": 3,
+    "rows": [
+      [
+        "north",
+        10,
+        2.5,
+        "2024-01-01T00:00:00",
+        true
+      ],
+      [
+        "south",
+        7,
+        3.0,
+        "2024-01-02T00:00:00",
+        false
+      ],
+      [
+        "east",
+        5,
+        null,
+        "2024-01-03T12:00:00",
+        null
+      ]
+    ],
+    "warnings": [
+      "cells holding spreadsheet errors (such as #DIV/0!) were read as NULL"
+    ]
+  },
+  "input": {
+    "sql": "SELECT * FROM book_Sales"
+  }
+}

@@ -1,0 +1,559 @@
+{
+  "bind": "fixtures/formats",
+  "expect": {
+    "markdown": "| table | source | rows | columns |\n| --- | --- | --- | --- |\n| bom | bom.csv | 2 | k, v |\n| book_Budget | book.ods#Budget | 4 | item, cost, due, paid |\n| book_Rates | book.ods#Rates | 1 | kind, rate |\n| book_Sales | book.xlsx#Sales | 3 | region, units, price, day, ok |\n| book_Notes | book.xlsx#Notes | 2 | note |\n| dupes | dupes.csv | 2 | column_1, column_2, column_3, column_4 |\n| dupnames | dupnames.csv | 1 | x, x_2, y |\n| events | events.ndjson | 3 | t, kind |\n| latin1 | latin1.csv | 1 | name, city |\n| mixed | mixed.csv | 3 | v |\n| mixed_types | mixed_types.json | 3 | v |\n| nulls | nulls.csv | 3 | a, b |\n| people | people.csv | 3 | name, score, joined, active |\n| people_2 | people.parquet | 3 | id, name, score, active, born, seen, price, big, ... |\n| people_zstd | people_zstd.parquet | 3 | id, name, score, active, born, seen, price, big, ... |\n| pipes | pipes.txt | 2 | a, b |\n| ragged | ragged.csv | 3 | a, b, c |\n| records | records.json | 3 | id, name, tags, geo, extra |\n| semi | semi.csv | 2 | id, city, pop |\n| tabs | tabs.tsv | 2 | id, note |\n| utf16le | utf16le.csv | 2 | k, v |\n| zip_codes | zip_codes.csv | 2 | zip, n |",
+    "tables": [
+      {
+        "column_count": 2,
+        "columns": [
+          {
+            "name": "k",
+            "type": "int64"
+          },
+          {
+            "name": "v",
+            "type": "text"
+          }
+        ],
+        "details": {
+          "delimiter": ",",
+          "header": true
+        },
+        "format": "csv",
+        "name": "bom",
+        "row_count": 2,
+        "source": "bom.csv"
+      },
+      {
+        "column_count": 4,
+        "columns": [
+          {
+            "name": "item",
+            "type": "text"
+          },
+          {
+            "name": "cost",
+            "type": "float64"
+          },
+          {
+            "name": "due",
+            "type": "timestamp"
+          },
+          {
+            "name": "paid",
+            "type": "bool"
+          }
+        ],
+        "format": "ods",
+        "name": "book_Budget",
+        "row_count": 4,
+        "sheet": "Budget",
+        "source": "book.ods"
+      },
+      {
+        "column_count": 2,
+        "columns": [
+          {
+            "name": "kind",
+            "type": "text"
+          },
+          {
+            "name": "rate",
+            "type": "float64"
+          }
+        ],
+        "format": "ods",
+        "name": "book_Rates",
+        "row_count": 1,
+        "sheet": "Rates",
+        "source": "book.ods"
+      },
+      {
+        "column_count": 5,
+        "columns": [
+          {
+            "name": "region",
+            "type": "text"
+          },
+          {
+            "name": "units",
+            "type": "int64"
+          },
+          {
+            "name": "price",
+            "type": "float64"
+          },
+          {
+            "name": "day",
+            "type": "timestamp"
+          },
+          {
+            "name": "ok",
+            "type": "bool"
+          }
+        ],
+        "format": "xlsx",
+        "name": "book_Sales",
+        "row_count": 3,
+        "sheet": "Sales",
+        "source": "book.xlsx"
+      },
+      {
+        "column_count": 1,
+        "columns": [
+          {
+            "name": "note",
+            "type": "text"
+          }
+        ],
+        "format": "xlsx",
+        "name": "book_Notes",
+        "row_count": 2,
+        "sheet": "Notes",
+        "source": "book.xlsx"
+      },
+      {
+        "column_count": 4,
+        "columns": [
+          {
+            "name": "column_1",
+            "type": "text"
+          },
+          {
+            "name": "column_2",
+            "type": "text"
+          },
+          {
+            "name": "column_3",
+            "type": "int64"
+          },
+          {
+            "name": "column_4",
+            "type": "text"
+          }
+        ],
+        "details": {
+          "delimiter": ",",
+          "header": false
+        },
+        "format": "csv",
+        "name": "dupes",
+        "row_count": 2,
+        "source": "dupes.csv"
+      },
+      {
+        "column_count": 3,
+        "columns": [
+          {
+            "name": "x",
+            "type": "int64"
+          },
+          {
+            "name": "x_2",
+            "type": "int64"
+          },
+          {
+            "name": "y",
+            "type": "int64"
+          }
+        ],
+        "details": {
+          "delimiter": ",",
+          "header": true
+        },
+        "format": "csv",
+        "name": "dupnames",
+        "row_count": 1,
+        "source": "dupnames.csv"
+      },
+      {
+        "column_count": 2,
+        "columns": [
+          {
+            "name": "t",
+            "type": "int64"
+          },
+          {
+            "name": "kind",
+            "type": "text"
+          }
+        ],
+        "format": "json",
+        "name": "events",
+        "row_count": 3,
+        "source": "events.ndjson"
+      },
+      {
+        "column_count": 2,
+        "columns": [
+          {
+            "name": "name",
+            "type": "text"
+          },
+          {
+            "name": "city",
+            "type": "text"
+          }
+        ],
+        "details": {
+          "delimiter": ",",
+          "header": true
+        },
+        "format": "csv",
+        "name": "latin1",
+        "row_count": 1,
+        "source": "latin1.csv"
+      },
+      {
+        "column_count": 1,
+        "columns": [
+          {
+            "name": "v",
+            "type": "text"
+          }
+        ],
+        "details": {
+          "delimiter": ",",
+          "header": true
+        },
+        "format": "csv",
+        "name": "mixed",
+        "row_count": 3,
+        "source": "mixed.csv"
+      },
+      {
+        "column_count": 1,
+        "columns": [
+          {
+            "name": "v",
+            "type": "text"
+          }
+        ],
+        "format": "json",
+        "name": "mixed_types",
+        "row_count": 3,
+        "source": "mixed_types.json"
+      },
+      {
+        "column_count": 2,
+        "columns": [
+          {
+            "name": "a",
+            "type": "int64"
+          },
+          {
+            "name": "b",
+            "type": "text"
+          }
+        ],
+        "details": {
+          "delimiter": ",",
+          "header": true
+        },
+        "format": "csv",
+        "name": "nulls",
+        "row_count": 3,
+        "source": "nulls.csv"
+      },
+      {
+        "column_count": 4,
+        "columns": [
+          {
+            "name": "name",
+            "type": "text"
+          },
+          {
+            "name": "score",
+            "type": "int64"
+          },
+          {
+            "name": "joined",
+            "type": "date"
+          },
+          {
+            "name": "active",
+            "type": "bool"
+          }
+        ],
+        "details": {
+          "delimiter": ",",
+          "header": true
+        },
+        "format": "csv",
+        "name": "people",
+        "row_count": 3,
+        "source": "people.csv"
+      },
+      {
+        "column_count": 10,
+        "columns": [
+          {
+            "name": "id",
+            "type": "int64"
+          },
+          {
+            "name": "name",
+            "type": "text"
+          },
+          {
+            "name": "score",
+            "type": "float64"
+          },
+          {
+            "name": "active",
+            "type": "bool"
+          },
+          {
+            "name": "born",
+            "type": "date"
+          },
+          {
+            "name": "seen",
+            "type": "timestamp"
+          },
+          {
+            "name": "price",
+            "type": "decimal(10,2)"
+          },
+          {
+            "name": "big",
+            "type": "uint64"
+          },
+          {
+            "name": "nested",
+            "type": "struct"
+          },
+          {
+            "name": "tags",
+            "type": "list<int32>"
+          }
+        ],
+        "format": "parquet",
+        "name": "people_2",
+        "row_count": 3,
+        "source": "people.parquet"
+      },
+      {
+        "column_count": 10,
+        "columns": [
+          {
+            "name": "id",
+            "type": "int64"
+          },
+          {
+            "name": "name",
+            "type": "text"
+          },
+          {
+            "name": "score",
+            "type": "float64"
+          },
+          {
+            "name": "active",
+            "type": "bool"
+          },
+          {
+            "name": "born",
+            "type": "date"
+          },
+          {
+            "name": "seen",
+            "type": "timestamp"
+          },
+          {
+            "name": "price",
+            "type": "decimal(10,2)"
+          },
+          {
+            "name": "big",
+            "type": "uint64"
+          },
+          {
+            "name": "nested",
+            "type": "struct"
+          },
+          {
+            "name": "tags",
+            "type": "list<int32>"
+          }
+        ],
+        "format": "parquet",
+        "name": "people_zstd",
+        "row_count": 3,
+        "source": "people_zstd.parquet"
+      },
+      {
+        "column_count": 2,
+        "columns": [
+          {
+            "name": "a",
+            "type": "int64"
+          },
+          {
+            "name": "b",
+            "type": "text"
+          }
+        ],
+        "details": {
+          "delimiter": "|",
+          "header": true
+        },
+        "format": "csv",
+        "name": "pipes",
+        "row_count": 2,
+        "source": "pipes.txt"
+      },
+      {
+        "column_count": 3,
+        "columns": [
+          {
+            "name": "a",
+            "type": "int64"
+          },
+          {
+            "name": "b",
+            "type": "int64"
+          },
+          {
+            "name": "c",
+            "type": "int64"
+          }
+        ],
+        "details": {
+          "delimiter": ",",
+          "header": true
+        },
+        "format": "csv",
+        "name": "ragged",
+        "row_count": 3,
+        "source": "ragged.csv"
+      },
+      {
+        "column_count": 5,
+        "columns": [
+          {
+            "name": "id",
+            "type": "int64"
+          },
+          {
+            "name": "name",
+            "type": "text"
+          },
+          {
+            "name": "tags",
+            "type": "list<text>"
+          },
+          {
+            "name": "geo",
+            "type": "struct"
+          },
+          {
+            "name": "extra",
+            "type": "bool"
+          }
+        ],
+        "format": "json",
+        "name": "records",
+        "row_count": 3,
+        "source": "records.json"
+      },
+      {
+        "column_count": 3,
+        "columns": [
+          {
+            "name": "id",
+            "type": "int64"
+          },
+          {
+            "name": "city",
+            "type": "text"
+          },
+          {
+            "name": "pop",
+            "type": "int64"
+          }
+        ],
+        "details": {
+          "delimiter": ";",
+          "header": true
+        },
+        "format": "csv",
+        "name": "semi",
+        "row_count": 2,
+        "source": "semi.csv"
+      },
+      {
+        "column_count": 2,
+        "columns": [
+          {
+            "name": "id",
+            "type": "int64"
+          },
+          {
+            "name": "note",
+            "type": "text"
+          }
+        ],
+        "details": {
+          "delimiter": "\t",
+          "header": true
+        },
+        "format": "csv",
+        "name": "tabs",
+        "row_count": 2,
+        "source": "tabs.tsv"
+      },
+      {
+        "column_count": 2,
+        "columns": [
+          {
+            "name": "k",
+            "type": "int64"
+          },
+          {
+            "name": "v",
+            "type": "text"
+          }
+        ],
+        "details": {
+          "delimiter": ",",
+          "header": true
+        },
+        "format": "csv",
+        "name": "utf16le",
+        "row_count": 2,
+        "source": "utf16le.csv"
+      },
+      {
+        "column_count": 2,
+        "columns": [
+          {
+            "name": "zip",
+            "type": "text"
+          },
+          {
+            "name": "n",
+            "type": "int64"
+          }
+        ],
+        "details": {
+          "delimiter": ",",
+          "header": true
+        },
+        "format": "csv",
+        "name": "zip_codes",
+        "row_count": 2,
+        "source": "zip_codes.csv"
+      }
+    ],
+    "warnings": [
+      "1 repeated column name got a number added (name_2, name_3)",
+      "people.parquet is the table people_2",
+      "rows with fewer than 3 fields were padded with NULL (first on line 3)",
+      "cells holding spreadsheet errors (such as #DIV/0!) were read as NULL"
+    ]
+  },
+  "input": {
+    "mode": "tables"
+  }
+}

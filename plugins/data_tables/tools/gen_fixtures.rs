@@ -42,6 +42,8 @@ fn main() {
         b
     });
     put(root, "formats/nulls.csv", "a,b\n1,\"\"\n2,\n3,x\n");
+    put(root, "formats/dupnames.csv", "x,x,y\n1,2,3\n");
+    put(root, "formats/latin1.csv", b"name,city\nJos\xe9,Lule\xe5\n");
     put(root, "formats/ragged.csv", "a,b,c\n1,2,3\n4,5\n6,7,8,9\n");
     put(root, "formats/mixed.csv", "v\n1\n2\nthree\n");
     put(root, "formats/zip_codes.csv", "zip,n\n02134,1\n10001,2\n");

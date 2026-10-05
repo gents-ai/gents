@@ -1,6 +1,7 @@
 //! What every data source offers the engine: a schema, a cheap row count when
 //! one is known, a fingerprint for cursors, and a streaming scan that can
 //! read just the columns a query needs.
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -112,7 +113,7 @@ impl Warnings {
         let Ok(seen) = self.seen.lock() else {
             return Vec::new();
         };
-        let mut out: Vec<String> = seen.values().take(MAX_WARNINGS).cloned().collect();
+        let mut out: Vec<String> = seen.values().take(MAX_WARNINGS).map(|m| scrub(m)).collect();
         if seen.len() > MAX_WARNINGS {
             out.push(format!(
                 "{} more warnings were left out",
@@ -121,6 +122,29 @@ impl Warnings {
         }
         out
     }
+}
+
+thread_local! {
+    static ROOT: RefCell<String> = const { RefCell::new(String::new()) };
+}
+
+/// Remembers the folder the call reads, so messages can name files relative to it.
+pub fn set_root(root: &Path) {
+    ROOT.with(|r| *r.borrow_mut() = root.to_string_lossy().trim_end_matches('/').to_string());
+}
+
+/// `message` with the bound folder's path cut off the files it names: what a user sees never
+/// carries the machine's own paths.
+pub fn scrub(message: &str) -> String {
+    ROOT.with(|r| {
+        let root = r.borrow();
+        if root.is_empty() {
+            return message.to_string();
+        }
+        message
+            .replace(&format!("{root}/"), "")
+            .replace(root.as_str(), "the folder")
+    })
 }
 
 /// FNV-1a, the cheap stable hash behind fingerprints and cursors.
@@ -201,6 +225,18 @@ mod tests {
         let list = w.list();
         assert_eq!(list.len(), MAX_WARNINGS + 1);
         assert_eq!(list.last().unwrap(), "3 more warnings were left out");
+    }
+
+    #[test]
+    fn messages_name_files_relative_to_the_bound_folder() {
+        set_root(Path::new("/data/in"));
+        assert_eq!(
+            scrub("/data/in/a/b.csv is broken; /data/in is the folder"),
+            "a/b.csv is broken; the folder is the folder"
+        );
+        assert_eq!(scrub("/elsewhere/x.csv"), "/elsewhere/x.csv");
+        set_root(Path::new(""));
+        assert_eq!(scrub("/data/in/a.csv"), "/data/in/a.csv");
     }
 
     #[test]

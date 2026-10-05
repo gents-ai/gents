@@ -1,0 +1,109 @@
+{
+  "bind": "fixtures/formats",
+  "expect": {
+    "columns": [
+      {
+        "name": "id",
+        "type": "int64"
+      },
+      {
+        "name": "name",
+        "type": "text"
+      },
+      {
+        "name": "score",
+        "type": "float64"
+      },
+      {
+        "name": "active",
+        "type": "bool"
+      },
+      {
+        "name": "born",
+        "type": "date"
+      },
+      {
+        "name": "seen",
+        "type": "timestamp"
+      },
+      {
+        "name": "price",
+        "type": "decimal(10,2)"
+      },
+      {
+        "name": "big",
+        "type": "uint64"
+      },
+      {
+        "name": "nested",
+        "type": "struct"
+      },
+      {
+        "name": "tags",
+        "type": "list<int32>"
+      }
+    ],
+    "markdown": "| id | name | score | active | born | seen | price | big | nested | tags |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n| 1 | Ana | 1.5 | true | 2024-02-29 | 2024-02-29T12:30:45.500 | 123.45 | 18446744073709551615 | {\"x\":1,\"y\":\"a\"} | [1,2] |\n| 2 |  | NULL | false | NULL | NULL | NULL | 1 | {\"x\":null,\"y\":\"b\"} | [] |\n| 3 | NULL | NaN | NULL | 1970-01-01 | 1970-01-01T00:00:00 | -0.05 | NULL | {\"x\":3,\"y\":null} | NULL |",
+    "offset": 0,
+    "order": "file",
+    "row_count": 3,
+    "rows": [
+      [
+        1,
+        "Ana",
+        1.5,
+        true,
+        "2024-02-29",
+        "2024-02-29T12:30:45.500",
+        "123.45",
+        "18446744073709551615",
+        {
+          "x": 1,
+          "y": "a"
+        },
+        [
+          1,
+          2
+        ]
+      ],
+      [
+        2,
+        "",
+        null,
+        false,
+        null,
+        null,
+        null,
+        1,
+        {
+          "x": null,
+          "y": "b"
+        },
+        []
+      ],
+      [
+        3,
+        null,
+        "NaN",
+        null,
+        "1970-01-01",
+        "1970-01-01T00:00:00",
+        "-0.05",
+        null,
+        {
+          "x": 3,
+          "y": null
+        },
+        null
+      ]
+    ],
+    "warnings": [
+      "people.parquet is the table people_2",
+      "1 float values are NaN or infinite and appear as the strings \"NaN\", \"Infinity\" and \"-Infinity\"",
+      "1 integers beyond 2^53 appear as strings so no digit is lost"
+    ]
+  },
+  "input": {
+    "sql": "SELECT id, name, score, active, born, seen, price, big, nested, tags FROM people_2"
+  }
+}

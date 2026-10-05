@@ -295,6 +295,10 @@ pub fn scan_error(e: &DataFusionError) -> Option<&ScanError> {
 
 /// One plain sentence for an engine error.
 pub fn explain(e: &DataFusionError) -> String {
+    crate::table::scrub(&explain_raw(e))
+}
+
+fn explain_raw(e: &DataFusionError) -> String {
     if let Some(s) = scan_error(e) {
         return s.to_string();
     }

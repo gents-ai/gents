@@ -1,0 +1,30 @@
+{
+  "bind": "fixtures/formats",
+  "expect": {
+    "columns": [
+      {
+        "name": "v",
+        "type": "text"
+      }
+    ],
+    "markdown": "| v |\n| --- |\n| 1 |\n| 2 |\n| three |",
+    "offset": 0,
+    "order": "query",
+    "row_count": 3,
+    "rows": [
+      [
+        "1"
+      ],
+      [
+        "2"
+      ],
+      [
+        "three"
+      ]
+    ],
+    "warnings": []
+  },
+  "input": {
+    "sql": "SELECT v FROM mixed ORDER BY v"
+  }
+}

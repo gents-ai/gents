@@ -1,0 +1,48 @@
+{
+  "jq": [
+    {
+      "name": "the data-analyst behavior is wired to its context and the data_analyst slot",
+      "expr": ".config.agent_behaviors | map(select(.behavior_id == \"data-analyst\" and .context_id == \"data-analyst-context\" and .inference_profile_id == \"gents:inference-slot:data_analyst\")) | length == 1"
+    },
+    {
+      "name": "its Tools document grants exactly the two plugins",
+      "expr": ".config.tools | map(select(.tools_id == \"data-analyst-tools\")) | .[0].integrations.plugins | map(.plugin) | sort == [\"gents/data_tables\", \"gents/data_tables_export\"]"
+    },
+    {
+      "name": "the read plugin binds read-only and the export plugin binds read-write",
+      "expr": "[.manifest.plugins[] | {(.name): .bind_dir.access}] | add == {\"data_tables\": \"read\", \"data_tables_export\": \"read_write\"}"
+    },
+    {
+      "name": "every plugin declares bounded limits within the host ceilings",
+      "expr": ".manifest.plugins | all(.limits.memory_mib <= 4096 and .limits.wall_clock_secs <= 900 and .limits.max_output_mib <= 4)"
+    },
+    {
+      "name": "each plugin points at its own instructions asset",
+      "expr": "[.manifest.plugins[].instructions] == [\"plugins/data_tables/TOOL.md\", \"plugins/data_tables/TOOL_EXPORT.md\"]"
+    },
+    {
+      "name": "the instructions name the tool they describe",
+      "expr": "(.assets[\"plugins/data_tables/TOOL.md\"] | startswith(\"# data_tables\")) and (.assets[\"plugins/data_tables/TOOL_EXPORT.md\"] | startswith(\"# data_tables_export\"))"
+    },
+    {
+      "name": "the graph callback outputs three collections correlated by run_id",
+      "expr": ".config.callbacks[0].handler.outputs | map(.collection) == [\"DataResult\", \"DataRow\", \"DataTable\"] and all(.correlation_field == \"run_id\")"
+    },
+    {
+      "name": "the callback binding passes every DataJob field the plugin reads",
+      "expr": ".config.callback_bindings[0].input_fields | contains([\"run_id\", \"path\", \"sql\", \"mode\", \"cursor\", \"tables\", \"max_rows\"])"
+    },
+    {
+      "name": "the plugin's input schema rejects unknown fields and bounds paging",
+      "expr": ".manifest.plugins[0].input_schema | .additionalProperties == false and .properties.max_rows.maximum == 100000 and .properties.max_bytes.maximum == 3000000"
+    },
+    {
+      "name": "the export plugin requires its path, sql and output",
+      "expr": ".manifest.plugins[1].input_schema.required | sort == [\"output\", \"path\", \"sql\"]"
+    },
+    {
+      "name": "the system prompt and the notice carry no em or en dash",
+      "expr": "[.assets[\"agent_behaviors/data_analyst/system_prompt.md\"], .assets[\"notice.md\"], .assets[\"README.md\"], .assets[\"plugins/data_tables/TOOL.md\"], .assets[\"plugins/data_tables/TOOL_EXPORT.md\"]] | all(test(\"\\u2014|\\u2013\") | not)"
+    }
+  ]
+}

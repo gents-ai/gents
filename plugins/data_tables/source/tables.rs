@@ -149,6 +149,7 @@ pub fn list(input: &Input, catalog: &Arc<Catalog>) -> Res<Value> {
                 entry.insert("columns".into(), Value::Array(cols));
             }
             Err(e) => {
+                let e = crate::table::scrub(&e);
                 entry.insert("error".into(), json!(e));
                 line.push(json!("unknown"));
                 line.push(json!(format!("error: {e}")));
@@ -162,7 +163,11 @@ pub fn list(input: &Input, catalog: &Arc<Catalog>) -> Res<Value> {
         .map(|n| ((*n).to_string(), "text".to_string()))
         .collect();
     let (md, _) = markdown(&cols, &rows, usize::MAX);
-    let mut warnings = catalog.listing.clone();
+    let mut warnings: Vec<String> = catalog
+        .listing
+        .iter()
+        .map(|w| crate::table::scrub(w))
+        .collect();
     warnings.extend(catalog.warn.list());
     let mut out = json!({"tables": tables, "markdown": md, "warnings": warnings});
     if (end as usize) < specs.len() {
@@ -229,6 +234,7 @@ pub async fn describe(input: &Input, catalog: &Arc<Catalog>) -> Res<Value> {
                 markdown_parts.push(md);
             }
             Err(e) => {
+                let e = crate::table::scrub(&e);
                 entry.insert("error".into(), json!(e));
                 markdown_parts.push(format!("### {}\n\nerror: {e}", spec.name));
             }

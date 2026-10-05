@@ -1,0 +1,98 @@
+{
+  "bind": "fixtures/formats",
+  "expect": {
+    "markdown": "### people_2 (3 rows)\n\n| column | type | non_null | distinct | min | max | mean |\n| --- | --- | --- | --- | --- | --- | --- |\n| id | int64 | 3 | 3 | 1 | 3 | 2.0 |\n| name | text | 2 | 2 |  | Ana |  |\n| score | float64 | 2 | 2 | 1.5 | NaN | NaN |\n| tags | list<int32> | 2 |  |  |  |  |",
+    "tables": [
+      {
+        "columns": [
+          {
+            "distinct": 3,
+            "max": 3,
+            "mean": 2.0,
+            "min": 1,
+            "name": "id",
+            "non_null": 3,
+            "nulls": 0,
+            "type": "int64"
+          },
+          {
+            "distinct": 2,
+            "max": "Ana",
+            "min": "",
+            "name": "name",
+            "non_null": 2,
+            "nulls": 1,
+            "type": "text"
+          },
+          {
+            "distinct": 2,
+            "max": "NaN",
+            "mean": "NaN",
+            "min": 1.5,
+            "name": "score",
+            "non_null": 2,
+            "nulls": 1,
+            "type": "float64"
+          },
+          {
+            "name": "tags",
+            "non_null": 2,
+            "nulls": 1,
+            "type": "list<int32>"
+          }
+        ],
+        "columns_omitted": 6,
+        "format": "parquet",
+        "name": "people_2",
+        "row_count": 3,
+        "rows_scanned": 3,
+        "sample": {
+          "columns": [
+            "id",
+            "name",
+            "score",
+            "tags"
+          ],
+          "rows": [
+            [
+              1,
+              "Ana",
+              1.5,
+              [
+                1,
+                2
+              ]
+            ],
+            [
+              2,
+              "",
+              null,
+              []
+            ],
+            [
+              3,
+              null,
+              "NaN",
+              null
+            ]
+          ]
+        },
+        "sampled": false,
+        "source": "people.parquet"
+      }
+    ],
+    "warnings": [
+      "people.parquet is the table people_2"
+    ]
+  },
+  "input": {
+    "columns": [
+      "id",
+      "name",
+      "score",
+      "tags"
+    ],
+    "mode": "describe",
+    "table": "people_2"
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "bind": "fixtures/formats",
+  "expect": {
+    "result": {
+      "complete": true,
+      "markdown": "| table | source | rows | columns |\n| --- | --- | --- | --- |\n| events | events.ndjson | 3 | t, kind |\n| people | people.csv | 3 | name, score, joined, active |",
+      "mode": "tables",
+      "warnings": []
+    },
+    "tables": [
+      {
+        "columns": "[{\"name\":\"t\",\"type\":\"int64\"},{\"name\":\"kind\",\"type\":\"text\"}]",
+        "format": "json",
+        "row_count": 3,
+        "source": "events.ndjson",
+        "table": "events"
+      },
+      {
+        "columns": "[{\"name\":\"name\",\"type\":\"text\"},{\"name\":\"score\",\"type\":\"int64\"},{\"name\":\"joined\",\"type\":\"date\"},{\"name\":\"active\",\"type\":\"bool\"}]",
+        "format": "csv",
+        "row_count": 3,
+        "source": "people.csv",
+        "table": "people"
+      }
+    ]
+  },
+  "input": {
+    "files": [
+      "events.ndjson",
+      "people.csv"
+    ],
+    "run_id": "r1"
+  }
+}

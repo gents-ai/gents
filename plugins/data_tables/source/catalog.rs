@@ -55,7 +55,9 @@ impl Fmt {
 }
 
 enum Kind {
-    File(PathBuf, Fmt),
+    Csv(PathBuf),
+    Json(PathBuf),
+    Parquet(PathBuf),
     Xlsx(Arc<xlsx::Book>, xlsx::SheetRef),
     Ods(Arc<ods::Book>, String),
     Inline(Arc<InlineTable>),
@@ -295,6 +297,11 @@ impl Catalog {
                     "cannot read {path}: {e}; the path must be a file or folder this tool may read"
                 )
             })?;
+            crate::table::set_root(if meta.is_file() {
+                root.parent().unwrap_or(root)
+            } else {
+                root
+            });
             let (base, rels, strict) = if meta.is_file() {
                 if files.is_some() {
                     return Err("files lists paths inside a folder, but path is a file".into());
@@ -430,7 +437,13 @@ impl Catalog {
                     });
                 }
             }
-            _ => {
+            Fmt::Csv | Fmt::Json | Fmt::Parquet => {
+                let path = full.to_path_buf();
+                let kind = match fmt {
+                    Fmt::Csv => Kind::Csv(path),
+                    Fmt::Json => Kind::Json(path),
+                    _ => Kind::Parquet(path),
+                };
                 let (name, note) = Self::name_for(stem(rel), rel, taken);
                 self.push(Spec {
                     name,
@@ -438,7 +451,7 @@ impl Catalog {
                     source: rel.to_string(),
                     sheet: None,
                     format: fmt.name(),
-                    kind: Kind::File(full.to_path_buf(), fmt),
+                    kind,
                 });
             }
         }
@@ -490,19 +503,9 @@ impl Catalog {
         }
         let infer = self.infer_of(name);
         let table: Arc<dyn TableSource> = match &spec.kind {
-            Kind::File(path, Fmt::Csv) => {
-                Arc::new(CsvTable::open(path, name, self.opts, infer, &self.warn)?)
-            }
-            Kind::File(path, Fmt::Json) => {
-                Arc::new(JsonTable::open(path, name, infer, &self.warn)?)
-            }
-            Kind::File(path, Fmt::Parquet) => Arc::new(ParquetTable::open(path)?),
-            // Workbooks are listed as one table per sheet, never as a file.
-            Kind::File(_, Fmt::Xlsx | Fmt::Ods) => {
-                return Err(format!(
-                    "{name} is a workbook sheet and cannot be opened as a file"
-                ));
-            }
+            Kind::Csv(path) => Arc::new(CsvTable::open(path, name, self.opts, infer, &self.warn)?),
+            Kind::Json(path) => Arc::new(JsonTable::open(path, name, infer, &self.warn)?),
+            Kind::Parquet(path) => Arc::new(ParquetTable::open(path)?),
             Kind::Xlsx(book, sheet) => {
                 let (book, sheet, warn) = (Arc::clone(book), sheet.clone(), Arc::clone(&self.warn));
                 let fp = file_fingerprint(&book.path)? ^ sheet_hash(&sheet.name);

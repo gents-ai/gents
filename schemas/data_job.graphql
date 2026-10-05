@@ -1,0 +1,20 @@
+type DataJob {
+  run_id: String @index(unique: true) @immutable
+  mode: String
+  path: String
+  files: [String]
+  tables: String
+  table: String
+  sql: String
+  max_rows: Int
+  max_bytes: Int
+  markdown_rows: Int
+  cursor: String
+  delimiter: String
+  header: Boolean
+  sample_rows: Int
+  columns: [String]
+  output: String
+  format: String
+  overwrite: Boolean
+}

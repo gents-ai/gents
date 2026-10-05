@@ -1,0 +1,38 @@
+{
+  "bind": "fixtures/formats",
+  "expect": {
+    "columns": [
+      {
+        "name": "t",
+        "type": "int64"
+      },
+      {
+        "name": "kind",
+        "type": "text"
+      }
+    ],
+    "markdown": "| t | kind |\n| --- | --- |\n| 1 | a |\n\n(the first 1 of 3 rows of this page; all are in rows)",
+    "offset": 0,
+    "order": "file",
+    "row_count": 3,
+    "rows": [
+      [
+        1,
+        "a"
+      ],
+      [
+        2,
+        "b"
+      ],
+      [
+        3,
+        "a"
+      ]
+    ],
+    "warnings": []
+  },
+  "input": {
+    "markdown_rows": 1,
+    "sql": "SELECT * FROM events"
+  }
+}

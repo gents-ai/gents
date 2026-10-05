@@ -81,9 +81,12 @@ fn within(name: &str, v: Option<u64>, lo: u64, hi: u64, default: u64) -> Res<u64
 }
 
 impl Input {
-    /// The mode: the one given, else `query` when there is SQL, else `tables`.
+    /// The mode: the one given, else `export` when there is an output name, `query` when there
+    /// is SQL, and `tables` otherwise.
     pub fn mode(&self) -> Mode {
-        self.mode.unwrap_or(if self.sql.is_some() {
+        self.mode.unwrap_or(if self.output.is_some() {
+            Mode::Export
+        } else if self.sql.is_some() {
             Mode::Query
         } else {
             Mode::Tables
@@ -176,6 +179,12 @@ mod tests {
     #[test]
     fn the_mode_follows_the_sql_unless_given() {
         assert_eq!(parse(serde_json::json!({})).unwrap().mode(), Mode::Tables);
+        assert_eq!(
+            parse(serde_json::json!({"sql": "select 1", "output": "o.csv"}))
+                .unwrap()
+                .mode(),
+            Mode::Export
+        );
         assert_eq!(
             parse(serde_json::json!({"sql": "select 1"}))
                 .unwrap()

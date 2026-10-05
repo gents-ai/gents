@@ -332,7 +332,7 @@ fn mixed_types_ragged_rows_and_duplicate_names_still_answer() {
     assert_eq!(r["rows"], json!([[1, 2, 3]]));
     assert_eq!(
         r["warnings"],
-        json!(["2 repeated column names were numbered (name_2, name_3)"])
+        json!(["2 repeated column names got a number added (name_2, name_3)"])
     );
 }
 

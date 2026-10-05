@@ -1,0 +1,86 @@
+{
+  "bind": "fixtures/formats",
+  "expect": {
+    "markdown": "### people (3 rows)\n\n| column | type | non_null | distinct | min | max | mean |\n| --- | --- | --- | --- | --- | --- | --- |\n| name | text | 3 | 3 | Ana | Cy |  |\n| score | int64 | 2 | 2 | 7 | 9 | 8.0 |\n| joined | date | 3 | 3 | 2024-01-05 | 2024-03-01 |  |\n| active | bool | 3 | 2 |  |  |  |",
+    "tables": [
+      {
+        "columns": [
+          {
+            "distinct": 3,
+            "max": "Cy",
+            "min": "Ana",
+            "name": "name",
+            "non_null": 3,
+            "nulls": 0,
+            "type": "text"
+          },
+          {
+            "distinct": 2,
+            "max": 9,
+            "mean": 8.0,
+            "min": 7,
+            "name": "score",
+            "non_null": 2,
+            "nulls": 1,
+            "type": "int64"
+          },
+          {
+            "distinct": 3,
+            "max": "2024-03-01",
+            "min": "2024-01-05",
+            "name": "joined",
+            "non_null": 3,
+            "nulls": 0,
+            "type": "date"
+          },
+          {
+            "distinct": 2,
+            "name": "active",
+            "non_null": 3,
+            "nulls": 0,
+            "type": "bool"
+          }
+        ],
+        "format": "csv",
+        "name": "people",
+        "row_count": 3,
+        "rows_scanned": 3,
+        "sample": {
+          "columns": [
+            "name",
+            "score",
+            "joined",
+            "active"
+          ],
+          "rows": [
+            [
+              "Ana",
+              9,
+              "2024-01-05",
+              true
+            ],
+            [
+              "Bo, Jr.",
+              7,
+              "2024-02-10",
+              false
+            ],
+            [
+              "Cy",
+              null,
+              "2024-03-01",
+              true
+            ]
+          ]
+        },
+        "sampled": false,
+        "source": "people.csv"
+      }
+    ],
+    "warnings": []
+  },
+  "input": {
+    "mode": "describe",
+    "table": "people"
+  }
+}

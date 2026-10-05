@@ -1,0 +1,107 @@
+{
+  "agent_behaviors": [
+    {
+      "behavior_id": "data-analyst",
+      "context_id": "data-analyst-context",
+      "display_name": "Data analyst",
+      "inference_profile_id": "gents:inference-slot:data_analyst"
+    }
+  ],
+  "agent_principal": {},
+  "callback_bindings": [
+    {
+      "binding_id": "data-run",
+      "callback_id": "data-run",
+      "event_source_id": "data-run",
+      "input_fields": [
+        "run_id",
+        "mode",
+        "path",
+        "files",
+        "tables",
+        "table",
+        "sql",
+        "max_rows",
+        "max_bytes",
+        "markdown_rows",
+        "cursor",
+        "delimiter",
+        "header",
+        "sample_rows",
+        "columns",
+        "output",
+        "format",
+        "overwrite"
+      ]
+    }
+  ],
+  "callbacks": [
+    {
+      "callback_id": "data-run",
+      "display_name": "data-run",
+      "handler": {
+        "correlation_field": "run_id",
+        "digest": "",
+        "kind": "plugin",
+        "outputs": [
+          {
+            "cardinality": "one",
+            "collection": "DataResult",
+            "correlation_field": "run_id",
+            "name": "result",
+            "required": true,
+            "schema": "DataResult/v1"
+          },
+          {
+            "cardinality": "many",
+            "collection": "DataRow",
+            "correlation_field": "run_id",
+            "name": "rows",
+            "schema": "DataRow/v1"
+          },
+          {
+            "cardinality": "many",
+            "collection": "DataTable",
+            "correlation_field": "run_id",
+            "name": "tables",
+            "schema": "DataTable/v1"
+          }
+        ],
+        "plugin": "data_tables"
+      }
+    }
+  ],
+  "contexts": [
+    {
+      "context_id": "data-analyst-context",
+      "display_name": "Data analyst",
+      "system_prompt": "./agent_behaviors/data_analyst/system_prompt.md",
+      "tools_id": "data-analyst-tools"
+    }
+  ],
+  "event_sources": [
+    {
+      "correlation_field": "run_id",
+      "display_name": "data-run",
+      "event_kind": "created",
+      "event_source_id": "data-run",
+      "source_collection": "DataJob"
+    }
+  ],
+  "tools": [
+    {
+      "display_name": "Data analyst tools",
+      "integrations": {
+        "plugins": [
+          {
+            "plugin": "gents/data_tables"
+          },
+          {
+            "plugin": "gents/data_tables_export"
+          }
+        ]
+      },
+      "tools_id": "data-analyst-tools"
+    }
+  ]
+}

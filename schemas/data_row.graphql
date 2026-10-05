@@ -1,0 +1,5 @@
+type DataRow {
+  run_id: String @index
+  row: Int
+  values: String
+}

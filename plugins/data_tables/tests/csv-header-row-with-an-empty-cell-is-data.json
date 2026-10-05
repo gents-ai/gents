@@ -1,0 +1,45 @@
+{
+  "bind": "fixtures/formats",
+  "expect": {
+    "columns": [
+      {
+        "name": "column_1",
+        "type": "text"
+      },
+      {
+        "name": "column_2",
+        "type": "text"
+      },
+      {
+        "name": "column_3",
+        "type": "int64"
+      },
+      {
+        "name": "column_4",
+        "type": "text"
+      }
+    ],
+    "markdown": "| column_1 | column_2 | column_3 | column_4 |\n| --- | --- | --- | --- |\n| a | a | NULL | a |\n| 1 | 2 | 3 | 4 |",
+    "offset": 0,
+    "order": "file",
+    "row_count": 2,
+    "rows": [
+      [
+        "a",
+        "a",
+        null,
+        "a"
+      ],
+      [
+        "1",
+        "2",
+        3,
+        "4"
+      ]
+    ],
+    "warnings": []
+  },
+  "input": {
+    "sql": "SELECT * FROM dupes"
+  }
+}

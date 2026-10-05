@@ -73,7 +73,8 @@ pub fn run(raw: &str) -> Res<String> {
         return out;
     }
     let input: Input = serde_json::from_str(raw).map_err(|e| format!("invalid input: {e}"))?;
-    serde_json::to_string(&call(&input)?).map_err(|e| format!("serializing the result: {e}"))
+    serde_json::to_string(&call(&input).map_err(|e| table::scrub(&e))?)
+        .map_err(|e| format!("serializing the result: {e}"))
 }
 
 /// Runs a checked input.

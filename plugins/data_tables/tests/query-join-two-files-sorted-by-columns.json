@@ -1,0 +1,29 @@
+{
+  "bind": "fixtures/formats",
+  "expect": {
+    "columns": [
+      {
+        "name": "name",
+        "type": "text"
+      },
+      {
+        "name": "city",
+        "type": "text"
+      }
+    ],
+    "markdown": "| name | city |\n| --- | --- |\n| Ana | Oslo |",
+    "offset": 0,
+    "order": "columns",
+    "row_count": 1,
+    "rows": [
+      [
+        "Ana",
+        "Oslo"
+      ]
+    ],
+    "warnings": []
+  },
+  "input": {
+    "sql": "SELECT p.name, s.city FROM people p JOIN semi s ON s.id = p.score - 8"
+  }
+}

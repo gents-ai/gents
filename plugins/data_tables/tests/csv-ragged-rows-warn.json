@@ -1,0 +1,46 @@
+{
+  "bind": "fixtures/formats",
+  "expect": {
+    "columns": [
+      {
+        "name": "a",
+        "type": "int64"
+      },
+      {
+        "name": "b",
+        "type": "int64"
+      },
+      {
+        "name": "c",
+        "type": "int64"
+      }
+    ],
+    "markdown": "| a | b | c |\n| --- | --- | --- |\n| 1 | 2 | 3 |\n| 4 | 5 | NULL |\n| 6 | 7 | 8 |",
+    "offset": 0,
+    "order": "file",
+    "row_count": 3,
+    "rows": [
+      [
+        1,
+        2,
+        3
+      ],
+      [
+        4,
+        5,
+        null
+      ],
+      [
+        6,
+        7,
+        8
+      ]
+    ],
+    "warnings": [
+      "rows with fewer than 3 fields were padded with NULL (first on line 3)"
+    ]
+  },
+  "input": {
+    "sql": "SELECT * FROM ragged"
+  }
+}

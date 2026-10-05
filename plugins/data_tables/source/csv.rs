@@ -254,13 +254,27 @@ pub fn column_names(
     if renamed_empty > 0 {
         warn.once(
             "empty-names",
-            format!("{renamed_empty} empty column names were replaced by column_<position>"),
+            format!(
+                "{renamed_empty} empty column {} named column_<position>",
+                if renamed_empty == 1 {
+                    "name was"
+                } else {
+                    "names were"
+                }
+            ),
         );
     }
     if renamed_dup > 0 {
         warn.once(
             "dup-names",
-            format!("{renamed_dup} repeated column names were numbered (name_2, name_3)"),
+            format!(
+                "{renamed_dup} repeated column {} a number added (name_2, name_3)",
+                if renamed_dup == 1 {
+                    "name got"
+                } else {
+                    "names got"
+                }
+            ),
         );
     }
     names
@@ -664,8 +678,8 @@ mod tests {
         assert_eq!(
             warn.list(),
             [
-                "2 repeated column names were numbered (name_2, name_3)",
-                "1 empty column names were replaced by column_<position>"
+                "2 repeated column names got a number added (name_2, name_3)",
+                "1 empty column name was named column_<position>"
             ]
         );
     }
