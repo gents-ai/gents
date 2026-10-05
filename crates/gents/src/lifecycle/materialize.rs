@@ -698,7 +698,7 @@ pub async fn activate_workspace_bound_request(
     let mutation = format!(
         r#"mutation {{
             update_AgentRequest(
-                filter: {{
+                docID: "{doc_id}", filter: {{
                     _docID: {{ _eq: "{doc_id}" }},
                     lifecycle_state: {{ _eq: "{workspace_binding_pending}" }}
                 }},
