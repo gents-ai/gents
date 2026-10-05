@@ -136,6 +136,13 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
     );
     assert_eq!(lean_contract_snapshot().optimization_cases.gates.len(), 10);
     assert_eq!(lean_contract_snapshot().optimization_cases.costs.len(), 6);
+    assert_eq!(
+        lean_contract_snapshot()
+            .optimization_cases
+            .seed_coverage
+            .len(),
+        18
+    );
     assert_eq!(lean_contract_snapshot().publish_if_cases.len(), 7);
     assert_eq!(lean_contract_snapshot().session_recovery_cases.len(), 16);
     assert_eq!(
@@ -652,6 +659,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             &snapshot.mailbox_reply_cases,
         ),
         (
+            "schema_argument_repair_cases",
+            "SchemaArgumentRepairCases",
+            &snapshot.schema_argument_repair_cases,
+        ),
+        (
             "invalid_tool_progress_cases",
             "InvalidToolProgressCases",
             &snapshot.invalid_tool_progress_cases,
@@ -879,6 +891,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         emitted.insert((
             "backend_health_cases".to_string(),
             "BackendHealthTransitionCases".to_string(),
+        ));
+    }
+    if !snapshot.backend_probe_schedule_cases.is_empty() {
+        emitted.insert((
+            "backend_probe_schedule_cases".to_string(),
+            "BackendProbeScheduleCases".to_string(),
         ));
     }
     if !snapshot.native_filesystem_boundary_cases.is_empty() {
@@ -1439,6 +1457,15 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         emitted.insert((
             "goal_readiness_gate_cases".to_string(),
             "GoalReadinessGateCases".to_string(),
+        ));
+    }
+    if !crate::lean_vocab_test::lean_contract_snapshot()
+        .goal_claimed_readiness_cases
+        .is_empty()
+    {
+        emitted.insert((
+            "goal_claimed_readiness_cases".to_string(),
+            "GoalClaimedReadinessCases".to_string(),
         ));
     }
     if !lean_goal_transition_cases().is_empty() {

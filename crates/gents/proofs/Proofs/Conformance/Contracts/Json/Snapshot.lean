@@ -3,6 +3,7 @@ import Proofs.Conformance.GraphWorkspaceLineage
 import Proofs.Conformance.OperatorBaseFreeze
 import Proofs.Conformance.LogicalOutputObligation
 import Proofs.Conformance.InvalidToolProgress
+import Proofs.Conformance.SchemaArgumentRepair
 import Proofs.Conformance.RepeatedToolFailure
 import Proofs.Conformance.ToolTimeouts
 import Proofs.Conformance.PluginResources
@@ -28,6 +29,7 @@ import Proofs.Conformance.Contracts.Json.Workspace
 import Proofs.Conformance.Contracts.Json.Callback
 import Proofs.Conformance.Contracts.Json.SelfConfig
 import Proofs.Conformance.Contracts.Json.Goal
+import Proofs.Conformance.GoalClaimedReadiness
 import Proofs.Conformance.Contracts.Json.SessionHydration
 import Proofs.Conformance.Contracts.Json.PairingReconcile
 import Proofs.Conformance.Contracts.Json.Enrollment
@@ -162,6 +164,8 @@ def snapshotJson : String :=
       ++ goalDecisionCasesJson ++ ","
     ++ "\"goal_readiness_gate_cases\":"
       ++ goalReadinessGateCasesJson ++ ","
+    ++ "\"goal_claimed_readiness_cases\":"
+      ++ Conformance.GoalClaimedReadiness.casesJson ++ ","
     ++ "\"goal_transition_cases\":"
       ++ goalTransitionCasesJson ++ ","
     ++ "\"goal_create_cases\":" ++ goalCreateCasesJson ++ ","
@@ -370,6 +374,8 @@ def snapshotJson : String :=
       ++ Conformance.MailboxReplyContracts.casesJson ++ ","
     ++ "\"mailbox_handoff_cases\":"
       ++ Conformance.MailboxHandoffContracts.casesJson ++ ","
+    ++ "\"schema_argument_repair_cases\":"
+      ++ Conformance.SchemaArgumentRepair.casesJson ++ ","
     ++ "\"invalid_tool_progress_cases\":"
       ++ Conformance.InvalidToolProgressContracts.casesJson ++ ","
     ++ "\"repeated_tool_failure_cases\":"
@@ -503,6 +509,9 @@ def snapshotJson : String :=
     ++ "\"backend_health_cases\":"
       ++ jsonArray
         (Proofs.BackendHealth.transitionCases.map backendHealthCaseJson) ++ ","
+    ++ "\"backend_probe_schedule_cases\":"
+      ++ jsonArray
+        (Proofs.BackendHealth.scheduleCases.map backendProbeScheduleCaseJson) ++ ","
     ++ "\"follow_up_hooks\":"
       ++ followUpHooksJson ++ ","
     ++ "\"trigger_delivery\":" ++ Conformance.TriggerDelivery.casesJson ++ ","

@@ -63,6 +63,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) workspace_path_capability_cases: Vec<serde_json::Value>,
     pub(crate) workspace_path_alias_cases: Vec<serde_json::Value>,
     pub(crate) logical_output_obligation_cases: Vec<serde_json::Value>,
+    pub(crate) schema_argument_repair_cases: Vec<serde_json::Value>,
     pub(crate) invalid_tool_progress_cases: Vec<serde_json::Value>,
     pub(crate) repeated_tool_failure_cases: Vec<serde_json::Value>,
     /// `Conformance.ToolTimeouts`: host-ceiling resolution of Tools timeouts.
@@ -98,6 +99,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) budget_rehydration_cases: Vec<LeanBudgetRehydrationCase>,
     pub(crate) goal_decision_cases: Vec<LeanGoalDecisionCase>,
     pub(crate) goal_readiness_gate_cases: Vec<LeanGoalReadinessGateCase>,
+    pub(crate) goal_claimed_readiness_cases: Vec<serde_json::Value>,
     pub(crate) goal_transition_cases: Vec<LeanGoalTransitionCase>,
     pub(crate) goal_create_cases: Vec<LeanGoalCreateCase>,
     pub(crate) task_goal_publication_cases: Vec<LeanTaskGoalPublicationCase>,
@@ -169,6 +171,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) completion_retry_cases: Vec<LeanCompletionRetryCase>,
     pub(crate) mcp_health_cases: Vec<LeanMcpHealthCase>,
     pub(crate) backend_health_cases: Vec<LeanBackendHealthCase>,
+    pub(crate) backend_probe_schedule_cases: Vec<LeanBackendProbeScheduleCase>,
     pub(crate) boundaries: Vec<LeanBoundary>,
     pub(crate) deviations: Vec<LeanDeviation>,
     pub(crate) command_policy_cases: Vec<LeanCommandPolicyCase>,
@@ -1982,6 +1985,10 @@ pub(crate) fn lean_mcp_health_cases() -> &'static [LeanMcpHealthCase] {
 
 pub(crate) fn lean_backend_health_cases() -> &'static [LeanBackendHealthCase] {
     &lean_contract_snapshot().backend_health_cases
+}
+
+pub(crate) fn lean_backend_probe_schedule_cases() -> &'static [LeanBackendProbeScheduleCase] {
+    &lean_contract_snapshot().backend_probe_schedule_cases
 }
 
 pub(crate) fn lean_command_policy_cases() -> &'static [LeanCommandPolicyCase] {

@@ -22,6 +22,70 @@ private def decisionJson : Decision → String
 
 private def bools : List Bool := [true, false]
 
+private def splitJson : SeedSplit → String
+  | .train => "\"train\"" | .validation => "\"validation\"" | .heldOut => "\"held_out\""
+
+private def optionalStringJson : Option String → String
+  | none => "null" | some value => jsonString value
+
+private def seedTriggerJson (trigger : SeedTrigger) : String :=
+  "{\"task_id\":" ++ jsonString trigger.taskId
+    ++ ",\"event_source_id\":" ++ optionalStringJson trigger.eventSourceId
+    ++ ",\"enabled\":" ++ boolJson trigger.enabled ++ "}"
+
+private def seedSourceJson (source : SeedSource) : String :=
+  "{\"event_source_id\":" ++ jsonString source.eventSourceId
+    ++ ",\"source_collection\":" ++ jsonString source.collection
+    ++ ",\"event_kind\":" ++ optionalStringJson source.eventKind ++ "}"
+
+private def seedCaseJson (c : SeedCase) : String :=
+  "{\"split\":" ++ splitJson c.split
+    ++ ",\"seed_collections\":" ++ jsonArray (c.seedCollections.map jsonString) ++ "}"
+
+private structure SeedCoverageScenario where
+  name : String
+  target : Option String := some "target"
+  taskEnabled : Bool := true
+  triggers : List SeedTrigger := [⟨"target", some "events", true⟩]
+  sources : List SeedSource := [⟨"events", "Work", none⟩]
+  cases : List SeedCase := [⟨.train, ["Work"]⟩, ⟨.validation, ["Work"]⟩]
+
+private def seedCoverageScenarios : List SeedCoverageScenario :=
+  [{ name := "both_splits_seed_target" },
+   { name := "context_prompt_only", target := none, taskEnabled := false,
+     triggers := [], sources := [], cases := [⟨.train, []⟩, ⟨.validation, []⟩] },
+   { name := "task_prompt_only", cases := [⟨.train, []⟩, ⟨.validation, []⟩] },
+   { name := "only_train_seeds", cases := [⟨.train, ["Work"]⟩, ⟨.validation, []⟩] },
+   { name := "only_validation_seeds", cases := [⟨.train, []⟩, ⟨.validation, ["Work"]⟩] },
+   { name := "only_held_out_seeds", cases := [⟨.heldOut, ["Work"]⟩] },
+   { name := "wrong_collection", cases := [⟨.train, ["Other"]⟩, ⟨.validation, ["Other"]⟩] },
+   { name := "wrong_task", triggers := [⟨"other", some "events", true⟩] },
+   { name := "disabled_task", taskEnabled := false },
+   { name := "disabled_trigger", triggers := [⟨"target", some "events", false⟩] },
+   { name := "schedule_trigger", triggers := [⟨"target", none, true⟩] },
+   { name := "missing_source", sources := [] },
+   { name := "unreferenced_source", sources := [⟨"other", "Work", none⟩] },
+   { name := "explicit_created", sources := [⟨"events", "Work", some "created"⟩] },
+   { name := "not_a_created_event", sources := [⟨"events", "Work", some "updated"⟩] },
+   { name := "later_matching_seed", cases := [⟨.train, ["Other", "Work"]⟩,
+       ⟨.validation, ["Other", "Work"]⟩] },
+   { name := "one_matching_case_per_split", cases := [⟨.train, []⟩, ⟨.train, ["Work"]⟩,
+       ⟨.validation, []⟩, ⟨.validation, ["Work"]⟩] },
+   { name := "unrelated_triggers_do_not_hide_route", triggers :=
+       [⟨"other", some "events", true⟩, ⟨"target", some "events", false⟩,
+        ⟨"target", some "events", true⟩] }]
+
+private def seedCoverageRow (s : SeedCoverageScenario) : String :=
+  "{\"name\":" ++ jsonString s.name
+    ++ ",\"target_task\":" ++ optionalStringJson s.target
+    ++ ",\"task_enabled\":" ++ boolJson s.taskEnabled
+    ++ ",\"triggers\":" ++ jsonArray (s.triggers.map seedTriggerJson)
+    ++ ",\"sources\":" ++ jsonArray (s.sources.map seedSourceJson)
+    ++ ",\"cases\":" ++ jsonArray (s.cases.map seedCaseJson)
+    ++ ",\"missing_splits\":" ++ jsonArray
+      ((missingTaskSeedSplits s.target s.taskEnabled s.triggers s.sources s.cases).map splitJson)
+    ++ "}"
+
 private def decisionRows : List String :=
   [Mode.improve, Mode.confirm].flatMap fun m =>
     bools.flatMap fun s => bools.flatMap fun r => bools.flatMap fun c => bools.map fun i =>
@@ -91,6 +155,7 @@ def optimizationCasesJson : String :=
     ++ ",\"alpha_effective_ppm\":" ++ toString (alphaEffectivePpm params) ++ "}"
     ++ ",\"decisions\":" ++ jsonArray decisionRows
     ++ ",\"gates\":" ++ jsonArray (gateScenarios.map fun (n, e) => gateRow n e)
-    ++ ",\"costs\":" ++ jsonArray (costScenarios.map costRow) ++ "}"
+    ++ ",\"costs\":" ++ jsonArray (costScenarios.map costRow)
+    ++ ",\"seed_coverage\":" ++ jsonArray (seedCoverageScenarios.map seedCoverageRow) ++ "}"
 
 end Conformance.Optimization

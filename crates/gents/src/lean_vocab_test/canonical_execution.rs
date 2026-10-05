@@ -115,6 +115,8 @@ pub(crate) enum LeanCanonicalExecutionCase {
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanCanonicalExecutionSeed {
     pub(crate) purpose: LeanRequestPurpose,
+    #[serde(deserialize_with = "required_nullable")]
+    pub(crate) title_binding: Option<LeanCanonicalTitleBinding>,
     pub(crate) request_id: u64,
     pub(crate) session_id: u64,
     pub(crate) principal: u64,
@@ -125,6 +127,18 @@ pub(crate) struct LeanCanonicalExecutionSeed {
     pub(crate) messages: Vec<LeanCanonicalMessage<LeanPayloadSpec>>,
     pub(crate) tool_calls: Vec<u64>,
     pub(crate) in_flight: Vec<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanCanonicalTitleBinding {
+    pub(crate) physical_request: u64,
+    pub(crate) logical_request: u64,
+    pub(crate) parent_physical: u64,
+    pub(crate) parent_logical: u64,
+    pub(crate) agent: u64,
+    pub(crate) session: u64,
+    pub(crate) authenticated: bool,
 }
 
 #[derive(Debug, Deserialize)]

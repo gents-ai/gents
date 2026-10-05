@@ -516,9 +516,10 @@ def protectedReplayCompactionCaseJson
   "{\"name\":" ++ jsonString witness.name ++
     ",\"message_count\":" ++ toString witness.messageCount ++
     ",\"raw_index\":" ++ toString witness.rawIndex ++
-    ",\"max_prefix\":" ++ toString witness.maxPrefix ++
     ",\"required\":" ++ jsonArray (witness.required.map claudeReplayTagJson) ++
     ",\"rows\":" ++ jsonArray (witness.rows.map claudeTaggedReplayRowJson) ++
+    ",\"ceiling_error\":" ++ jsonString witness.ceilingError ++
+    ",\"ceiling\":" ++ jsonOptionalNat witness.ceiling ++
     ",\"selected_split\":" ++ jsonOptionalNat witness.selectedSplit ++
     ",\"outcome\":" ++ jsonString witness.outcome ++ "}"
 

@@ -35,3 +35,4 @@ include!("tool_execution.rs");
 
 include!("invalid_tool_progress.rs");
 include!("repeated_tool_failure.rs");
+include!("schema_argument_repair.rs");

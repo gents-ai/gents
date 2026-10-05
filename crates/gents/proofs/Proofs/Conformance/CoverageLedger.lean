@@ -623,6 +623,11 @@ def caseCoverage : List CoverageEntry :=
       "conformance::goals::generated_goal_readiness_gate_cases_fence_retry_accounting")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "goal_claimed_readiness_cases"
+      "GoalClaimedReadinessCases"
+      "trigger_engine::goal_source::claimed_readiness_tests::generated_claimed_readiness_cases_drive_goal_source")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "goal_transition_cases"
       "GoalTransitionCases"
       "conformance::goals::generated_goal_transition_cases_fence_runtime_state_machine")
@@ -840,6 +845,16 @@ def caseCoverage : List CoverageEntry :=
       "optimization::policy::tests::gates_costs_and_decisions_match_lean")
       "optimization" [Surface.operatorCli]
   , tagged (consumerCoverage
+      "optimization_cases"
+      "OptimizationCases"
+      "optimization::subject::tests::task_seed_coverage_matches_lean_for_canonical_pack_and_definition_inputs")
+      "optimization" [Surface.operatorCli]
+  , tagged (consumerCoverage
+      "optimization_cases"
+      "OptimizationCases"
+      "optimization::driver::matrix::an_unexercised_task_target_is_refused_before_any_job_or_trial_is_created")
+      "optimization" [Surface.operatorCli]
+  , tagged (consumerCoverage
       "tool_policy_cases"
       "ToolPolicyCases"
       "conformance::generated_tool_policy_cases_match_lean_composition")
@@ -961,6 +976,11 @@ def caseCoverage : List CoverageEntry :=
       "backend_health_cases"
       "BackendHealthTransitionCases"
       "backend_health::tests::generated_backend_health_cases_match_prober_transitions")
+      "backend-health" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "backend_probe_schedule_cases"
+      "BackendProbeScheduleCases"
+      "backend_health::tests::generated_backend_probe_schedule_cases_match_runtime_selection")
       "backend-health" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "inference_registry_cases"
@@ -1138,6 +1158,11 @@ def caseCoverage : List CoverageEntry :=
       "WorkspacePathCapabilityCases"
       "workspace::tests::generated_workspace_path_capability_cases_drive_real_git_executor")
       "isolated-workspaces" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "schema_argument_repair_cases"
+      "SchemaArgumentRepairCases"
+      "agent::loop_stream::tests::generated_schema_argument_repair_cases_drive_owned_loop")
+      "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "invalid_tool_progress_cases"
       "InvalidToolProgressCases"
@@ -1418,10 +1443,11 @@ def caseCoverage : List CoverageEntry :=
       "CanonicalWorkerCapacityCases"
       "Bind modeled acquire, full-capacity refusal and release to the slot-owned Rust capacity scheduler. No request parks a worker while waiting on another session.")
       "canonical-output" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
+  , tagged (consumerWithFollowUp
       "canonical_execution_gate_cases"
       "CanonicalExecutionGateCases"
-      "Composed lease, publication, tool lifecycle, recovery, delivery and gate witnesses require native transactional owners. The application Trace separately proves sequence bounds, claim coherence, full tool coherence and closure uniqueness inductively; finite generated cases do not establish these universal invariants in Rust. Typed adapter fixtures and success summaries are not native consumer coverage.")
+      "canonical_execution_native_adapter::every_generated_native_execution_script_runs_to_completion"
+      "Generated native scripts bind transactional lease, publication, recovery and tool owners. Title scripts bind signed parent-only admission, own claim/begin, renewal, Complete/Partial/retracted audit closure, retry coordinates, terminal-parent isolation and purpose denial. Rows marked nativeGap retain explicit replication or unmaterialized-input premises; trace summaries and finite cases do not establish the application's universal invariants in Rust.")
       "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
   , tagged (consumerCoverage
       "canonical_spawned_target_rejection_cases"
@@ -1554,7 +1580,7 @@ def caseCoverage : List CoverageEntry :=
       "protected_replay_compaction_cases"
       "ProtectedReplayCompactionCases"
       "conformance::prompt_assembly::generated_protected_replay_compaction_cases_bind_native_split_and_checkpoint"
-      "Native selection and checkpoint validation retain every independently required signed Claude row before summary. A long required chain may still end in CannotFit at the rebuilt full-request guard; retirement of older requirements is deferred to #1693, not inferred from the retention target. The generated cases do not themselves invoke the summary provider.")
+      "Native replay association and reduction ceilings preserve the entire captured prefix of required reasoning. A nonempty required set refuses summarization with CannotFit; an empty set preserves the ordinary retention policy. Retirement of older requirements remains deferred. Generated cases bind modeled assistant blocks to native ceiling and split selection; the summary-provider refusal has separate native coverage.")
       "compaction" [Surface.agentFacing]
   , tagged (followUpCoverage
       "compaction_cursor_cases"

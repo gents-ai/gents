@@ -62,8 +62,9 @@ pub use path_capability::WorkspacePathCapability;
 pub use quickstart::provision_read_only_workspace;
 pub use runtime::cleanup_workspace;
 pub(crate) use runtime::{
-    integrate_on_integrator_success, materialize_workspace_binding, release_writer_binding,
-    seal_on_writer_success, stamp_workspace_lineage, writer_request_already_sealed,
+    integrate_on_integrator_success, materialize_workspace_binding,
+    release_terminal_writer_binding, release_writer_binding, seal_on_writer_success,
+    stamp_workspace_lineage, writer_request_already_sealed,
 };
 
 pub(crate) use overlay::{

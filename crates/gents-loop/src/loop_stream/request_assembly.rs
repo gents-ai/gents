@@ -9,9 +9,9 @@ pub(super) fn message_values(rows: &[TaggedMessage]) -> Vec<Message> {
     rows.iter().map(|row| row.message.clone()).collect()
 }
 
-/// Translate the checkpoint owner's independently required assistant sources
-/// into the reducer's exact provider-view row coordinates. No native payload
-/// equality or provider-assigned message ID participates in this association.
+/// Required reasoning depends on its complete captured prefix. Refines
+/// `Compaction.replayReductionCeiling` after validating source associations
+/// through the existing checkpoint owner.
 pub fn replay_compaction_prefix_bound(
     rows: &[TaggedMessage],
     required: &[ReplayTag],
@@ -31,11 +31,7 @@ pub fn replay_compaction_prefix_bound(
         }
     }
     prepare_replay_checkpoint(required.to_vec(), assistants, 0)?;
-    Ok(rows.iter().position(|row| {
-        row.source
-            .as_ref()
-            .is_some_and(|tag| required.contains(tag))
-    }))
+    Ok((!required.is_empty()).then_some(0))
 }
 
 fn replay_input_error(message: impl Into<String>) -> StreamingError {
@@ -112,7 +108,7 @@ mod replay_error_tests {
     }
 
     #[test]
-    fn replay_prefix_bound_uses_full_provider_view_row_index() {
+    fn replay_prefix_bound_preserves_the_entire_required_capture_prefix() {
         let earlier = provider_tag(0);
         let required = provider_tag(1);
         let rows = vec![
@@ -125,8 +121,8 @@ mod replay_error_tests {
         ];
         assert_eq!(
             replay_compaction_prefix_bound(&rows, &[required]).unwrap(),
-            Some(5),
-            "the bound is the whole provider-view index, not assistant ordinal 2"
+            Some(0),
+            "summarizing any earlier row can invalidate the required capture"
         );
     }
 

@@ -54,6 +54,62 @@ pub(crate) async fn publish_claimed_continuation(
     Ok(receipt)
 }
 
+/// Stop only the observed claim while its parent is still the idle session
+/// head. Publication writes the same Goal row, so a conflicting child commit
+/// retries this transaction and must pass these observations again.
+pub(crate) async fn stop_claimed_continuation_for_unavailable_behavior(
+    node: &EmbeddedNode,
+    observed: &GoalDocument,
+    parent_request_id: &str,
+    reason: &str,
+) -> Result<bool> {
+    crate::config_client::ConfigAccess::transact_local(
+        node,
+        None,
+        "goal.stop_unavailable_claimed_continuation",
+        |txn| Box::pin(async move {
+            let Some(goal) = load_canonical_goal_in_txn(txn, &observed.agent_did, &observed.session_id).await? else {
+                return Ok(false);
+            };
+            if goal.doc_id != observed.doc_id || goal.status != observed.status
+                || goal.continuation_sequence() != observed.continuation_sequence()
+                || goal.last_continued_from_request_id != observed.last_continued_from_request_id
+                || goal.last_continued_from_request_id.as_deref() != Some(parent_request_id)
+                || gate_claimed_goal_continuation(
+                    GoalBehaviorObservation::Unavailable, true, false,
+                    &goal.state().context("goal has an unknown status")?,
+                ) != GoalClaimedDecision::Stop
+            {
+                return Ok(false);
+            }
+            let did = escape_graphql_string(&goal.agent_did);
+            let session = escape_graphql_string(&goal.session_id);
+            let response = txn.execute(&format!(r#"{{ AgentRequest(filter: {{
+                agent_did: {{ _eq: "{did}" }}, session_id: {{ _eq: "{session}" }}
+            }}, order: [{{ created_at: DESC }}, {{ request_id: DESC }}]) {{ {SIGNED_REQUEST_FIELDS} }} }}"#)).await?;
+            let requests: Vec<AgentRequestRow> = serde_json::from_value(
+                response.pointer("/data/AgentRequest").cloned()
+                    .context("claimed stop request query omitted rows")?
+            )?;
+            if !goal_session_is_idle(&requests)
+                || !latest_goal_request(&goal, &requests).is_some_and(|parent|
+                    parent.request_id == parent_request_id
+                        && parent.lifecycle_state.is_some_and(RequestLifecycleState::is_terminal))
+                || requests.iter().any(|request|
+                    request.caused_by_trigger_kind.as_deref() == Some(GOAL_TRIGGER_KIND)
+                        && request.caused_by_trigger_id.as_deref() == Some(goal.goal_id.as_str())
+                        && request.caused_by_parent_request_id.as_deref() == Some(parent_request_id))
+            {
+                return Ok(false);
+            }
+            Ok(stop_claimed_continuation_in_txn(
+                txn, &goal, observed.continuation_sequence(), parent_request_id,
+                reason, false, Utc::now(),
+            ).await?.is_some())
+        }),
+    ).await
+}
+
 /// The invalid-evidence stop staged by the attempt that committed, if any.
 type StoppedReason = std::sync::Mutex<Option<String>>;
 
@@ -208,12 +264,13 @@ async fn stage_claimed_continuation(
         wait_observation::WaitEvidence::Unavailable(error) => return Err(error),
         wait_observation::WaitEvidence::Invalid(error) => {
             *stopped.lock().unwrap_or_else(|poison| poison.into_inner()) =
-                stop_for_invalid_wait_evidence(
+                stop_claimed_continuation_in_txn(
                     txn,
                     &goal,
                     sequence,
                     parent_request_id,
-                    &error,
+                    &format!("invalid Goal wait evidence: {error:#}"),
+                    true,
                     now,
                 )
                 .await?;
@@ -280,36 +337,33 @@ async fn stage_claimed_continuation(
     }))
 }
 
-/// Stop automatic continuation on uninterpretable wait evidence, through the
-/// Goal owner's pause (active) or wrap-up abandonment (budget limited), under
-/// the same claim guard as publication. Returns the recorded reason when the
-/// guarded write matched. A paused Goal leaves the automatic candidate set; an
-/// abandoned wrap-up stays a candidate, but publication refuses any claim once
-/// the wrap-up is completed, so neither can publish or stop again. Operator
-/// resume clears `last_failure` and starts a new epoch, so no retry prompt
-/// reads it.
-async fn stop_for_invalid_wait_evidence(
+/// Uses the existing Goal pause/abandon transitions under the publication
+/// claim guard. Readiness stops preserve retry provenance; invalid wait
+/// evidence records its failure because that claim cannot be recovered.
+async fn stop_claimed_continuation_in_txn(
     txn: &ConfigApplyTxn<'_>,
     goal: &GoalDocument,
     sequence: i64,
     parent_request_id: &str,
-    error: &anyhow::Error,
+    reason: &str,
+    record_failure: bool,
     now: DateTime<Utc>,
 ) -> Result<Option<String>> {
     let state = goal.state().context("goal has an unknown status")?;
-    let reason = format!("invalid Goal wait evidence: {error:#}");
-    let escaped_reason = escape_graphql_string(&reason);
+    let failure_field = if record_failure {
+        format!(r#", last_failure: "{}""#, escape_graphql_string(reason))
+    } else {
+        String::new()
+    };
     let updated_at = escape_graphql_string(&now.to_rfc3339());
     let fields = if let Some(post) = state.step(GoalAction::Pause) {
         format!(
-            r#"status: "{}", active_time_seconds: {}, active_started_at: null, last_failure: "{escaped_reason}", updated_at: "{updated_at}""#,
+            r#"status: "{}", active_time_seconds: {}, active_started_at: null{failure_field}, updated_at: "{updated_at}""#,
             post.status.as_str(),
             goal.current_active_time_seconds(now),
         )
     } else if state.step(GoalAction::WrapupAbandoned).is_some() {
-        format!(
-            r#"wrapup_completed: true, last_failure: "{escaped_reason}", updated_at: "{updated_at}""#
-        )
+        format!(r#"wrapup_completed: true{failure_field}, updated_at: "{updated_at}""#)
     } else {
         return Ok(None);
     };
@@ -329,7 +383,7 @@ async fn stop_for_invalid_wait_evidence(
     Ok(response
         .pointer("/data/update_Goal")
         .is_some_and(mutation_returned_rows)
-        .then_some(reason))
+        .then(|| reason.to_owned()))
 }
 
 #[cfg(test)]

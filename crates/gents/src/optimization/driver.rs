@@ -41,7 +41,8 @@ use crate::optimization::policy::{
 };
 use crate::optimization::proposer::{ProposalInput, Proposer, Rejection};
 use crate::optimization::subject::{
-    baseline_text, materialize_candidate, materialize_pack, MaterializedPack,
+    baseline_text, materialize_candidate, materialize_pack, missing_task_seed_splits,
+    MaterializedPack,
 };
 use crate::optimization::target::{
     baseline_equivalence, capture_closure, closure_digests, current_text, BaselineMismatch,
@@ -986,6 +987,22 @@ async fn freeze_job(
         &request.behavior_id,
         &request.target,
     )?;
+    let missing = missing_task_seed_splits(&source.config, &request.target, &definition);
+    if !missing.is_empty() {
+        let splits = missing
+            .iter()
+            .map(|split| match split {
+                EvalSplit::Train => "train",
+                EvalSplit::Validation => "validation",
+                EvalSplit::HeldOut => unreachable!("held-out coverage does not gate job freeze"),
+            })
+            .collect::<Vec<_>>()
+            .join(" and ");
+        return Err(refused(format!(
+            "task target {:?} has no seed route in the {splits} split; add a seed stage on a collection whose enabled event trigger runs this enabled task",
+            source.target_id,
+        )));
+    }
     let pack_text = baseline_text(&source)?;
     // Ruling R5, before anything is written: the pack must be the live one.
     let closure = read_closure(access, owner).await?;

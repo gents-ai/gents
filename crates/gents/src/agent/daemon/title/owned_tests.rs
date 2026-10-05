@@ -419,12 +419,17 @@ impl TitleFixture {
 }
 
 fn modeled_title_fields(name: &str) -> (Vec<(StreamPayload, String, u32, u32)>, OutputOutcome) {
-    let case = crate::lean_vocab_test::lean_contract_snapshot().canonical_execution_gate_cases.iter().find(|case| matches!(case, LeanCanonicalExecutionCase::ModelExecution { name: found, .. } if found == name)).expect("Lean title script");
-    let LeanCanonicalExecutionCase::ModelExecution {
+    let case = crate::lean_vocab_test::lean_contract_snapshot().canonical_execution_gate_cases.iter().find(|case| matches!(case, LeanCanonicalExecutionCase::NativeExecution { name: found, .. } | LeanCanonicalExecutionCase::ModelExecution { name: found, .. } if found == name)).expect("Lean title script");
+    let (LeanCanonicalExecutionCase::NativeExecution {
         operations,
         expected_observations,
         ..
-    } = case
+    }
+    | LeanCanonicalExecutionCase::ModelExecution {
+        operations,
+        expected_observations,
+        ..
+    }) = case
     else {
         unreachable!()
     };
@@ -801,12 +806,16 @@ async fn crashed_title_recovers_committed_reasoning_without_publication() {
     let model = crate::lean_vocab_test::lean_contract_snapshot()
         .canonical_execution_gate_cases
         .iter()
-        .find(|case| matches!(case, LeanCanonicalExecutionCase::ModelExecution { name, .. } if name == "title_expired_unlatched_recovery_no_message"))
+        .find(|case| matches!(case, LeanCanonicalExecutionCase::NativeExecution { name, .. } | LeanCanonicalExecutionCase::ModelExecution { name, .. } if name == "title_expired_unlatched_recovery_no_message"))
         .expect("modeled title recovery");
-    let LeanCanonicalExecutionCase::ModelExecution {
+    let (LeanCanonicalExecutionCase::NativeExecution {
         expected_observations,
         ..
-    } = model
+    }
+    | LeanCanonicalExecutionCase::ModelExecution {
+        expected_observations,
+        ..
+    }) = model
     else {
         unreachable!()
     };
