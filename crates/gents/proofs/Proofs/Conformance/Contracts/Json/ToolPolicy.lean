@@ -1,5 +1,6 @@
 import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.ToolPolicy.Cases
+import Proofs.ToolPolicy.FieldRead
 import Proofs.ToolPolicy.WriteInput
 import Proofs.ToolPolicy.ApplicationWrite
 
@@ -15,6 +16,22 @@ def writeGrantViewJson (grant : WriteGrantView) : String :=
   ++ "}"
 
 def boolJson (b : Bool) : String := if b then "true" else "false"
+
+def fieldReadCasesJson : String := Id.run do
+  let mut rows := []
+  for widths in [[], [1], [1, 2, 3, 4], List.replicate 2000 1 ++ [4], List.replicate 501 4] do
+    for offset in [0, 1, 2, 3, 6, 10, 2000, 2004, 2005] do
+      for present in [false, true] do
+        for hashOk in [false, true] do
+          for granted in [false, true] do
+            let result := ToolPolicy.FieldRead.page widths offset 2000 granted granted granted present hashOk
+            rows := rows ++ ["{\"widths\":" ++ "[" ++ String.intercalate "," (widths.map toString) ++ "]"
+              ++ ",\"offset\":" ++ toString offset
+              ++ ",\"granted\":" ++ boolJson granted
+              ++ ",\"present\":" ++ boolJson present
+              ++ ",\"hashOk\":" ++ boolJson hashOk
+              ++ ",\"next\":" ++ (match result with | none => "null" | some n => toString n) ++ "}"]
+  return "[" ++ String.intercalate "," rows ++ "]"
 
 def writeInputKindName : ToolPolicy.WriteInput.Kind → String
   | .text => "text" | .integer => "integer" | .number => "number"

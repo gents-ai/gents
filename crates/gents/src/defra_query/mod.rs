@@ -10,10 +10,10 @@ use serde_json::json;
 
 pub(crate) const MAX_FIELD_STRING_BYTES: usize = 2_000;
 
-fn field_truncation_marker(original_bytes: usize) -> String {
+fn field_truncation_marker(shown_bytes: usize, original_bytes: usize) -> String {
     format!(
         " [truncated: showed {} of {} bytes]",
-        MAX_FIELD_STRING_BYTES, original_bytes
+        shown_bytes, original_bytes
     )
 }
 
@@ -33,7 +33,7 @@ pub(crate) fn truncate_field_strings(value: &mut serde_json::Value) -> bool {
                         }
                     })
                     .collect();
-                let marker = field_truncation_marker(original_bytes);
+                let marker = field_truncation_marker(truncated.len(), original_bytes);
                 *s = format!("{}{}", truncated, marker);
                 true
             } else {
@@ -52,6 +52,7 @@ pub(crate) fn truncate_field_strings(value: &mut serde_json::Value) -> bool {
 
 pub(crate) mod bounded;
 mod command;
+mod field_page;
 mod native_filter;
 mod search;
 pub use command::{build_paged_query, execute_command, query_help, render_result, QueryParams};
