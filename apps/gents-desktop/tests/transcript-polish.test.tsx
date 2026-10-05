@@ -89,7 +89,6 @@ const panel = (
         retryMessage: vi.fn(async () => null),
       },
     }}
-    holdsCount={0}
     inFlight={inFlight}
     stopping={stopping}
     scroller={null}

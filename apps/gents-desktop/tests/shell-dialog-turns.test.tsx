@@ -177,7 +177,6 @@ function sessionShell(): Shell {
     captureComposeIntent: () => 0,
     acceptsComposeIntent: () => true,
     selectBehavior: vi.fn(),
-    holds: [],
     interruptVisible: false,
     selectedTrackedRequestId: null,
     activeRequestId: null,

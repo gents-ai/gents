@@ -54,7 +54,6 @@ export function SessionsScreen({
   nodeDid?: string;
 }) {
   const deployment = shell.selectedDeployment;
-  const held = new Set(shell.holds.flatMap((h) => (h.sessionId ? [h.sessionId] : [])));
   const [query, setQuery] = useState<string | null>(null);
   /* the three axes the summary carries: behavior, state, and what started it */
   const [filter, setFilter] = useSessionFilter();
@@ -84,7 +83,7 @@ export function SessionsScreen({
   const nodeCounts = Object.fromEntries(
     shell.deployments.map((n) => [nodeDidOf(n), n.sessions.length]),
   );
-  const conversations = filterSessions(inScope, filter, held, query);
+  const conversations = filterSessions(inScope, filter, query);
   /* an empty list says "yet" only when no node has a session; otherwise
      something narrowed it, the node chips included */
   const narrowed =
@@ -107,8 +106,8 @@ export function SessionsScreen({
      with four workers is one piece of work, and a list that spends five
      rows on it stops being a list of what a person is doing.
 
-     Folded is not hidden. A worker that needs someone, or failed, or is
-     running, is on the list whether or not its parent is open — the status
+     Folded is not hidden. A worker that failed or is running is on the
+     list whether or not its parent is open — the status
      mark is the reason to read this screen, and a fold that costs someone
      that is worse than the rows it saved. So is a worker that matches a
      filter: a person who asked for what needs them has asked for exactly
@@ -127,7 +126,6 @@ export function SessionsScreen({
         hidden: number;
         open: boolean;
         running: number;
-        needing: number;
       };
 
   /* Work handed out sits under the work that handed it out — but only when
@@ -167,12 +165,11 @@ export function SessionsScreen({
       if (open)
         for (const [n, c] of kin.entries())
           rows.push({ kind: "session", session: c, child: true, delay: n });
-      const needing = kin.filter((c) => held.has(c.sessionId)).length;
       const running = kin.filter((c) => isLive(c.turnState)).length;
       /* the way in stays while there is something behind it worth opening,
          or while it is open; a parent whose workers have all finished is
          one row again */
-      if (kin.length > 0 && (open || running > 0 || needing > 0))
+      if (kin.length > 0 && (open || running > 0))
         rows.push({
           kind: "toggle",
           of: root.sessionId,
@@ -180,7 +177,6 @@ export function SessionsScreen({
           hidden: open ? 0 : kin.length,
           open,
           running,
-          needing,
         });
       return rows;
     });
@@ -206,7 +202,6 @@ export function SessionsScreen({
             <SessionFilters
               sessions={inScope}
               deployment={deployment}
-              held={held}
               value={filter}
               onChange={setFilter}
               nodes={{
@@ -284,12 +279,6 @@ export function SessionsScreen({
                   {row.open || row.hidden === 0
                     ? `${row.kin} ${row.kin === 1 ? "worker" : "workers"}`
                     : `${row.hidden} more ${row.hidden === 1 ? "worker" : "workers"}`}
-                  {row.needing > 0 && (
-                    <span className="flex items-center gap-1 text-foreground">
-                      <span className="size-1.5 rounded-full bg-brand" />
-                      {row.needing} needs you
-                    </span>
-                  )}
                   {row.running > 0 && <span>· {row.running} running</span>}
                 </button>
               </li>
@@ -320,10 +309,7 @@ export function SessionsScreen({
                     row.child ? "py-2 pl-9 text-sm" : "py-3.5",
                   )}
                 >
-                  <SessionStatus
-                    turnState={row.session.turnState}
-                    held={held.has(row.session.sessionId)}
-                  />
+                  <SessionStatus turnState={row.session.turnState} />
                   <p className="flex min-w-0 items-center gap-1.5 text-sm">
                     {/* the mark says a session came from another; the indent
                         says which one. Kept in both places: a row that only

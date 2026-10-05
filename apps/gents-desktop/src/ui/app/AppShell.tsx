@@ -212,7 +212,6 @@ export function AppShell({
   ceiling,
   online,
   mailboxCount,
-  holds,
   recent,
   working,
   nodeCount,
@@ -235,7 +234,6 @@ export function AppShell({
   recent?: SessionSummary[];
   working?: DeploymentView | null;
   nodeCount?: number;
-  holds?: Set<string>;
   syncHealth?: SyncHealthView | null;
   /** a shell error, shown as a banner over the canvas until dismissed */
   error?: string | null;
@@ -458,7 +456,6 @@ export function AppShell({
                   deployment={deployment}
                   online={online}
                   mailboxCount={mailboxCount}
-                  holds={holds}
                   settings={panelSettings}
                   foot={panelFoot}
                   recent={recent}
@@ -553,7 +550,6 @@ export function AppShell({
             deployment={deployment}
             online={online}
             mailboxCount={mailboxCount}
-            holds={holds}
             recent={recent}
             working={working}
             nodeCount={nodeCount}

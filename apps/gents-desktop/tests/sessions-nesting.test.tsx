@@ -51,7 +51,6 @@ const child = session({
 });
 const shell = (sessions: SessionSummary[]) =>
   ({
-    holds: [],
     behaviorDescriptions: {},
     deployments: [deploymentWith(sessions)],
     selectedDeployment: deploymentWith(sessions),
@@ -116,20 +115,10 @@ describe("sessions started by another session", () => {
     });
     const sessions = [parent, child, unresolved];
     expect(
-      filterSessions(
-        sessions,
-        { ...emptyFilter, sources: ["session"] },
-        new Set(),
-        null,
-      ),
+      filterSessions(sessions, { ...emptyFilter, sources: ["session"] }, null),
     ).toEqual([child]);
     expect(
-      filterSessions(
-        sessions,
-        { ...emptyFilter, sources: ["person"] },
-        new Set(),
-        null,
-      ),
+      filterSessions(sessions, { ...emptyFilter, sources: ["person"] }, null),
     ).toEqual([parent, unresolved]);
   });
 });

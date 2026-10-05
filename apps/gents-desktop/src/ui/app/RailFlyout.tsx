@@ -67,7 +67,6 @@ export function NavPanel({
   recent: recentProp,
   working,
   nodeCount,
-  holds = new Set<string>(),
   settings,
   foot,
 }: {
@@ -77,7 +76,6 @@ export function NavPanel({
   deployment: DeploymentView | null;
   online: boolean;
   mailboxCount: number;
-  holds?: Set<string>;
   /** the settings menu, as a row at the foot */
   settings?: ReactNode;
   /** what sits above Nodes at the foot: the sync chip, from the app */
@@ -205,10 +203,7 @@ export function NavPanel({
                       currentSession === c.sessionId && "text-foreground",
                     )}
                   >
-                    <SessionStatus
-                      turnState={c.turnState}
-                      held={holds.has(c.sessionId)}
-                    />
+                    <SessionStatus turnState={c.turnState} />
                     <span className="min-w-0 flex-1 truncate">
                       {c.title ?? "Untitled session"}
                     </span>
@@ -264,7 +259,6 @@ export function RailFlyout({
   deployment,
   online,
   mailboxCount,
-  holds = new Set<string>(),
   mode = "hover",
   settings,
   foot,
@@ -279,8 +273,6 @@ export function RailFlyout({
   deployment: DeploymentView | null;
   online: boolean;
   mailboxCount: number;
-  /** sessions with a held tool call waiting on a person */
-  holds?: Set<string>;
   /** hover: rail with a flyout; expanded: the panel in the flow; collapsed: rail only */
   mode?: NavMode;
   settings?: ReactNode;
@@ -381,7 +373,6 @@ export function RailFlyout({
             deployment={deployment}
             online={online}
             mailboxCount={mailboxCount}
-            holds={holds}
             settings={settings}
             foot={foot}
             recent={recent}

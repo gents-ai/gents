@@ -15,7 +15,6 @@ export function WorkersSurface({ sessionId }: SurfaceContext) {
   const workers = sessionId
     ? (workersBySession(shell.deployments).get(sessionId) ?? [])
     : [];
-  const held = new Set(shell.holds.flatMap((h) => (h.sessionId ? [h.sessionId] : [])));
   return (
     <ScrollArea className="h-full">
       <div className="px-3 py-2">
@@ -31,7 +30,7 @@ export function WorkersSurface({ sessionId }: SurfaceContext) {
                 href={href({ name: "session", sessionId: w.sessionId })}
                 className="-mx-1 grid grid-cols-[auto_1fr_auto_auto] items-center gap-3 rounded-lg px-2 py-2 text-sm hover:bg-accent"
               >
-                <SessionStatus turnState={w.turnState} held={held.has(w.sessionId)} />
+                <SessionStatus turnState={w.turnState} />
                 <span className="truncate">{w.title ?? "Untitled"}</span>
                 <NodeBehaviorStack
                   nodes={shell.deployments}

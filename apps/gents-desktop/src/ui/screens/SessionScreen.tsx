@@ -78,7 +78,6 @@ import { AgentAvatar } from "./AgentAvatar";
 import { PanelMenu } from "@/app/PanelMenu";
 import { PaneBar } from "@/app/PaneBar";
 import { BehaviorPicker } from "./BehaviorPicker";
-import { HoldCard } from "./HoldCard";
 import { LoadingStatus } from "./LoadingStatus";
 import { SlashSkillMenu } from "./SlashSkillMenu";
 import { useSlashSkills } from "./useSlashSkills";
@@ -1044,7 +1043,6 @@ function ResponseActions({ text }: { text: string }) {
 
 export const TranscriptPanel = memo(function TranscriptPanel({
   actionsRef,
-  holdsCount,
   inFlight,
   stopping = false,
   scroller,
@@ -1055,7 +1053,6 @@ export const TranscriptPanel = memo(function TranscriptPanel({
   deployment,
 }: {
   actionsRef: RefObject<TranscriptActions>;
-  holdsCount: number;
   inFlight: boolean;
   stopping?: boolean;
   /** the transcript's scroller, once mounted */
@@ -1267,7 +1264,7 @@ export const TranscriptPanel = memo(function TranscriptPanel({
           )}
         </div>
       )}
-      {status && !live && holdsCount === 0 && (
+      {status && !live && (
         <AssistantMessage>
           <Thinking label={status} />
         </AssistantMessage>
@@ -1580,7 +1577,6 @@ export function SessionScreen({ shell }: { shell: Shell }) {
   }
 
   /* ---- an existing session ---- */
-  const holdsHere = shell.holds.filter((h) => h.sessionId === session?.sessionId);
   const inFlight = shell.interruptVisible ?? Boolean(shell.selectedTrackedRequestId);
 
   /* stop: the interrupt reaches this request only; sessions it started keep
@@ -1807,7 +1803,6 @@ export function SessionScreen({ shell }: { shell: Shell }) {
               <TranscriptPanel
                 deployment={deployment}
                 actionsRef={transcriptActions}
-                holdsCount={holdsHere.length}
                 inFlight={inFlight}
                 stopping={stopping}
                 scroller={scroller}
@@ -1852,55 +1847,6 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                   </Button>
                 )}
                 <LoadingStatus shell={shell} />
-                {/* a held tool call blocks the turn, so it pins above the composer as the
-                    desktop's HoldsPanel does: the first in full, any others as one row each */}
-                {holdsHere[0] && (
-                  <div className="mb-3">
-                    <HoldCard
-                      title={`${holdsHere[0].toolName} needs your approval`}
-                      detail={
-                        <code className="font-mono text-xs">{holdsHere[0].args}</code>
-                      }
-                      onApprove={() =>
-                        shell.resolveHold(holdsHere[0]!.toolCallId, true)
-                      }
-                      onDeny={() => shell.resolveHold(holdsHere[0]!.toolCallId, false)}
-                    >
-                      {holdsHere.length > 1 && (
-                        <span className="ml-auto text-xs text-muted-foreground">
-                          {holdsHere.length - 1} more waiting
-                        </span>
-                      )}
-                    </HoldCard>
-                    {holdsHere.slice(1).map((h) => (
-                      <div
-                        key={h.toolCallId}
-                        className="mt-1 flex items-center gap-2 rounded-xl border border-border/60 bg-raised px-3 py-1.5 text-sm"
-                      >
-                        <span className="min-w-0 flex-1 truncate">
-                          {h.toolName}
-                          <code className="ml-2 font-mono text-xs text-muted-foreground">
-                            {h.args}
-                          </code>
-                        </span>
-                        <Button
-                          size="sm"
-                          variant="brand"
-                          onClick={() => shell.resolveHold(h.toolCallId, true)}
-                        >
-                          Approve
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => shell.resolveHold(h.toolCallId, false)}
-                        >
-                          Deny
-                        </Button>
-                      </div>
-                    ))}
-                  </div>
-                )}
                 <div data-testid="composer">
                   <Composer
                     value={draft}

@@ -74,7 +74,6 @@ describe("SessionScreen transcript render boundary", () => {
     };
     const props = {
       actionsRef,
-      holdsCount: 0,
       inFlight: false,
       scroller: null,
     };
@@ -105,7 +104,6 @@ describe("SessionScreen transcript render boundary", () => {
     const scroller = null;
     const props = {
       actionsRef,
-      holdsCount: 0,
       inFlight: false,
       scroller,
     };
@@ -171,7 +169,6 @@ describe("SessionScreen transcript render boundary", () => {
                 retryMessage: vi.fn(async () => null),
               },
             }}
-            holdsCount={0}
             inFlight={false}
             scroller={viewport}
             session={current}

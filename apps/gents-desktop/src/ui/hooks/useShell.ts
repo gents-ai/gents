@@ -140,19 +140,12 @@ export function useShell(
       conversationLoading: d.sessionLoadingStatus,
       clearError: d.onDismissError,
       retryStartup: d.onRetryStartup,
-      holds: [] as {
-        sessionId?: string | null;
-        toolCallId: string;
-        toolName: string;
-        args: string;
-      }[],
       sendMessage,
       captureComposeIntent: d.captureComposeIntent,
       acceptsComposeIntent: d.acceptsComposeIntent,
       retryMessage: d.onRetryMessage,
       runTask: d.onRunTask,
       runSchedule: d.onRunSchedule,
-      resolveHold: async (_id: string, _approve: boolean) => {},
       dismissMailboxItem: d.onDismissMailboxItem,
       openMailboxItem: d.onOpenMailboxItem,
       answerMailboxQuestion: d.onAnswerMailboxQuestion,

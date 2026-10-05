@@ -97,7 +97,6 @@ function existingSessionShell(status: Shell["nonEmptyContentSendStatus"]): Shell
       goal: null,
       context: null,
     },
-    holds: [],
     interruptVisible: false,
     selectedTrackedRequestId: null,
     activeRequestId: null,

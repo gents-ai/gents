@@ -30,7 +30,7 @@ import { cn } from "@gents/ui/lib/utils";
 import { isLive } from "@/lib/live";
 import { BehaviorAvatar } from "./parts";
 
-export type SessionState = "live" | "held" | "failed";
+export type SessionState = "live" | "failed";
 export type SessionSource = "person" | "task" | "session";
 
 export type SessionFilter = {
@@ -51,7 +51,7 @@ const KEY = "gents-session-filter";
 const strings = (v: unknown) =>
   Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
 
-/* the narrowing outlives the visit: a person who works from "needs you"
+/* the narrowing outlives the visit: a person who works from "failed"
    comes back to it. The trigger takes full ink and the row carries a
    clear while anything is set, so a filter is never quietly on. */
 export function useSessionFilter() {
@@ -61,7 +61,8 @@ export function useSessionFilter() {
       if (!raw) return emptyFilter;
       const parsed = JSON.parse(raw) as Record<string, unknown>;
       return {
-        states: strings(parsed.states) as SessionState[],
+        /* a state this build no longer offers is dropped, not misread */
+        states: strings(parsed.states).filter(isSessionState),
         sources: strings(parsed.sources) as SessionSource[],
         behaviors: strings(parsed.behaviors),
       };
@@ -80,12 +81,11 @@ export function useSessionFilter() {
   return [filter, setFilter] as const;
 }
 
-const matchesState = (c: SessionSummary, state: SessionState, held: Set<string>) =>
-  state === "live"
-    ? isLive(c.turnState)
-    : state === "held"
-      ? held.has(c.sessionId)
-      : c.turnState === "failed";
+const isSessionState = (value: string): value is SessionState =>
+  value === "live" || value === "failed";
+
+const matchesState = (c: SessionSummary, state: SessionState) =>
+  state === "live" ? isLive(c.turnState) : c.turnState === "failed";
 
 /* One option for automation, not two. Every run a trigger fires also names
    the task it fired, so a task and a trigger were the same sessions under
@@ -103,27 +103,21 @@ const matchesSource = (c: SessionSummary, source: SessionSource) =>
 
 /* an axis passes when nothing on it is picked, or when one picked value
    matches: within an axis the options are a union, across axes they meet */
-const passes = (c: SessionSummary, f: SessionFilter, held: Set<string>) =>
-  (f.states.length === 0 || f.states.some((s) => matchesState(c, s, held))) &&
+const passes = (c: SessionSummary, f: SessionFilter) =>
+  (f.states.length === 0 || f.states.some((s) => matchesState(c, s))) &&
   (f.sources.length === 0 || f.sources.some((s) => matchesSource(c, s))) &&
   (f.behaviors.length === 0 || f.behaviors.includes(c.behaviorId ?? ""));
 
 export const filterSessions = (
   sessions: SessionSummary[],
   f: SessionFilter,
-  held: Set<string>,
   query: string | null,
 ) =>
   sessions.filter(
     (c) =>
-      passes(c, f, held) &&
+      passes(c, f) &&
       (!query || (c.title ?? "").toLowerCase().includes(query.toLowerCase())),
   );
-
-/* the held mark the rows use: a filled brand dot, not a Lucide glyph */
-function HeldDot({ className }: { className?: string }) {
-  return <span className={cn("size-2 rounded-full bg-brand", className)} />;
-}
 
 export type Option<V extends string> = {
   value: V;
@@ -134,7 +128,6 @@ export type Option<V extends string> = {
 
 const STATES: Option<SessionState>[] = [
   { value: "live", label: "Live", icon: Activity },
-  { value: "held", label: "Needs you", icon: HeldDot },
   { value: "failed", label: "Failed", icon: CircleX, tint: "text-destructive" },
 ];
 
@@ -343,14 +336,12 @@ function BehaviorAxis({
 export function SessionFilters({
   sessions,
   deployment,
-  held,
   value,
   onChange,
   nodes,
 }: {
   sessions: SessionSummary[];
   deployment: DeploymentView | null;
-  held: Set<string>;
   value: SessionFilter;
   onChange: (next: SessionFilter) => void;
   /** the node pick beside this row, so one clear empties the whole bar */
@@ -359,13 +350,10 @@ export function SessionFilters({
   /* a count says what its option would leave: its own axis is dropped from
      the filter, so the numbers answer "and how many of those" as you narrow */
   const countFor = (axis: keyof SessionFilter, test: (c: SessionSummary) => boolean) =>
-    sessions.filter((c) => passes(c, { ...value, [axis]: [] }, held) && test(c)).length;
+    sessions.filter((c) => passes(c, { ...value, [axis]: [] }) && test(c)).length;
 
   const stateCounts = Object.fromEntries(
-    STATES.map((s) => [
-      s.value,
-      countFor("states", (c) => matchesState(c, s.value, held)),
-    ]),
+    STATES.map((s) => [s.value, countFor("states", (c) => matchesState(c, s.value))]),
   );
   const sourceCounts = Object.fromEntries(
     SOURCES.map((s) => [

@@ -269,9 +269,6 @@ function AppHost({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
               recent={recentInScope(defaultScope("recents"), scopeContextOf(shell), 8)}
               working={working}
               nodeCount={shell.deployments.length}
-              holds={
-                new Set(shell.holds.flatMap((h) => (h.sessionId ? [h.sessionId] : [])))
-              }
               syncHealth={shell.snapshot?.client?.syncHealth}
               error={shell.error}
               onDismissError={shell.clearError}
