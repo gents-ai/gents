@@ -223,6 +223,7 @@ export function MailboxScreen({
               >
                 <NodeAxis
                   nodes={shell.deployments}
+                  homeDid={shell.snapshot?.bootstrap.initAgentDid}
                   counts={nodeCounts}
                   value={nodeIds}
                   onChange={(next) => {
@@ -564,6 +565,7 @@ function Item({
           <div className="col-start-1 row-start-1 flex justify-end max-md:self-center md:mt-0.5 md:w-12">
             <NodeBehaviorStack
               nodes={shell.deployments}
+              homeDid={shell.snapshot?.bootstrap.initAgentDid}
               nodeDid={m.agentDid}
               behaviorId={m.targetBehaviorId}
               deployment={shell.selectedDeployment}

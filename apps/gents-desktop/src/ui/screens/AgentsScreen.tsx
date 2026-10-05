@@ -59,20 +59,21 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
   } | null>(null);
   const [removingBusy, setRemovingBusy] = useState(false);
   const pending = shell.snapshot?.client?.enrollmentRequests;
+  const homeDid = shell.snapshot?.bootstrap.initAgentDid;
   /* the node this machine runs, then the paired ones with the reachable
      first: the dot is the first thing read on a row */
   const groups = [
     {
       key: "local",
       label: "Local node",
-      nodes: shell.deployments.filter(isWorkingNode),
+      nodes: shell.deployments.filter((d) => isWorkingNode(d, homeDid)),
       count: false,
     },
     {
       key: "remote",
       label: "Remote nodes",
       nodes: shell.deployments
-        .filter((d) => !isWorkingNode(d))
+        .filter((d) => !isWorkingNode(d, homeDid))
         .sort((a, b) => Number(b.dialSucceeded) - Number(a.dialSucceeded)),
       count: true,
     },
@@ -197,7 +198,7 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
                         </span>
                         {/* the pairing label names a remote node when its principal
                         does not; the local node's pill already says it */}
-                        {!isWorkingNode(d) && d.label !== name && (
+                        {!isWorkingNode(d, homeDid) && d.label !== name && (
                           <span className="min-w-0 truncate text-xs text-muted-foreground">
                             {d.label}
                           </span>

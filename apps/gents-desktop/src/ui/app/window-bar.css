@@ -3,21 +3,9 @@
    Windows caption rules stay in App.css; macOS keeps a native title bar
    above the webview, so nothing here is for it. */
 
-/* where the traffic lights float over the webview (trafficLightsInWebview,
-   stamped as data-window-lights) they sit in the bar's rail region, 15px to
-   67px from the left, past the 56px rail: the pane region starts clear of
-   them. With a native title bar above the webview nothing is inset. */
-/* the first region after the rail's: 12px, or clear of the lights on macOS */
+/* the first region after the rail's */
 .app-bar-first {
   padding-left: 0.75rem;
-}
-:root[data-window-lights="inline"] .app-bar-first {
-  padding-left: 24px;
-}
-@media (max-width: 767px) {
-  :root[data-window-lights="inline"] .app-bar-first {
-    padding-left: var(--titlebar-inset);
-  }
 }
 
 /* while a divider or a tab is dragged nothing on the page selects, and the

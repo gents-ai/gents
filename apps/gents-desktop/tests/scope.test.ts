@@ -49,7 +49,7 @@ const peer = node(
   [session("p1", "did:peer", "did:peer:eng", "2026-09-26T11:00:00Z")],
   [item("m3", "did:peer", "did:peer:eng")],
 );
-const ctx = { nodes: [local, peer], selectedNodeDid: "did:local" };
+const ctx = { nodes: [local, peer], selectedNodeDid: "did:local", homeDid: null };
 
 describe("nodes in scope", () => {
   it("sessions default to the working node whatever is selected; the mailbox to every node", () => {
@@ -70,10 +70,21 @@ describe("nodes in scope", () => {
     expect(
       nodesInScope(
         { nodes: "working", agents: [] },
-        { nodes: [peer], selectedNodeDid: "did:peer" },
+        { nodes: [peer], selectedNodeDid: "did:peer", homeDid: null },
       ),
     ).toEqual([peer]);
-    expect(workingNode([peer])).toBeNull();
+    expect(workingNode([peer], null)).toBeNull();
+  });
+  it("an enrolled node is the working node when it is the home the caller names", () => {
+    const home = node("did:home", "enrollment", []);
+    expect(workingNode([peer, home], null)).toBeNull();
+    expect(workingNode([peer, home], "did:home")).toBe(home);
+    expect(
+      nodesInScope(
+        { nodes: "working", agents: [] },
+        { nodes: [peer, home], selectedNodeDid: "did:peer", homeDid: "did:home" },
+      ),
+    ).toEqual([home]);
   });
   it("all and a chosen set span nodes in the snapshot order", () => {
     expect(nodesInScope({ nodes: "all", agents: [] }, ctx)).toEqual([local, peer]);

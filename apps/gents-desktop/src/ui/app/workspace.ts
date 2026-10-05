@@ -74,8 +74,43 @@ const browserStorage = {
   },
 };
 
-/* the single dock the app kept before docks were per session */
-browserStorage.removeItem("gents-prototype-dock");
+const isRecord = (v: unknown): v is Record<string, unknown> =>
+  typeof v === "object" && v !== null && !Array.isArray(v);
+
+/** What storage held, as a workspace: storage is outside the app's control
+    (another build, a hand edit), so a scope whose dock is not one is dropped
+    and a tab that is not an id is left out. */
+export function restoreWorkspace(persisted: unknown): WorkspaceState {
+  const saved = isRecord(persisted) ? persisted : {};
+  const docks: Record<string, DockState> = {};
+  for (const [scope, dock] of Object.entries(
+    isRecord(saved.docks) ? saved.docks : {},
+  )) {
+    if (!isRecord(dock) || !Array.isArray(dock.tabs)) continue;
+    const tabs = [
+      ...new Set(dock.tabs.filter((t): t is string => typeof t === "string")),
+    ];
+    const active =
+      typeof dock.active === "string" && tabs.includes(dock.active)
+        ? dock.active
+        : (tabs[0] ?? null);
+    docks[scope] = { open: false, tabs, active };
+  }
+  const visited = Array.isArray(saved.visited)
+    ? [...new Set(saved.visited.filter((s): s is string => typeof s === "string"))]
+    : [];
+  return { docks, visited };
+}
+
+/* `scope` becomes the most recent; past the bound the oldest are forgotten */
+function remembering(state: WorkspaceState, scope: string): WorkspaceState {
+  const docks = { ...state.docks };
+  const visited = [...state.visited.filter((s) => s !== scope), scope];
+  for (const forgotten of visited.splice(0, visited.length - REMEMBERED_SCOPES)) {
+    delete docks[forgotten];
+  }
+  return { docks, visited };
+}
 
 const store = createStore<WorkspaceState>()(
   persist((): WorkspaceState => ({ docks: {}, visited: [] }), {
@@ -89,6 +124,7 @@ const store = createStore<WorkspaceState>()(
       ),
       visited,
     }),
+    merge: (persisted, current) => ({ ...current, ...restoreWorkspace(persisted) }),
   }),
 );
 
@@ -111,12 +147,7 @@ export const workspace = {
   visit(scope: string) {
     store.setState((state) => {
       if (state.visited[state.visited.length - 1] === scope) return state;
-      const docks = { ...state.docks };
-      const visited = [...state.visited.filter((s) => s !== scope), scope];
-      for (const forgotten of visited.splice(0, visited.length - REMEMBERED_SCOPES)) {
-        delete docks[forgotten];
-      }
-      return { docks, visited };
+      return remembering(state, scope);
     });
   },
   /** a session just created from the new-session screen keeps the dock it
@@ -127,7 +158,7 @@ export const workspace = {
       if (!composed) return state;
       const docks = { ...state.docks, [`session:${sessionId}`]: composed };
       delete docks[NEW_SESSION_SCOPE];
-      return { docks };
+      return remembering({ ...state, docks }, `session:${sessionId}`);
     });
   },
   /** show a surface: added as a tab if it is not one, made the one showing */

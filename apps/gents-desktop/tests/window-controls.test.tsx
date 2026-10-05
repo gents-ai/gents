@@ -16,7 +16,6 @@ vi.mock("../src/lib/windowControls", () => controls);
 vi.mock("../src/lib/shellPlatform", () => ({
   headerIsWindowBar: () => true,
   isWindowsTauriShell: () => true,
-  trafficLightsInWebview: () => false,
 }));
 
 describe("Windows caption controls", () => {

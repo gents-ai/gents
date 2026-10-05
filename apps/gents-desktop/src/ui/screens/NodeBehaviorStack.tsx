@@ -13,6 +13,7 @@ import { behaviorName } from "./behavior";
 
 export function NodeBehaviorStack({
   nodes,
+  homeDid,
   nodeDid,
   behaviorId,
   deployment,
@@ -22,6 +23,8 @@ export function NodeBehaviorStack({
   keyboard = false,
 }: {
   nodes: readonly DeploymentView[];
+  /** the home's agent DID, which marks the working node */
+  homeDid: string | null | undefined;
   nodeDid: string | null | undefined;
   behaviorId: string | null | undefined;
   deployment: DeploymentView | null;
@@ -34,7 +37,7 @@ export function NodeBehaviorStack({
   keyboard?: boolean;
 }) {
   const found = nodes.find((n) => nodeDidOf(n) === nodeDid) ?? null;
-  const node = found && !isWorkingNode(found) ? found : null;
+  const node = found && !isWorkingNode(found, homeDid) ? found : null;
   const dim = size === "sm" ? "size-5 text-[9px]" : "size-7 text-[11px]";
   const overlap = size === "sm" ? "-ml-1.5" : "-ml-2";
   /* two marks overlap to read as one; hovering the pair spreads them on a
@@ -49,7 +52,8 @@ export function NodeBehaviorStack({
       workers
         .map((w) => nodes.find((n) => nodeDidOf(n) === w.agentDid) ?? null)
         .filter(
-          (n): n is DeploymentView => n !== null && !isWorkingNode(n) && n !== node,
+          (n): n is DeploymentView =>
+            n !== null && !isWorkingNode(n, homeDid) && n !== node,
         ),
     ),
   ];
