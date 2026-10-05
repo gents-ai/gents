@@ -16,7 +16,7 @@ import { cn } from "@gents/ui/lib/utils";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import type { Shell } from "@/hooks/useShell";
 import { useShellContext } from "@/app/ShellContext";
-import { workspace } from "@/app/workspace";
+import { dockScopeOf, useDockFor } from "@/app/workspace";
 import type { SurfaceContext } from "@/app/surfaces";
 import { useNow } from "@/lib/clock";
 import { duration } from "./tool-summary";
@@ -68,14 +68,11 @@ function Entry({
 
 /* the trace as a registered surface: the shell from context, the close
    through the workspace, so the dock and the phone sheet mount the same thing */
-export function TraceSurface(_: SurfaceContext) {
+export function TraceSurface({ sessionId }: SurfaceContext) {
   const shell = useShellContext();
+  const { closeTab: closeTraceTab } = useDockFor(dockScopeOf("session", sessionId));
   return (
-    <TracePanel
-      shell={shell}
-      onClose={() => workspace.closeTab("trace")}
-      chrome={false}
-    />
+    <TracePanel shell={shell} onClose={() => closeTraceTab("trace")} chrome={false} />
   );
 }
 

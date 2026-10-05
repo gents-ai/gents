@@ -25,6 +25,7 @@ import {
   supportsLocalManagedServer,
 } from "./lib/shellPlatform";
 import { AppShell } from "./ui/app/AppShell";
+import { dockScope, workspace } from "./ui/app/workspace";
 import { WindowControls } from "./ui/app/WindowControls";
 import { BehaviorColorsContext } from "./ui/screens/behavior-colors";
 import { AgentScreen } from "./ui/screens/agent/AgentScreen";
@@ -95,6 +96,10 @@ function AppHost({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
   }, []);
   const bridge = explicitBridge ?? defaultBridge;
   const route = useRoute();
+  /* the dock of each screen is found from its route while rendering; this
+     only records the visit, which bounds how many docks are remembered */
+  const scope = dockScope(route);
+  useEffect(() => workspace.visit(scope), [scope]);
   const history = useHistory();
   useHistoryInputs(history);
   useSwipeNav(history);

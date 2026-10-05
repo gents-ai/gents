@@ -10,6 +10,7 @@ import {
 } from "@source-inc/gents-desktop-client";
 import { projectChatShell } from "@source-inc/gents-desktop-chat";
 import { useDesktopChatProjectionState } from "../src/hooks/useDesktopChatProjectionState";
+import { MemoryNavProvider } from "@gents/shell";
 
 const navigate = vi.hoisted(() => vi.fn());
 const markdownRender = vi.hoisted(() => vi.fn());
@@ -126,7 +127,13 @@ function OwnedSessionScreen({ shell }: { shell: Shell }) {
     session: null,
     syncHealth: null,
   });
-  return <SessionScreen shell={{ ...shell, draft, setDraft }} />;
+  return (
+    <MemoryNavProvider
+      initial={{ name: "session", sessionId: shell.selectedSessionId }}
+    >
+      <SessionScreen shell={{ ...shell, draft, setDraft }} />
+    </MemoryNavProvider>
+  );
 }
 
 describe("SessionScreen canonical composer admission", () => {

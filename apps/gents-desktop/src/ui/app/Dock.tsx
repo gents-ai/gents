@@ -11,7 +11,7 @@ import { PanelMenu } from "./PanelMenu";
 import { cn } from "@gents/ui/lib/utils";
 import { dockView } from "./dock-scope";
 import type { Placement } from "./surfaces";
-import { useWorkspace, workspace } from "./workspace";
+import { dockScopeOf, useDockFor } from "./workspace";
 
 export function Dock({
   sessionId,
@@ -22,7 +22,7 @@ export function Dock({
   routeName: string;
   placement?: Placement;
 }) {
-  const { dock } = useWorkspace();
+  const { dock, closeDock } = useDockFor(dockScopeOf(routeName, sessionId));
   const view = dockView(dock, routeName, placement);
   /* the card keeps showing its last surface while the divider settles shut
      after the store has closed the dock; the shell unmounts it at 0 */
@@ -52,7 +52,7 @@ export function Dock({
             variant="ghost"
             size="icon-sm"
             aria-label="Close panel"
-            onClick={() => workspace.closeDock()}
+            onClick={() => closeDock()}
           >
             <X />
           </Button>
@@ -91,6 +91,9 @@ export function DockTabs({
   paneTab?: { onShow: () => void; progress: number } | null;
 }) {
   const shell = useShellContext();
+  const { dock, activate, moveTab, closeTab, closeDock } = useDockFor(
+    dockScopeOf(routeName, sessionId),
+  );
   const paneTitle =
     shell.deployments.flatMap((n) => n.sessions).find((x) => x.sessionId === sessionId)
       ?.title ?? "Session";
@@ -124,7 +127,7 @@ export function DockTabs({
     const step = lefts.length > 1 ? lefts[1]! - lefts[0]! : 0;
     press.current = { id, startX: e.clientX, lefts, step };
     e.currentTarget.setPointerCapture(e.pointerId);
-    workspace.activate(id);
+    activate(id);
   };
   const onMove = (e: React.PointerEvent<HTMLElement>) => {
     const p = press.current;
@@ -142,7 +145,7 @@ export function DockTabs({
   };
   const onRelease = () => {
     delete document.documentElement.dataset.dragging;
-    if (drag && drag.to !== drag.from) workspace.moveTab(drag.id, drag.to);
+    if (drag && drag.to !== drag.from) moveTab(drag.id, drag.to);
     press.current = null;
     setDrag(null);
   };
@@ -153,7 +156,6 @@ export function DockTabs({
     if (drag.to <= index && index < drag.from) return step;
     return 0;
   };
-  const { dock } = useWorkspace();
   const view = dockView(dock, routeName, "dock");
   /* the session tab's natural width, so it can grow into place from nothing
      and the tabs beside it slide over rather than jump */
@@ -235,7 +237,7 @@ export function DockTabs({
                 type="button"
                 role="tab"
                 aria-selected={active}
-                onClick={() => workspace.activate(s.id)}
+                onClick={() => activate(s.id)}
                 className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5"
               >
                 <s.icon className="size-4 shrink-0" />
@@ -258,7 +260,7 @@ export function DockTabs({
                 /* the tab captures the pointer for dragging, which would
                      redirect this button's click to the tab */
                 onPointerDown={(e) => e.stopPropagation()}
-                onClick={() => workspace.closeTab(s.id)}
+                onClick={() => closeTab(s.id)}
                 className={cn(
                   "ml-1 grid size-5 shrink-0 cursor-pointer place-items-center rounded-md hover:bg-background",
                   !active &&
@@ -278,7 +280,7 @@ export function DockTabs({
           size="icon-sm"
           aria-label="Hide panel"
           className="shrink-0"
-          onClick={() => workspace.closeDock()}
+          onClick={() => closeDock()}
         >
           <Columns2 />
         </Button>

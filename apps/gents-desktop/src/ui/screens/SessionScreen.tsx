@@ -130,6 +130,7 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "@gents/ui/components/popover";
 import { ReplyingTo } from "./ReplyingTo";
 import { useExclusivePopover } from "@/hooks/useExclusivePopover";
+import { workspace } from "@/app/workspace";
 
 function formatTokens(value: number) {
   if (value < 1_000) return String(value);
@@ -1436,6 +1437,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
     if (result) setDraft((current) => (current === text ? "" : current));
     if (!shell.acceptsComposeIntent(intentGeneration)) return;
     if (result && result.sessionId !== shell.selectedSessionId) {
+      if (!shell.selectedSessionId) workspace.adoptNewSessionDock(result.sessionId);
       navigate({ name: "session", sessionId: result.sessionId });
     }
   };
