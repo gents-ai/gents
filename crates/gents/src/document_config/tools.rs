@@ -25,7 +25,7 @@ use crate::toolset::{CommandExecutionMode, CommandNetworkMode};
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct Tools {
     pub tools_id: String,
-    pub agent_did: String,
+    pub node_did: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub display_name: Option<String>,
@@ -37,7 +37,7 @@ pub struct Tools {
     pub remote: Option<RemoteTools>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
-    pub subagents: Option<SubagentTools>,
+    pub agents: Option<AgentTools>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub built_ins: Option<BuiltInTools>,
@@ -296,7 +296,7 @@ pub struct RemoteServiceTools {
     #[serde(skip_serializing_if = "is_default")]
     #[cfg_attr(feature = "typescript", ts(as = "Option<RemoteToolStyle>", optional = nullable))]
     pub style: RemoteToolStyle,
-    /// Required services must be available before the behavior admits new work.
+    /// Required services must be available before agent admission of new work.
     /// Optional service outages do not block admission; calls still require the
     /// selected service and tool to be available. Malformed refs remain errors.
     #[serde(
@@ -355,19 +355,19 @@ pub struct RemoteServiceTools {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-pub struct SubagentTools {
+pub struct AgentTools {
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_string_vec_or_null"
     )]
-    /// References to same-owner SubagentTarget documents. Empty selects no targets.
+    /// References to same-owner AgentTarget documents. Empty selects no targets.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
     pub target_ids: Vec<String>,
     /// Exposes agent_new/agent_message over the allowlisted targets. Every
     /// started session is a background tool row; there is no foreground wait,
     /// workspace inheritance, cascade or cross-principal switch. A target on
-    /// another principal is admitted there as a Peer request under its ACP.
+    /// another node is admitted there as a Peer request under its ACP.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub enabled: Option<bool>,
@@ -541,7 +541,7 @@ pub struct SelfConfigTools {
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub enable_self_config: Option<bool>,
     /// Self-config category allowlist; unset means the core spine
-    /// (behavior, tools, profile). See `config_client::patch`.
+    /// (agent, tools, profile). See `config_client::patch`.
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_optional_string_vec"
@@ -561,7 +561,7 @@ pub struct SelfConfigTools {
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub self_config_preview: Option<bool>,
     /// Opt-in authority to install and activate graph packs from the home store or
-    /// registry for this principal. Disabled by absence and never implied by
+    /// registry for this node. Disabled by absence and never implied by
     /// general self-config.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
