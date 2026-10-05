@@ -10,6 +10,7 @@ import {
 } from "@source-inc/gents-desktop-client";
 import { projectChatShell } from "@source-inc/gents-desktop-chat";
 import { useDesktopChatProjectionState } from "../src/hooks/useDesktopChatProjectionState";
+import { MemoryNavProvider } from "@gents/shell";
 
 const navigate = vi.hoisted(() => vi.fn());
 const markdownRender = vi.hoisted(() => vi.fn());
@@ -47,6 +48,7 @@ function newSessionShell(
     selectedSessionId: null,
     selectedBehaviorId: "behavior",
     selectedAgentDid: "did:key:agent",
+    deployments: [],
     selectedDeployment: {
       agentDid: "did:key:agent",
       agentPrincipal: { displayName: "Agent" },
@@ -119,12 +121,19 @@ function OwnedSessionScreen({ shell }: { shell: Shell }) {
     selectedBehaviorId: shell.selectedBehaviorId,
     selectedSessionId: shell.selectedSessionId,
     selectedSessionSummary: null,
+    deployments: [],
     selectedDeployment: null,
     sending: false,
     session: null,
     syncHealth: null,
   });
-  return <SessionScreen shell={{ ...shell, draft, setDraft }} />;
+  return (
+    <MemoryNavProvider
+      initial={{ name: "session", sessionId: shell.selectedSessionId }}
+    >
+      <SessionScreen shell={{ ...shell, draft, setDraft }} />
+    </MemoryNavProvider>
+  );
 }
 
 describe("SessionScreen canonical composer admission", () => {
@@ -356,5 +365,38 @@ describe("SessionScreen canonical composer admission", () => {
 
     rerender(<OwnedSessionScreen shell={existingSessionShell({ kind: "ready" })} />);
     expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
+  });
+});
+
+describe("SessionScreen goal label", () => {
+  const goal = (status: string, wrapupCompleted: boolean) => ({
+    goalId: "g",
+    status,
+    objective: "Unfinished work",
+    wrapupRequested: true,
+    wrapupCompleted,
+    tokensUsed: 1000,
+    tokenBudget: 1000,
+    consecutiveBlockedAudits: 0,
+    activeTimeSeconds: 12,
+    continuationSequence: 1,
+    lastBlockedReason: null,
+    lastFailure: null,
+    completionEvidence: null,
+  });
+
+  it("does not report a wrapped-up budget-limited goal as met", () => {
+    const shell = existingSessionShell({ kind: "ready" });
+    shell.selectedSession!.goal = goal("budget_limited", true);
+    render(<OwnedSessionScreen shell={shell} />);
+    expect(screen.queryByText("Goal met")).not.toBeInTheDocument();
+    expect(screen.getByText("Goal · budget reached")).toBeInTheDocument();
+  });
+
+  it("reports a complete goal as met", () => {
+    const shell = existingSessionShell({ kind: "ready" });
+    shell.selectedSession!.goal = goal("complete", true);
+    render(<OwnedSessionScreen shell={shell} />);
+    expect(screen.getByText("Goal met")).toBeInTheDocument();
   });
 });

@@ -64,7 +64,8 @@
     "@source-inc/gents-desktop-chat": "0.20.0",
     "@source-inc/gents-desktop-fleet": "0.20.0",
     "@source-inc/gents-desktop-tokens": "0.20.0",
-    "@source-inc/gents-desktop-ui": "0.20.0"
+    "@source-inc/gents-desktop-ui": "0.20.0",
+    "zustand": "^5.0.15"
   },
   "devDependencies": {
     "@source-inc/gents-desktop-operations": "0.20.0",

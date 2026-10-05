@@ -106,6 +106,7 @@ vi.mock("../src/ui/screens/Markdown", () => ({
 vi.mock("../src/ui/screens/BehaviorPicker", () => ({ BehaviorPicker: () => null }));
 vi.mock("../src/ui/screens/TracePanel", () => ({
   TracePanel: () => <p>Trace</p>,
+  TraceSurface: () => <p>Trace</p>,
 }));
 vi.stubGlobal(
   "IntersectionObserver",
@@ -117,7 +118,10 @@ vi.stubGlobal(
 
 import { SyncHealth } from "../src/ui/app/SyncHealth";
 import type { Shell } from "../src/ui/hooks/useShell";
+import { AppShell } from "../src/ui/app/AppShell";
+import { TooltipProvider } from "@gents/ui/components/tooltip";
 import { SessionScreen } from "../src/ui/screens/SessionScreen";
+import { MemoryNavProvider } from "@gents/shell";
 
 const healthy: SyncHealthView = {
   state: "healthy",
@@ -161,6 +165,7 @@ function sessionShell(forkSession = vi.fn().mockResolvedValue("fork-1")): Shell 
     },
     selectedBehaviorId: "behavior",
     selectedAgentDid: "did:key:agent",
+    deployments: [],
     selectedDeployment: null,
     draft: "",
     setDraft: vi.fn(),
@@ -188,12 +193,24 @@ function sessionShell(forkSession = vi.fn().mockResolvedValue("fork-1")): Shell 
   } as unknown as Shell;
 }
 
+/* the shell around the screen: the side panel is the shell's dock sheet */
 function Harness({ shell }: { shell: Shell }) {
   return (
-    <>
-      <SyncHealth syncHealth={healthy} />
-      <SessionScreen shell={shell} />
-    </>
+    <MemoryNavProvider initial={{ name: "session", sessionId: "session-1" }}>
+      <TooltipProvider>
+        <AppShell
+          route={{ name: "session", sessionId: "session-1" }}
+          agentName={null}
+          agentDid={null}
+          deployment={null}
+          online
+          mailboxCount={0}
+          syncHealth={healthy}
+        >
+          <SessionScreen shell={shell} />
+        </AppShell>
+      </TooltipProvider>
+    </MemoryNavProvider>
   );
 }
 
@@ -221,9 +238,10 @@ describe("shell dialogs take turns (#1778)", () => {
     ).toBeVisible();
     expect(dialogs()).toHaveLength(1);
 
-    // The header's side panel button: in a narrow window it opens a sheet.
-    const [sidePanel] = screen.getAllByRole("button", { name: "Open side panel" });
-    await user.click(sidePanel!);
+    // The pane's More menu offers the trace surface: in a narrow window it opens a sheet.
+    const [more] = screen.getAllByRole("button", { name: "More" });
+    await user.click(more!);
+    await user.click(await screen.findByRole("menuitem", { name: "Trace" }));
     // The context popover is still leaving; the sheet waits for it.
     expect(dialogs()).toHaveLength(1);
     expect(
@@ -249,8 +267,9 @@ describe("shell dialogs take turns (#1778)", () => {
       await screen.findByRole("dialog", { name: "Session context details" }),
     ).toBeVisible();
 
-    const [fork] = screen.getAllByRole("button", { name: "Fork session" });
-    await user.click(fork!);
+    const [more] = screen.getAllByRole("button", { name: "More" });
+    await user.click(more!);
+    await user.click(await screen.findByRole("menuitem", { name: "Fork session" }));
     expect(dialogs()).toHaveLength(1);
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
 

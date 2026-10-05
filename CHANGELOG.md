@@ -6,6 +6,41 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- Desktop shell (macOS): a two-finger swipe goes back or forward. AppKit
+  recognises the gesture, an arrow handle travels in from the pane's edge
+  and fills as it nears the commit distance, and content that can still
+  scroll sideways keeps the swipe until it reaches its edge.
+- Desktop shell: Back and Forward in the window bar replace the session
+  screen's back link, with a real forward cursor. Cmd+[ / Cmd+] on macOS,
+  Alt+Left / Alt+Right on Windows and Linux, and mouse side buttons on all
+  three.
+- Desktop shell: a window bar across the top carries each screen's title,
+  marks and actions; the side panel becomes a dock of tabbed surfaces
+  (trace, workers) beside the pane, resized by a divider that
+  settles with a spring and collapses to a tab; in a half-screen window the
+  dock is a sheet, and on a phone a bottom sheet. The rail keeps its mark
+  and settings at the foot.
+
+- Desktop lists span nodes: the sessions list and the mailbox cover every
+  node the client can see, with a node axis to narrow them, and each row
+  wears the node and behavior it belongs to; the navigation panel shows the
+  working node and recent sessions; the mailbox is grouped by urgency,
+  searchable, and dismissable in bulk with a selection bar; a failed action
+  is reported once where it happened, and the banner keeps only the
+  client's own state.
+
+- Desktop transcript: consecutive tool calls form one activity group that
+  is placed once and only grows at its end; live text is revealed at a
+  steady pace and held until its message arrives; a step opens only from
+  its caret, shows its outcome on the row, and an edit its +/− tally;
+  withheld reasoning is one line, not `[encrypted reasoning]`; a session
+  shows one loading line until it is here; an armed mailbox reply is
+  visible above the composer and can be put down.
+
+- Desktop: opening a session from a mailbox item keeps the reply it armed;
+  the route no longer re-selects a session the shell already holds. The
+  design kit is pinned to gents-design `c211d60`.
+
 - Plugins can declare bounded resource limits and read a directory explicitly
   bound for one call. Increased installed resource limits require
   `--grant-authority`; unchanged or reduced approved limits survive reinstall.

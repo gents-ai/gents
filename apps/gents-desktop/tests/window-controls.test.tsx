@@ -68,8 +68,9 @@ describe("Windows caption controls", () => {
     const header = container.querySelector("header");
     expect(header).toHaveAttribute("data-tauri-drag-region");
     expect(header?.querySelector("a[aria-label='Agents']")).toBeInTheDocument();
+    /* the sync chip sits at the nav's foot, not in the bar */
     expect(
-      header?.querySelector("button[aria-label$='Show sync diagnostics.']"),
+      screen.getAllByRole("button", { name: /Show sync diagnostics/ })[0],
     ).toBeInTheDocument();
     expect(screen.getByTestId("window-controls")).toBeInTheDocument();
   });

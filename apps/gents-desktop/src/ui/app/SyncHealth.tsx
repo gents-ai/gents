@@ -13,8 +13,14 @@ import { useExclusivePopover } from "@/hooks/useExclusivePopover";
 
 export function SyncHealth({
   syncHealth,
+  compact = false,
+  row = false,
 }: {
   syncHealth: SyncHealthView | null | undefined;
+  /** the dot alone, for the rail; the label is still its name and in the details */
+  compact?: boolean;
+  /* as a full-width row of the nav panel */
+  row?: boolean;
 }) {
   const popover = useExclusivePopover();
   const status = projectSyncOperationalStatus(syncHealth);
@@ -45,21 +51,38 @@ export function SyncHealth({
       <PopoverTrigger
         aria-label={`${status.shortLabel}. Show sync diagnostics.`}
         title={status.detail}
-        className="flex h-7 items-center gap-2 rounded-full px-2 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-      >
-        {status.kind === "syncing" || status.kind === "working" ? (
-          <Spinner className="text-foreground" />
-        ) : (
-          <span className={cn("size-2 rounded-full", dot)} aria-hidden="true" />
+        className={cn(
+          "flex shrink-0 cursor-pointer items-center gap-2 whitespace-nowrap text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
+          row
+            ? /* a row of the nav panel: the dot in the icon slot, the label beside it */
+              "h-8 w-full rounded-lg pr-2 text-sm"
+            : "h-7 rounded-full text-xs",
+          !row && (compact ? "w-7 justify-center" : "px-2"),
         )}
-        {status.shortLabel}
+      >
+        <span className={cn("grid shrink-0 place-items-center", row && "size-[30px]")}>
+          {status.kind === "syncing" || status.kind === "working" ? (
+            <Spinner className="text-foreground" />
+          ) : (
+            <span
+              className={cn("size-2 shrink-0 rounded-full", dot)}
+              aria-hidden="true"
+            />
+          )}
+        </span>
+        {/* on phones the dot is the chip; the status is still its label and
+            in the details it opens */}
+        {!compact && (
+          <span className={cn(!row && "max-sm:hidden")}>{status.shortLabel}</span>
+        )}
       </PopoverTrigger>
       <PopoverContent
         ref={popover.popupRef}
         role={popover.open ? "dialog" : "presentation"}
         aria-label={popover.open ? "Database sync details" : undefined}
         aria-hidden={popover.open ? undefined : true}
-        align="end"
+        align={compact ? "start" : "end"}
+        side={compact ? "right" : "bottom"}
         className="w-96"
       >
         <p className="font-heading text-sm font-medium text-heading">Database sync</p>

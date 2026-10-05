@@ -92,7 +92,7 @@ const panel = (
     holdsCount={0}
     inFlight={inFlight}
     stopping={stopping}
-    ownerRef={{ current: null }}
+    scroller={null}
     session={snapshot}
     workers={NO_WORKERS}
     parentWork={NO_PARENT}
@@ -161,6 +161,21 @@ describe("long command output", () => {
   });
 
   it("keeps a running command's live output at its newest line until the reader scrolls up", () => {
+    /* jsdom has no ResizeObserver: this one reports the output growing */
+    const observers = new Set<() => void>();
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(private readonly callback: () => void) {}
+        observe() {
+          observers.add(this.callback);
+        }
+        disconnect() {
+          observers.delete(this.callback);
+        }
+      },
+    );
+    const grow = () => act(() => observers.forEach((notify) => notify()));
     const running = (tail: string) => ({
       ...tool(command({}), "running"),
       partialOutputTail: tail,
@@ -176,6 +191,7 @@ describe("long command output", () => {
     });
 
     rerender(<ToolBody tool={running("a\nb")} />);
+    grow();
     expect(viewport.scrollTop).toBe(500);
 
     act(() => {
@@ -184,7 +200,9 @@ describe("long command output", () => {
     });
     scrollHeight = 900;
     rerender(<ToolBody tool={running("a\nb\nc")} />);
+    grow();
     expect(viewport.scrollTop).toBe(0);
+    vi.unstubAllGlobals();
   });
 });
 

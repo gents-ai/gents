@@ -25,6 +25,7 @@ import {
   supportsLocalManagedServer,
 } from "./lib/shellPlatform";
 import { AppShell } from "./ui/app/AppShell";
+import { dockScope, workspace } from "./ui/app/workspace";
 import { WindowControls } from "./ui/app/WindowControls";
 import { BehaviorColorsContext } from "./ui/screens/behavior-colors";
 import { AgentScreen } from "./ui/screens/agent/AgentScreen";
@@ -36,8 +37,25 @@ import { PluginAccessPrompt } from "./ui/screens/PluginAccessPrompt";
 import { Shortcuts } from "./ui/screens/Shortcuts";
 import { SetupScreen } from "./ui/screens/setup/SetupScreen";
 import { useShell, type ShellBridge } from "./ui/hooks/useShell";
+import { ShellProvider } from "./ui/app/ShellContext";
+import { workingNode } from "./ui/lib/nodes";
+import {
+  defaultScope,
+  mailboxInScope,
+  recentInScope,
+  scopeContextOf,
+} from "./ui/lib/scope";
+import "./ui/screens/surfaces";
 import { isLocalAgent, needsFirstRunSetup } from "./ui/lib/firstRun";
-import { bindNav, interceptNavClicks, navigate, useRoute } from "./ui/lib/router";
+import {
+  bindNav,
+  interceptNavClicks,
+  navigate,
+  useHistory,
+  useRoute,
+} from "./ui/lib/router";
+import { useHistoryInputs } from "./ui/lib/history-inputs";
+import { useSwipeNav } from "./ui/lib/swipe-nav";
 import { initTheme } from "./ui/theme";
 
 import "./App.css";
@@ -78,11 +96,28 @@ function AppHost({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
   }, []);
   const bridge = explicitBridge ?? defaultBridge;
   const route = useRoute();
+  /* the dock of each screen is found from its route while rendering; this
+     only records the visit, which bounds how many docks are remembered */
+  const scope = dockScope(route);
+  useEffect(() => workspace.visit(scope), [scope]);
+  const history = useHistory();
+  useHistoryInputs(history);
+  useSwipeNav(history);
   const shell = useShell(
     bridge,
     route.name === "session" ? route.sessionId : undefined,
   );
-
+  const working = workingNode(
+    shell.deployments,
+    shell.snapshot?.bootstrap.initAgentDid,
+  );
+  /* a failed action is over by the time it is reported: one toast where the
+     person is, then forgotten. The banner is for the client's own state. */
+  useEffect(() => {
+    if (!shell.actionError) return;
+    toast(shell.actionError);
+    shell.clearActionError();
+  }, [shell.actionError, shell.clearActionError]);
   useEffect(() => {
     initTheme();
     applyShellPlatform();
@@ -218,39 +253,50 @@ function AppHost({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
     <>
       <TooltipProvider>
         <BehaviorColorsContext.Provider value={shell.behaviorColors}>
-          <AppShell
-            route={route}
-            agentName={agent}
-            agentDid={shell.selectedAgentDid}
-            deployment={shell.selectedDeployment}
-            root={shell.snapshot?.bootstrap.initToolRoot}
-            ceiling={shell.snapshot?.bootstrap.initToolCeiling}
-            online={Boolean(shell.snapshot?.client)}
-            mailboxCount={
-              shell.selectedDeployment?.mailboxItems.filter((m) => m.status === "open")
-                .length ?? 0
-            }
-            holds={
-              new Set(shell.holds.flatMap((h) => (h.sessionId ? [h.sessionId] : [])))
-            }
-            syncHealth={shell.snapshot?.client?.syncHealth}
-            error={shell.error}
-            onDismissError={shell.clearError}
-            onOpenDbExplorer={openDbExplorer}
-          >
-            {route.name === "sessions" && <SessionsScreen shell={shell} />}
-            {route.name === "session" && <SessionScreen shell={shell} />}
-            {route.name === "mailbox" && <MailboxScreen shell={shell} />}
-            {route.name === "agents" && <AgentsScreen shell={shell} />}
-            {route.name === "agent" && (
-              <AgentScreen
-                shell={shell}
-                agentDid={route.agentDid}
-                section={route.section}
-                item={route.item}
-              />
-            )}
-          </AppShell>
+          <ShellProvider value={shell}>
+            <AppShell
+              route={route}
+              history={history}
+              agentName={agent}
+              agentDid={shell.selectedAgentDid}
+              deployment={shell.selectedDeployment}
+              root={shell.snapshot?.bootstrap.initToolRoot}
+              ceiling={shell.snapshot?.bootstrap.initToolCeiling}
+              online={Boolean(shell.snapshot?.client)}
+              mailboxCount={
+                mailboxInScope(defaultScope("mailbox"), scopeContextOf(shell)).length
+              }
+              recent={recentInScope(defaultScope("recents"), scopeContextOf(shell), 8)}
+              working={working}
+              nodeCount={shell.deployments.length}
+              holds={
+                new Set(shell.holds.flatMap((h) => (h.sessionId ? [h.sessionId] : [])))
+              }
+              syncHealth={shell.snapshot?.client?.syncHealth}
+              error={shell.error}
+              onDismissError={shell.clearError}
+              onOpenDbExplorer={openDbExplorer}
+            >
+              {route.name === "sessions" && (
+                <SessionsScreen shell={shell} nodeDid={route.nodeDid} />
+              )}
+              {route.name === "session" && <SessionScreen shell={shell} />}
+              {route.name === "mailbox" && (
+                <MailboxScreen shell={shell} nodeDid={route.nodeDid} />
+              )}
+              {(route.name === "agents" || route.name === "nodes") && (
+                <AgentsScreen shell={shell} />
+              )}
+              {route.name === "agent" && (
+                <AgentScreen
+                  shell={shell}
+                  agentDid={route.agentDid}
+                  section={route.section}
+                  item={route.item}
+                />
+              )}
+            </AppShell>
+          </ShellProvider>
           <Toaster />
           {shell.deployments.some((deployment) =>
             isLocalAgent(deployment, shell.snapshot?.bootstrap.initAgentDid),

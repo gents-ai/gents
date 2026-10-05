@@ -42,6 +42,11 @@ export function useDesktopShell({
   const [runningTask, setRunningTask] = useState(false);
   const runningTaskCountRef = useRef(0);
   const [error, setError] = useState<string | null>(null);
+  // A failed action is reported where
+  // it happened and is over; only the client's own state belongs in the
+  // banner. Action hooks get this setter; background projection and
+  // lifecycle errors keep setError.
+  const [actionError, setActionError] = useState<string | null>(null);
   const {
     session,
     sessionLoad,
@@ -112,7 +117,7 @@ export function useDesktopShell({
     selectedAgentDid,
     selectedBehaviorId,
     selectedSessionId,
-    setError,
+    setError: setActionError,
     setSelectedAgentDid,
     setSelectedBehaviorId,
     setSelectedSessionId,
@@ -224,7 +229,7 @@ export function useDesktopShell({
     snapshot,
     ensureDesktopClientStarted,
     setAddingPeer,
-    setError,
+    setError: setActionError,
     selectedAgentDidRef,
     selectAgent,
     setStarting,
@@ -263,7 +268,7 @@ export function useDesktopShell({
   } = createDesktopShellConfigActions({
     api,
     mutateSnapshot,
-    setError,
+    setError: setActionError,
     setSavingBehaviorConfig,
     setSavingConfig,
   });
@@ -319,13 +324,16 @@ export function useDesktopShell({
     captureComposeIntent,
     refreshSnapshot,
     runningTaskCountRef,
-    setError,
+    setError: setActionError,
     setRunningTask,
     setSavingConfig,
   });
 
   function onDismissError() {
     setError(null);
+  }
+  function onDismissActionError() {
+    setActionError(null);
   }
 
   return {
@@ -345,6 +353,8 @@ export function useDesktopShell({
     runningTask,
     error,
     onDismissError,
+    actionError,
+    onDismissActionError,
     onRetryStartup,
     incompatibleHome,
     managedServerWait,

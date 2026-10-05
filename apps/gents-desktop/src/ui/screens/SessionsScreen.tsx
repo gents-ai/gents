@@ -1,6 +1,6 @@
 /* Sessions: a heading row with search and New, then plain rows on the
    ground: title, the behavior's chip, and when it last moved. */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ChevronDown,
   CornerDownRight,
@@ -17,9 +17,24 @@ import { cn } from "@gents/ui/lib/utils";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import type { Shell } from "@/hooks/useShell";
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
-import { href } from "@/lib/router";
-import { BehaviorChip } from "./parts";
+import { href, navigate } from "@/lib/router";
 import { when } from "./time";
+import {
+  defaultScope,
+  nodesInScope,
+  scopeContextOf,
+  sessionsInScope,
+  type Scope,
+} from "@/lib/scope";
+import {
+  nodeDidOf,
+  nodeOfSession,
+  parentOfSession,
+  workersBySession,
+} from "@/lib/nodes";
+import { useStoredStrings } from "@/lib/stored";
+import { NodeBehaviorStack } from "./NodeBehaviorStack";
+import { NodeAxis } from "./NodeAxis";
 import { SessionStatus } from "./SessionStatus";
 import { isLive } from "@/lib/live";
 import {
@@ -29,7 +44,14 @@ import {
   useSessionFilter,
 } from "./SessionFilters";
 
-export function SessionsScreen({ shell }: { shell: Shell }) {
+export function SessionsScreen({
+  shell,
+  nodeDid,
+}: {
+  shell: Shell;
+  /** a node named on the route: the list opens narrowed to it */
+  nodeDid?: string;
+}) {
   const deployment = shell.selectedDeployment;
   const held = new Set(shell.holds.flatMap((h) => (h.sessionId ? [h.sessionId] : [])));
   const [query, setQuery] = useState<string | null>(null);
@@ -37,18 +59,29 @@ export function SessionsScreen({ shell }: { shell: Shell }) {
   const [filter, setFilter] = useSessionFilter();
   /* which parents are showing their workers; a person who opened one meant it */
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
-  const conversations = filterSessions(deployment?.sessions ?? [], filter, held, query);
-  const parentOf = (c: SessionSummary) => {
-    const parent = c.startedBy;
-    return parent
-      ? (deployment?.sessions.find(
-          (s) =>
-            s.sessionId === parent.sessionId &&
-            s.agentDid === parent.agentDid &&
-            s.requesterDid === parent.requesterDid,
-        ) ?? null)
-      : null;
-  };
+  /* the nodes the list shows: the working node to start, then whatever the
+     chips choose; none chosen means every node */
+  const ctx = scopeContextOf(shell);
+  const defaultNodeIds = nodesInScope(defaultScope("sessions"), ctx).map(nodeDidOf);
+  const [nodeIds, setNodeIds] = useStoredStrings(
+    "gents-prototype-sessions-nodes",
+    defaultNodeIds,
+  );
+  useEffect(() => {
+    if (nodeDid) setNodeIds([nodeDid]);
+  }, [nodeDid, setNodeIds]);
+  /* the working node is where the list starts, not a filter to clear */
+  const nodesPicked =
+    nodeIds.length !== defaultNodeIds.length ||
+    nodeIds.some((id) => !defaultNodeIds.includes(id));
+  const scope: Scope = { nodes: nodeIds.length ? nodeIds : "all", agents: [] };
+  const inScope = sessionsInScope(scope, ctx);
+  const nodeCounts = Object.fromEntries(
+    shell.deployments.map((n) => [nodeDidOf(n), n.sessions.length]),
+  );
+  const conversations = filterSessions(inScope, filter, held, query);
+  /* the session whose latest request spawned this one, by provenance */
+  const parentOf = (c: SessionSummary) => parentOfSession(c, shell.deployments);
 
   /* Work a session handed out sits under the session that handed it out.
      A parent with four workers is one piece of work in five sessions, and
@@ -99,6 +132,10 @@ export function SessionsScreen({ shell }: { shell: Shell }) {
      Nothing is lost by it. The parent says what its workers are doing and
      how many need someone, so the reason to look is on the screen; the
      looking is a click. */
+  /* every worker on any node by the session that handed it out, whether
+     or not the list is showing it: the parent's marks say the whole piece
+     of work, and a worker on another node is still its work */
+  const workersOf = workersBySession(shell.deployments);
   const nested = (() => {
     const shown = new Set(conversations.map((c) => c.sessionId));
     const children = new Map<string, SessionSummary[]>();
@@ -144,12 +181,27 @@ export function SessionsScreen({ shell }: { shell: Shell }) {
         <div className="flex h-10 items-center gap-2">
           <h1 className="font-heading text-lg font-medium text-heading">Sessions</h1>
           <div className="ml-auto flex min-w-0 items-center gap-2">
+            <NodeAxis
+              nodes={shell.deployments}
+              homeDid={shell.snapshot?.bootstrap.initAgentDid}
+              counts={nodeCounts}
+              value={nodeIds}
+              onChange={(next) => {
+                setNodeIds(next);
+                /* a pick is the person's, so the route stops naming a node */
+                if (nodeDid) navigate({ name: "sessions" });
+              }}
+            />
             <SessionFilters
-              sessions={deployment?.sessions ?? []}
+              sessions={inScope}
               deployment={deployment}
               held={held}
               value={filter}
               onChange={setFilter}
+              nodes={{
+                picked: nodesPicked,
+                clear: () => setNodeIds(defaultNodeIds),
+              }}
             />
             <Button
               variant="ghost"
@@ -168,7 +220,9 @@ export function SessionsScreen({ shell }: { shell: Shell }) {
               nativeButton={false}
               render={<a href={href({ name: "session", sessionId: null })} />}
             >
-              New
+              {/* a phone row has no width for the word beside six marks */}
+              <Plus className="sm:hidden" />
+              <span className="max-sm:sr-only">New</span>
             </Button>
           </div>
         </div>
@@ -242,7 +296,10 @@ export function SessionsScreen({ shell }: { shell: Shell }) {
                 }
               >
                 <a
-                  href={href({ name: "session", sessionId: row.session.sessionId })}
+                  href={href({
+                    name: "session",
+                    sessionId: row.session.sessionId,
+                  })}
                   data-testid={`session-${row.session.sessionId}`}
                   className={cn(
                     "-mx-3 grid grid-cols-[auto_1fr_auto_auto] items-center gap-4 rounded-lg px-3 hover:bg-accent",
@@ -307,18 +364,23 @@ export function SessionsScreen({ shell }: { shell: Shell }) {
                       {row.session.title ?? "Untitled"}
                     </span>
                   </p>
-                  <BehaviorChip
+                  <NodeBehaviorStack
+                    nodes={shell.deployments}
+                    homeDid={shell.snapshot?.bootstrap.initAgentDid}
+                    nodeDid={nodeOfSession(row.session)}
                     behaviorId={row.session.behaviorId}
                     deployment={deployment}
-                    showName={false}
                     description={
                       shell.behaviorDescriptions[row.session.behaviorId ?? ""]
                     }
-                    className={row.child ? "size-5 text-[9px]" : undefined}
+                    size={row.child ? "sm" : "md"}
+                    workers={
+                      row.child ? [] : (workersOf.get(row.session.sessionId) ?? [])
+                    }
                   />
                   <span
                     className={cn(
-                      "w-20 text-right text-muted-foreground",
+                      "w-10 text-right text-muted-foreground sm:w-20",
                       row.child ? "text-xs" : "text-sm",
                     )}
                   >

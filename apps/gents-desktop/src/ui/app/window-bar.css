@@ -1,0 +1,19 @@
+/* The window bar's own rules: the inset of its first region, and the
+   page while a divider or a tab is dragged. The setup strip and the
+   Windows caption rules stay in App.css; macOS keeps a native title bar
+   above the webview, so nothing here is for it. */
+
+/* the first region after the rail's */
+.app-bar-first {
+  padding-left: 0.75rem;
+}
+
+/* while a divider or a tab is dragged nothing on the page selects, and the
+   pointer keeps the drag's cursor wherever it passes */
+:root[data-dragging] * {
+  -webkit-user-select: none;
+  user-select: none;
+}
+:root[data-dragging="divider"] * {
+  cursor: col-resize !important;
+}
