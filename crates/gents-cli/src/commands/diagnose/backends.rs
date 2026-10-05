@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use gents::config_client::ConfigAccess;
-use gents::document_config::{BackendAuth, InferenceBackend, InferenceBackendObservation};
+use gents::document_config::{BackendAuth, InferenceBackend};
 use serde_json::{json, Value};
 
 use crate::shared::ConfigExportBundle;
@@ -46,6 +46,25 @@ pub(super) async fn diagnose_backends(
                 report["error"] = Value::String(error.to_string());
             }
         }
+        let observation = crate::shared::load_backend_observation(
+            access,
+            &backend.agent_did,
+            &backend.backend_id,
+        )
+        .await
+        .ok();
+        let warnings = bundle
+            .config
+            .inference_profiles
+            .iter()
+            .filter(|profile| profile.backend_id == backend.backend_id)
+            .filter_map(|profile| {
+                gents::config::unsent_reasoning_effort(backend, profile, observation.as_ref())
+            })
+            .collect::<Vec<_>>();
+        if !warnings.is_empty() {
+            report["warnings"] = json!(warnings);
+        }
         reports.push(report);
     }
     for (backend_id, required) in models {
@@ -62,17 +81,9 @@ async fn backend_check(
     required: &BTreeSet<&str>,
 ) -> Result<Value> {
     backend.validate()?;
-    let query = format!(
-        "{{ InferenceBackend(filter: {{agent_did: {{_eq: \"{}\"}}, backend_id: {{_eq: \"{}\"}}}}, limit: 2) {{backend_id catalogs probe_status last_probe}} }}",
-        gents::graphql::escape_graphql_string(&backend.agent_did),
-        gents::graphql::escape_graphql_string(&backend.backend_id),
-    );
-    let rows = crate::graphql_rows(access, "InferenceBackend", &query).await?;
-    anyhow::ensure!(
-        rows.len() == 1,
-        "backend observation is missing or ambiguous"
-    );
-    let observation: InferenceBackendObservation = serde_json::from_value(rows[0].clone())?;
+    let observation =
+        crate::shared::load_backend_observation(access, &backend.agent_did, &backend.backend_id)
+            .await?;
     anyhow::ensure!(
         gents::document_configured_from_fields(
             backend.enabled,
@@ -233,5 +244,29 @@ mod tests {
         assert!(backend_check(&access, &missing, &BTreeSet::new())
             .await
             .is_err());
+    }
+
+    #[tokio::test]
+    async fn diagnose_reports_an_xai_effort_that_will_not_be_sent() {
+        let owner = "did:key:owner";
+        let access = crate::shared::test_support::seed_unsent_xai_effort(owner).await;
+        let mut backend = crate::shared::test_support::xai_effort_backend(owner);
+        let object = backend.as_object_mut().unwrap();
+        object.remove("catalogs");
+        object.remove("probe_status");
+        let bundle: ConfigExportBundle = serde_json::from_value(json!({
+            "format": "test", "agent_did": owner, "exported_at": "2026-01-01T00:00:00Z",
+            "access_mode": "local", "agent_principal": {"agent_did": owner},
+            "inference_backends": [backend],
+            "inference_profiles": [crate::shared::test_support::xai_effort_profile(owner)],
+        }))
+        .unwrap();
+        let reports = diagnose_backends(&access, &bundle).await;
+        let warnings = reports[0]["warnings"].as_array().expect("warnings");
+        assert_eq!(warnings.len(), 1, "{reports:#?}");
+        assert!(
+            warnings[0].as_str().unwrap().contains("profile grok"),
+            "{warnings:?}"
+        );
     }
 }

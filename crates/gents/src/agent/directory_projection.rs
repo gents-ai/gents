@@ -1000,7 +1000,7 @@ fn parse_config_projection(
                     selected[0].reasoning_efforts.as_ref(),
                 ) {
                     anyhow::ensure!(
-                        supported.contains(&effort),
+                        crate::config::admits_reasoning_effort(backend, effort, supported),
                         "profile {id:?} selects an unadvertised effort"
                     );
                 }

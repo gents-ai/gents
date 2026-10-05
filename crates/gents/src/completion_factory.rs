@@ -97,9 +97,19 @@ pub(crate) fn loop_config(
                     reasoning_profile_params(
                         behavior.backend_provider_kind,
                         behavior.openai_wire_api,
-                        behavior.sampling.reasoning_effort,
+                        crate::inference_setup::sent_reasoning_effort(
+                            behavior.backend_provider_kind,
+                            behavior.openai_wire_api,
+                            &behavior.backend_endpoint,
+                            behavior.resolved_reasoning_efforts.as_deref(),
+                            behavior.sampling.reasoning_effort,
+                        ),
                     ),
-                    provider_additional_params(behavior.backend_provider_kind),
+                    provider_additional_params(
+                        behavior.backend_provider_kind,
+                        behavior.openai_wire_api,
+                        &behavior.backend_endpoint,
+                    ),
                 ),
                 behavior.sampling.additional_params(),
             ),
@@ -368,8 +378,25 @@ pub(crate) fn params_disable_reasoning(params: Option<&serde_json::Value>) -> bo
         == Some(ReasoningEffort::None.as_str())
 }
 
-fn provider_additional_params(kind: BackendProviderKind) -> Option<serde_json::Value> {
+/// xAI retains Responses requests by default, so an API-key backend at its
+/// endpoint asks for `store: false` and, to keep reasoning replayable without
+/// server state, encrypted reasoning, as `patch_store_false` does for the
+/// subscription transport (`PromptAssembly.ResponsesStorage.storage`).
+fn provider_additional_params(
+    kind: BackendProviderKind,
+    wire: crate::OpenAiWireApi,
+    endpoint: &str,
+) -> Option<serde_json::Value> {
     match kind {
+        BackendProviderKind::OpenAiCompatible
+            if wire == crate::OpenAiWireApi::Responses
+                && crate::inference_setup::is_xai_api_endpoint(endpoint) =>
+        {
+            Some(serde_json::json!({
+                "store": false,
+                "include": [gents_loop::provider_patches::ENCRYPTED_REASONING_INCLUDE],
+            }))
+        }
         BackendProviderKind::OpenAiCompatible => None,
         BackendProviderKind::OpenRouter => Some(
             rig::providers::openrouter::ProviderPreferences::new()
