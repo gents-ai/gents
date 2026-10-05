@@ -656,7 +656,7 @@ impl ConfigCommandTool {
                     "behavior" => {
                         ["clone", "disable", "default", "context"].contains(&verb.as_str())
                     }
-                    "backend" => verb == "discover",
+                    "backend" => ["discover", "accounts"].contains(&verb.as_str()),
                     "skill" => verb == "import",
                     _ => false,
                 };
@@ -997,6 +997,10 @@ impl ConfigCommandTool {
                     parsed.one("cursor")?,
                 )
                 .await;
+        }
+        if verb == "accounts" {
+            ParsedArgs::parse(&argv[1..])?.reject_mutation_flags()?;
+            return self.account_inventory().await;
         }
         let create_args = match verb {
             "create" => Some(&argv[1..]),
@@ -1991,6 +1995,110 @@ impl ConfigCommandTool {
         ordered! {"resource": target.collection_name(), "document": document}.pretty()
     }
 
+    /// Each account and account-free backend: provider, label, state, the
+    /// profiles that use it and its last stored usage. Store reads only: it
+    /// never contacts a provider or renews a sign-in, and shows no token,
+    /// sign-in identity, credential id or account reference.
+    async fn account_inventory(&self) -> Result<String> {
+        use crate::backend_provider::BackendProviderOauthExt;
+        use crate::oauth_credential::backend_account;
+        use crate::usage_observation::{load_usage, usage_view, UsageAccount};
+        let access = crate::config_client::ConfigAccess::Local(self.node.clone());
+        let agent_did = self.agent_did.as_str();
+        let accounts = crate::oauth_credential::list_accounts(&access, agent_did).await?;
+        let (backends, profiles) = crate::config_client::ConfigAccess::transact_local(
+            &self.node,
+            Some(self.core.identity()?),
+            "self_config.account_inventory",
+            |txn| {
+                Box::pin(async move {
+                    Ok((
+                        crate::config_client::list_inference_backends_in_txn(txn, agent_did)
+                            .await?,
+                        crate::config_client::list_inference_profiles_in_txn(txn, agent_did)
+                            .await?,
+                    ))
+                })
+            },
+        )
+        .await?;
+        let profiles_on = |backend_ids: &[&str]| {
+            profiles
+                .iter()
+                .filter(|profile| backend_ids.contains(&profile.backend_id.as_str()))
+                .map(|profile| profile.profile_id.clone())
+                .collect::<Vec<_>>()
+        };
+        let now = chrono::Utc::now();
+        let mut items = Vec::new();
+        for account in &accounts {
+            let serving: Vec<_> = backends
+                .iter()
+                .filter(|backend| {
+                    matches!(
+                        backend_account(backend, std::slice::from_ref(account)),
+                        Some(Some(_))
+                    )
+                })
+                .map(|backend| backend.backend_id.as_str())
+                .collect();
+            let kind = crate::BackendProviderKind::ALL
+                .into_iter()
+                .find(|kind| kind.oauth_provider() == Some(account.provider.as_str()));
+            let usage = match kind {
+                Some(kind) if account.enabled => {
+                    let usage_account = UsageAccount::Credential {
+                        agent_did: agent_did.to_string(),
+                        provider: account.provider.clone(),
+                        account_ref: account.account_ref.clone(),
+                    };
+                    let stored = load_usage(&access, &usage_account).await?;
+                    Some(usage_view(stored.as_ref(), kind, now))
+                }
+                _ => None,
+            };
+            items.push(json!({
+                "provider": account.provider,
+                "label": account.label,
+                "state": if account.enabled { "enabled" } else { "disabled" },
+                "profiles": profiles_on(&serving),
+                "usage": usage,
+            }));
+        }
+        for backend in &backends {
+            let state = match backend_account(backend, &accounts) {
+                Some(Some(_)) => continue,
+                Some(None) => "account not on this node",
+                None if backend.enabled => "enabled",
+                None => "disabled",
+            };
+            let usage = if state == "enabled" {
+                let usage_account = UsageAccount::Backend {
+                    agent_did: agent_did.to_string(),
+                    provider: backend.provider_kind.as_str().to_string(),
+                    backend_id: backend.backend_id.clone(),
+                };
+                let stored = load_usage(&access, &usage_account).await?;
+                Some(usage_view(stored.as_ref(), backend.provider_kind, now))
+            } else {
+                None
+            };
+            items.push(json!({
+                "provider": backend.provider_kind.as_str(),
+                "label": backend.name,
+                "state": state,
+                "profiles": profiles_on(&[backend.backend_id.as_str()]),
+                "usage": usage,
+            }));
+        }
+        ordered! {
+            "resource": "accounts",
+            "items": items,
+            "note": "Read-only. Accounts are managed by the operator with `gents accounts`; a profile may keep its account, use an account-free backend or move to another provider's default account, never to another account of one provider. Usage is the last stored observation; this view contacts no provider.",
+        }
+        .pretty()
+    }
+
     async fn inference_inventory(
         &self,
         target: SelfConfigTarget,
@@ -2377,7 +2485,7 @@ pub(super) fn help_patch_contracts(resource: Option<&str>) -> Value {
                     "display_name": "string|null",
                     "description": "string|null",
                     "context_id": "existing same-principal AgentContext ID|null",
-                    "inference_profile_id": "existing same-principal InferenceProfile ID (required)",
+                    "inference_profile_id": "existing same-principal InferenceProfile ID (required); never another account of the current provider",
                     "enabled": "boolean; default true",
                     "tags": "array<string>; default [] (UI/discovery labels only)",
                 }),
@@ -2413,7 +2521,7 @@ pub(super) fn help_patch_contracts(resource: Option<&str>) -> Value {
             patch_contract(
                 SelfConfigTarget::InferenceProfile,
                 json!({
-                    "display_name":"string|null","description":"string|null","backend_id":"existing same-principal backend ID","model_name":"string","reasoning_effort":"none|minimal|low|medium|high|xhigh|max|ultra|null","context_window":"positive integer <= the model's advertised maximum context window, when the backend advertises one|null","max_output_tokens":"positive integer|null","sampling_id":"existing same-principal sampling ID|null","execution_id":"existing same-principal execution ID|null","tags":"array<string>; default []"
+                    "display_name":"string|null","description":"string|null","backend_id":"existing same-principal backend ID; never another account of the current provider","model_name":"string","reasoning_effort":"none|minimal|low|medium|high|xhigh|max|ultra|null","context_window":"positive integer <= the model's advertised maximum context window, when the backend advertises one|null","max_output_tokens":"positive integer|null","sampling_id":"existing same-principal sampling ID|null","execution_id":"existing same-principal execution ID|null","tags":"array<string>; default []"
                 }),
             ),
             patch_contract(
@@ -2437,14 +2545,14 @@ pub(super) fn help_patch_contracts(resource: Option<&str>) -> Value {
             patch_contract(
                 SelfConfigTarget::Compaction,
                 json!({
-                    "display_name":"string|null","strategy":"StripToolResults|StripThenSummarize|null; absent uses StripThenSummarize","threshold":"number 0..1|null; default 0.75","keep_recent_tokens":"non-negative integer|null","tool_result_max_chars":"positive integer|null","summary_max_output_tokens":"positive integer|null","summary_file_list_max":"non-negative integer|null","inference_profile_id":"existing same-principal profile ID|null","tags":"array<string>; default []"
+                    "display_name":"string|null","strategy":"StripToolResults|StripThenSummarize|null; absent uses StripThenSummarize","threshold":"number 0..1|null; default 0.75","keep_recent_tokens":"non-negative integer|null","tool_result_max_chars":"positive integer|null","summary_max_output_tokens":"positive integer|null","summary_file_list_max":"non-negative integer|null","inference_profile_id":"existing same-principal profile ID|null; never another account of the current provider","tags":"array<string>; default []"
                 }),
             ),
         ],
         Some("backend") => vec![patch_contract(
             SelfConfigTarget::InferenceBackend,
             json!({
-                "name":"string","provider_kind":"OpenAiCompatible|OpenRouter|ChatGptCodex|XaiGrokOAuth|ClaudeCliSubscription|AnthropicApiKey","openai_wire_api":"chat_completions|responses|null","endpoint":"URL string","auth":"{kind:unauthenticated}|{kind:environment,variable:string}|{kind:principal_oauth}; raw api_key values are operator-managed","connect_timeout_secs":"positive integer|null; default 10","discovery_timeout_secs":"positive integer|null; default 10","max_concurrent":"positive integer|null; default 1","max_queue_depth":"integer >= 0|null; default 100","enabled":"boolean; default true","tags":"array<string>; default []"
+                "name":"string","provider_kind":"OpenAiCompatible|OpenRouter|ChatGptCodex|XaiGrokOAuth|ClaudeCliSubscription|AnthropicApiKey","openai_wire_api":"chat_completions|responses|null","endpoint":"URL string","auth":"{kind:unauthenticated}|{kind:environment,variable:string}|{kind:principal_oauth}; raw api_key values and principal_oauth account_ref are operator-managed","connect_timeout_secs":"positive integer|null; default 10","discovery_timeout_secs":"positive integer|null; default 10","max_concurrent":"positive integer|null; default 1","max_queue_depth":"integer >= 0|null; default 100","enabled":"boolean; default true","tags":"array<string>; default []"
             }),
         )],
         Some("mcp-service") => vec![patch_contract(

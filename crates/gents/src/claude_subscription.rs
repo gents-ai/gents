@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::claude_oauth::{CLAUDE_OAUTH_PRODUCT, CLAUDE_OAUTH_PROVIDER};
 use crate::oauth_credential::{BearerSource, DbCredentialBearer, OAuthRefreshKind};
+use crate::usage_observation::{UsageAccount, UsageReporter};
 
 /// Placeholder endpoint for ClaudeCliSubscription InferenceBackend rows.
 pub const DEFAULT_BACKEND_ENDPOINT: &str = "claude-cli://subscription";
@@ -40,6 +41,7 @@ pub fn default_model_name() -> &'static str {
 pub struct ClaudeSubscriptionClient<S: BearerSource = DbCredentialBearer> {
     pub(crate) bearer: Arc<S>,
     pub(crate) http: ReqwestClient,
+    pub(crate) usage: Option<Arc<UsageReporter>>,
 }
 
 impl<S: BearerSource> Clone for ClaudeSubscriptionClient<S> {
@@ -47,6 +49,7 @@ impl<S: BearerSource> Clone for ClaudeSubscriptionClient<S> {
         Self {
             bearer: self.bearer.clone(),
             http: self.http.clone(),
+            usage: self.usage.clone(),
         }
     }
 }
@@ -61,18 +64,27 @@ impl<S: BearerSource> fmt::Debug for ClaudeSubscriptionClient<S> {
 impl ClaudeSubscriptionClient<DbCredentialBearer> {
     /// Look the agent's Claude credential up once and bind the shared bearer.
     /// Fails closed with the `claude-login` hint when no enabled credential exists.
-    pub async fn build(node: Arc<EmbeddedNode>, agent_did: &str) -> Result<Self> {
-        let (bearer, _credential) = crate::oauth_http::bootstrap_oauth_client(
-            node,
+    pub async fn build(
+        node: Arc<EmbeddedNode>,
+        agent_did: &str,
+        account_ref: Option<&str>,
+    ) -> Result<Self> {
+        let (bearer, credential) = crate::oauth_http::bootstrap_oauth_client(
+            node.clone(),
             agent_did,
             CLAUDE_OAUTH_PROVIDER,
             OAuthRefreshKind::Claude,
             CLAUDE_OAUTH_PRODUCT,
+            crate::oauth_credential::AccountPick::Reference(account_ref),
         )
         .await?;
         Ok(Self {
             bearer,
             http: ReqwestClient::new(),
+            usage: Some(UsageReporter::new(
+                node,
+                UsageAccount::for_credential(&credential),
+            )),
         })
     }
 }
@@ -93,6 +105,7 @@ impl<S: BearerSource> ClaudeSubscriptionClient<S> {
         Self {
             bearer,
             http: ReqwestClient::new(),
+            usage: None,
         }
     }
 }
@@ -116,6 +129,7 @@ pub struct ClaudeSubscriptionModel<S: BearerSource = DbCredentialBearer> {
     model: String,
     bearer: Arc<S>,
     http: ReqwestClient,
+    usage: Option<Arc<UsageReporter>>,
 }
 
 impl<S: BearerSource> Clone for ClaudeSubscriptionModel<S> {
@@ -124,6 +138,7 @@ impl<S: BearerSource> Clone for ClaudeSubscriptionModel<S> {
             model: self.model.clone(),
             bearer: self.bearer.clone(),
             http: self.http.clone(),
+            usage: self.usage.clone(),
         }
     }
 }
@@ -150,6 +165,7 @@ impl<S: BearerSource + 'static> CompletionModel for ClaudeSubscriptionModel<S> {
             model: model.into(),
             bearer: client.bearer.clone(),
             http: client.http.clone(),
+            usage: client.usage.clone(),
         }
     }
 
@@ -171,6 +187,7 @@ impl<S: BearerSource + 'static> CompletionModel for ClaudeSubscriptionModel<S> {
             surface,
             self.bearer.as_ref(),
             &self.http,
+            self.usage.clone(),
         )
         .await?;
         futures::pin_mut!(stream);
@@ -212,6 +229,7 @@ impl<S: BearerSource + 'static> CompletionModel for ClaudeSubscriptionModel<S> {
             surface,
             self.bearer.as_ref(),
             &self.http,
+            self.usage.clone(),
         )
         .await?;
         Ok(StreamingCompletionResponse::stream(Box::pin(stream)))

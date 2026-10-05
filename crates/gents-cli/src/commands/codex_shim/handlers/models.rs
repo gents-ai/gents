@@ -200,7 +200,7 @@ pub(super) async fn available_model_backends(state: &ShimState) -> Result<Vec<Av
         // principal's catalog. One principal never inherits another's
         // advertised list.
         let credential_scope =
-            matches!(backend.auth, BackendAuth::PrincipalOAuth).then_some(agent_did);
+            matches!(backend.auth, BackendAuth::PrincipalOAuth { .. }).then_some(agent_did);
         let catalog =
             lookup_backend_observation(state.node.as_ref(), agent_did, &backend.backend_id)
                 .await
@@ -468,7 +468,8 @@ async fn apply_model_selection(
                     lookup_backend_observation_in_txn(txn, owner, &selection.backend_id)
                         .await?
                         .context("selected backend has no discovery observation")?;
-                let scope = matches!(backend.auth, BackendAuth::PrincipalOAuth).then_some(owner);
+                let scope =
+                    matches!(backend.auth, BackendAuth::PrincipalOAuth { .. }).then_some(owner);
                 let catalog = observation
                     .catalog_for(scope)?
                     .context("selected backend has no catalog in this credential scope")?;

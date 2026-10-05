@@ -16,7 +16,8 @@ use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
 
-use crate::goal::publish_claimed_continuation;
+use crate::blocked_turn::last_failed_call_in_txn;
+use crate::config_client::ConfigAccess;
 use crate::goal::{
     claim_continuation, claim_retry_continuation, gate_goal_continuation,
     goal_continuation_materialization_step, goal_failure_cause, load_goal_by_id,
@@ -27,7 +28,9 @@ use crate::goal::{
     GoalStatus, ObservedGoalBehavior, GOAL_READINESS_WAIT_PREFIX, GOAL_TRIGGER_KIND,
     MAX_INFRASTRUCTURE_RETRIES,
 };
+use crate::goal::{publish_claimed_continuation, resume_at_reset};
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use crate::identity::RegisteredIdentity;
 use crate::runtime_snapshot::{ActiveRuntimeSnapshot, ConcurrencyMode, ResolvedTask};
 use crate::watcher::AgentRequest;
 use crate::UpdateSubscriptionSource;
@@ -101,9 +104,19 @@ impl GoalSource {
         }
     }
 
-    async fn rescan(&mut self) -> Option<FireIntent> {
+    /// A reset is a clock event, so only the rescan `tick` resumes at one.
+    async fn rescan(&mut self, tick: bool) -> Option<FireIntent> {
         let agent_did = self.snapshot_rx.borrow().local_did.clone();
-        match self.load_candidate_goals(&agent_did).await {
+        if tick {
+            self.resume_at_reported_resets(&agent_did).await;
+        }
+        match self
+            .load_goals(
+                &agent_did,
+                r#"status: { _in: ["active", "budget_limited"] }"#,
+            )
+            .await
+        {
             Ok(goals) => {
                 for goal in goals {
                     match self.build_intent(goal).await {
@@ -118,14 +131,50 @@ impl GoalSource {
         None
     }
 
-    async fn load_candidate_goals(&self, agent_did: &str) -> Result<Vec<GoalDocument>> {
+    /// Opted-in usage-limited Goals resume through the operator resume
+    /// transaction once their reported reset has passed.
+    async fn resume_at_reported_resets(&self, agent_did: &str) {
+        let goals = match self
+            .load_goals(
+                agent_did,
+                r#"status: { _eq: "usage_limited" }, auto_resume_at_reset: { _eq: true }"#,
+            )
+            .await
+        {
+            Ok(goals) => goals,
+            Err(error) => {
+                tracing::warn!(%error, "goal source reset resume scan failed");
+                return;
+            }
+        };
+        for goal in goals {
+            let resumed = async {
+                let identity = RegisteredIdentity::from_registered_did(&goal.agent_did, None)?;
+                resume_at_reset(&self.node, &identity, &goal, Utc::now()).await
+            }
+            .await;
+            match resumed {
+                Ok(Some(receipt)) => tracing::info!(
+                    request_id = %receipt.request_id,
+                    goal_id = %goal.goal_id,
+                    "durable goal continuation fired at the reported reset"
+                ),
+                Ok(None) => {}
+                Err(error) => {
+                    tracing::warn!(%error, goal_id = %goal.goal_id, "goal reset resume failed")
+                }
+            }
+        }
+    }
+
+    async fn load_goals(&self, agent_did: &str, status_filter: &str) -> Result<Vec<GoalDocument>> {
         let agent_did = escape_graphql_string(agent_did);
         let query = format!(
             r#"{{
                 Goal(
                     filter: {{
                         agent_did: {{ _eq: "{agent_did}" }},
-                        status: {{ _in: ["active", "budget_limited"] }}
+                        {status_filter}
                     }},
                     order: [{{ created_at: ASC }}, {{ goal_id: ASC }}]
                 ) {{
@@ -133,12 +182,12 @@ impl GoalSource {
                     active_time_seconds active_started_at consecutive_blocked_audits
                     last_blocked_request_id last_blocked_reason last_continued_from_request_id continuation_sequence
                     wrapup_requested wrapup_completed infrastructure_retry_count last_failure completion_evidence
-                    created_at updated_at
+                    auto_resume_at_reset created_at updated_at
                 }}
             }}"#
         );
         let response =
-            graphql_with_transaction_retry(&self.node, &query, "query active Goal rows").await?;
+            graphql_with_transaction_retry(&self.node, &query, "query Goal rows").await?;
         serde_json::from_value(
             response
                 .data
@@ -147,7 +196,7 @@ impl GoalSource {
                 .cloned()
                 .unwrap_or_else(|| serde_json::Value::Array(Vec::new())),
         )
-        .context("decoding active Goal rows")
+        .context("decoding Goal rows")
     }
 
     async fn build_intent(&self, mut goal: GoalDocument) -> Result<Option<FireIntent>> {
@@ -736,27 +785,13 @@ impl GoalSource {
     }
 
     async fn request_usage_limit_failure(&self, request_id: &str) -> Result<Option<String>> {
-        let request_id = escape_graphql_string(request_id);
-        let query = format!(
-            r#"{{
-                InferenceCall(
-                    filter: {{ request_id: {{ _eq: "{request_id}" }}, call_state: {{ _eq: "failed" }} }},
-                    order: [{{ attempt: DESC }}],
-                    limit: 1
-                ) {{ failure_reason }}
-            }}"#
-        );
-        let response =
-            graphql_with_transaction_retry(&self.node, &query, "query goal usage-limit failure")
-                .await?;
-        let reason = response
-            .data
+        let call = ConfigAccess::transact_local(&self.node, None, "goal.last_failed_call", |txn| {
+            Box::pin(last_failed_call_in_txn(txn, request_id))
+        })
+        .await?;
+        let reason = call
             .as_ref()
-            .and_then(|data| data.get("InferenceCall"))
-            .and_then(|rows| rows.as_array())
-            .and_then(|rows| rows.first())
-            .and_then(|row| row.get("failure_reason"))
-            .and_then(|value| value.as_str())
+            .and_then(|call| call.failure_reason.as_deref())
             .map(str::trim)
             .filter(|value| !value.is_empty());
         Ok(reason.and_then(|reason| {
@@ -909,15 +944,16 @@ impl TriggerSource for GoalSource {
                     .subscription
                     .as_mut()
                     .expect("goal source subscription opened before polling");
-                tokio::select! {
+                let tick = tokio::select! {
                     biased;
                     _ = self.cancel.cancelled() => return None,
                     changed = self.snapshot_rx.changed() => {
                         if changed.is_err() {
                             return None;
                         }
+                        false
                     }
-                    _ = self.rescan_tick.tick() => {}
+                    _ = self.rescan_tick.tick() => true,
                     message = subscription.recv() => {
                         if message.is_none() {
                             tracing::warn!("goal source subscription channel closed; source exiting");
@@ -927,9 +963,10 @@ impl TriggerSource for GoalSource {
                         if dropped > 0 {
                             tracing::warn!(dropped, "goal source dropped updates; durable rescan is recovering");
                         }
+                        false
                     }
-                }
-                if let Some(intent) = self.rescan().await {
+                };
+                if let Some(intent) = self.rescan(tick).await {
                     return Some(intent);
                 }
             }

@@ -1684,6 +1684,91 @@ fn default_behavior_publication_matches_lean() {
     }
 }
 
+#[tokio::test]
+async fn oauth_account_scope_matches_lean() {
+    use crate::backend_provider::{BackendProviderKind, BackendProviderOauthExt};
+    use crate::oauth_credential::{resolve_oauth_credential, upsert_oauth_credential, AccountPick};
+    let snapshot = crate::lean_vocab_test::lean_contract_snapshot();
+    let lean = &snapshot.configuration_scope_cases["oauth_account"];
+    let kind_of = |value: &serde_json::Value| -> BackendProviderKind {
+        serde_json::from_value(value.clone()).unwrap()
+    };
+
+    let node = std::sync::Arc::new(crate::oauth_credential::test_support::test_node().await);
+    for row in lean["rows"].as_array().unwrap() {
+        let provider = kind_of(&row["provider_kind"]).oauth_provider().unwrap();
+        let owner = row["owner"].as_str().unwrap();
+        let account = row["account"].as_str();
+        let credential = crate::oauth_credential::OAuthCredential {
+            doc_id: None,
+            credential_id: format!("{provider}:{owner}:{}", account.unwrap_or("original")),
+            agent_did: owner.to_string(),
+            provider: provider.to_string(),
+            access_token: "access-TEST".to_string(),
+            refresh_token: "refresh-TEST".to_string(),
+            id_token: None,
+            account_id: None,
+            chatgpt_plan_type: None,
+            is_fedramp: false,
+            access_token_expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+            last_refresh: None,
+            enabled: row["enabled"].as_bool().unwrap(),
+            account_ref: account.map(str::to_string),
+            connected_at: None,
+            provider_account_key: None,
+            label: None,
+        };
+        upsert_oauth_credential(&node, &credential).await.unwrap();
+    }
+    let access = crate::config_client::ConfigAccess::Local(node);
+
+    let cases = lean["cases"].as_array().unwrap();
+    assert_eq!(cases.len(), 6);
+    for case in cases {
+        let text = case["auth"].as_str().unwrap();
+        let auth: BackendAuth = serde_json::from_str(text).unwrap();
+        assert_eq!(serde_json::to_string(&auth).unwrap(), text, "{case}");
+        let scope = case["scope"].as_str().unwrap();
+        let stored_owner = case["stored_owner"].as_str().unwrap();
+        assert!(
+            !text.contains(scope) && !text.contains(stored_owner),
+            "{case}"
+        );
+        let resolved = match case["owner"].as_str() {
+            Some(owner) => {
+                assert!(matches!(auth, BackendAuth::PrincipalOAuth { .. }), "{case}");
+                let provider = kind_of(&case["provider_kind"]).oauth_provider().unwrap();
+                // The runtime resolves under the executing principal, never the stored owner.
+                let row = resolve_oauth_credential(
+                    &access,
+                    scope,
+                    provider,
+                    AccountPick::Reference(auth.oauth_account_ref()),
+                )
+                .await
+                .unwrap();
+                if let Some(row) = &row {
+                    assert_eq!(row.agent_did, owner, "{case}");
+                }
+                row.map(
+                    |row| serde_json::json!({"owner": row.agent_did, "account": row.account_ref}),
+                )
+            }
+            None => {
+                assert!(
+                    !matches!(auth, BackendAuth::PrincipalOAuth { .. }),
+                    "{case}"
+                );
+                None
+            }
+        };
+        let expected = case["resolved"]
+            .as_object()
+            .map(|row| serde_json::json!({"owner": row["owner"], "account": row["account"]}));
+        assert_eq!(resolved, expected, "{case}");
+    }
+}
+
 #[test]
 fn unchanged_nested_links_are_validated_without_a_behavior_write() {
     for missing in [

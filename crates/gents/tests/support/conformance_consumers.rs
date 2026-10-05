@@ -525,6 +525,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_goal_config_reactivation_cases_drive_transactional_setter",
         },
         ConformanceConsumer::RustTest {
+            id: "goal::reset_resume::contract_tests::generated_goal_reset_resume_cases_drive_real_transactions",
+            package: "gents",
+            source_path: "crates/gents/src/goal/reset_resume/contract_tests.rs",
+            module_path: "goal::reset_resume::contract_tests",
+            function: "generated_goal_reset_resume_cases_drive_real_transactions",
+        },
+        ConformanceConsumer::RustTest {
             id: "cli_goal::goal_resume_request_reuses_signed_predecessor_and_returns_same_child",
             package: "gents-cli",
             source_path: "crates/gents-cli/tests/suites/cli_goal.rs",

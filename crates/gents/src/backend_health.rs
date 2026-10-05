@@ -248,6 +248,7 @@ async fn oauth_credential_for_probe(
         provider,
         oauth_refresh_kind(backend.provider_kind),
         oauth_product(backend.provider_kind),
+        crate::oauth_credential::AccountPick::Reference(backend.auth.oauth_account_ref()),
     )
     .await
     .with_context(|| {
@@ -265,7 +266,9 @@ async fn oauth_credential_for_probe(
     Ok(credential)
 }
 
-fn oauth_refresh_kind(kind: crate::backend_provider::BackendProviderKind) -> OAuthRefreshKind {
+pub(crate) fn oauth_refresh_kind(
+    kind: crate::backend_provider::BackendProviderKind,
+) -> OAuthRefreshKind {
     match kind {
         crate::backend_provider::BackendProviderKind::ChatGptCodex => OAuthRefreshKind::ChatGpt,
         crate::backend_provider::BackendProviderKind::XaiGrokOAuth => OAuthRefreshKind::Xai,
@@ -276,7 +279,7 @@ fn oauth_refresh_kind(kind: crate::backend_provider::BackendProviderKind) -> OAu
     }
 }
 
-fn oauth_product(
+pub(crate) fn oauth_product(
     kind: crate::backend_provider::BackendProviderKind,
 ) -> crate::oauth_credential::OAuthProduct {
     match kind {
@@ -1056,7 +1059,7 @@ mod tests {
         // so the runtime-level prober must leave it alone entirely.
         let mut codex = backend("codex", "http://127.0.0.1:1/v1".to_string());
         codex.provider_kind = crate::backend_provider::BackendProviderKind::ChatGptCodex;
-        codex.auth = crate::document_config::BackendAuth::PrincipalOAuth;
+        codex.auth = crate::document_config::BackendAuth::PrincipalOAuth { account_ref: None };
         let outcome = probe_backends_cycle(
             &node,
             &client,
@@ -1078,7 +1081,7 @@ mod tests {
             crate::claude_subscription::DEFAULT_BACKEND_ENDPOINT.to_string(),
         );
         claude.provider_kind = crate::backend_provider::BackendProviderKind::ClaudeCliSubscription;
-        claude.auth = crate::document_config::BackendAuth::PrincipalOAuth;
+        claude.auth = crate::document_config::BackendAuth::PrincipalOAuth { account_ref: None };
         claude
     }
 
@@ -1089,7 +1092,7 @@ mod tests {
     ) -> InferenceBackend {
         let mut backend = backend(id, endpoint.to_string());
         backend.provider_kind = kind;
-        backend.auth = crate::document_config::BackendAuth::PrincipalOAuth;
+        backend.auth = crate::document_config::BackendAuth::PrincipalOAuth { account_ref: None };
         backend
     }
 
@@ -1131,6 +1134,129 @@ mod tests {
         let snap = health_map.get("claude").await.expect("entry");
         assert_eq!(snap.state, BackendHealthState::Healthy);
         assert!(snap.last_error.is_none());
+    }
+
+    #[tokio::test]
+    async fn oauth_account_reference_is_probed_with_its_own_account() {
+        let node = Arc::new(test_node().await);
+        let did = "did:key:z6MkProbeAccount";
+        let provider = crate::xai_grok_oauth::XAI_OAUTH_PROVIDER;
+        let account = crate::oauth_credential::OAuthCredential {
+            doc_id: None,
+            credential_id: format!("{provider}:{did}:acct-b"),
+            agent_did: did.to_string(),
+            provider: provider.to_string(),
+            access_token: "access-TEST".into(),
+            refresh_token: "refresh-TEST".into(),
+            id_token: None,
+            account_id: None,
+            chatgpt_plan_type: None,
+            is_fedramp: false,
+            access_token_expires_at: Utc::now() + chrono::Duration::hours(8),
+            last_refresh: Some(Utc::now()),
+            enabled: true,
+            account_ref: Some("acct-b".into()),
+            connected_at: Some(Utc::now()),
+            provider_account_key: None,
+            label: None,
+        };
+        crate::oauth_credential::upsert_oauth_credential(&node, &account)
+            .await
+            .expect("seed acct-b");
+        let (options, client, health_map) = (
+            probe_options(),
+            reqwest::Client::new(),
+            BackendHealthMap::new(),
+        );
+        let mut grok = oauth_backend(
+            crate::backend_provider::BackendProviderKind::XaiGrokOAuth,
+            "grok",
+            "https://cli-chat-proxy.grok.com/v1",
+        );
+        grok.agent_did = did.to_string();
+        grok.auth = crate::document_config::BackendAuth::PrincipalOAuth {
+            account_ref: Some("acct-b".into()),
+        };
+        let models = ModelsListener::start();
+        grok.endpoint = models.endpoint();
+        seed_backend_observation(&node, &grok, "unknown").await;
+        let outcome = probe_backends_cycle(
+            &node,
+            &client,
+            std::slice::from_ref(&grok),
+            Utc::now(),
+            &health_map,
+            &options,
+            Some(OAuthProbeContext {
+                node: node.clone(),
+                principal_did: did,
+            }),
+        )
+        .await;
+        let snap = health_map.get("grok").await.expect("entry");
+        assert_eq!(
+            outcome.promotable,
+            vec!["grok".to_string()],
+            "{:?}",
+            snap.last_error
+        );
+        assert_eq!(snap.state, BackendHealthState::Healthy);
+    }
+
+    #[tokio::test]
+    async fn oauth_account_reference_without_its_row_is_not_probed() {
+        let node = Arc::new(test_node().await);
+        let did = "did:key:z6MkProbe";
+        seed_credential(
+            &node,
+            did,
+            crate::xai_grok_oauth::XAI_OAUTH_PROVIDER,
+            Utc::now() + chrono::Duration::hours(8),
+        )
+        .await;
+        let (options, client, health_map) = (
+            probe_options(),
+            reqwest::Client::new(),
+            BackendHealthMap::new(),
+        );
+        let mut grok = oauth_backend(
+            crate::backend_provider::BackendProviderKind::XaiGrokOAuth,
+            "grok",
+            "https://cli-chat-proxy.grok.com/v1",
+        );
+        grok.agent_did = did.to_string();
+        grok.auth = crate::document_config::BackendAuth::PrincipalOAuth {
+            account_ref: Some("acct-b".into()),
+        };
+        let models = ModelsListener::start();
+        grok.endpoint = models.endpoint();
+        seed_backend_observation(&node, &grok, "unknown").await;
+        let outcome = probe_backends_cycle(
+            &node,
+            &client,
+            std::slice::from_ref(&grok),
+            Utc::now(),
+            &health_map,
+            &options,
+            Some(OAuthProbeContext {
+                node: node.clone(),
+                principal_did: did,
+            }),
+        )
+        .await;
+        assert!(outcome.promotable.is_empty());
+        let error = health_map
+            .get("grok")
+            .await
+            .and_then(|snap| snap.last_error)
+            .unwrap_or_default();
+        let missing = crate::oauth_credential::classify_oauth_auth_error(
+            &crate::oauth_credential::XAI_OAUTH_PRODUCT,
+            did,
+            crate::xai_grok_oauth::XAI_OAUTH_PROVIDER,
+            &crate::oauth_credential::OAuthAuthProblem::Missing,
+        );
+        assert!(error.contains(&missing), "{error}");
     }
 
     #[tokio::test]

@@ -116,7 +116,7 @@ impl InferenceTarget {
         backend.validate()?;
         profile.validate()?;
         anyhow::ensure!(
-            !matches!(backend.auth, BackendAuth::PrincipalOAuth),
+            !matches!(backend.auth, BackendAuth::PrincipalOAuth { .. }),
             "PrincipalOAuth targets are not supported for fresh-principal evals: \
              each trial's new principal has no OAuthCredential"
         );

@@ -1,9 +1,11 @@
 //! The network terminal beneath every provider completion stack.
 
 use std::future::Future;
+use std::sync::Arc;
 
 use bytes::Bytes;
 use chrono::Utc;
+use gents_loop::account_usage::UsageSource;
 use gents_loop::provider_limit::ProviderLimitHeaders;
 use reqwest::StatusCode;
 use rig::http_client::{
@@ -11,6 +13,8 @@ use rig::http_client::{
     StreamingResponse,
 };
 use rig::wasm_compat::WasmCompatSend;
+
+use crate::usage_observation::UsageReporter;
 
 /// Rig's reqwest client, except that a non-success response keeps its
 /// rate-limit headers.
@@ -25,16 +29,31 @@ use rig::wasm_compat::WasmCompatSend;
 #[derive(Clone, Debug, Default)]
 pub struct ProviderHttpClient {
     inner: ReqwestClient,
+    /// Records each response's usage headers for the account this client serves.
+    usage: Option<Arc<UsageReporter>>,
 }
 
 impl ProviderHttpClient {
     pub fn new(inner: ReqwestClient) -> Self {
-        Self { inner }
+        Self { inner, usage: None }
+    }
+
+    pub(crate) fn with_usage(inner: ReqwestClient, reporter: Arc<UsageReporter>) -> Self {
+        Self {
+            inner,
+            usage: Some(reporter),
+        }
     }
 }
 
 fn instance_error<E: std::error::Error + Send + Sync + 'static>(error: E) -> http_client::Error {
     http_client::Error::Instance(Box::new(error))
+}
+
+fn observe(usage: &Option<Arc<UsageReporter>>, headers: &HeaderMap, source: UsageSource) {
+    if let Some(usage) = usage {
+        usage.observe(headers, source);
+    }
 }
 
 /// The rejected-response error: Rig's variant, body plus header marker.
@@ -70,14 +89,17 @@ impl HttpClientExt for ProviderHttpClient {
             .request(parts.method, parts.uri.to_string())
             .headers(parts.headers)
             .body(body);
+        let usage = self.usage.clone();
         async move {
             let response = request.send().await.map_err(instance_error)?;
             let status = response.status();
             if !status.is_success() {
                 let headers = response.headers().clone();
+                observe(&usage, &headers, UsageSource::Error);
                 let body = response.text().await.unwrap_or_default();
                 return Err(rejected_response_error(status, &headers, &body));
             }
+            observe(&usage, response.headers(), UsageSource::Header);
             let mut builder = Response::builder().status(status);
             if let Some(headers) = builder.headers_mut() {
                 *headers = response.headers().clone();
@@ -117,6 +139,7 @@ impl HttpClientExt for ProviderHttpClient {
             .body(body)
             .build();
         let client = self.inner.clone();
+        let usage = self.usage.clone();
         async move {
             let response = client
                 .execute(request.map_err(instance_error)?)
@@ -125,9 +148,11 @@ impl HttpClientExt for ProviderHttpClient {
             let status = response.status();
             if !status.is_success() {
                 let headers = response.headers().clone();
+                observe(&usage, &headers, UsageSource::Error);
                 let body = response.text().await.unwrap_or_default();
                 return Err(rejected_response_error(status, &headers, &body));
             }
+            observe(&usage, response.headers(), UsageSource::Header);
             let mut builder = Response::builder()
                 .status(status)
                 .version(response.version());

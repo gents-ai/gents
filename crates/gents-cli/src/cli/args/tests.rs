@@ -1374,3 +1374,176 @@ fn task_run_separates_invocation_identity_from_continued_session() {
         _ => panic!("expected Task run"),
     }
 }
+
+#[test]
+fn login_commands_take_a_label_and_only_their_own_provider() {
+    for (command, provider) in [
+        ("codex-login", "chatgpt-codex"),
+        ("claude-login", "claude-subscription"),
+        ("grok-login", "xai-oauth"),
+    ] {
+        let label = |cli: Cli| match cli.command {
+            Command::CodexLogin(args) => (args.label, args.provider),
+            Command::ClaudeLogin(args) => (args.label, args.provider),
+            Command::GrokLogin(args) => (args.label, args.provider),
+            _ => panic!("expected {command}"),
+        };
+        let parsed = Cli::try_parse_from(["gents", command]).expect("default provider");
+        assert_eq!(label(parsed), (None, provider.to_string()));
+        let parsed = Cli::try_parse_from(["gents", command, "--label", "Work"])
+            .unwrap_or_else(|error| panic!("{command} --label: {error}"));
+        assert_eq!(
+            label(parsed),
+            (Some("Work".to_string()), provider.to_string())
+        );
+        assert!(
+            Cli::try_parse_from(["gents", command, "--provider", "other-provider"]).is_err(),
+            "{command} must refuse another provider"
+        );
+    }
+}
+
+#[test]
+fn profile_set_and_set_account_take_an_account() {
+    let set = |extra: &[&str]| {
+        let argv = [
+            &["gents", "config", "profile", "set", "--file", "f"][..],
+            extra,
+        ]
+        .concat();
+        match Cli::try_parse_from(&argv).map(|cli| cli.command) {
+            Ok(Command::Config {
+                command:
+                    ConfigCommand::Profile {
+                        command: InferenceProfileCommand::Set(args),
+                    },
+            }) => Ok((args.account, args.provider)),
+            Ok(_) => panic!("{argv:?} parsed as another command"),
+            Err(error) => Err(error),
+        }
+    };
+    assert_eq!(set(&[]).unwrap(), (None, None));
+    assert_eq!(
+        set(&["--account", "label-b"]).unwrap(),
+        (Some("label-b".into()), None)
+    );
+    assert_eq!(
+        set(&["--provider", "claude-subscription"]).unwrap(),
+        (None, Some("claude-subscription".into()))
+    );
+    assert_eq!(
+        set(&["--account", "label-b", "--provider", "claude-subscription"]).unwrap(),
+        (Some("label-b".into()), Some("claude-subscription".into()))
+    );
+    assert!(set(&["--provider", "unknown"]).is_err());
+
+    for extra in [&[][..], &["--provider", "claude-subscription"][..]] {
+        let argv = [
+            &["gents", "config", "profile", "set-account", "p", "label-b"][..],
+            extra,
+        ]
+        .concat();
+        let Command::Config {
+            command:
+                ConfigCommand::Profile {
+                    command: InferenceProfileCommand::SetAccount(args),
+                },
+        } = Cli::try_parse_from(&argv)
+            .unwrap_or_else(|error| panic!("{argv:?}: {error}"))
+            .command
+        else {
+            panic!("{argv:?} parsed as another command");
+        };
+        assert_eq!(
+            (args.profile.as_str(), args.account.as_deref()),
+            ("p", Some("label-b"))
+        );
+        assert_eq!(args.provider.is_some(), !extra.is_empty());
+    }
+}
+
+#[test]
+fn set_account_lists_without_an_account_and_moves_companions_on_request() {
+    let parse = |argv: &[&str]| match Cli::try_parse_from(
+        [&["gents", "config", "profile", "set-account"][..], argv].concat(),
+    )
+    .map(|cli| cli.command)
+    {
+        Ok(Command::Config {
+            command:
+                ConfigCommand::Profile {
+                    command: InferenceProfileCommand::SetAccount(args),
+                },
+        }) => Ok((args.profile, args.account, args.with_compaction)),
+        Ok(_) => panic!("{argv:?} parsed as another command"),
+        Err(error) => Err(error),
+    };
+    assert_eq!(parse(&["p"]).unwrap(), ("p".into(), None, false));
+    assert_eq!(
+        parse(&["p", "label-b", "--with-compaction"]).unwrap(),
+        ("p".into(), Some("label-b".into()), true)
+    );
+    assert!(
+        parse(&["p", "--with-compaction"]).is_err(),
+        "companions move only with an account"
+    );
+}
+
+#[test]
+fn goal_set_takes_an_auto_resume_switch() {
+    let parse = |argv: &[&str]| match Cli::try_parse_from(
+        [&["gents", "goal", "set", "--session", "s"][..], argv].concat(),
+    )
+    .map(|cli| cli.command)
+    {
+        Ok(Command::Goal {
+            command: GoalCommand::Set(args),
+        }) => Ok(args.auto_resume),
+        Ok(_) => panic!("{argv:?} parsed as another command"),
+        Err(error) => Err(error),
+    };
+    assert_eq!(parse(&[]).unwrap(), None);
+    assert_eq!(parse(&["--auto-resume", "on"]).unwrap(), Some(true));
+    assert_eq!(parse(&["--auto-resume", "off"]).unwrap(), Some(false));
+    assert!(parse(&["--auto-resume", "maybe"]).is_err());
+}
+
+#[test]
+fn goal_resume_on_takes_an_account_and_requires_from() {
+    let parse = |argv: &[&str]| match Cli::try_parse_from(
+        [&["gents", "goal", "resume-on"][..], argv].concat(),
+    )
+    .map(|cli| cli.command)
+    {
+        Ok(Command::Goal {
+            command: GoalCommand::ResumeOn(args),
+        }) => Ok((
+            args.account,
+            args.from,
+            args.scope.session,
+            args.with_compaction,
+        )),
+        Ok(_) => panic!("{argv:?} parsed as another command"),
+        Err(error) => Err(error),
+    };
+    assert_eq!(
+        parse(&["label-b", "--from", "r1", "--session", "s"]).unwrap(),
+        ("label-b".into(), "r1".into(), "s".into(), false)
+    );
+    assert!(
+        parse(&[
+            "label-b",
+            "--from",
+            "r1",
+            "--session",
+            "s",
+            "--with-compaction"
+        ])
+        .unwrap()
+        .3
+    );
+    assert_eq!(
+        parse(&["label-b", "--session", "s"]).unwrap_err().kind(),
+        clap::error::ErrorKind::MissingRequiredArgument
+    );
+}

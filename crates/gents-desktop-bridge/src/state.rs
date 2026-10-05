@@ -54,7 +54,8 @@ pub struct DesktopAppState {
     pub pending_oauth_credentials: PendingOAuthCredentials,
 }
 
-type CredentialKey = (String, String);
+/// Agent DID, credential provider and the sign-in's account identity.
+type CredentialKey = (String, String, String);
 
 /// A credential issued by a completed sign-in, ordered by issuance for its
 /// (agent DID, credential provider) key.
@@ -68,10 +69,22 @@ impl IssuedOAuthCredential {
         &self.credential
     }
 
+    /// Sign-ins of different accounts are ordered and held apart. The account
+    /// is the one `store_sign_in` matches on: the key, else `account_id`.
     fn key(&self) -> CredentialKey {
+        let identity = [
+            &self.credential.provider_account_key,
+            &self.credential.account_id,
+        ]
+        .into_iter()
+        .flatten()
+        .map(|value| value.trim())
+        .find(|value| !value.is_empty())
+        .unwrap_or_default();
         (
             self.credential.agent_did.clone(),
             self.credential.provider.clone(),
+            identity.to_owned(),
         )
     }
 }
@@ -169,8 +182,9 @@ impl PendingOAuthCredentials {
         }
     }
 
-    /// Writes the credential held for this key, if any, and releases it once
-    /// stored. Returns `None` when nothing is held.
+    /// Writes the newest credential held for this agent and provider, if any,
+    /// and releases it once stored; other accounts' held sign-ins stay held.
+    /// Returns `None` when nothing is held.
     pub async fn retry<T, F, Fut>(
         &self,
         agent_did: &str,
@@ -181,7 +195,14 @@ impl PendingOAuthCredentials {
         F: FnOnce(gents::oauth_credential::OAuthCredential) -> Fut,
         Fut: std::future::Future<Output = anyhow::Result<T>>,
     {
-        let key = (agent_did.to_string(), provider.to_string());
+        let key = self
+            .slots()
+            .iter()
+            .filter(|((agent, held_provider, _), slot)| {
+                agent == agent_did && held_provider == provider && slot.held.is_some()
+            })
+            .max_by_key(|(_, slot)| slot.held.as_ref().map(|held| held.sequence))
+            .map(|(key, _)| key.clone())?;
         let gate = self.write_gate(&key);
         let _ordered = gate.lock().await;
         let credential = self
@@ -203,7 +224,7 @@ impl PendingOAuthCredentials {
         let mut held: Vec<_> = self
             .slots()
             .iter()
-            .filter(|((agent, _), _)| agent == agent_did)
+            .filter(|((agent, _, _), _)| agent == agent_did)
             .filter_map(|(_, slot)| slot.held.as_ref().map(|held| held.credential.clone()))
             .collect();
         held.sort_by(|left, right| left.provider.cmp(&right.provider));

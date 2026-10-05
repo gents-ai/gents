@@ -21,6 +21,7 @@
 //! tool-runtime scope. `gents::tool_call_lifecycle::runtime` extends
 //! [`tool_call_lifecycle::runtime`]'s task-local scope with that overlay.
 
+pub mod account_usage;
 pub mod backend_provider;
 pub mod claude_messages_body;
 pub mod compaction;

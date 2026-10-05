@@ -175,6 +175,7 @@ pub(crate) fn runtime_contract_router(
         .route("/activation", get(activation_handler))
         .route("/enrollment/decisions", post(enrollment_decision_handler))
         .route("/enrollment/pending", post(enrollment_pending_handler))
+        .route("/accounts/usage/read", post(account_usage_read_handler))
         .route("/self", get(self_handler))
         .route("/sessions", get(sessions_handler))
         .route("/fleet", get(fleet_handler))
@@ -284,6 +285,56 @@ async fn wait_for_activation(state: RuntimeHttpState) -> Response {
             )
                 .into_response();
         }
+    }
+}
+
+/// Reads the runtime principal's account usage now. Upstream calls and
+/// sign-in renewals follow, so only the runtime's own operator may ask.
+async fn account_usage_read_handler(
+    State(state): State<RuntimeHttpState>,
+    axum::Json(command): axum::Json<crate::commands::accounts::UsageReadCommand>,
+) -> Response {
+    let error = |status: StatusCode, error: String| {
+        (status, axum::Json(json!({ "error": error }))).into_response()
+    };
+    let Some(service) = state.enrollment_decisions.read().await.clone() else {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "runtime is not ready".to_string(),
+        );
+    };
+    let authenticated = match command.validate_at(chrono::Utc::now()) {
+        Ok(()) => {
+            service
+                .authenticate_signed(
+                    &command.signer_did,
+                    &command.signing_payload(),
+                    &command.sig,
+                    &command.nonce,
+                )
+                .await
+        }
+        Err(invalid) => Err(invalid),
+    };
+    if let Err(refused) = authenticated {
+        return error(StatusCode::FORBIDDEN, format!("{refused:#}"));
+    }
+    let Some(runtime) = state.activation_runtime.get() else {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "runtime is not activated yet".to_string(),
+        );
+    };
+    match runtime
+        .read_usage(command.trigger, command.provider.as_deref())
+        .await
+    {
+        Ok(reads) => (
+            StatusCode::OK,
+            axum::Json(json!({ "agent_did": runtime.agent_did(), "reads": reads })),
+        )
+            .into_response(),
+        Err(failed) => error(StatusCode::INTERNAL_SERVER_ERROR, format!("{failed:#}")),
     }
 }
 
@@ -1203,5 +1254,80 @@ mod tests {
             Some("unknown")
         );
         assert_eq!(payload.get("behavior"), Some(&Value::Null));
+    }
+
+    async fn usage_route(
+        state: &RuntimeHttpState,
+        command: crate::commands::accounts::UsageReadCommand,
+    ) -> (StatusCode, Value) {
+        let response = account_usage_read_handler(State(state.clone()), axum::Json(command)).await;
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("usage body");
+        (status, serde_json::from_slice(&body).expect("usage json"))
+    }
+
+    fn usage_command(signer_did: &str) -> crate::commands::accounts::UsageReadCommand {
+        crate::commands::accounts::UsageReadCommand {
+            trigger: gents::usage_observation::UsageTrigger::Open,
+            provider: None,
+            signer_did: signer_did.to_string(),
+            issued_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            nonce: "nonce-usage-1".to_string(),
+            sig: vec![0; 64],
+        }
+    }
+
+    #[tokio::test]
+    async fn account_usage_route_is_unavailable_before_activation() {
+        let (status, body) = usage_route(&state(), usage_command("did:key:zAgent")).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert!(body["error"].is_string(), "{body}");
+    }
+
+    #[tokio::test]
+    async fn account_usage_route_refuses_unsigned_and_foreign_signers() {
+        let temp = tempfile::tempdir().unwrap();
+        let key = |name: &str| -> Arc<dyn gents::AgentIdentity> {
+            Arc::new(gents::KeyIdentity::load_or_create(temp.path().join(name), None).unwrap())
+        };
+        let (identity, other) = (key("runtime.key"), key("other.key"));
+        let node = Arc::new(
+            gents::defra_node::EmbeddedNode::builder()
+                .build()
+                .await
+                .unwrap(),
+        );
+        gents::migration::ensure_all_runtime_migrations(node.clone())
+            .await
+            .unwrap();
+        let state = state();
+        *state.enrollment_decisions.write().await = Some(
+            crate::http::enrollment::EnrollmentDecisionService::new(identity.clone(), node),
+        );
+        let signed = |identity: &Arc<dyn gents::AgentIdentity>| {
+            let identity = identity.clone();
+            async move {
+                crate::commands::accounts::UsageReadCommand::signed(
+                    identity.as_ref(),
+                    gents::usage_observation::UsageTrigger::Open,
+                    None,
+                )
+                .await
+                .unwrap()
+            }
+        };
+
+        let (status, body) = usage_route(&state, usage_command(identity.did())).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "unsigned: {body}");
+        let (status, body) = usage_route(&state, signed(&other).await).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "foreign: {body}");
+
+        let command = signed(&identity).await;
+        let (status, body) = usage_route(&state, command.clone()).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "signed: {body}");
+        let (status, body) = usage_route(&state, command).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "replay: {body}");
     }
 }

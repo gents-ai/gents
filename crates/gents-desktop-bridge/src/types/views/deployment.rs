@@ -235,6 +235,9 @@ pub struct InferenceBackendView {
     /// Canonical provider advertisements for model-specific editing controls.
     pub advertised_models: Vec<gents::document_config::AdvertisedModel>,
     pub probe_status: Option<String>,
+    /// The account a subscription backend runs on; `None` is the provider's
+    /// original account (and every backend that uses no account).
+    pub account_ref: Option<String>,
 }
 
 // Configurations without credentials use their canonical serialized documents.
