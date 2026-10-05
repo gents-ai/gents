@@ -1,4 +1,4 @@
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import type {
@@ -7,9 +7,7 @@ import type {
   DesktopClientSnapshot,
 } from "@source-inc/gents-desktop-client";
 import { createDesktopShellConfigActions } from "../src/hooks/desktopShellConfigActions";
-import { useDesktopClientLifecycle } from "../src/hooks/useDesktopClientLifecycle";
-import { storesFor } from "./fleet-fixture";
-import { createSelectionStore } from "../src/hooks/selectionStore";
+import { lifecycleFor } from "./shell-fixture";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -29,20 +27,6 @@ function snapshot(label: string): DesktopClientSnapshot {
   } as unknown as DesktopClientSnapshot;
 }
 
-function renderLifecycle(api: DesktopApiAdapter) {
-  return renderHook(() =>
-    useDesktopClientLifecycle({
-      api,
-      ...storesFor(api),
-      supportsManagedServer: false,
-      refreshSession: vi.fn(async () => null),
-      store: selectionFor(api),
-      setError: vi.fn(),
-      setSession: vi.fn(),
-    }),
-  );
-}
-
 function configActions(
   api: DesktopApiAdapter,
   mutateSnapshot: <T>(operation: () => Promise<T>) => Promise<T>,
@@ -51,8 +35,6 @@ function configActions(
     api,
     mutateSnapshot,
     setError: vi.fn(),
-    setSelectedAgentDid: vi.fn(),
-    setSelectedBehaviorId: vi.fn(),
   });
 }
 
@@ -73,29 +55,25 @@ describe("desktop snapshot publication", () => {
       fetchDesktopSnapshot,
       saveBackendConfig,
     } as unknown as DesktopApiAdapter;
-    const { result } = renderLifecycle(api);
-    await waitFor(() => expect(result.current.snapshot).not.toBeNull());
-    const actions = configActions(api, result.current.mutateSnapshot);
+    const lifecycle = lifecycleFor(api);
+    await waitFor(() => expect(lifecycle.snapshot).not.toBeNull());
+    const actions = configActions(api, lifecycle.mutateSnapshot);
 
     const older = actions.onSaveBackendConfig({} as BackendSaveRequest);
     const newer = actions.onSaveBackendConfig({} as BackendSaveRequest);
     const newerPayload = snapshot("newer-stale-payload");
     let newerResult: DesktopClientSnapshot | undefined;
-    await act(async () => {
-      secondSave.resolve(newerPayload);
-      newerResult = await newer;
-    });
+    secondSave.resolve(newerPayload);
+    newerResult = await newer;
     expect(newerResult).toBe(newerPayload);
-    expect(result.current.snapshot).toBe(authoritative);
+    expect(lifecycle.snapshot).toBe(authoritative);
 
     const olderPayload = snapshot("older-stale-payload");
     let olderResult: DesktopClientSnapshot | undefined;
-    await act(async () => {
-      firstSave.resolve(olderPayload);
-      olderResult = await older;
-    });
+    firstSave.resolve(olderPayload);
+    olderResult = await older;
     expect(olderResult).toBe(olderPayload);
-    expect(result.current.snapshot).toBe(authoritative);
+    expect(lifecycle.snapshot).toBe(authoritative);
     expect(fetchDesktopSnapshot).toHaveBeenCalledTimes(3);
   });
 
@@ -110,28 +88,18 @@ describe("desktop snapshot publication", () => {
       fetchDesktopSnapshot,
       saveBackendConfig: vi.fn(() => failedSave.promise),
     } as unknown as DesktopApiAdapter;
-    const { result } = renderLifecycle(api);
-    await waitFor(() => expect(result.current.snapshot).not.toBeNull());
-    const actions = configActions(api, result.current.mutateSnapshot);
+    const lifecycle = lifecycleFor(api);
+    await waitFor(() => expect(lifecycle.snapshot).not.toBeNull());
+    const actions = configActions(api, lifecycle.mutateSnapshot);
 
-    let reading!: Promise<void>;
-    act(() => {
-      reading = result.current.refreshSnapshot();
-    });
+    const reading = lifecycle.refreshSnapshot();
     const mutation = actions.onSaveBackendConfig({} as BackendSaveRequest);
     failedSave.reject(new Error("write rejected"));
     await expect(mutation).rejects.toThrow("write rejected");
 
     const observed = snapshot("read-after-failure");
     pendingRead.resolve(observed);
-    await act(async () => reading);
-    expect(result.current.snapshot).toBe(observed);
+    await reading;
+    expect(lifecycle.snapshot).toBe(observed);
   });
 });
-
-const selections = new WeakMap<object, ReturnType<typeof createSelectionStore>>();
-function selectionFor(api: object) {
-  const found = selections.get(api) ?? createSelectionStore();
-  selections.set(api, found);
-  return found;
-}

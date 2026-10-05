@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { DeploymentView } from "@source-inc/gents-desktop-client";
 import { createDesktopShellSelectionActions } from "../src/hooks/desktopShellSelectionActions";
 import { selection } from "../src/hooks/selectionStore";
-import { shellStores } from "./fleet-fixture";
+import { shellStores } from "./shell-fixture";
 
 const node = (agentDid: string, sessionIds: string[]) =>
   ({

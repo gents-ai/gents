@@ -5,7 +5,7 @@ import { ShellProvider } from "@/app/ShellContext";
 import { clearSurfaces, registerSurface } from "@/app/surfaces";
 import { workspace } from "@/app/workspace";
 import type { Shell } from "@/hooks/useShell";
-import { fleetFor } from "./fleet-fixture";
+import { fleetFor } from "./shell-fixture";
 
 const Nothing = () => null;
 const SCOPE = "session:a";

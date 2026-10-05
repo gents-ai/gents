@@ -5,7 +5,7 @@ import type {
   MailboxItemView,
 } from "@source-inc/gents-desktop-client";
 import { createDesktopShellMailboxActions } from "../src/hooks/desktopShellMailboxActions";
-import { shellStores } from "./fleet-fixture";
+import { shellStores } from "./shell-fixture";
 
 const item = {
   itemId: "item-1",

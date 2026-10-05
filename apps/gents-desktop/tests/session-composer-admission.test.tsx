@@ -14,7 +14,7 @@ import { useDesktopChatProjectionState } from "../src/hooks/useDesktopChatProjec
 import { MemoryNavProvider } from "@gents/shell";
 import { selectedSessionFields } from "./session-store-fixture";
 import { readSession, writeSession } from "../src/hooks/sessionStore";
-import { fleetFor } from "./fleet-fixture";
+import { fleetFor } from "./shell-fixture";
 import { useLayoutEffect, useState } from "react";
 import { createChatStore } from "../src/hooks/chatStore";
 import { createClientStore } from "../src/hooks/clientStore";

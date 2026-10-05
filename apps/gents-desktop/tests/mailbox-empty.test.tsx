@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import type { Shell } from "@/hooks/useShell";
 import { MailboxScreen } from "../src/ui/screens/MailboxScreen";
-import { fleetFor } from "./fleet-fixture";
+import { fleetFor } from "./shell-fixture";
 
 describe("empty mailbox", () => {
   it("says what arrives here and offers a session as the way to start new work", () => {

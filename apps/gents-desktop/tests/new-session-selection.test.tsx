@@ -11,7 +11,7 @@ import { useStore } from "zustand";
 import { setterOf } from "../src/hooks/chatStore";
 import { applyFleetSnapshot } from "../src/hooks/fleetStore";
 import { readSession, writeSession } from "../src/hooks/sessionStore";
-import { admittingProjection, shellStores } from "./fleet-fixture";
+import { admittingProjection, shellStores } from "./shell-fixture";
 import { useDesktopShellEffects } from "../src/hooks/desktopShellEffects";
 import { createDesktopShellSelectionActions } from "../src/hooks/desktopShellSelectionActions";
 import { createSelectionStore, useSelection } from "../src/hooks/selectionStore";
@@ -63,7 +63,6 @@ function useHarness(
     })),
   ).current;
   const api = useRef({ sendChatMessage }).current as unknown as DesktopApiAdapter;
-  const ref = useRef({ current: null }).current;
   const [route] = useState(() =>
     createDesktopShellSelectionActions({ stores, setError: vi.fn() }),
   );
@@ -80,11 +79,13 @@ function useHarness(
   }));
   useDesktopShellEffects({
     api,
-    autoRestartInFlight: { current: false },
-    autostartAttempted: { current: true },
+    recovery: {
+      autostartAttempted: true,
+      autoRestartInFlight: false,
+      lastP2PAutoRestartAt: null,
+      lastObservedP2PHealth: null,
+    },
     deployments,
-    lastObservedP2PHealth: ref,
-    lastP2PAutoRestartAt: ref,
     localWorkflow: workflow,
     clientAutostarts: () => false,
     listenToUpdates: async () => () => {},

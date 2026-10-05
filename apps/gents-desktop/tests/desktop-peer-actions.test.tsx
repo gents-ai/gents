@@ -9,7 +9,7 @@ import type {
 import { createDesktopShellPeerActions } from "../src/hooks/desktopShellPeerActions";
 import { createDesktopShellSelectionActions } from "../src/hooks/desktopShellSelectionActions";
 import { useSelection } from "../src/hooks/selectionStore";
-import { shellStores } from "./fleet-fixture";
+import { shellStores } from "./shell-fixture";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;

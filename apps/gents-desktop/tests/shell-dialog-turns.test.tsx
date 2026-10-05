@@ -127,7 +127,7 @@ import { SessionScreen } from "../src/ui/screens/SessionScreen";
 import { MemoryNavProvider } from "@gents/shell";
 import { selectedSessionFields } from "./session-store-fixture";
 import { createDraftStore } from "../src/hooks/draftStore";
-import { fleetFor } from "./fleet-fixture";
+import { fleetFor } from "./shell-fixture";
 
 const healthy: SyncHealthView = {
   state: "healthy",

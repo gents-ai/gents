@@ -4,7 +4,7 @@ import { useStore } from "zustand";
 import { describe, expect, it, vi } from "vitest";
 import { createDesktopShellChatActions } from "../src/hooks/desktopShellChatActions";
 import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
-import { admittingProjection, shellStores } from "./fleet-fixture";
+import { admittingProjection, shellStores } from "./shell-fixture";
 
 const desktopShell = vi.hoisted(() => ({
   deployments: [

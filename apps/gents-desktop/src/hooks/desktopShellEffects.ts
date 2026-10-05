@@ -1,4 +1,4 @@
-import { useEffect, type MutableRefObject } from "react";
+import { useEffect } from "react";
 
 import type { ChatWorkflowState } from "@source-inc/gents-desktop-chat";
 import type {
@@ -16,16 +16,15 @@ import {
   shouldAutoRestartP2P,
   timingConfig,
 } from "./desktopShellRuntime";
+import type { ClientRecovery } from "./clientLifecycle";
 import { selection, type SelectionStore } from "./selectionStore";
 import { useDesktopProjectionEffects } from "./useDesktopProjectionEffects";
 
 type DesktopShellEffectsArgs = {
   api: DesktopApiAdapter;
-  autoRestartInFlight: MutableRefObject<boolean>;
-  autostartAttempted: MutableRefObject<boolean>;
+  /** what automatic recovery remembers between observations */
+  recovery: ClientRecovery;
   deployments: DeploymentView[];
-  lastObservedP2PHealth: MutableRefObject<P2PHealth | null>;
-  lastP2PAutoRestartAt: MutableRefObject<number | null>;
   localWorkflow: ChatWorkflowState;
   clientAutostarts: (snapshot: DesktopClientSnapshot) => boolean;
   listenToUpdates: DesktopClientUpdatedListenerFactory;
@@ -57,11 +56,8 @@ type DesktopShellEffectsArgs = {
 
 export function useDesktopShellEffects({
   api,
-  autoRestartInFlight,
-  autostartAttempted,
+  recovery,
   deployments,
-  lastObservedP2PHealth,
-  lastP2PAutoRestartAt,
   localWorkflow,
   clientAutostarts,
   listenToUpdates,
@@ -104,44 +100,37 @@ export function useDesktopShellEffects({
       return;
     }
 
-    if (autostartAttempted.current) {
+    if (recovery.autostartAttempted) {
       return;
     }
 
-    autostartAttempted.current = true;
+    recovery.autostartAttempted = true;
     void onStartClient();
-  }, [
-    autostartAttempted,
-    clientAutostarts,
-    onStartClient,
-    sending,
-    snapshot,
-    starting,
-  ]);
+  }, [recovery, clientAutostarts, onStartClient, sending, snapshot, starting]);
 
   useEffect(() => {
-    const previousHealth = lastObservedP2PHealth.current;
-    lastObservedP2PHealth.current = runtimeHealth;
+    const previousHealth = recovery.lastObservedP2PHealth;
+    recovery.lastObservedP2PHealth = runtimeHealth;
 
     if (!runtimeHealth) {
       return;
     }
 
     if (runtimeHealth.status === "healthy") {
-      lastP2PAutoRestartAt.current = null;
+      recovery.lastP2PAutoRestartAt = null;
       return;
     }
 
     if (
       !ownsAutomaticRecovery() ||
-      autoRestartInFlight.current ||
+      recovery.autoRestartInFlight ||
       starting ||
       stopping ||
       sending ||
       !shouldAutoRestartP2P(
         previousHealth,
         runtimeHealth,
-        lastP2PAutoRestartAt.current,
+        recovery.lastP2PAutoRestartAt,
         Date.now(),
         timingConfig().p2pAutoRestartCooldownMs,
       )
@@ -149,21 +138,12 @@ export function useDesktopShellEffects({
       return;
     }
 
-    lastP2PAutoRestartAt.current = Date.now();
+    recovery.lastP2PAutoRestartAt = Date.now();
     logShellEvent(
       `auto restart requested reason="P2P transport wedged" status=${runtimeHealth.status} failures=${runtimeHealth.consecutiveFailures}`,
     );
     void restartDesktopClient("P2P transport wedged");
-  }, [
-    autoRestartInFlight,
-    lastObservedP2PHealth,
-    lastP2PAutoRestartAt,
-    restartDesktopClient,
-    runtimeHealth,
-    sending,
-    starting,
-    stopping,
-  ]);
+  }, [recovery, restartDesktopClient, runtimeHealth, sending, starting, stopping]);
 
   useDesktopProjectionEffects({
     clientAvailable,

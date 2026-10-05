@@ -1,9 +1,9 @@
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { useDesktopClientLifecycle } from "../src/hooks/useDesktopClientLifecycle";
 import { createSelectionStore } from "../src/hooks/selectionStore";
-import { storesFor } from "./fleet-fixture";
+import { readSession, writeSession } from "../src/hooks/sessionStore";
+import { lifecycleFor } from "./shell-fixture";
 
 const ownership = vi.hoisted(() => ({ main: true }));
 vi.mock("../src/lib/shellPlatform", () => ({
@@ -40,18 +40,8 @@ describe("desktop client restart selection ordering", () => {
         startManagedServer: vi.fn().mockResolvedValue({ state: "running" }),
         fetchDesktopSnapshot: vi.fn().mockResolvedValue(snapshot),
       };
-      const { result } = renderHook(() =>
-        useDesktopClientLifecycle({
-          api,
-          ...storesFor(api),
-          supportsManagedServer: true,
-          refreshSession: vi.fn(async () => null),
-          store: createSelectionStore(),
-          setError: vi.fn(),
-          setSession: vi.fn(),
-        } as unknown as Parameters<typeof useDesktopClientLifecycle>[0]),
-      );
-      await waitFor(() => expect(result.current.startupPhase).toBe("ready"));
+      const lifecycle = lifecycleFor(api, { supportsManagedServer: true });
+      await waitFor(() => expect(lifecycle.startupPhase).toBe("ready"));
       expect(api.startManagedServer).not.toHaveBeenCalled();
       expect(api.managedServerStatus).toHaveBeenCalledTimes(main ? 1 : 0);
       expect(api.fetchDesktopSnapshot).toHaveBeenCalledOnce();
@@ -72,35 +62,22 @@ describe("desktop client restart selection ordering", () => {
         .mockResolvedValue(newer),
       startDesktopClient: vi.fn(() => start.promise),
     };
-    const { result } = renderHook(() =>
-      useDesktopClientLifecycle({
-        api,
-        ...storesFor(api),
-        supportsManagedServer: false,
-        refreshSession: vi.fn(async () => null),
-        store,
-        setError: vi.fn(),
-        setSession: vi.fn(),
-      } as unknown as Parameters<typeof useDesktopClientLifecycle>[0]),
-    );
+    const lifecycle = lifecycleFor(api, { selection: store });
     await waitFor(() => expect(api.fetchDesktopSnapshot).toHaveBeenCalledOnce());
 
-    let starting!: Promise<Record<string, unknown>>;
-    act(() => {
-      starting = result.current.ensureDesktopClientStarted();
-    });
+    const starting = lifecycle.ensureDesktopClientStarted();
     start.resolve(newer);
-    await act(async () => starting);
-    expect(result.current.snapshot).toBe(newer);
-    expect(result.current.startupPhase).toBe("ready");
+    await starting;
+    expect(lifecycle.snapshot).toBe(newer);
+    expect(lifecycle.startupPhase).toBe("ready");
 
     refresh.resolve({
       bootstrap: { clientStateExists: false, savedPeers: [] },
       client: null,
     });
-    await act(async () => refresh.promise);
-    expect(result.current.snapshot).toBe(newer);
-    expect(result.current.startupPhase).toBe("ready");
+    await refresh.promise;
+    expect(lifecycle.snapshot).toBe(newer);
+    expect(lifecycle.startupPhase).toBe("ready");
   });
 
   it.each(["start", "restart"])(
@@ -117,34 +94,21 @@ describe("desktop client restart selection ordering", () => {
         shutdownDesktopClient: vi.fn(async () => stopped),
         startDesktopClient: vi.fn(() => start.promise),
       };
-      const { result } = renderHook(() =>
-        useDesktopClientLifecycle({
-          api,
-          ...storesFor(api),
-          supportsManagedServer: false,
-          refreshSession: vi.fn(async () => null),
-          store: createSelectionStore(),
-          setError: vi.fn(),
-          setSession: vi.fn(),
-        } as unknown as Parameters<typeof useDesktopClientLifecycle>[0]),
-      );
-      await waitFor(() => expect(result.current.snapshot).not.toBeNull());
-      let pending!: Promise<unknown>;
-      act(() => {
-        pending =
-          operation === "start"
-            ? result.current.ensureDesktopClientStarted()
-            : result.current.restartDesktopClient("test");
-      });
+      const lifecycle = lifecycleFor(api);
+      await waitFor(() => expect(lifecycle.snapshot).not.toBeNull());
+      const pending =
+        operation === "start"
+          ? lifecycle.ensureDesktopClientStarted()
+          : lifecycle.restartDesktopClient("test");
       await waitFor(() => expect(api.startDesktopClient).toHaveBeenCalledOnce());
-      await act(async () => result.current.refreshSnapshot());
-      expect(result.current.snapshot).toBe(stopped);
+      await lifecycle.refreshSnapshot();
+      expect(lifecycle.snapshot).toBe(stopped);
       api.fetchDesktopSnapshot.mockResolvedValue(ready);
       start.resolve(ready);
-      await act(async () => pending);
-      expect(result.current.snapshot).toBe(ready);
-      expect(result.current.startupPhase).toBe("ready");
-      expect(result.current.starting).toBe(false);
+      await pending;
+      expect(lifecycle.snapshot).toBe(ready);
+      expect(lifecycle.startupPhase).toBe("ready");
+      expect(lifecycle.starting).toBe(false);
       expect(api.fetchDesktopSnapshot).toHaveBeenCalledTimes(3);
     },
   );
@@ -159,7 +123,6 @@ describe("desktop client restart selection ordering", () => {
       bootstrap: { clientStateExists: true, savedPeers: [] },
       client: {},
     };
-    const setError = vi.fn();
     const api = {
       fetchDesktopSnapshot: vi
         .fn()
@@ -167,32 +130,17 @@ describe("desktop client restart selection ordering", () => {
         .mockResolvedValueOnce(refreshed),
       startDesktopClient: vi.fn(() => start.promise),
     };
-    const { result } = renderHook(() =>
-      useDesktopClientLifecycle({
-        api,
-        ...storesFor(api),
-        supportsManagedServer: false,
-        refreshSession: vi.fn(async () => null),
-        store: createSelectionStore(),
-        setError,
-        setSession: vi.fn(),
-      } as unknown as Parameters<typeof useDesktopClientLifecycle>[0]),
-    );
-    await waitFor(() => expect(result.current.snapshot).not.toBeNull());
+    const lifecycle = lifecycleFor(api);
+    await waitFor(() => expect(lifecycle.snapshot).not.toBeNull());
 
-    let starting!: Promise<Record<string, unknown>>;
-    act(() => {
-      starting = result.current.ensureDesktopClientStarted();
-    });
-    await act(async () => result.current.refreshSnapshot());
+    const starting = lifecycle.ensureDesktopClientStarted();
+    await lifecycle.refreshSnapshot();
     start.reject(new Error("stale start failed"));
-    await act(async () => {
-      await expect(starting).rejects.toThrow("stale start failed");
-    });
+    await expect(starting).rejects.toThrow("stale start failed");
 
-    expect(result.current.snapshot).toBe(refreshed);
-    expect(result.current.startupPhase).toBe("ready");
-    expect(setError).not.toHaveBeenCalledWith("Error: stale start failed");
+    expect(lifecycle.snapshot).toBe(refreshed);
+    expect(lifecycle.startupPhase).toBe("ready");
+    expect(lifecycle.errors).not.toContain("Error: stale start failed");
   });
 
   it("reports a failed start when a newer read only observed the stopped client", async () => {
@@ -201,41 +149,24 @@ describe("desktop client restart selection ordering", () => {
       bootstrap: { clientStateExists: true, savedPeers: [{}] },
       client: null,
     };
-    const setError = vi.fn();
     const api = {
       fetchDesktopSnapshot: vi.fn().mockResolvedValue(stopped),
       startDesktopClient: vi.fn(() => start.promise),
     };
-    const { result } = renderHook(() =>
-      useDesktopClientLifecycle({
-        api,
-        ...storesFor(api),
-        supportsManagedServer: false,
-        refreshSession: vi.fn(async () => null),
-        store: createSelectionStore(),
-        setError,
-        setSession: vi.fn(),
-      } as unknown as Parameters<typeof useDesktopClientLifecycle>[0]),
-    );
-    await waitFor(() => expect(result.current.snapshot).not.toBeNull());
-    let pending!: Promise<unknown>;
-    act(() => {
-      pending = result.current.ensureDesktopClientStarted();
-    });
-    await act(async () => result.current.refreshSnapshot());
+    const lifecycle = lifecycleFor(api);
+    await waitFor(() => expect(lifecycle.snapshot).not.toBeNull());
+    const pending = lifecycle.ensureDesktopClientStarted();
+    await lifecycle.refreshSnapshot();
     start.reject(new Error("start failed"));
-    await act(async () => {
-      await expect(pending).rejects.toThrow("start failed");
-    });
-    expect(result.current.startupPhase).toBe("client-error");
-    expect(result.current.starting).toBe(false);
-    expect(setError).toHaveBeenCalledWith("Error: start failed");
+    await expect(pending).rejects.toThrow("start failed");
+    expect(lifecycle.startupPhase).toBe("client-error");
+    expect(lifecycle.starting).toBe(false);
+    expect(lifecycle.errors).toContain("Error: start failed");
   });
 
   it("does not clear a session selected while a restart from new-compose is pending", async () => {
     const restarted = deferred<Record<string, unknown>>();
     const store = createSelectionStore();
-    const setSession = vi.fn();
     const api = {
       fetchDesktopSnapshot: vi.fn(async () => ({
         bootstrap: { clientStateExists: false, savedPeers: [] },
@@ -244,33 +175,24 @@ describe("desktop client restart selection ordering", () => {
       shutdownDesktopClient: vi.fn(async () => undefined),
       startDesktopClient: vi.fn(() => restarted.promise),
     };
-    const { result } = renderHook(() =>
-      useDesktopClientLifecycle({
-        api,
-        ...storesFor(api),
-        supportsManagedServer: false,
-        refreshSession: vi.fn(async () => null),
-        store,
-        setError: vi.fn(),
-        setSession,
-      } as unknown as Parameters<typeof useDesktopClientLifecycle>[0]),
-    );
+    const lifecycle = lifecycleFor(api, { selection: store });
     await waitFor(() => expect(api.fetchDesktopSnapshot).toHaveBeenCalled());
-    setSession.mockClear();
 
-    let restart!: Promise<void>;
-    act(() => {
-      restart = result.current.restartDesktopClient("test");
-    });
+    const restart = lifecycle.restartDesktopClient("test");
     await waitFor(() => expect(api.startDesktopClient).toHaveBeenCalled());
     store.setState({ sessionId: "newly-selected-session" });
+    writeSession(lifecycle.stores.session, {
+      sessionId: "newly-selected-session",
+    } as never);
     restarted.resolve({
       bootstrap: { clientStateExists: true, savedPeers: [] },
       client: null,
     });
-    await act(async () => restart);
+    await restart;
 
-    expect(setSession).not.toHaveBeenCalledWith(null);
+    expect(readSession(lifecycle.stores.session)?.sessionId).toBe(
+      "newly-selected-session",
+    );
   });
 
   it("recovers client-error when a successful start is finally observed after a failed read", async () => {
@@ -287,22 +209,12 @@ describe("desktop client restart selection ordering", () => {
         .mockResolvedValue(ready),
       startDesktopClient: vi.fn().mockResolvedValue(ready),
     };
-    const { result } = renderHook(() =>
-      useDesktopClientLifecycle({
-        api,
-        ...storesFor(api),
-        supportsManagedServer: false,
-        refreshSession: vi.fn(async () => null),
-        store: createSelectionStore(),
-        setError: vi.fn(),
-        setSession: vi.fn(),
-      } as unknown as Parameters<typeof useDesktopClientLifecycle>[0]),
-    );
-    await waitFor(() => expect(result.current.snapshot).not.toBeNull());
-    await act(async () => result.current.ensureDesktopClientStarted());
-    expect(result.current.startupPhase).toBe("client-error");
-    await act(async () => result.current.refreshSnapshot());
-    expect(result.current.startupPhase).toBe("ready");
-    expect(result.current.snapshot).toBe(ready);
+    const lifecycle = lifecycleFor(api);
+    await waitFor(() => expect(lifecycle.snapshot).not.toBeNull());
+    await lifecycle.ensureDesktopClientStarted();
+    expect(lifecycle.startupPhase).toBe("client-error");
+    await lifecycle.refreshSnapshot();
+    expect(lifecycle.startupPhase).toBe("ready");
+    expect(lifecycle.snapshot).toBe(ready);
   });
 });

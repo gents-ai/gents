@@ -16,6 +16,8 @@ import type {
     to, and what the managed server is doing. */
 export type ClientState = {
   snapshot: DesktopClientSnapshot | null;
+  /** the client's own failure, shown in the banner with Reconnect */
+  error: string | null;
   startupPhase: DesktopStartupPhase;
   starting: boolean;
   stopping: boolean;
@@ -39,6 +41,7 @@ export function createClientStore(
 ) {
   return createStore<ClientState>(() => ({
     snapshot: null,
+    error: null,
     startupPhase,
     starting: false,
     stopping: false,

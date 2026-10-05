@@ -14,7 +14,7 @@ import { copyText } from "@source-inc/gents-desktop-ui";
 import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
 import { deployment } from "./config-panel-wiring/fixtures";
 import type { ShellProjection } from "../src/hooks/shellProjection";
-import { shellStores } from "./fleet-fixture";
+import { shellStores } from "./shell-fixture";
 
 /** chat actions on session s1 of `deployment`, admitted by the projections given */
 function chatActions(

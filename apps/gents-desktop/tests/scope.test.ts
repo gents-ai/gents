@@ -16,7 +16,7 @@ import {
   sessionsInScope,
 } from "@/lib/scope";
 import { workingNode } from "@/lib/nodes";
-import { fleetFor } from "./fleet-fixture";
+import { fleetFor } from "./shell-fixture";
 
 const session = (id: string, agentDid: string, behaviorId: string, updatedAt: string) =>
   ({ sessionId: id, agentDid, behaviorId, updatedAt }) as unknown as SessionSummary;

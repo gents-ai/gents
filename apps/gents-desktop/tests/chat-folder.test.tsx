@@ -6,7 +6,7 @@ import {
 } from "../src/hooks/chatFolders";
 import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 import { createDesktopShellChatActions } from "../src/hooks/desktopShellChatActions";
-import { admittingProjection, shellStores } from "./fleet-fixture";
+import { admittingProjection, shellStores } from "./shell-fixture";
 import { folderLabel } from "../src/ui/screens/ChatFolderPicker";
 
 describe("chat folders", () => {

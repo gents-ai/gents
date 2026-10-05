@@ -1,5 +1,11 @@
-import type { DesktopClientSnapshot } from "@source-inc/gents-desktop-client";
+import { vi } from "vitest";
 
+import type {
+  DesktopApiAdapter,
+  DesktopClientSnapshot,
+} from "@source-inc/gents-desktop-client";
+
+import { createClientLifecycle } from "../src/hooks/clientLifecycle";
 import { createChatStore, type ChatState } from "../src/hooks/chatStore";
 import { createClientStore, type ClientStore } from "../src/hooks/clientStore";
 import {
@@ -7,7 +13,11 @@ import {
   createFleetStore,
   type FleetStore,
 } from "../src/hooks/fleetStore";
-import { createSelectionStore, type SelectionState } from "../src/hooks/selectionStore";
+import {
+  createSelectionStore,
+  type SelectionState,
+  type SelectionStore,
+} from "../src/hooks/selectionStore";
 import { createSessionStore } from "../src/hooks/sessionStore";
 import type { ShellProjection, ShellStores } from "../src/hooks/shellProjection";
 
@@ -19,20 +29,6 @@ export function fleetFor(deployments: unknown[] = []) {
     client: { deployments },
   } as unknown as DesktopClientSnapshot);
   return fleet;
-}
-
-/* one set of client stores per test, found by the test's api object, since
-   a hook's options are rebuilt on every render */
-const lifecycleStores = new WeakMap<
-  object,
-  { client: ClientStore; fleet: FleetStore }
->();
-export function storesFor(api: object) {
-  const found = lifecycleStores.get(api);
-  if (found) return found;
-  const stores = { client: createClientStore(), fleet: createFleetStore() };
-  lifecycleStores.set(api, stores);
-  return stores;
 }
 
 /** Every shell store, holding `deployments` as both the client's read and
@@ -85,4 +81,47 @@ export function historyOf<K extends keyof ChatState>(stores: ShellStores, key: K
     if (state[key] !== prev[key]) values.push(state[key]);
   });
   return values;
+}
+
+/** A started lifecycle over fresh stores, as the app makes it, with the
+    client's state read through getters and every banner error kept. */
+export function lifecycleFor(
+  api: object,
+  {
+    supportsManagedServer = false,
+    selection,
+  }: { supportsManagedServer?: boolean; selection?: SelectionStore } = {},
+) {
+  const stores = shellStores();
+  if (selection) stores.selection = selection;
+  stores.client.setState({
+    startupPhase: supportsManagedServer
+      ? "checking-managed-server"
+      : "loading-configuration",
+  });
+  const errors: (string | null)[] = [];
+  stores.client.subscribe((state, prev) => {
+    if (state.error !== prev.error) errors.push(state.error);
+  });
+  const lifecycle = createClientLifecycle({
+    api: api as DesktopApiAdapter,
+    supportsManagedServer,
+    stores,
+    refreshSession: vi.fn(async () => null),
+  });
+  void lifecycle.initializeDesktop();
+  return {
+    ...lifecycle,
+    stores,
+    errors,
+    get snapshot() {
+      return stores.client.getState().snapshot;
+    },
+    get startupPhase() {
+      return stores.client.getState().startupPhase;
+    },
+    get starting() {
+      return stores.client.getState().starting;
+    },
+  };
 }

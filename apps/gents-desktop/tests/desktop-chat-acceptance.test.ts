@@ -10,7 +10,7 @@ import {
 } from "../src/hooks/desktopShellChatActions";
 import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 import { selection } from "../src/hooks/selectionStore";
-import { admittingProjection, historyOf, shellStores } from "./fleet-fixture";
+import { admittingProjection, historyOf, shellStores } from "./shell-fixture";
 
 function fixture(
   send: () => Promise<unknown>,

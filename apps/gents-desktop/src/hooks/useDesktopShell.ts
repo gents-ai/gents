@@ -1,32 +1,21 @@
-import { useMemo, useState, type SetStateAction } from "react";
-
-import { setDesktopShellTimingConfigForTests } from "./desktopShellRuntime";
-import { useDesktopShellEffects } from "./desktopShellEffects";
-import { useDesktopClientLifecycle } from "./useDesktopClientLifecycle";
-import { useDesktopChatProjectionState } from "./useDesktopChatProjectionState";
-import { createChatStore } from "./chatStore";
-import { createClientStore } from "./clientStore";
-import { createFleetStore } from "./fleetStore";
-import { createSelectionStore, useSelection } from "./selectionStore";
-import { projectShell, projectionInputsOf, type ShellStores } from "./shellProjection";
-import {
-  createSessionStore,
-  headerOf,
-  useSessionFields,
-  useSessionValue,
-  writeSession,
-} from "./sessionStore";
-import { selectedIn } from "../ui/hooks/useSelectedSession";
-import { createSessionReads } from "./sessionReads";
-import { createShellActions } from "./shellActions";
-import { folderOf } from "./chatFolders";
+import { useMemo, useState } from "react";
 import { useStore } from "zustand";
+
 import type {
   DesktopApiAdapter,
   DesktopClientUpdatedListenerFactory,
-  DesktopSessionSnapshot,
 } from "@source-inc/gents-desktop-client";
+
 import { projectSessionLoadingStatus } from "../lib/loadingStatus";
+import { selectedIn } from "../ui/hooks/useSelectedSession";
+import { folderOf } from "./chatFolders";
+import { createDesktopApp } from "./desktopApp";
+import { useDesktopShellEffects } from "./desktopShellEffects";
+import { setDesktopShellTimingConfigForTests } from "./desktopShellRuntime";
+import { useSelection } from "./selectionStore";
+import { headerOf, useSessionFields, useSessionValue } from "./sessionStore";
+import { useDesktopChatProjectionState } from "./useDesktopChatProjectionState";
+import { useDesktopClientLifecycle } from "./useDesktopClientLifecycle";
 
 export { setDesktopShellTimingConfigForTests };
 export type { DesktopStartupPhase } from "./useDesktopClientLifecycle";
@@ -45,97 +34,32 @@ export function useDesktopShell({
   supportsManagedServer = false,
   reportFailure,
 }: DesktopShellBridge) {
-  /* every store the shell is projected from, created once: screens select
-     from them, and actions read them when they run */
-  const [stores] = useState<ShellStores>(() => ({
-    selection: createSelectionStore(),
-    session: createSessionStore(),
-    fleet: createFleetStore(),
-    client: createClientStore(
-      supportsManagedServer ? "checking-managed-server" : "loading-configuration",
-    ),
-    chat: createChatStore(),
-  }));
-  /* the projection as the stores hold it now, for an action or a read */
-  const [projectNow] = useState(() => () => projectShell(projectionInputsOf(stores)));
-  const [trackedRequestId] = useState(() => () => projectNow().trackedRequestId);
+  /* the app outside React, made once: the bridge is the app's for its life */
+  const [app] = useState(() =>
+    createDesktopApp({ api, supportsManagedServer, reportFailure }),
+  );
+  const { stores, lifecycle, actions } = app;
   const store = stores.selection;
   const current = useSelection(store);
   const selectedAgentDid = current.agentDid;
   const selectedSessionId = current.sessionId;
   const selectedBehaviorId = current.behaviorId;
   const pendingMailboxCauseId = current.mailboxRoute?.itemId ?? null;
-  const [error, setError] = useState<string | null>(null);
-  /* A failed action is reported once, as a toast, by the action itself:
-     it happened where the person clicked and is over. Only the client's own
-     state belongs in the banner with Reconnect: the lifecycle, the session
-     reads and the effects that refresh in the background, so a repeated
-     poll failure does not raise a toast every interval. Actions clear an
-     earlier error with null; a toast has nothing to clear. The bridge is
-     the app's for its life, so this is made once. */
-  const [setActionError] = useState(() => (message: string | null) => {
-    if (message) reportFailure?.(message);
-  });
   const sessionStore = stores.session;
-  const [setSession] = useState(
-    () => (next: SetStateAction<DesktopSessionSnapshot | null>) =>
-      writeSession(sessionStore, next),
-  );
-  const [reads] = useState(() =>
-    createSessionReads({
-      api,
-      store,
-      sessionStore,
-      trackedRequestId,
-      setError,
-    }),
-  );
-  const { refreshSession, refreshSessionLiveDelta } = reads;
   const sessionLoad = useSessionValue(sessionStore, (state) => state.load);
   const {
-    autostartAttempted,
-    clientAutostarts,
-    autoRestartInFlight,
-    lastP2PAutoRestartAt,
-    lastObservedP2PHealth,
     snapshot,
-    mutateSnapshot,
+    error,
     startupPhase,
     starting,
     stopping,
-    refreshSnapshot,
-    ensureDesktopClientStarted,
-    onStartClient,
-    onRetryStartup,
     incompatibleHome,
     managedServerWait,
     diagnosticsHint,
-    onSkipManagedServerWait,
     canRestartManagedServer,
-    onRestartManagedServer,
-    restartDesktopClient,
-  } = useDesktopClientLifecycle({
-    api,
-    supportsManagedServer,
-    refreshSession,
-    store,
-    client: stores.client,
-    fleet: stores.fleet,
-    setError,
-    setSession,
-  });
-  /* every action, made once: each reads the stores when it runs */
-  const [actions] = useState(() =>
-    createShellActions({
-      api,
-      stores,
-      project: projectNow,
-      reads,
-      client: { refreshSnapshot, mutateSnapshot, ensureDesktopClientStarted },
-      setError: setActionError,
-    }),
-  );
-  const { selectAgent } = actions;
+  } = useDesktopClientLifecycle(api, stores.client, lifecycle);
+  const { selectAgent, refreshSession, refreshSessionLiveDelta, refreshSnapshot } =
+    actions;
   const deployments = snapshot?.client?.deployments ?? [];
   const selectedDeployment =
     deployments.find((deployment) => deployment.agentDid === selectedAgentDid) ?? null;
@@ -190,31 +114,28 @@ export function useDesktopShell({
   );
   useDesktopShellEffects({
     api,
-    autoRestartInFlight,
-    autostartAttempted,
+    recovery: lifecycle.recovery,
     deployments,
-    lastObservedP2PHealth,
-    lastP2PAutoRestartAt,
     localWorkflow,
-    clientAutostarts,
+    clientAutostarts: lifecycle.clientAutostarts,
     listenToUpdates,
     composingFor: current.composingFor,
-    onStartClient,
+    onStartClient: lifecycle.onStartClient,
     refreshSession,
     refreshSessionLiveDelta,
     refreshSnapshot,
-    restartDesktopClient,
+    restartDesktopClient: lifecycle.restartDesktopClient,
     runtimeHealth,
     selectedAgentDid,
     selectedBehaviorId,
     selectedDeployment,
     selectedSessionId,
     store,
-    trackedRequestId,
+    trackedRequestId: app.trackedRequestId,
     selectedTrackedRequestId,
     sending,
     setLocalWorkflow,
-    setError,
+    setError: lifecycle.setError,
     selectAgent,
     snapshot,
     starting,
@@ -226,7 +147,7 @@ export function useDesktopShell({
   );
 
   function onDismissError() {
-    setError(null);
+    lifecycle.setError(null);
   }
 
   return {
@@ -243,13 +164,13 @@ export function useDesktopShell({
     sending,
     error,
     onDismissError,
-    onRetryStartup,
+    onRetryStartup: lifecycle.onRetryStartup,
     incompatibleHome,
     managedServerWait,
     diagnosticsHint,
-    onSkipManagedServerWait,
+    onSkipManagedServerWait: lifecycle.onSkipManagedServerWait,
     canRestartManagedServer,
-    onRestartManagedServer,
+    onRestartManagedServer: lifecycle.onRestartManagedServer,
     selectedAgentDid,
     selectedSessionId,
     selectedBehaviorId,
