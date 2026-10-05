@@ -122,8 +122,10 @@ A graph node sends a `ChartRequest` record (every field above, plus `run_id`)
 and gets one `ChartResult` back: `chart`, `width`, `height`, `alt`, `svg`,
 `png_base64`, `png_width`, `png_height`, `series_json` (the `series` list as
 JSON text), `warnings` and `error` (the sentence, when nothing could be
-drawn). `data` may be a JSON string holding rows or CSV text. See the pack's
-README for the installable `chart-render` callback.
+drawn). `data` may be a JSON string holding rows or CSV text. A record stays
+under 2 MB: past that the SVG text is left out, then the PNG is drawn smaller,
+each with a warning. See the pack's README for the installable `chart-render`
+callback.
 
 ## Behaviour to know
 

@@ -94,7 +94,7 @@ data_tables node can be passed straight in.
 | --- | --- |
 | `chart`, `width`, `height` | what was drawn |
 | `alt` | the text description |
-| `svg` | the SVG document (left out, with a warning, when it would not fit the 4 MiB output limit; a `png`-only request has none) |
+| `svg` | the SVG document (left out, with a warning, when the record would pass 2 MB; a `png`-only request has none) |
 | `png_base64`, `png_width`, `png_height` | the PNG |
 | `svg_file`, `png_file` | files written by `chart-save` |
 | `series_json` | the `series` list as JSON text |
@@ -196,7 +196,7 @@ per table, 512 columns, a cell of at most 65 536 bytes (a larger one means the
 file is not a table), 24 series, 100 categories per axis, 80 heatmap rows or
 columns, 12 pie slices, 40 boxes, 1500 drawn points per line, 10 000 drawn
 scatter marks, 2000 bubbles, 200 histogram bins, 16 million pixels, and a
-reply under 4 MiB (the SVG text is left out first, then the PNG is drawn
+reply under 4 MiB, or a graph record under 2 MB (the SVG text is left out first, then the PNG is drawn
 smaller). A table is read in one streaming pass and only the columns the chart
 names are kept, so memory follows the chart, not the file.
 

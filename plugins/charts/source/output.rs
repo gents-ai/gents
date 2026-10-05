@@ -10,8 +10,11 @@ use crate::num::round_sig;
 use crate::raster::{self, Png};
 use crate::spec::Output;
 
-/// Bytes of JSON a result may take: the host caps output at 4 MiB.
+/// Bytes of JSON a tool result may take: the host caps output at 4 MiB.
 pub const BUDGET: usize = 3_700_000;
+/// Bytes of JSON a graph record may take. The record is stored as one
+/// document, so it is held well below the output cap.
+pub const RECORD_BUDGET: usize = 2_000_000;
 
 /// A file written into the bound folder.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -197,7 +200,11 @@ pub fn deliver_as(mut r: Rendered, output: Output, files: &[Written], shape: Sha
         };
         let text = serde_json::to_string(&doc)
             .map_err(|e| format!("the result could not be written: {e}"))?;
-        if text.len() <= BUDGET {
+        let budget = match shape {
+            Shape::Tool => BUDGET,
+            Shape::Record => RECORD_BUDGET,
+        };
+        if text.len() <= budget {
             return Ok(text);
         }
         if with_svg && output != Output::Png {
@@ -397,6 +404,22 @@ mod tests {
             .unwrap();
         let (width, _, _) = raster::decode(&png).unwrap();
         assert_eq!(width, 140, "200 pixels at 0.7");
+    }
+
+    #[test]
+    fn a_graph_record_is_held_to_the_smaller_budget_with_the_same_fallbacks() {
+        let r = rendered(RECORD_BUDGET + 10);
+        let text = deliver_as(r, Output::Both, &[], Shape::Record).unwrap();
+        assert!(text.len() <= RECORD_BUDGET, "{} bytes", text.len());
+        let v = parse(&text);
+        assert!(v.get("svg").is_none(), "the SVG text is left out first");
+        assert!(v["png_base64"].is_string());
+        assert!(v["warnings"].to_string().contains("SVG is left out"));
+        let same = rendered(RECORD_BUDGET + 10);
+        assert!(
+            deliver(same, Output::Both, &[]).is_ok_and(|t| t.contains("\"svg\"")),
+            "a tool result of that size keeps its SVG"
+        );
     }
 
     #[test]
