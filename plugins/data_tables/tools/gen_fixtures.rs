@@ -154,6 +154,59 @@ fn main() {
             ),
         ]),
     );
+    // Header rows with an empty cell, as spreadsheets and pandas write them.
+    put(root, "headers/pandas.csv", ",a,b\n0,1,2\n1,3,4\n");
+    put(
+        root,
+        "headers/gapx.xlsx",
+        fixtures::xlsx(&[(
+            "S",
+            vec![
+                vec![X::Empty, X::S("a"), X::S("b")],
+                vec![X::N("0"), X::N("1"), X::N("2")],
+                vec![X::N("1"), X::N("3"), X::N("4")],
+            ],
+        )]),
+    );
+    put(
+        root,
+        "headers/gapo.ods",
+        fixtures::ods(&[(
+            "S",
+            vec![
+                (1, vec![O::Gap(1), O::S("a"), O::S("b")]),
+                (1, vec![O::F("0"), O::F("1"), O::F("2")]),
+                (1, vec![O::F("1"), O::F("3"), O::F("4")]),
+            ],
+        )]),
+    );
+    // Text files that start like a binary format, and a one-column file whose values hold `;`.
+    put(root, "heads/parts.csv", "PAR1,qty\nbolt,4\n");
+    put(root, "heads/marks.csv", "ARROW1,qty\nbolt,4\n");
+    put(root, "heads/semis.csv", "v\n\"a;b\"\n\"c;d\"\n\"e;f\"\n");
+    // Tables at and past the column cap (2,000), two rows each.
+    for (name, width) in [("ok", 2_000), ("toowide", 2_001)] {
+        let header: Vec<String> = (0..width).map(|i| format!("c{i}")).collect();
+        let row: Vec<String> = (0..width).map(|i| i.to_string()).collect();
+        put(
+            root,
+            &format!("wide/{name}.csv"),
+            format!(
+                "{}\n{}\n{}\n",
+                header.join(","),
+                row.join(","),
+                row.join(",")
+            ),
+        );
+    }
+    // A link that leaves its folder is refused with a plain sentence, not followed.
+    #[cfg(unix)]
+    {
+        put(root, "links/inside.csv", "k\n1\n");
+        let link = root.join("links/outside.csv");
+        let _ = std::fs::remove_file(&link);
+        std::os::unix::fs::symlink("../formats/people.csv", &link).unwrap();
+    }
     put(root, "hostile/bomb.xlsx", fixtures::zip_bomb());
     put(
         root,

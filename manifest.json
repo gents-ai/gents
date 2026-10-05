@@ -86,7 +86,7 @@
           },
           "max_bytes": {
             "default": 1000000,
-            "description": "The most bytes of row data one page returns.",
+            "description": "The most bytes of row data one page returns; the whole result stays under 3.5 MB, so a page may hold fewer rows and then carries next.cursor.",
             "maximum": 3000000,
             "minimum": 4096,
             "type": "integer"

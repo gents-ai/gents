@@ -1,7 +1,7 @@
 {
   "bind": "fixtures/formats",
   "expect": {
-    "markdown": "| table | source | rows | columns |\n| --- | --- | --- | --- |\n| bom | bom.csv | 2 | k, v |\n| book_Budget | book.ods#Budget | 4 | item, cost, due, paid |\n| book_Rates | book.ods#Rates | 1 | kind, rate |\n| book_Sales | book.xlsx#Sales | 3 | region, units, price, day, ok |\n| book_Notes | book.xlsx#Notes | 2 | note |\n| dupes | dupes.csv | 2 | column_1, column_2, column_3, column_4 |\n| dupnames | dupnames.csv | 1 | x, x_2, y |\n| events | events.ndjson | 3 | t, kind |\n| latin1 | latin1.csv | 1 | name, city |\n| mixed | mixed.csv | 3 | v |\n| mixed_types | mixed_types.json | 3 | v |\n| nulls | nulls.csv | 3 | a, b |\n| people | people.csv | 3 | name, score, joined, active |\n| people_2 | people.parquet | 3 | id, name, score, active, born, seen, price, big, ... |\n| people_zstd | people_zstd.parquet | 3 | id, name, score, active, born, seen, price, big, ... |\n| pipes | pipes.txt | 2 | a, b |\n| ragged | ragged.csv | 3 | a, b, c |\n| records | records.json | 3 | id, name, tags, geo, extra |\n| semi | semi.csv | 2 | id, city, pop |\n| tabs | tabs.tsv | 2 | id, note |\n| utf16le | utf16le.csv | 2 | k, v |\n| zip_codes | zip_codes.csv | 2 | zip, n |",
+    "markdown": "| table | source | rows | columns |\n| --- | --- | --- | --- |\n| bom | bom.csv | 2 | k, v |\n| book_Budget | book.ods#Budget | 4 | item, cost, due, paid |\n| book_Rates | book.ods#Rates | 1 | kind, rate |\n| book_Sales | book.xlsx#Sales | 3 | region, units, price, day, ok |\n| book_Notes | book.xlsx#Notes | 2 | note |\n| dupes | dupes.csv | 1 | a, a_2, column_3, a_3 |\n| dupnames | dupnames.csv | 1 | x, x_2, y |\n| events | events.ndjson | 3 | t, kind |\n| latin1 | latin1.csv | 1 | name, city |\n| mixed | mixed.csv | 3 | v |\n| mixed_types | mixed_types.json | 3 | v |\n| nulls | nulls.csv | 3 | a, b |\n| people | people.csv | 3 | name, score, joined, active |\n| people_2 | people.parquet | 3 | id, name, score, active, born, seen, price, big, ... |\n| people_zstd | people_zstd.parquet | 3 | id, name, score, active, born, seen, price, big, ... |\n| pipes | pipes.txt | 2 | a, b |\n| ragged | ragged.csv | 3 | a, b, c |\n| records | records.json | 3 | id, name, tags, geo, extra |\n| semi | semi.csv | 2 | id, city, pop |\n| tabs | tabs.tsv | 2 | id, note |\n| utf16le | utf16le.csv | 2 | k, v |\n| zip_codes | zip_codes.csv | 2 | zip, n |",
     "tables": [
       {
         "column_count": 2,
@@ -116,29 +116,29 @@
         "column_count": 4,
         "columns": [
           {
-            "name": "column_1",
-            "type": "text"
+            "name": "a",
+            "type": "int64"
           },
           {
-            "name": "column_2",
-            "type": "text"
+            "name": "a_2",
+            "type": "int64"
           },
           {
             "name": "column_3",
             "type": "int64"
           },
           {
-            "name": "column_4",
-            "type": "text"
+            "name": "a_3",
+            "type": "int64"
           }
         ],
         "details": {
           "delimiter": ",",
-          "header": false
+          "header": true
         },
         "format": "csv",
         "name": "dupes",
-        "row_count": 2,
+        "row_count": 1,
         "source": "dupes.csv"
       },
       {

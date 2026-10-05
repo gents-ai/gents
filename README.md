@@ -12,7 +12,7 @@ ready-made **Data analyst** agent that uses them.
 | CSV, TSV, delimited text | delimiter and header detected (or set), quoted fields and newlines, UTF-8 BOM, UTF-16 with a byte order mark; an empty field is NULL, an empty quoted field is the empty string |
 | JSON, NDJSON | an array of records or any number of records one after another; nested objects are structs, arrays are lists |
 | Parquet | uncompressed, snappy, gzip, brotli, lz4 and zstd; only the columns a query names are read |
-| XLSX, ODS | every sheet is a table; number, date, boolean and text cells keep their type |
+| XLSX, ODS | every sheet is a table; number, date, boolean and text cells keep their type; a header row with an empty cell (a pandas index column) is a header |
 | inline `tables` | rows as JSON in the shape this plugin returns, so one call's result is the next call's input |
 
 | Mode | What it does |
@@ -139,8 +139,11 @@ A query with its own ORDER BY keeps it. Without one, a plain scan keeps the file
 shape (aggregates, joins, DISTINCT, windows, UNION) is sorted by all its output columns, ascending with NULLs
 last, so the same query always returns the same rows in the same order; `order` in the result says which rule
 applied. A page is rows `offset` to `offset + n` of that order. The cursor holds a fingerprint of the SQL, the
-options, and every table the query opened (its name, size and its first and last 64 KiB; a change in the middle of
-a file that keeps its size is not seen), and is refused with the reason when any changed. The query is run again
+options, and every table the query opened (its name, size, its first and last 64 KiB and 64 evenly spaced 4 KiB
+blocks between them, so a file of up to 384 KiB is covered whole; an edit that keeps the size of a larger file and
+misses every sampled block is not seen, and the clock is left out so the same file always gives the same cursor),
+and is refused with the reason when any changed. A table whose types came from a sample is read once in full when
+its result has a next page, so every page has the same column types. The query is run again
 for each page and the rows before the page are dropped as they stream, so memory stays flat and the cost of a page
 grows with its offset; narrow the query, or export the result, for a very long one.
 
@@ -153,7 +156,14 @@ and never spill to disk, so a query that cannot fit fails with a sentence naming
 killed. CSV and JSON types come from the first 100000 rows; a later value that disagrees makes the call read the
 table once in full to settle the type, and it still returns the right answer. SQL is limited to 64 KiB and 256
 levels of nesting, a row to 16 MiB, a text value in a result to 64 KiB (said in `warnings`), and a result page to
-3 MB of rows. The plugin's declared limits are 3072 MiB of memory, a 900 s wall clock and 4 MiB of output.
+3 MB of rows. The whole result (rows, Markdown, columns and warnings) is held under 3.5 MB: a page that would
+pass it holds fewer rows and says so, a value over 64 KiB is cut at that size (a list or record as the first 64 KiB
+of its JSON text, never built whole), and a row over 1 MiB has its long texts shortened. A table has at most 2000
+columns: the engine plans a wider one in time that grows faster than its width, so it is refused with a sentence.
+A workbook is opened only when a query names one of its sheets, and its strings are read as a stream and capped at
+512 MiB. `repeat`, `lpad`, `rpad`, `range`, `generate_series` and `array_repeat` with a literal size over 64 MiB of
+text or 20 million elements are refused before they run. The plugin's declared limits are 3072 MiB of memory, a
+900 s wall clock and 4 MiB of output.
 
 ## Authority
 
@@ -187,6 +197,12 @@ build.
 - A page costs a run of the query up to its offset (see above); there is no server-side cursor state.
 - Other date formats than ISO-8601 stay text in CSV; convert with `to_date`.
 - Excel formulas read as the value Excel stored; there is no recalculation. XLS (the pre-2007 format) is not read.
+- A size that comes from a column (`repeat('a', col)`) is not checked before the function runs; the engine's pool
+  does not see what one function builds, so such a query is stopped by the plugin's memory limit.
+- ODS files are listed with one streamed pass over each file's content (flat memory, time that grows with the
+  file), because the sheet names live there; XLSX files are listed from their small workbook part only.
+- A cursor does not carry file modification times (they would make the same file give different cursors on
+  different machines), so a same-size edit that misses every sampled block is not seen.
 - Nothing here was benchmarked for this pack; the only timing check is that realistic inputs run inside the
   declared limits.
 

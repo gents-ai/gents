@@ -182,9 +182,13 @@ fn sample_rows(bytes: &[u8], delim: u8, complete: bool) -> Rows {
     rows
 }
 
-/// The candidate delimiter that splits the sample into the most consistent columns.
+/// The candidate delimiter that splits the sample into the most consistent columns: the one
+/// where the largest share of rows have the same number of fields, then the one with more
+/// such rows, then more fields, then the earlier of `,` `;` tab `|`. A wrong candidate that
+/// cuts quoted text apart makes extra short rows, so a share (not a count) keeps it from winning.
 pub fn sniff_delimiter(bytes: &[u8], complete: bool) -> u8 {
-    let mut best = (0usize, 0usize, b',');
+    // (rows agreeing, rows sampled, fields in them, delimiter)
+    let mut best: Option<(usize, usize, usize, u8)> = None;
     for d in CANDIDATES {
         let rows = sample_rows(bytes, d, complete);
         let mut freq: HashMap<usize, usize> = HashMap::new();
@@ -194,11 +198,16 @@ pub fn sniff_delimiter(bytes: &[u8], complete: bool) -> u8 {
         let Some((&cols, &agree)) = freq.iter().max_by_key(|&(&c, &n)| (n, c)) else {
             continue;
         };
-        if cols >= 2 && (agree, cols) > (best.0, best.1) {
-            best = (agree, cols, d);
+        if cols < 2 {
+            continue;
+        }
+        let wins =
+            best.is_none_or(|(a, n, c, _)| (agree * n, agree, cols) > (a * rows.len(), a, c));
+        if wins {
+            best = Some((agree, rows.len(), cols, d));
         }
     }
-    best.2
+    best.map_or(b',', |(.., d)| d)
 }
 
 /// Whether the first row of `rows` is a header: every non-empty cell is text and a later row

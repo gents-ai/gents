@@ -1,0 +1,45 @@
+{
+  "expect": {
+    "columns": [
+      {
+        "name": "a",
+        "type": "int64"
+      }
+    ],
+    "markdown": "| a |\n| --- |\n| 1 |\n| 3 |",
+    "offset": 0,
+    "order": "file",
+    "row_count": 2,
+    "rows": [
+      [
+        1
+      ],
+      [
+        3
+      ]
+    ],
+    "warnings": [
+      "2 rows of inline table t had values beyond its 1 columns that were left out (first is row 1)"
+    ]
+  },
+  "input": {
+    "sql": "SELECT * FROM t",
+    "tables": {
+      "t": {
+        "columns": [
+          "a"
+        ],
+        "rows": [
+          [
+            1,
+            2
+          ],
+          [
+            3,
+            4
+          ]
+        ]
+      }
+    }
+  }
+}

@@ -534,3 +534,32 @@ fn dates_and_timestamps_become_typed_columns() {
     );
     assert_eq!(rows[1][1], json!("2024-03-01T00:00:00"));
 }
+
+#[test]
+fn quoted_text_full_of_other_delimiters_does_not_outvote_the_real_one() {
+    // A writer's output for a table whose values hold `;`, tab, `|`, line breaks and a carriage
+    // return. Read with `;` or tab, the quoted text is cut apart into more rows that agree on
+    // two fields (6 of 10) than the five rows that all agree on five under `,`: only the share
+    // of agreeing rows (1.0 against 0.6) tells them apart.
+    let text = "c0,c1,c2,c3,c4\n\
+        \"vx\ty\",\"v^p:<6.\r=\",\"vi|/<n\",\"v;\",\"v\tXA(\r\t\"\n\
+        \"ve;f\",\"vl.;ITf_M\r/\",\"v!\t$S=xv?[\",\"va;b\",\"v;;;\"\n\
+        v?0l=!4\\\\0~,\"ve;f\",\"v|\",\"v<\t<sbH&D/\n\",v\n\
+        \"va,b;c\",\"v\r\t&i\nV\n:y\",\"vx\ty\",\"v;;;\",\"v/,\r\"\n";
+    for d in *b";\t" {
+        let rows = sample_rows(text.as_bytes(), d, true);
+        assert!(
+            rows.len() >= 10,
+            "{} rows under {:?}",
+            rows.len(),
+            d as char
+        );
+    }
+    assert_eq!(sniff_delimiter(text.as_bytes(), true), b',');
+    let (t, warn, _d) = open(text);
+    assert_eq!(columns(&t).len(), 5);
+    assert_eq!(t.row_count(), Some(4));
+    assert!(warn.list().is_empty(), "{:?}", warn.list());
+    // Equal shares and equal counts still go to the earlier candidate.
+    assert_eq!(sniff_delimiter(b"a;b|c\nd;e|f\n", true), b';');
+}

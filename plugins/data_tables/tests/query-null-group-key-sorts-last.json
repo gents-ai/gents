@@ -1,0 +1,37 @@
+{
+  "bind": "fixtures/formats",
+  "expect": {
+    "columns": [
+      {
+        "name": "b",
+        "type": "text"
+      },
+      {
+        "name": "n",
+        "type": "int64"
+      }
+    ],
+    "markdown": "| b | n |\n| --- | --- |\n|  | 1 |\n| x | 1 |\n| NULL | 1 |",
+    "offset": 0,
+    "order": "columns",
+    "row_count": 3,
+    "rows": [
+      [
+        "",
+        1
+      ],
+      [
+        "x",
+        1
+      ],
+      [
+        null,
+        1
+      ]
+    ],
+    "warnings": []
+  },
+  "input": {
+    "sql": "SELECT b, count(*) AS n FROM nulls GROUP BY b"
+  }
+}
