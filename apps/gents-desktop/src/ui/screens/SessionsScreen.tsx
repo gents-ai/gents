@@ -18,7 +18,7 @@ import { ScrollArea } from "@gents/ui/components/scroll-area";
 import type { Shell } from "@/hooks/useShell";
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
 import { href, navigate } from "@/lib/router";
-import { when } from "./time";
+import { Age } from "./time";
 import {
   defaultScope,
   knownNodeIds,
@@ -380,7 +380,8 @@ export function SessionsScreen({
                       row.child ? "text-xs" : "text-sm",
                     )}
                   >
-                    {when(row.session.updatedAt)}
+                    {/* kept current by the clock, whether or not the row re-renders */}
+                    <Age iso={row.session.updatedAt} />
                   </span>
                 </a>
               </li>
