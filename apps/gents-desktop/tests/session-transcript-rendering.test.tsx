@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
@@ -75,7 +76,7 @@ describe("SessionScreen transcript render boundary", () => {
       actionsRef,
       holdsCount: 0,
       inFlight: false,
-      ownerRef: { current: null },
+      scroller: null,
     };
     const view = render(<TranscriptPanel {...props} session={failed} />);
     expect(screen.getByText("The assistant could not finish this turn.")).toBeVisible();
@@ -101,12 +102,12 @@ describe("SessionScreen transcript render boundary", () => {
         retryMessage: vi.fn(async () => null),
       },
     };
-    const ownerRef = { current: null };
+    const scroller = null;
     const props = {
       actionsRef,
       holdsCount: 0,
       inFlight: false,
-      ownerRef,
+      scroller,
     };
     const view = render(<TranscriptPanel {...props} session={original} />);
 
@@ -125,12 +126,8 @@ describe("SessionScreen transcript render boundary", () => {
   });
 
   it.each([true, false])(
-    "adjusts reading position only after an accepted older page (%s)",
+    "adjusts reading position only when an older page adds rows (%s)",
     async (loaded) => {
-      vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
-        callback(0);
-        return 1;
-      });
       let scrollHeight = 100;
       const viewport = document.createElement("div");
       Object.defineProperty(viewport, "scrollHeight", {
@@ -138,12 +135,6 @@ describe("SessionScreen transcript render boundary", () => {
         get: () => scrollHeight,
       });
       viewport.scrollTop = 20;
-      const owner = document.createElement("div");
-      vi.spyOn(owner, "querySelector").mockReturnValue(viewport);
-      const loadOlderSessionTimeline = vi.fn(async () => {
-        scrollHeight = 180;
-        return loaded;
-      });
       const original = session("stable markdown");
       original.timelinePage = {
         totalItems: 41,
@@ -153,26 +144,46 @@ describe("SessionScreen transcript render boundary", () => {
         oldestItemKey: "assistant-1",
         newestItemKey: "assistant-1",
       };
+      const older = session("older markdown").timelineItems[0]!;
+      const withOlder: DesktopSessionSnapshot = {
+        ...original,
+        timelineItems: [
+          { ...older, itemKey: "assistant-0", sequence: 0 },
+          ...original.timelineItems,
+        ],
+      };
+      /* as the session owner does: the older page is set as state, then the
+         load reports whether it added rows */
+      function Owner() {
+        const [current, setCurrent] = useState(original);
+        const loadOlderSessionTimeline = async () => {
+          if (loaded) {
+            scrollHeight = 180;
+            setCurrent(withOlder);
+          }
+          return loaded;
+        };
+        return (
+          <TranscriptPanel
+            actionsRef={{
+              current: {
+                loadOlderSessionTimeline,
+                retryMessage: vi.fn(async () => null),
+              },
+            }}
+            holdsCount={0}
+            inFlight={false}
+            scroller={viewport}
+            session={current}
+          />
+        );
+      }
 
-      render(
-        <TranscriptPanel
-          actionsRef={{
-            current: {
-              loadOlderSessionTimeline,
-              retryMessage: vi.fn(async () => null),
-            },
-          }}
-          holdsCount={0}
-          inFlight={false}
-          ownerRef={{ current: owner }}
-          session={original}
-        />,
-      );
+      render(<Owner />);
       await act(async () => {
         fireEvent.wheel(viewport, { deltaY: -20 });
       });
 
-      expect(loadOlderSessionTimeline).toHaveBeenCalledTimes(1);
       expect(viewport.scrollTop).toBe(loaded ? 100 : 20);
     },
   );
