@@ -45,7 +45,7 @@ pub fn nice_ticks(min: f64, max: f64, target: usize) -> Ticks {
     let raw = (hi - lo) / target;
     let k = floor_log10(raw);
     let m = raw / pow10(k);
-    let mult: i64 = if m <= std::f64::consts::SQRT_2 {
+    let mut mult: i64 = if m <= std::f64::consts::SQRT_2 {
         1
     } else if m <= 3.162_277_660_168_379_5 {
         2
@@ -53,6 +53,13 @@ pub fn nice_ticks(min: f64, max: f64, target: usize) -> Ticks {
         5
     } else {
         10
+    };
+    // Ten times a power of ten is one times the next, so the decimals are minimal.
+    let k = if mult == 10 {
+        mult = 1;
+        k + 1
+    } else {
+        k
     };
     let step = if k >= 0 {
         mult as f64 * pow10(k)
@@ -251,6 +258,18 @@ mod tests {
         let t = nice_ticks(0.0, 0.03, 6);
         assert_eq!(t.values, [0.0, 0.005, 0.01, 0.015, 0.02, 0.025, 0.03]);
         assert_eq!(t.decimals, 3);
+    }
+
+    #[test]
+    fn a_step_of_one_needs_no_decimals_even_when_it_came_from_a_tenth_scale() {
+        let t = nice_ticks(0.0, 3.18, 4);
+        assert_eq!(t.values, [0.0, 1.0, 2.0, 3.0, 4.0]);
+        assert_eq!((t.step, t.decimals), (1.0, 0));
+        let t = nice_ticks(0.0, 0.318, 4);
+        assert_eq!(t.values, [0.0, 0.1, 0.2, 0.3, 0.4]);
+        assert_eq!(t.decimals, 1);
+        let t = nice_ticks(0.0, 31.8, 4);
+        assert_eq!((t.step, t.decimals), (10.0, 0));
     }
 
     #[test]

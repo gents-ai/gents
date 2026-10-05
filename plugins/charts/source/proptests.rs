@@ -52,6 +52,12 @@ proptest! {
             let written = format!("{:.*}", t.decimals, v);
             prop_assert!(written.parse::<f64>().unwrap() == *v, "{v} needs no more than {} decimals", t.decimals);
         }
+        if t.decimals > 0 {
+            // The decimals are the fewest that write every tick exactly.
+            let fewer = t.decimals - 1;
+            let all_exact = t.values.iter().all(|v| format!("{:.*}", fewer, v).parse::<f64>().unwrap() == *v);
+            prop_assert!(!all_exact, "{:?} need only {fewer} decimals", t.values);
+        }
     }
 
     #[test]

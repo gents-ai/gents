@@ -23,6 +23,8 @@ pub mod det;
 #[cfg(test)]
 mod dist_tests;
 pub mod err;
+#[cfg(test)]
+mod fixtures_tests;
 pub mod format;
 pub mod frame;
 #[cfg(test)]
