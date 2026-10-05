@@ -216,7 +216,15 @@ mod tests {
                 })
             })
             .await?;
-        for default in [Some("review"), None] {
+        let fallback_profile = serde_json::from_value(json!({
+            "agent_did":"did:test:alpha","profile_id":"fallback","backend_id":"backend","model_name":"model"
+        }))?;
+        super::super::profile::upsert_inference_profile(&node, &fallback_profile).await?;
+        let fallback = serde_json::from_value(json!({
+            "agent_did":"did:test:alpha","behavior_id":"fallback","inference_profile_id":"fallback"
+        }))?;
+        upsert_agent_behavior(&node, &fallback).await?;
+        for default in ["review", "fallback"] {
             access
                 .transact("test.principal.default", |txn| {
                     Box::pin(async move {
@@ -228,7 +236,7 @@ mod tests {
                         )
                         .await?
                         .unwrap();
-                        value["default_behavior_id"] = serde_json::to_value(default)?;
+                        value["default_behavior_id"] = json!(default);
                         let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
                             collection: Collection::AgentPrincipal,
                             add: value.clone(),
@@ -239,7 +247,7 @@ mod tests {
                     })
                 })
                 .await?;
-            if default.is_some() {
+            if default == "review" {
                 assert!(delete_agent_behavior(&node, "did:test:alpha", "review")
                     .await
                     .is_err());

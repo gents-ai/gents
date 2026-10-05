@@ -72,6 +72,12 @@ private def defaultBehaviorJson : Json := toJson (defaultBehaviorCases.map
       ("publishable", toJson (defaultBehaviorPublishable reg "alice" defaultId)),
       ("context_resolves", toJson (resolveContext reg "alice" contextId).toBool)])
 
+private def defaultReplacementJson : Json := toJson (
+  ([none, some "coding"] : List (Option String)).flatMap fun current =>
+    ([none, some "coding", some "review"] : List (Option String)).map fun candidate =>
+      Json.mkObj [("current", toJson current), ("candidate", toJson candidate),
+        ("allowed", toJson (defaultBehaviorReplacementAllowed current candidate))])
+
 /-- Export the actual shared-label input documents as well as computed results. -/
 def casesJson : String := (Json.mkObj
   [("documents", toJson (["alice", "bob"].map fun owner => Json.mkObj
@@ -82,7 +88,8 @@ def casesJson : String := (Json.mkObj
        ("enabled", toJson true)])),
    ("cases", toJson (["alice", "bob", "absent"].map caseJson)),
    ("context_bounds", contextBoundsJson),
-   ("default_behavior", defaultBehaviorJson)]).compress
+   ("default_behavior", defaultBehaviorJson),
+   ("default_replacement", defaultReplacementJson)]).compress
 
 /-- These scope fixtures advertise one model with unknown capabilities. Backend
 owner comes from the containing document, independently of credential scope. -/
