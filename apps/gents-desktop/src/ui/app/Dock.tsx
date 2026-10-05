@@ -6,7 +6,6 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { Columns2, MessageSquare, X } from "lucide-react";
 import { Button } from "@gents/ui/components/button";
 import { Hint } from "@/screens/Hint";
-import { useShellContext } from "./ShellContext";
 import { PanelMenu } from "./PanelMenu";
 import { cn } from "@gents/ui/lib/utils";
 import { dockView } from "./dock-scope";
@@ -97,11 +96,11 @@ export function DockTabs({
      title at the strip's start brings it back */
   paneTab?: { onShow: () => void; progress: number } | null;
 }) {
-  const shell = useShellContext();
   const { dock, activate, moveTab, closeTab, closeDock } = useDockFor(
     dockScopeOf(routeName, sessionId),
   );
-  const fleet = useFleet(shell, (s) => s);
+  /* the tabs' badges count from the fleet */
+  const fleet = useFleet((s) => s);
   const paneTitle =
     (sessionId ? fleet.bySessionId[sessionId]?.title : null) ?? "Session";
   /* reordering, the way a browser does it: a press shows the tab; moved past

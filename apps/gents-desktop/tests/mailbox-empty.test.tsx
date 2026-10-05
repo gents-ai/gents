@@ -3,16 +3,16 @@ import { describe, expect, it } from "vitest";
 
 import type { Shell } from "@/hooks/useShell";
 import { MailboxScreen } from "../src/ui/screens/MailboxScreen";
-import { fleetFor } from "./shell-fixture";
+import { testApp, withApp } from "./app-fixture";
 
 describe("empty mailbox", () => {
   it("says what arrives here and offers a session as the way to start new work", () => {
     const shell = {
       deployments: [],
-      fleet: fleetFor(),
+      app: testApp(),
       selectedDeployment: { mailboxItems: [] },
     } as unknown as Shell;
-    render(<MailboxScreen shell={shell} />);
+    render(<MailboxScreen shell={shell} />, { wrapper: withApp(shell.app) });
     expect(screen.getByText("Nothing needs your attention")).toBeVisible();
     expect(
       screen.getByText(/When an agent has a question, needs your approval/),

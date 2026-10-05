@@ -6,6 +6,7 @@ import type {
 } from "@source-inc/gents-desktop-client";
 
 import type { DesktopStartupPhase } from "../lib/loadingStatus";
+import { createSelectors, type WithSelectors } from "./createSelectors";
 import type {
   ManagedServerStartupError,
   ManagedServerWait,
@@ -34,22 +35,24 @@ export type ClientState = {
   };
 };
 
-export type ClientStore = StoreApi<ClientState>;
+export type ClientStore = WithSelectors<StoreApi<ClientState>>;
 
 export function createClientStore(
   startupPhase: DesktopStartupPhase = "loading-configuration",
 ) {
-  return createStore<ClientState>(() => ({
-    snapshot: null,
-    error: null,
-    startupPhase,
-    starting: false,
-    stopping: false,
-    managedServerWait: null,
-    managedServerFailure: null,
-    startupDiagnosticsHint: null,
-    home: { report: null, busy: false, generation: 0 },
-  }));
+  return createSelectors(
+    createStore<ClientState>(() => ({
+      snapshot: null,
+      error: null,
+      startupPhase,
+      starting: false,
+      stopping: false,
+      managedServerWait: null,
+      managedServerFailure: null,
+      startupDiagnosticsHint: null,
+      home: { report: null, busy: false, generation: 0 },
+    })),
+  );
 }
 
 /** A setter for one field. */

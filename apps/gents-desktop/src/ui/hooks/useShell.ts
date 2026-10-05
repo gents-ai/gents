@@ -83,6 +83,8 @@ export function useShell(
       ]),
     );
     return {
+      /* the app itself, for the provider at the root */
+      app: d.app,
       api,
       snapshot: d.snapshot,
       error: d.error,

@@ -86,6 +86,7 @@ export function useDesktopShell({
   }
 
   return {
+    app,
     ...actions,
     snapshot,
     fleet: stores.fleet,

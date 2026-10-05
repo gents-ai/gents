@@ -11,19 +11,13 @@ import {
 } from "@source-inc/gents-desktop-client";
 import { projectChatShell } from "@source-inc/gents-desktop-chat";
 import { useStore } from "zustand";
-import { createDraftStore } from "../src/hooks/draftStore";
-import { createShellView } from "../src/hooks/shellView";
+import type { DesktopApp } from "../src/hooks/desktopApp";
+import { AppProvider } from "../src/ui/app/AppContext";
+import { testApp } from "./app-fixture";
 import { MemoryNavProvider } from "@gents/shell";
 import { selectedSessionFields } from "./session-store-fixture";
 import { readSession, writeSession } from "../src/hooks/sessionStore";
-import { fleetFor } from "./shell-fixture";
 import { useLayoutEffect, useState } from "react";
-import { createChatStore } from "../src/hooks/chatStore";
-import { createClientStore } from "../src/hooks/clientStore";
-import { createFleetStore } from "../src/hooks/fleetStore";
-import { createSelectionStore } from "../src/hooks/selectionStore";
-import { createSessionStore as newSessionStore } from "../src/hooks/sessionStore";
-import type { ShellStores } from "../src/hooks/shellProjection";
 
 const navigate = vi.hoisted(() => vi.fn());
 const markdownRender = vi.hoisted(() => vi.fn());
@@ -62,7 +56,6 @@ function newSessionShell(
     selectedBehaviorId: "behavior",
     selectedAgentDid: "did:key:agent",
     deployments: [],
-    fleet: fleetFor(),
     selectedDeployment: {
       agentDid: "did:key:agent",
       agentPrincipal: { displayName: "Agent" },
@@ -125,37 +118,42 @@ function existingSessionShell(status: Shell["nonEmptyContentSendStatus"]): Shell
 }
 
 // Exercise the real context-keyed draft owner as well as the real kit Composer.
+// The screen still takes the shell for what it has not moved to the app;
+// the app mirrors the shell's selection and session, as the root keeps them
+// one and the same.
 function OwnedSessionScreen({ shell }: { shell: Shell }) {
-  const [stores] = useState<ShellStores>(() => ({
-    selection: createSelectionStore(),
-    session: newSessionStore(),
-    fleet: createFleetStore(),
-    client: createClientStore(),
-    chat: createChatStore(),
-  }));
-  /* the drafts are keyed by the selection, which follows the shell rendered */
-  useLayoutEffect(() => {
-    stores.selection.setState({
-      agentDid: shell.selectedAgentDid,
-      sessionId: shell.selectedSessionId,
-      behaviorId: shell.selectedBehaviorId,
-    });
-  }, [
-    stores,
-    shell.selectedAgentDid,
-    shell.selectedSessionId,
-    shell.selectedBehaviorId,
-  ]);
-  const [view] = useState(() => createShellView(stores));
-  const [draftStore] = useState(createDraftStore);
-  const draftKey = useStore(view, (state) => state.draftKey);
+  const [app] = useState(() => {
+    const created = testApp({ api: shell.api });
+    mirror(created, shell);
+    return created;
+  });
+  useLayoutEffect(() => mirror(app, shell), [app, shell]);
+  const draftKey = useStore(app.view, (state) => state.draftKey);
   return (
-    <MemoryNavProvider
-      initial={{ name: "session", sessionId: shell.selectedSessionId }}
-    >
-      <SessionScreen shell={{ ...shell, draftStore, draftKey }} />
-    </MemoryNavProvider>
+    <AppProvider value={app}>
+      <MemoryNavProvider
+        initial={{ name: "session", sessionId: shell.selectedSessionId }}
+      >
+        <SessionScreen shell={{ ...shell, draftStore: app.drafts, draftKey }} />
+      </MemoryNavProvider>
+    </AppProvider>
   );
+}
+
+function mirror(app: DesktopApp, shell: Shell) {
+  const next = {
+    agentDid: shell.selectedAgentDid,
+    sessionId: shell.selectedSessionId,
+    behaviorId: shell.selectedBehaviorId,
+  };
+  const current = app.stores.selection.getState();
+  if (
+    current.agentDid !== next.agentDid ||
+    current.sessionId !== next.sessionId ||
+    current.behaviorId !== next.behaviorId
+  )
+    app.stores.selection.setState(next);
+  writeSession(app.stores.session, readSession(shell.sessionStore));
 }
 
 describe("SessionScreen canonical composer admission", () => {

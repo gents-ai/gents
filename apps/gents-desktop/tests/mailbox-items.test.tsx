@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { MailboxItemView } from "@source-inc/gents-desktop-client";
 import type { Shell } from "@/hooks/useShell";
 import { MailboxScreen } from "../src/ui/screens/MailboxScreen";
-import { fleetFor } from "./shell-fixture";
+import { testApp, withApp } from "./app-fixture";
 
 /* the sender's hover card reads the whole deployment; the card is not
    what these cases are about */
@@ -46,7 +46,7 @@ const shellWith = (
   ({
     answerMailboxQuestion,
     deployments: [deploymentWith(items)],
-    fleet: fleetFor([deploymentWith(items)]),
+    app: testApp({ deployments: [deploymentWith(items)] }),
     selectedDeployment: deploymentWith(items),
   }) as unknown as Shell;
 const deploymentWith = (items: MailboxItemView[]) => ({
@@ -56,9 +56,12 @@ const deploymentWith = (items: MailboxItemView[]) => ({
   sessions: [{ sessionId: "session-1", title: "Mailbox cleanup" }],
 });
 
+const renderMailbox = (shell: Shell) =>
+  render(<MailboxScreen shell={shell} />, { wrapper: withApp(shell.app) });
+
 describe("mailbox item", () => {
   it("shows the title, sender, session, time, kind and status", () => {
-    render(<MailboxScreen shell={shellWith([item()])} />);
+    renderMailbox(shellWith([item()]));
     expect(screen.getByRole("heading", { name: "Refactor landed" })).toBeVisible();
     const meta = screen.getByTestId("mailbox-item-meta");
     expect(within(meta).getByText("Finished")).toBeVisible();
@@ -74,16 +77,14 @@ describe("mailbox item", () => {
   it("names the source by agent, session and time, never its raw identity", () => {
     const sourceId =
       '["event","did:key:agent","did:key:person","engineer","request-1"]';
-    render(
-      <MailboxScreen shell={shellWith([item({ sourceKind: "agent", sourceId })])} />,
-    );
+    renderMailbox(shellWith([item({ sourceKind: "agent", sourceId })]));
     expect(screen.queryByText(sourceId, { exact: false })).toBeNull();
     expect(screen.queryByText(/did:key:/)).toBeNull();
   });
 
   it("renders the summary as markdown and keeps its line breaks", () => {
     const summary = "First line\nsecond line\n\n- one\n- two\n\n**bold**";
-    render(<MailboxScreen shell={shellWith([item({ summary })])} />);
+    renderMailbox(shellWith([item({ summary })]));
     const body = screen.getByTestId("mailbox-item-body");
     expect(body.querySelectorAll("li")).toHaveLength(2);
     expect(body.querySelector("strong")).toHaveTextContent("bold");
@@ -94,13 +95,11 @@ describe("mailbox item", () => {
   });
 
   it("renders a JSON payload as a code block and a text payload as markdown", () => {
-    render(
-      <MailboxScreen
-        shell={shellWith([
-          item({ itemId: "a", title: "json", payload: '{"pr":42}' }),
-          item({ itemId: "b", title: "text", payload: "## Next\n1. review" }),
-        ])}
-      />,
+    renderMailbox(
+      shellWith([
+        item({ itemId: "a", title: "json", payload: '{"pr":42}' }),
+        item({ itemId: "b", title: "text", payload: "## Next\n1. review" }),
+      ]),
     );
     /* by card, not by position: the list orders items newest first, and
        the two fixtures are created a moment apart */
@@ -117,7 +116,7 @@ describe("mailbox item", () => {
 
   it("folds a long body behind show more and unfolds it", () => {
     const summary = Array.from({ length: 20 }, (_, i) => `line ${i}`).join("\n");
-    render(<MailboxScreen shell={shellWith([item({ summary })])} />);
+    renderMailbox(shellWith([item({ summary })]));
     const body = screen.getByTestId("mailbox-item-body");
     expect(body).toHaveClass("max-h-48");
     const more = screen.getByRole("button", { name: "Show more" });
@@ -131,7 +130,7 @@ describe("mailbox item", () => {
   });
 
   it("offers no fold for a short body", () => {
-    render(<MailboxScreen shell={shellWith([item({ summary: "short" })])} />);
+    renderMailbox(shellWith([item({ summary: "short" })]));
     expect(screen.queryByRole("button", { name: "Show more" })).toBeNull();
     expect(screen.getByTestId("mailbox-item-body")).not.toHaveClass("max-h-48");
   });
@@ -159,7 +158,7 @@ describe("mailbox question", () => {
   it("sends a single choice on click and hides the raw payload", async () => {
     const answer = vi.fn().mockResolvedValue(undefined);
     const ask = questionItem({});
-    render(<MailboxScreen shell={shellWith([ask], answer)} />);
+    renderMailbox(shellWith([ask], answer));
     expect(screen.getByText("Which backend should the crew use?")).toBeVisible();
     expect(screen.queryByText(/"version"/)).toBeNull();
     expect(screen.getByText("Runs on this Mac")).toBeVisible();
@@ -177,7 +176,7 @@ describe("mailbox question", () => {
   it("toggles several choices and sends them with an Other note", () => {
     const answer = vi.fn().mockResolvedValue(undefined);
     const ask = questionItem({ multi_select: true, allow_free_text: true });
-    render(<MailboxScreen shell={shellWith([ask], answer)} />);
+    renderMailbox(shellWith([ask], answer));
     const send = screen.getByRole("button", { name: "Send" });
     expect(send).toBeDisabled();
     const local = screen.getByRole("button", { name: "Local model" });
@@ -198,7 +197,7 @@ describe("mailbox question", () => {
   it("sends a free-text-only answer", () => {
     const answer = vi.fn().mockResolvedValue(undefined);
     const ask = questionItem({ allow_free_text: true });
-    render(<MailboxScreen shell={shellWith([ask], answer)} />);
+    renderMailbox(shellWith([ask], answer));
     fireEvent.change(screen.getByLabelText("Other"), { target: { value: "Ollama" } });
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
     expect(answer).toHaveBeenCalledWith(ask, { option_ids: [], free_text: "Ollama" });
@@ -228,21 +227,15 @@ describe("mailbox question", () => {
       },
       { prompt: " " },
     ]) {
-      const { unmount } = render(
-        <MailboxScreen shell={shellWith([questionItem(bad)])} />,
-      );
+      const { unmount } = renderMailbox(shellWith([questionItem(bad)]));
       expect(screen.queryByTestId("mailbox-question")).toBeNull();
       unmount();
     }
   });
 
   it("keeps the generic view for a payload that is not a question", () => {
-    render(
-      <MailboxScreen
-        shell={shellWith([
-          item({ kind: "ask", action: "start_request", payload: '{"pr":42}' }),
-        ])}
-      />,
+    renderMailbox(
+      shellWith([item({ kind: "ask", action: "start_request", payload: '{"pr":42}' })]),
     );
     expect(screen.queryByTestId("mailbox-question")).toBeNull();
     expect(

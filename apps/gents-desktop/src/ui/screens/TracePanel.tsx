@@ -89,7 +89,7 @@ export function TracePanel({
 }) {
   /* the tool list is kept when the session is written, so a streamed chunk
      does not rebuild it */
-  const tools = useSessionFacts(shell)?.tools ?? NO_TOOLS;
+  const tools = useSessionFacts()?.tools ?? NO_TOOLS;
   const running = shell.selectedTrackedRequestId !== null;
   const [openKey, setOpenKey] = useState<string | null>(null);
 

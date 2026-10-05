@@ -16,7 +16,8 @@ import type {
   SessionProvenanceView,
   SessionSummary,
 } from "@source-inc/gents-desktop-client";
-import type { Shell } from "@/hooks/useShell";
+import { useApp } from "@/app/AppContext";
+import { useFleet } from "@/hooks/useFleet";
 import { isLive } from "@/lib/live";
 import {
   selectedIn,
@@ -109,11 +110,12 @@ type Held<T> = { scope: string; value: T };
    this desktop observes refreshes it; there is no timer of its own. Every
    applied live delta advances storeVersion, so a settled lineage must not
    follow it: that would be one bridge call per streamed chunk. */
-export function useSessionProvenance(shell: Shell): SessionProvenanceView | null {
-  const sessionId = useSelectedSessionValue(shell, (s) => s?.sessionId ?? null);
-  const rowsRevision = useSessionFacts(shell)?.rowsRevision ?? 0;
-  const agentDid = shell.selectedDeployment?.agentDid ?? null;
-  const sessions = shell.selectedDeployment?.sessions;
+export function useSessionProvenance(): SessionProvenanceView | null {
+  const { api, stores } = useApp();
+  const sessionId = useSelectedSessionValue((s) => s?.sessionId ?? null);
+  const rowsRevision = useSessionFacts()?.rowsRevision ?? 0;
+  const agentDid = stores.selection.use.agentDid();
+  const sessions = useFleet((s) => (agentDid ? s.sessionsOf[agentDid] : undefined));
   const summary = listedSession(sessions, agentDid, sessionId);
   const listed = summary !== null;
   const requesterDid = summary?.requesterDid ?? null;
@@ -124,7 +126,7 @@ export function useSessionProvenance(shell: Shell): SessionProvenanceView | null
     provenance?.calls.some((c) => isLive(c.caused.lifecycleState)) ?? false;
   /* the store version moves with every streamed chunk, so it is followed,
      and re-renders this, only while a caused request is live */
-  const storeVersion = useSelectedSessionValue(shell, (s) =>
+  const storeVersion = useSelectedSessionValue((s) =>
     awaitsCaused ? (s?.projectionRevision?.storeVersion ?? null) : null,
   );
   const sessionsCue = (sessions ?? [])
@@ -148,11 +150,13 @@ export function useSessionProvenance(shell: Shell): SessionProvenanceView | null
     asked.current = {
       cues,
       version:
-        selectedIn(shell.sessionStore.getState(), shell)?.projectionRevision
-          ?.storeVersion ?? null,
+        selectedIn(stores.session.getState(), {
+          selectedSessionId: sessionId,
+          selectedAgentDid: agentDid,
+        })?.projectionRevision?.storeVersion ?? null,
     };
     const ask = ++generation.current;
-    void shell.api.sessionProvenance({ sessionId, agentDid, requesterDid }).then(
+    void api.sessionProvenance({ sessionId, agentDid, requesterDid }).then(
       (value) => {
         if (generation.current === ask) setHeld({ scope, value });
       },
@@ -162,7 +166,8 @@ export function useSessionProvenance(shell: Shell): SessionProvenanceView | null
       },
     );
   }, [
-    shell.api,
+    api,
+    stores,
     agentDid,
     sessionId,
     requesterDid,
@@ -175,13 +180,11 @@ export function useSessionProvenance(shell: Shell): SessionProvenanceView | null
   return provenance;
 }
 
-export function useWorkers(
-  shell: Shell,
-  provenance: SessionProvenanceView | null,
-): Workers {
-  const facts = useSessionFacts(shell);
-  const agentDid = shell.selectedDeployment?.agentDid ?? null;
-  const sessions = shell.selectedDeployment?.sessions;
+export function useWorkers(provenance: SessionProvenanceView | null): Workers {
+  const { api, stores } = useApp();
+  const facts = useSessionFacts();
+  const agentDid = stores.selection.use.agentDid();
+  const sessions = useFleet((s) => (agentDid ? s.sessionsOf[agentDid] : undefined));
   const [heldOps, setHeldOps] = useState<Held<DesktopOperationsSnapshot> | null>(null);
   const ops = heldOps?.scope === agentDid ? heldOps.value : null;
   /* asked again when a tool changes, which the session store counts */
@@ -197,14 +200,14 @@ export function useWorkers(
       return;
     }
     let live = true;
-    void shell.api.fetchOperationsSnapshot({ agentDid }).then(
+    void api.fetchOperationsSnapshot({ agentDid }).then(
       (o) => live && setHeldOps({ scope: agentDid, value: o }),
       () => live && setHeldOps(null),
     );
     return () => {
       live = false;
     };
-  }, [shell.api, hasProcesses, agentDid, toolsRevision]);
+  }, [api, hasProcesses, agentDid, toolsRevision]);
   return useMemo(() => {
     if (!provenance && !ops) return NO_WORKERS;
     const all = provenance ? subagentsOf(provenance, sessions) : [];

@@ -13,7 +13,7 @@ import { useFleet, workersOfId } from "../hooks/useFleet";
 
 export function WorkersSurface({ sessionId }: SurfaceContext) {
   const shell = useShellContext();
-  const workers = useFleet(shell, (s) => workersOfId(s, sessionId));
+  const workers = useFleet((s) => workersOfId(s, sessionId));
   return (
     <ScrollArea className="h-full">
       <div className="px-3 py-2">

@@ -63,7 +63,7 @@ export function SessionsScreen({
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   /* the nodes the list shows: the working node to start, then whatever the
      chips choose; none chosen means every node */
-  const fleet = useFleet(shell, (s) => s);
+  const fleet = useFleet((s) => s);
   const ctx = scopeContextOf(shell, fleet);
   /* the nodes as rows draw them, without their lists: the same objects
      while unchanged, so a row whose session did not change skips */

@@ -1,22 +1,16 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { DockTabs } from "@/app/Dock";
-import { ShellProvider } from "@/app/ShellContext";
 import { clearSurfaces, registerSurface } from "@/app/surfaces";
 import { workspace } from "@/app/workspace";
-import type { Shell } from "@/hooks/useShell";
-import { fleetFor } from "./shell-fixture";
+import { testApp, withApp } from "./app-fixture";
 
 const Nothing = () => null;
 const SCOPE = "session:a";
-const shell = { deployments: [], fleet: fleetFor() } as unknown as Shell;
-
 const renderTabs = () =>
-  render(
-    <ShellProvider value={shell}>
-      <DockTabs sessionId="a" routeName="session" />
-    </ShellProvider>,
-  );
+  render(<DockTabs sessionId="a" routeName="session" />, {
+    wrapper: withApp(testApp()),
+  });
 const tab = (name: string) => screen.getByRole("tab", { name });
 const capture = Element.prototype.setPointerCapture;
 

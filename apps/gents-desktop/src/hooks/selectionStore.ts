@@ -1,6 +1,7 @@
 import { useStore } from "zustand";
 import { createStore, type StoreApi } from "zustand/vanilla";
 
+import { createSelectors, type WithSelectors } from "./createSelectors";
 import { acceptsAsyncResult } from "./desktopShellRuntime";
 
 /** What the person is looking at: a node, a session on it (null for a new
@@ -32,7 +33,7 @@ export type SelectionState = Selection & {
   intent: number;
 };
 
-export type SelectionStore = StoreApi<SelectionState>;
+export type SelectionStore = WithSelectors<StoreApi<SelectionState>>;
 
 const EMPTY: SelectionState = {
   agentDid: null,
@@ -44,7 +45,7 @@ const EMPTY: SelectionState = {
 };
 
 export function createSelectionStore(initial: Partial<SelectionState> = {}) {
-  return createStore<SelectionState>(() => ({ ...EMPTY, ...initial }));
+  return createSelectors(createStore<SelectionState>(() => ({ ...EMPTY, ...initial })));
 }
 
 /* A mailbox route lasts while the selection is the one it set up. Checked

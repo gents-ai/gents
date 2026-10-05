@@ -7,6 +7,7 @@ import type {
 } from "@source-inc/gents-desktop-chat";
 
 import { loadChatFolders, type ChatFolders } from "./chatFolders";
+import { createSelectors, type WithSelectors } from "./createSelectors";
 
 /** The compose side of a chat: the submission workflow the client runs
     locally, whether a send is in flight, the turn shown for a sent
@@ -18,16 +19,18 @@ export type ChatState = {
   folders: ChatFolders;
 };
 
-export type ChatStore = StoreApi<ChatState>;
+export type ChatStore = WithSelectors<StoreApi<ChatState>>;
 
 export function createChatStore(initial: Partial<ChatState> = {}) {
-  return createStore<ChatState>(() => ({
-    localWorkflow: { kind: "ready" },
-    sending: false,
-    optimisticPendingTurn: null,
-    folders: loadChatFolders(),
-    ...initial,
-  }));
+  return createSelectors(
+    createStore<ChatState>(() => ({
+      localWorkflow: { kind: "ready" },
+      sending: false,
+      optimisticPendingTurn: null,
+      folders: loadChatFolders(),
+      ...initial,
+    })),
+  );
 }
 
 /** A setter for one field, taking a value or an updater, as React's did. */

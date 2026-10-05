@@ -2,16 +2,14 @@ import { useStore } from "zustand";
 
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
 
-import { sessionKeyOf, type FleetState, type FleetStore } from "../../hooks/fleetStore";
+import { sessionKeyOf, type FleetState } from "../../hooks/fleetStore";
+import { useApp } from "../app/AppContext";
 
 export const NO_SESSIONS: readonly SessionSummary[] = [];
 
 /** A value from the fleet store; re-renders when it changes by identity. */
-export function useFleet<T>(
-  shell: { fleet: FleetStore },
-  select: (state: FleetState) => T,
-): T {
-  return useStore(shell.fleet, select);
+export function useFleet<T>(select: (state: FleetState) => T): T {
+  return useStore(useApp().stores.fleet, select);
 }
 
 /** The session that handed `session` out, on whatever node lists it. */

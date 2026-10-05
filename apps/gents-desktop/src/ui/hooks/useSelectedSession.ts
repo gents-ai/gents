@@ -5,21 +5,17 @@ import {
   useSessionValue,
   type SessionFacts,
   type SessionState,
-  type SessionStore,
 } from "../../hooks/sessionStore";
-
-/** What a screen needs to find the selected session in the session store. */
-export type SessionSelection = {
-  sessionStore: SessionStore;
-  selectedSessionId: string | null;
-  selectedAgentDid: string | null;
-};
+import { useApp } from "../app/AppContext";
 
 /** The held session when it is the selected one, else null: a read for the
     previous selection can still be held while the next one loads. */
 export function selectedIn(
   state: SessionState,
-  { selectedSessionId, selectedAgentDid }: Omit<SessionSelection, "sessionStore">,
+  {
+    selectedSessionId,
+    selectedAgentDid,
+  }: { selectedSessionId: string | null; selectedAgentDid: string | null },
 ): DesktopSessionSnapshot | null {
   const session = state.session;
   return session?.sessionId === selectedSessionId &&
@@ -28,33 +24,43 @@ export function selectedIn(
     : null;
 }
 
+/* the session store and the selection that picks the held read out of it */
+function useHeld() {
+  const { stores } = useApp();
+  const selection = {
+    selectedSessionId: stores.selection.use.sessionId(),
+    selectedAgentDid: stores.selection.use.agentDid(),
+  };
+  return { store: stores.session, selection };
+}
+
 /** The selected session; re-renders the caller on every change, streamed
     chunks included. Only the transcript reads it whole. */
-export function useSelectedSession(shell: SessionSelection) {
-  return useSessionValue(shell.sessionStore, (state) => selectedIn(state, shell));
+export function useSelectedSession() {
+  const { store, selection } = useHeld();
+  return useSessionValue(store, (state) => selectedIn(state, selection));
 }
 
 /** A value from the selected session; re-renders when it changes by identity. */
 export function useSelectedSessionValue<T>(
-  shell: SessionSelection,
   pick: (session: DesktopSessionSnapshot | null) => T,
 ): T {
-  return useSessionValue(shell.sessionStore, (state) => pick(selectedIn(state, shell)));
+  const { store, selection } = useHeld();
+  return useSessionValue(store, (state) => pick(selectedIn(state, selection)));
 }
 
 /** Fields of the selected session; re-renders when any of them changes. */
 export function useSelectedSessionFields<T extends object | null>(
-  shell: SessionSelection,
   pick: (session: DesktopSessionSnapshot | null) => T,
 ): T {
-  return useSessionFields(shell.sessionStore, (state) =>
-    pick(selectedIn(state, shell)),
-  );
+  const { store, selection } = useHeld();
+  return useSessionFields(store, (state) => pick(selectedIn(state, selection)));
 }
 
 /** The selected session's transcript facts, or null while it is not held. */
-export function useSessionFacts(shell: SessionSelection): SessionFacts | null {
-  return useSessionValue(shell.sessionStore, (state) =>
-    selectedIn(state, shell) ? state.facts : null,
+export function useSessionFacts(): SessionFacts | null {
+  const { store, selection } = useHeld();
+  return useSessionValue(store, (state) =>
+    selectedIn(state, selection) ? state.facts : null,
   );
 }

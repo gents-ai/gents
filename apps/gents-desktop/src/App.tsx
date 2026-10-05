@@ -35,7 +35,8 @@ import { SessionsScreen } from "./ui/screens/SessionsScreen";
 import { PluginAccessPrompt } from "./ui/screens/PluginAccessPrompt";
 import { Shortcuts } from "./ui/screens/Shortcuts";
 import { SetupScreen } from "./ui/screens/setup/SetupScreen";
-import { useShell, type ShellBridge } from "./ui/hooks/useShell";
+import { useShell, type Shell, type ShellBridge } from "./ui/hooks/useShell";
+import { AppProvider } from "./ui/app/AppContext";
 import { ShellProvider } from "./ui/app/ShellContext";
 import { workingNode } from "./ui/lib/nodes";
 import {
@@ -52,6 +53,8 @@ import {
   navigate,
   useHistory,
   useRoute,
+  type History,
+  type Route,
 } from "./ui/lib/router";
 import { useHistoryInputs } from "./ui/lib/history-inputs";
 import { useSwipeNav } from "./ui/lib/swipe-nav";
@@ -109,11 +112,29 @@ function AppHost({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
     bridge,
     route.name === "session" ? route.sessionId : undefined,
   );
+  return (
+    <AppProvider value={shell.app}>
+      <AppBody bridge={bridge} route={route} history={history} shell={shell} />
+    </AppProvider>
+  );
+}
+
+function AppBody({
+  bridge,
+  route,
+  history,
+  shell,
+}: {
+  bridge: ShellBridge;
+  route: Route;
+  history: History;
+  shell: Shell;
+}) {
   const homeDid = shell.snapshot?.bootstrap.initAgentDid ?? null;
   /* what the rail counts and lists: each node's sessions and mailbox */
   const railScope = scopeContextOf(
     shell,
-    useFleet(shell, (s) => s),
+    useFleet((s) => s),
   );
   const working = workingNode(shell.deployments, homeDid);
 
@@ -127,7 +148,7 @@ function AppHost({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
   }, []);
   useManagedServerTrayControls(bridge.api);
   const agent = shell.selectedDeployment?.agentPrincipal.displayName ?? null;
-  const sessionTitle = useSelectedSessionValue(shell, (s) => s?.title ?? null);
+  const sessionTitle = useSelectedSessionValue((s) => s?.title ?? null);
   useEffect(() => {
     if (!isMacTauriShell()) return;
     const title =

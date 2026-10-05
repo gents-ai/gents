@@ -9,7 +9,9 @@ import type {
   RenderedToolCallView,
   SessionProvenanceView,
 } from "@source-inc/gents-desktop-client";
-import type { Shell } from "@/hooks/useShell";
+import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
+import type { DesktopApp } from "../src/hooks/desktopApp";
+import { node, publish, testApp, withApp } from "./app-fixture";
 
 import {
   subagentsOf,
@@ -17,11 +19,7 @@ import {
   useWorkers,
 } from "../src/ui/screens/workers";
 import { workerNow } from "../src/ui/screens/WorkerStep";
-import {
-  createSessionStore,
-  writeSession,
-  type SessionStore,
-} from "../src/hooks/sessionStore";
+import { writeSession } from "../src/hooks/sessionStore";
 
 const AGENT = "did:key:parent";
 const PERSON = "did:key:person";
@@ -98,40 +96,39 @@ const view = (
   calls,
 });
 
-function shellFor(
-  api: Shell["api"],
+/* the agent's node, listing `sessions` */
+const nodeListing = (sessions: unknown[]) => [node({ agentDid: AGENT, sessions })];
+
+/* An app selecting `sessionId` on the agent's node, which lists
+   `sessions`; one per transcript and session a test passes, as the
+   projection keeps one store across reads. */
+const apps = new WeakMap<RenderedTimelineItem[], Map<string, DesktopApp>>();
+function appFor(
+  api: object,
   timelineItems: RenderedTimelineItem[],
   {
     sessionId = "parent-session",
     sessions = null as unknown[] | null,
   }: { sessionId?: string; sessions?: unknown[] | null } = {},
-): Shell {
-  return {
+): DesktopApp {
+  const bySession = apps.get(timelineItems) ?? new Map<string, DesktopApp>();
+  apps.set(timelineItems, bySession);
+  const deployments = nodeListing(
+    sessions ?? [{ agentDid: AGENT, sessionId, requesterDid: PERSON }],
+  );
+  const known = bySession.get(sessionId);
+  if (known) {
+    publish(known, deployments);
+    return known;
+  }
+  const app = testApp({
     api,
-    sessionStore: storeFor(sessionId, timelineItems),
-    selectedSessionId: sessionId,
-    selectedAgentDid: null,
-    selectedDeployment: {
-      agentDid: AGENT,
-      sessions: sessions ?? [{ agentDid: AGENT, sessionId, requesterDid: PERSON }],
-    },
-  } as unknown as Shell;
-}
-
-/* one session store per transcript a test passes, as the projection keeps
-   one store across reads */
-const stores = new WeakMap<RenderedTimelineItem[], Map<string, SessionStore>>();
-function storeFor(sessionId: string, timelineItems: RenderedTimelineItem[]) {
-  const bySession = stores.get(timelineItems) ?? new Map<string, SessionStore>();
-  stores.set(timelineItems, bySession);
-  const store =
-    bySession.get(sessionId) ??
-    createSessionStore({
-      sessionId,
-      timelineItems,
-    } as unknown as DesktopSessionSnapshot);
-  bySession.set(sessionId, store);
-  return store;
+    deployments,
+    session: { sessionId, timelineItems } as unknown as DesktopSessionSnapshot,
+    selection: { agentDid: AGENT, sessionId },
+  });
+  bySession.set(sessionId, app);
+  return app;
 }
 
 function apiWith(
@@ -142,14 +139,19 @@ function apiWith(
   return {
     sessionProvenance: vi.fn(provenance),
     fetchOperationsSnapshot: vi.fn().mockResolvedValue({ backgroundedTools: [] }),
-  } as unknown as Shell["api"] & {
+  } as unknown as DesktopApiAdapter & {
     sessionProvenance: ReturnType<typeof vi.fn>;
     fetchOperationsSnapshot: ReturnType<typeof vi.fn>;
   };
 }
 
-function useBoth(shell: Shell) {
-  return useWorkers(shell, useSessionProvenance(shell));
+function useBoth() {
+  return useWorkers(useSessionProvenance());
+}
+
+/* the workers of the session `app` selects, under it as the root provides it */
+function renderWorkers(app: DesktopApp) {
+  return renderHook(() => useBoth(), { wrapper: withApp(app) });
 }
 
 describe("subagents of a session", () => {
@@ -174,9 +176,7 @@ describe("subagents of a session", () => {
     const api = apiWith(async () => view([started, messaged], ["session-done"]));
     const start = call("req-1", "call-done");
     const message = call("req-1", "call-m", "running", "message");
-    const { result } = renderHook(() =>
-      useBoth(shellFor(api, [group(start, message)])),
-    );
+    const { result } = renderWorkers(appFor(api, [group(start, message)]));
 
     await waitFor(() => expect(result.current.byToolCall(start)).toBeTruthy());
     const reachedStart = result.current.byToolCall(start)!;
@@ -192,7 +192,7 @@ describe("subagents of a session", () => {
 
   it("asks for the session's exact scope, requester included", async () => {
     const api = apiWith(async () => view([]));
-    renderHook(() => useBoth(shellFor(api, [group(call("req-1", "call-1"))])));
+    renderWorkers(appFor(api, [group(call("req-1", "call-1"))]));
     await waitFor(() =>
       expect(api.sessionProvenance).toHaveBeenCalledWith({
         sessionId: "parent-session",
@@ -204,24 +204,20 @@ describe("subagents of a session", () => {
 
   it("does not ask while the session's scope is unknown", async () => {
     const api = apiWith(async () => view([]));
-    renderHook(() =>
-      useBoth(shellFor(api, [group(call("req-1", "call-1"))], { sessions: [] })),
-    );
+    renderWorkers(appFor(api, [group(call("req-1", "call-1"))], { sessions: [] }));
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(api.sessionProvenance).not.toHaveBeenCalled();
   });
 
   it("does not ask while two listed scopes share the session's label", async () => {
     const api = apiWith(async () => view([]));
-    renderHook(() =>
-      useBoth(
-        shellFor(api, [group(call("req-1", "call-1"))], {
-          sessions: [
-            { agentDid: AGENT, sessionId: "parent-session", requesterDid: PERSON },
-            { agentDid: AGENT, sessionId: "parent-session", requesterDid: null },
-          ],
-        }),
-      ),
+    renderWorkers(
+      appFor(api, [group(call("req-1", "call-1"))], {
+        sessions: [
+          { agentDid: AGENT, sessionId: "parent-session", requesterDid: PERSON },
+          { agentDid: AGENT, sessionId: "parent-session", requesterDid: null },
+        ],
+      }),
     );
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(api.sessionProvenance).not.toHaveBeenCalled();
@@ -232,7 +228,7 @@ describe("subagents of a session", () => {
     const steer = caused("r-steer", "session-a", "processing", "req-2", "call-steer");
     const api = apiWith(async () => view([steer], ["session-a"]));
     const message = call("req-2", "call-steer", "running", "message");
-    const { result } = renderHook(() => useBoth(shellFor(api, [group(message)])));
+    const { result } = renderWorkers(appFor(api, [group(message)]));
     await waitFor(() => expect(result.current.byToolCall(message)).toBeTruthy());
     expect(result.current.byToolCall(message)!.subagent?.sessionId).toBe("session-a");
     expect(
@@ -243,7 +239,7 @@ describe("subagents of a session", () => {
   it("joins a call only through the lineage, never through a summary's latest request", async () => {
     const api = apiWith(async () => view([]));
     const unknown = call("req-1", "call-unknown", "running");
-    const shell = shellFor(api, [group(unknown)], {
+    const app = appFor(api, [group(unknown)], {
       sessions: [
         { agentDid: AGENT, sessionId: "parent-session", requesterDid: PERSON },
         {
@@ -253,7 +249,7 @@ describe("subagents of a session", () => {
         },
       ],
     });
-    const { result } = renderHook(() => useBoth(shell));
+    const { result } = renderWorkers(app);
     await waitFor(() => expect(result.current.loaded).toBe(true));
     expect(result.current.byToolCall(unknown)).toBeNull();
   });
@@ -263,7 +259,7 @@ describe("subagents of a session", () => {
       view([caused("r-1", "session-1", "completed", "req-1", "call-1")]),
     );
     const other = call("req-2", "call-1");
-    const { result } = renderHook(() => useBoth(shellFor(api, [group(other)])));
+    const { result } = renderWorkers(appFor(api, [group(other)]));
     await waitFor(() => expect(result.current.loaded).toBe(true));
     expect(result.current.byToolCall(other)).toBeNull();
   });
@@ -273,14 +269,23 @@ describe("subagents of a session", () => {
       view([caused("r-a", "session-a", "completed", "req-1", "call-a")]),
     );
     const items = [group(call("req-1", "call-a"))];
-    const { result, rerender } = renderHook(
-      ({ sessionId }: { sessionId: string }) =>
-        useBoth(shellFor(api, items, { sessionId })),
-      { initialProps: { sessionId: "session-x" } },
-    );
+    const app = appFor(api, items, { sessionId: "session-x" });
+    const { result } = renderWorkers(app);
     await waitFor(() => expect(result.current.all).toHaveLength(1));
     api.sessionProvenance.mockImplementationOnce(() => new Promise(() => {}));
-    rerender({ sessionId: "session-y" });
+    act(() => {
+      publish(
+        app,
+        nodeListing([
+          { agentDid: AGENT, sessionId: "session-y", requesterDid: PERSON },
+        ]),
+      );
+      app.stores.selection.setState({ sessionId: "session-y" });
+      writeSession(app.stores.session, {
+        sessionId: "session-y",
+        timelineItems: items,
+      } as unknown as DesktopSessionSnapshot);
+    });
     expect(result.current.all).toHaveLength(0);
   });
 });
@@ -294,11 +299,8 @@ describe("subagent lineage freshness", () => {
     const tool = call("req-1", "call-1", "success");
     const items = [group(tool)];
     const own = { agentDid: AGENT, sessionId: "parent-session", requesterDid: PERSON };
-    const { result, rerender } = renderHook(
-      ({ sessions }: { sessions: unknown[] }) =>
-        useBoth(shellFor(api, items, { sessions })),
-      { initialProps: { sessions: [own] as unknown[] } },
-    );
+    const app = appFor(api, items, { sessions: [own] });
+    const { result } = renderWorkers(app);
     await waitFor(() =>
       expect(result.current.byToolCall(tool)?.request.lifecycleState).toBe(
         "processing",
@@ -306,12 +308,16 @@ describe("subagent lineage freshness", () => {
     );
 
     api.sessionProvenance.mockRejectedValueOnce(new Error("bridge busy"));
-    rerender({ sessions: [own, { sessionId: "other", turnState: "running" }] });
+    act(() =>
+      publish(app, nodeListing([own, { sessionId: "other", turnState: "running" }])),
+    );
     await waitFor(() => expect(api.sessionProvenance).toHaveBeenCalledTimes(2));
     expect(result.current.byToolCall(tool)?.request.lifecycleState).toBe("processing");
 
     state = "completed";
-    rerender({ sessions: [own, { sessionId: "other", turnState: "completed" }] });
+    act(() =>
+      publish(app, nodeListing([own, { sessionId: "other", turnState: "completed" }])),
+    );
     await waitFor(() =>
       expect(result.current.byToolCall(tool)?.request.lifecycleState).toBe("completed"),
     );
@@ -326,15 +332,15 @@ describe("subagent lineage freshness", () => {
       );
       const tool = call("req-1", "call-1", "success");
       const items = [group(tool)];
-      const shell = shellFor(api, items);
+      const app = appFor(api, items);
       const observe = (storeVersion: number) =>
-        writeSession(shell.sessionStore, (session) =>
+        writeSession(app.stores.session, (session) =>
           session
             ? { ...session, projectionRevision: { storeVersion, reconcileVersion: 1 } }
             : session,
         );
       observe(1);
-      const { result } = renderHook(() => useBoth(shell));
+      const { result } = renderWorkers(app);
       await waitFor(() => expect(api.sessionProvenance).toHaveBeenCalledTimes(1));
       await vi.advanceTimersByTimeAsync(60_000);
       expect(api.sessionProvenance).toHaveBeenCalledTimes(1);
@@ -359,9 +365,9 @@ describe("subagent lineage freshness", () => {
     /* a live delta replaces only the live reply; the rows stay the same objects */
     const toolRow = group(tool);
     const items = [toolRow];
-    const shell = shellFor(api, items);
+    const app = appFor(api, items);
     const stream = (storeVersion: number) =>
-      writeSession(shell.sessionStore, (session) =>
+      writeSession(app.stores.session, (session) =>
         session
           ? {
               ...session,
@@ -379,7 +385,7 @@ describe("subagent lineage freshness", () => {
           : session,
       );
     stream(1);
-    const { result } = renderHook(() => useBoth(shell));
+    const { result } = renderWorkers(app);
     await waitFor(() =>
       expect(result.current.byToolCall(tool)?.request.lifecycleState).toBe("completed"),
     );
@@ -390,7 +396,7 @@ describe("subagent lineage freshness", () => {
 
   it("asks for operations facts only when the transcript has a background process", async () => {
     const api = apiWith(async () => view([]));
-    renderHook(() => useBoth(shellFor(api, [group(call("req-1", "call-1"))])));
+    renderWorkers(appFor(api, [group(call("req-1", "call-1"))]));
     await waitFor(() => expect(api.sessionProvenance).toHaveBeenCalled());
     expect(api.fetchOperationsSnapshot).not.toHaveBeenCalled();
 
@@ -399,7 +405,7 @@ describe("subagent lineage freshness", () => {
       toolName: "spawn_process",
       presentation: { kind: "process", action: "spawn", target: "bash" },
     } as unknown as RenderedToolCallView;
-    renderHook(() => useBoth(shellFor(api, [group(process)])));
+    renderWorkers(appFor(api, [group(process)]));
     await waitFor(() => expect(api.fetchOperationsSnapshot).toHaveBeenCalled());
   });
 });

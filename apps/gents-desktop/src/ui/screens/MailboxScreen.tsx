@@ -120,7 +120,7 @@ export function MailboxScreen({
      node to start, then whatever the chips choose */
   const ctx = scopeContextOf(
     shell,
-    useFleet(shell, (s) => s),
+    useFleet((s) => s),
   );
   const [storedNodeIds, setNodeIds] = useStoredStrings("gents-prototype-mailbox-nodes");
   useEffect(() => {

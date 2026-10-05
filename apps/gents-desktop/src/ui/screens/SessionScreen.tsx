@@ -123,7 +123,6 @@ import { toastFailure } from "@/lib/failure";
 import {
   useSelectedSession,
   useSelectedSessionFields,
-  type SessionSelection,
 } from "../hooks/useSelectedSession";
 import { useDraft } from "../../hooks/draftStore";
 import { useFleet, workersOfId } from "../hooks/useFleet";
@@ -1284,9 +1283,9 @@ export const TranscriptPanel = memo(function TranscriptPanel({
 });
 
 export function SessionScreen({ shell }: { shell: Shell }) {
-  const session = useSelectedSessionFields(shell, selectScreenFacts);
+  const session = useSelectedSessionFields(selectScreenFacts);
   const homeDid = shell.snapshot?.bootstrap.initAgentDid;
-  const sessionWorkers = useFleet(shell, (s) => workersOfId(s, session?.sessionId));
+  const sessionWorkers = useFleet((s) => workersOfId(s, session?.sessionId));
   const [draft, setDraft] = useDraft(shell.draftStore, shell.draftKey);
   const [requestedStop, setRequestedStop] = useState<string | null>(null);
   /* the transcript column follows new content while the reader is near
@@ -1330,8 +1329,8 @@ export function SessionScreen({ shell }: { shell: Shell }) {
   }, [shell.selectedSessionId, session, scroller]);
   const choice = useBehaviorChoice(shell);
   const deployment = shell.selectedDeployment;
-  const provenance = useSessionProvenance(shell);
-  const workers = useWorkers(shell, provenance);
+  const provenance = useSessionProvenance();
+  const workers = useWorkers(provenance);
   const parentWork = useParentWork(shell, provenance);
   /* the composer mounts with the session, not with the screen, so this
      measures from a callback ref rather than an effect that would run once
@@ -1801,7 +1800,6 @@ export function SessionScreen({ shell }: { shell: Shell }) {
 
               <div ref={headerEnd} aria-hidden="true" />
               <SelectedTranscript
-                shell={shell}
                 deployment={deployment}
                 actionsRef={transcriptActions}
                 inFlight={inFlight}
@@ -2215,13 +2213,10 @@ function Reasoning({ text }: { text: string }) {
 
 /* The transcript is the one reader of every streamed chunk: it alone selects
    the whole session, so a chunk re-renders it and not the screen around it. */
-function SelectedTranscript({
-  shell,
-  ...props
-}: Omit<ComponentProps<typeof TranscriptPanel>, "session"> & {
-  shell: SessionSelection;
-}) {
-  return <TranscriptPanel {...props} session={useSelectedSession(shell)} />;
+function SelectedTranscript(
+  props: Omit<ComponentProps<typeof TranscriptPanel>, "session">,
+) {
+  return <TranscriptPanel {...props} session={useSelectedSession()} />;
 }
 
 /* What the screen around the transcript reads from the session. A streamed

@@ -1,4 +1,5 @@
 import { act, render, screen } from "@testing-library/react";
+import { useState } from "react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type {
@@ -127,7 +128,9 @@ import { SessionScreen } from "../src/ui/screens/SessionScreen";
 import { MemoryNavProvider } from "@gents/shell";
 import { selectedSessionFields } from "./session-store-fixture";
 import { createDraftStore } from "../src/hooks/draftStore";
-import { fleetFor } from "./shell-fixture";
+import { testApp } from "./app-fixture";
+import { AppProvider } from "../src/ui/app/AppContext";
+import { readSession } from "../src/hooks/sessionStore";
 
 const healthy: SyncHealthView = {
   state: "healthy",
@@ -171,7 +174,6 @@ function sessionShell(): Shell {
     selectedBehaviorId: "behavior",
     selectedAgentDid: "did:key:agent",
     deployments: [],
-    fleet: fleetFor(),
     selectedDeployment: null,
     draftStore: createDraftStore(),
     draftKey: "session",
@@ -200,22 +202,31 @@ function sessionShell(): Shell {
 
 /* the shell around the screen: the side panel is the shell's dock sheet */
 function Harness({ shell }: { shell: Shell }) {
+  const [app] = useState(() =>
+    testApp({
+      api: shell.api,
+      session: readSession(shell.sessionStore),
+      selection: { behaviorId: shell.selectedBehaviorId },
+    }),
+  );
   return (
-    <MemoryNavProvider initial={{ name: "session", sessionId: "session-1" }}>
-      <TooltipProvider>
-        <AppShell
-          route={{ name: "session", sessionId: "session-1" }}
-          agentName={null}
-          agentDid={null}
-          deployment={null}
-          online
-          mailboxCount={0}
-          syncHealth={healthy}
-        >
-          <SessionScreen shell={shell} />
-        </AppShell>
-      </TooltipProvider>
-    </MemoryNavProvider>
+    <AppProvider value={app}>
+      <MemoryNavProvider initial={{ name: "session", sessionId: "session-1" }}>
+        <TooltipProvider>
+          <AppShell
+            route={{ name: "session", sessionId: "session-1" }}
+            agentName={null}
+            agentDid={null}
+            deployment={null}
+            online
+            mailboxCount={0}
+            syncHealth={healthy}
+          >
+            <SessionScreen shell={shell} />
+          </AppShell>
+        </TooltipProvider>
+      </MemoryNavProvider>
+    </AppProvider>
   );
 }
 
