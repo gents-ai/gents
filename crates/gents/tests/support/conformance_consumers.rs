@@ -371,6 +371,20 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "gates_costs_and_decisions_match_lean",
         },
         ConformanceConsumer::RustTest {
+            id: "optimization::subject::tests::task_seed_coverage_matches_lean_for_canonical_pack_and_definition_inputs",
+            package: "gents",
+            source_path: "crates/gents/src/optimization/subject.rs",
+            module_path: "optimization::subject::tests",
+            function: "task_seed_coverage_matches_lean_for_canonical_pack_and_definition_inputs",
+        },
+        ConformanceConsumer::RustTest {
+            id: "optimization::driver::matrix::an_unexercised_task_target_is_refused_before_any_job_or_trial_is_created",
+            package: "gents",
+            source_path: "crates/gents/src/optimization/driver/matrix.rs",
+            module_path: "optimization::driver::matrix",
+            function: "an_unexercised_task_target_is_refused_before_any_job_or_trial_is_created",
+        },
+        ConformanceConsumer::RustTest {
             id: "commands::codex_shim::turn_projection::tests::generated_reasoning_projection_cases_drive_turn_projection_notifications",
             package: "gents-cli",
             source_path: "crates/gents-cli/src/commands/codex_shim/turn_projection.rs",

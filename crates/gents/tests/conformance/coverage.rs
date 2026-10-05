@@ -136,6 +136,13 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
     );
     assert_eq!(lean_contract_snapshot().optimization_cases.gates.len(), 10);
     assert_eq!(lean_contract_snapshot().optimization_cases.costs.len(), 6);
+    assert_eq!(
+        lean_contract_snapshot()
+            .optimization_cases
+            .seed_coverage
+            .len(),
+        18
+    );
     assert_eq!(lean_contract_snapshot().publish_if_cases.len(), 7);
     assert_eq!(lean_contract_snapshot().session_recovery_cases.len(), 16);
     assert_eq!(

@@ -12,6 +12,84 @@ in Rust) is an abstract `Bool`; eval runs, the proposer and candidate
 construction are outside the fence. -/
 namespace Optimization
 
+inductive SeedSplit where
+  | train | validation | heldOut
+  deriving DecidableEq, Repr
+
+structure SeedCase where
+  split : SeedSplit
+  seedCollections : List String
+  deriving DecidableEq, Repr
+
+structure SeedTrigger where
+  taskId : String
+  eventSourceId : Option String
+  enabled : Bool
+  deriving DecidableEq, Repr
+
+structure SeedSource where
+  eventSourceId : String
+  collection : String
+  eventKind : Option String
+  deriving DecidableEq, Repr
+
+def seedReachesTask (taskId collection : String) (triggers : List SeedTrigger)
+    (sources : List SeedSource) : Bool :=
+  triggers.any fun trigger =>
+    trigger.enabled && trigger.taskId == taskId &&
+      match trigger.eventSourceId with
+      | none => false
+      | some id => sources.any fun source =>
+          source.eventSourceId == id && source.collection == collection &&
+            source.eventKind.getD "created" == "created"
+
+def splitSeedsTask (taskId : String) (split : SeedSplit) (triggers : List SeedTrigger)
+    (sources : List SeedSource) (cases : List SeedCase) : Bool :=
+  cases.any fun c => decide (c.split = split) &&
+    c.seedCollections.any (fun collection => seedReachesTask taskId collection triggers sources)
+
+/-- A task-template optimization needs a seed route in both development splits.
+The pack loader has already bound owners and resolved the target task's behavior.
+Only stage seeds count: fixtures precede runtime boot, and prompt stages do not
+render the target template. Filters, grouping and the contents of seed documents
+remain runtime evidence; this admission rule establishes structural reachability,
+not successful delivery. A context target has no seed requirement. -/
+def missingTaskSeedSplits (target : Option String) (taskEnabled : Bool)
+    (triggers : List SeedTrigger) (sources : List SeedSource) (cases : List SeedCase) :
+    List SeedSplit :=
+  match target with
+  | none => []
+  | some taskId => [.train, .validation].filter fun split =>
+      !(taskEnabled && splitSeedsTask taskId split triggers sources cases)
+
+theorem context_requires_no_seed (enabled : Bool) (triggers : List SeedTrigger)
+    (sources : List SeedSource) (cases : List SeedCase) :
+    missingTaskSeedSplits none enabled triggers sources cases = [] := rfl
+
+theorem disabled_task_missing_both_splits (task : String) (triggers : List SeedTrigger)
+    (sources : List SeedSource) (cases : List SeedCase) :
+    missingTaskSeedSplits (some task) false triggers sources cases = [.train, .validation] := by
+  simp [missingTaskSeedSplits]
+
+theorem task_seed_coverage_requires_both_splits (task : String) (enabled : Bool)
+    (triggers : List SeedTrigger) (sources : List SeedSource) (cases : List SeedCase) :
+    missingTaskSeedSplits (some task) enabled triggers sources cases = [] ↔
+      enabled = true ∧ splitSeedsTask task .train triggers sources cases = true ∧
+        splitSeedsTask task .validation triggers sources cases = true := by
+  cases ht : splitSeedsTask task .train triggers sources cases <;>
+    cases hv : splitSeedsTask task .validation triggers sources cases <;>
+    cases enabled <;> simp [missingTaskSeedSplits, ht, hv]
+
+theorem held_out_seed_cannot_cover_train (task : String) (triggers : List SeedTrigger)
+    (sources : List SeedSource) (collections : List String) :
+    splitSeedsTask task .train triggers sources [⟨.heldOut, collections⟩] = false := by
+  simp [splitSeedsTask]
+
+theorem held_out_seed_cannot_cover_validation (task : String) (triggers : List SeedTrigger)
+    (sources : List SeedSource) (collections : List String) :
+    splitSeedsTask task .validation triggers sources [⟨.heldOut, collections⟩] = false := by
+  simp [splitSeedsTask]
+
 inductive Arm where
   | baseline | candidate
   deriving DecidableEq, Repr
