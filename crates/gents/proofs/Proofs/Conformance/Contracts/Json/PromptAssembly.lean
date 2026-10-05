@@ -3,6 +3,7 @@ import Proofs.Conformance.Contracts.Json.SessionHydration
 import Proofs.Conformance.ContractCases.PromptAssembly
 import Proofs.Compaction.Executable
 import Proofs.PromptAssembly.ClaudeWire
+import Proofs.PromptAssembly.ResponsesStorage
 
 namespace Conformance.Contracts
 
@@ -306,6 +307,47 @@ def promptAssemblyClaudeWireStartCaseJson
 
 def promptAssemblyClaudeWireStartCasesJson : String :=
   jsonArray (PromptAssembly.ClaudeWire.cases.map promptAssemblyClaudeWireStartCaseJson)
+
+private def responsesStorageFamilyJson :
+    PromptAssembly.ResponsesStorage.Family → String
+  | .openAiCompatible => "OpenAiCompatible"
+  | .xaiGrokOAuth => "XaiGrokOAuth"
+  | .chatGptCodex => "ChatGptCodex"
+  | .openRouter => "OpenRouter"
+
+private def responsesStorageWireJson :
+    PromptAssembly.ResponsesStorage.Wire → String
+  | .responses => "responses"
+  | .chatCompletions => "chat_completions"
+
+def promptAssemblyResponsesStorageCaseJson
+    (witness : PromptAssembly.ResponsesStorage.Case) : String :=
+  "{\"name\":" ++ jsonString witness.name ++
+    ",\"family\":" ++ jsonString (responsesStorageFamilyJson witness.family) ++
+    ",\"wire\":" ++ jsonString (responsesStorageWireJson witness.wire) ++
+    ",\"endpoint\":" ++ jsonString witness.endpoint ++
+    ",\"store\":" ++ (match witness.expected.store with
+      | none => "null"
+      | some value => boolString value) ++
+    ",\"encrypted_include\":" ++ boolString
+      (witness.expected.includes.contains
+        PromptAssembly.ResponsesStorage.encryptedReasoningInclude) ++ "}"
+
+def promptAssemblyResponsesStorageCasesJson : String :=
+  jsonArray (PromptAssembly.ResponsesStorage.cases.map
+    promptAssemblyResponsesStorageCaseJson)
+
+def promptAssemblyResponsesEffortCaseJson
+    (witness : PromptAssembly.ResponsesStorage.EffortCase) : String :=
+  "{\"name\":" ++ jsonString witness.name ++
+    ",\"endpoint\":" ++ jsonString witness.endpoint ++
+    ",\"advertised\":" ++ jsonOptionalStringArray witness.advertised ++
+    ",\"requested\":" ++ jsonOptionalString witness.requested ++
+    ",\"expected\":" ++ jsonOptionalString witness.expected ++ "}"
+
+def promptAssemblyResponsesEffortCasesJson : String :=
+  jsonArray (PromptAssembly.ResponsesStorage.effortCases.map
+    promptAssemblyResponsesEffortCaseJson)
 
 private def claudeReplayInputBlockJson :
     CanonicalOutput.MessageBlock (List UInt8) → String

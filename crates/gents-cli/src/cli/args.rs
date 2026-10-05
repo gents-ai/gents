@@ -2197,6 +2197,8 @@ pub(crate) enum BackendPresetArg {
     ChatGptCodex,
     #[value(name = "xai-oauth")]
     XaiGrokOAuth,
+    #[value(name = "xai")]
+    XaiApiKey,
     #[value(
         name = "claude-cli-subscription",
         alias = "claude-subscription",
@@ -2221,6 +2223,7 @@ impl BackendPresetArg {
             Self::OpenRouter => "openrouter",
             Self::ChatGptCodex => "chatgpt-codex",
             Self::XaiGrokOAuth => "xai-oauth",
+            Self::XaiApiKey => "xai",
             Self::ClaudeCliSubscription => "claude-cli-subscription",
             Self::Anthropic => "anthropic",
             Self::Ollama => "ollama",
@@ -2238,6 +2241,7 @@ impl BackendPresetArg {
             Self::Anthropic => BackendProviderKind::AnthropicApiKey,
             Self::GenericOpenAiCompatible
             | Self::OpenAi
+            | Self::XaiApiKey
             | Self::Ollama
             | Self::Vllm
             | Self::LlamaCpp => BackendProviderKind::OpenAiCompatible,
@@ -2251,6 +2255,7 @@ impl BackendPresetArg {
             Self::OpenRouter => Some("https://openrouter.ai/api/v1"),
             Self::ChatGptCodex => Some(gents::chatgpt_codex::default_backend_endpoint()),
             Self::XaiGrokOAuth => Some(gents::xai_grok_oauth::default_backend_endpoint()),
+            Self::XaiApiKey => Some(gents::inference_setup::XAI_API_ENDPOINT),
             Self::ClaudeCliSubscription => {
                 Some(gents::claude_subscription::default_backend_endpoint())
             }
@@ -2276,6 +2281,7 @@ impl BackendPresetArg {
             | Self::OpenAi
             | Self::OpenRouter
             | Self::Anthropic
+            | Self::XaiApiKey
             | Self::Vllm => None,
         }
     }
@@ -2285,6 +2291,7 @@ impl BackendPresetArg {
             Self::OpenAi => Some("OPENAI_API_KEY"),
             Self::OpenRouter => Some("OPENROUTER_API_KEY"),
             Self::Anthropic => Some("ANTHROPIC_API_KEY"),
+            Self::XaiApiKey => Some("XAI_API_KEY"),
             Self::GenericOpenAiCompatible
             | Self::ChatGptCodex
             | Self::XaiGrokOAuth
@@ -2297,7 +2304,7 @@ impl BackendPresetArg {
 
     pub(crate) fn default_openai_wire_api(self) -> Option<OpenAiWireApi> {
         match self {
-            Self::OpenAi => Some(OpenAiWireApi::Responses),
+            Self::OpenAi | Self::XaiApiKey => Some(OpenAiWireApi::Responses),
             Self::GenericOpenAiCompatible
             | Self::OpenRouter
             | Self::ChatGptCodex

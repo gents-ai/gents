@@ -499,6 +499,16 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "PromptAssemblyClaudeWireStartCases",
             !snapshot.prompt_assembly_claude_wire_start_cases.is_empty(),
         ),
+        (
+            "prompt_assembly_responses_storage_cases",
+            "PromptAssemblyResponsesStorageCases",
+            !snapshot.prompt_assembly_responses_storage_cases.is_empty(),
+        ),
+        (
+            "prompt_assembly_responses_effort_cases",
+            "PromptAssemblyResponsesEffortCases",
+            !snapshot.prompt_assembly_responses_effort_cases.is_empty(),
+        ),
     ] {
         if present {
             emitted.insert((category.to_owned(), domain.to_owned()));
