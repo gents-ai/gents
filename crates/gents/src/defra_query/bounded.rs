@@ -366,7 +366,7 @@ impl Tool for BoundedQueryTool {
         let scope = CollectionScope::restricted(vec![self.decl.collection.clone()]);
         let command = params.into();
         let result = if let Some(actor) = &self.actor {
-            crate::config_client::ConfigAccess::transact_local(
+            crate::config_client::ConfigAccess::transact_local_readonly(
                 &self.node,
                 Some(actor.clone()),
                 "bounded_application_query",
@@ -454,6 +454,31 @@ mod tests {
                 fill: Some(WriteToolFieldFill::Correlation),
             }],
         }
+    }
+
+    #[tokio::test]
+    async fn actor_scoped_query_completes_while_mutation_gate_is_held() {
+        let node = node_with_findings().await;
+        let holder = crate::config_client::ConfigApplyTxn::begin_local(&node, None)
+            .await
+            .unwrap();
+        let mut declaration = decl();
+        declaration.filter_fields.clear();
+        let tool = BoundedQueryTool::new(Arc::clone(&node), declaration).with_actor(
+            ::identity::Did::new("did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR")
+                .unwrap(),
+        );
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            Tool::call(&tool, BoundedQueryParams(Map::new())),
+        )
+        .await
+        .expect("actor read must not wait for mutation gate")
+        .unwrap();
+        assert!(result.contains("f1"));
+        assert!(result.contains("f2"));
+        assert!(result.contains("\"count\": 2"));
+        holder.commit().await.unwrap();
     }
 
     #[tokio::test]
