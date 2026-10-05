@@ -71,7 +71,7 @@ pub struct ActivationReceipt {
     pub generation: i64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct GraphRunReceipt {
     pub run_id: String,
     pub graph_id: String,
@@ -79,6 +79,57 @@ pub struct GraphRunReceipt {
     pub entry_name: String,
     pub correlation: String,
     pub seed_doc_id: String,
+}
+
+/// The durable `run_graph` tool result. Session observers find the run a
+/// session started through this reply, so its only writer and its only
+/// reader ([`run_receipt_from_tool_result`]) live together.
+///
+/// The loop persists only a bounded head of every tool result
+/// ([`TruncationLimits::default`](crate::truncation::TruncationLimits)), and a
+/// cut reply is not JSON, so its run would never be observed. The reply
+/// therefore stays within those limits: it sheds the run's entry `input`, and
+/// then the rest of `observed`, before it would exceed them.
+pub fn run_graph_tool_result(
+    principal: &str,
+    receipt: &GraphRunReceipt,
+    observed: &super::GraphRunView,
+    next: Value,
+) -> serde_json::Result<String> {
+    const OMITTED: &str = "omitted: exceeds the tool result limit; read it with the status tool";
+    let full = serde_json::to_value(observed)?;
+    let mut without_input = full.clone();
+    without_input["input"] = json!(OMITTED);
+    let summary = json!({"run_id": observed.run_id, "status": observed.status, "omitted": OMITTED});
+    let limits = crate::truncation::TruncationLimits::default();
+    let mut reply = String::new();
+    for observed in [full, without_input, summary] {
+        reply = serde_json::to_string_pretty(&json!({
+            "node_bound": true,
+            "principal": principal,
+            "receipt": receipt,
+            "observed": observed,
+            "next": next,
+        }))?;
+        if !crate::truncation::truncate(&reply, crate::truncation::TruncationMode::Head, &limits)
+            .truncated
+        {
+            break;
+        }
+    }
+    Ok(reply)
+}
+
+/// Decode the receipt from a durable [`run_graph_tool_result`]. Any other
+/// text is `None`.
+pub fn run_receipt_from_tool_result(result: &str) -> Option<GraphRunReceipt> {
+    #[derive(serde::Deserialize)]
+    struct Envelope {
+        receipt: GraphRunReceipt,
+    }
+    serde_json::from_str::<Envelope>(result)
+        .ok()
+        .map(|envelope| envelope.receipt)
 }
 
 /// Where a graph run's entry input came from: the operator (validated against
@@ -1552,11 +1603,81 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+
     use crate::graph_pipeline::{
         compile_graph, BundledProvenance, CompilerPolicy, EntryBinding, GraphIntent, GraphLimits,
         GraphNode, PortCardinality, PortRef, PortSpec, RequiredSchemaDigest, ResultCardinality,
         ResultContract, StageCapability,
     };
+
+    #[test]
+    fn run_receipt_decodes_only_what_the_run_graph_writer_wrote() {
+        let receipt = GraphRunReceipt {
+            run_id: "run-1".into(),
+            graph_id: "graph".into(),
+            revision_digest: "sha256:d".into(),
+            entry_name: "entry".into(),
+            correlation: "corr".into(),
+            seed_doc_id: "seed".into(),
+        };
+        let observed: crate::graph_pipeline::GraphRunView = serde_json::from_value(json!({
+            "view_version": 1, "run_id": "run-1", "graph_id": "graph",
+            "revision_digest": "sha256:d", "owner_did": "did:test:owner",
+            "caller_did": "did:test:owner", "entry_name": "entry", "correlation": "corr",
+            "status": "running", "input": {}, "created_at": "2026-10-02T05:30:00Z",
+            "started_at": null, "completed_at": null, "update_generation": 0,
+            "requests": [], "stages": [], "groups": [], "results": [],
+            "persisted_result_refs": [], "active_request_count": 0,
+            "terminal_request_count": 0, "result_contract_satisfied": false,
+            "failure_evidence": null,
+        }))
+        .unwrap();
+        let result =
+            run_graph_tool_result("did:test:owner", &receipt, &observed, json!({})).unwrap();
+        assert_eq!(run_receipt_from_tool_result(&result), Some(receipt.clone()));
+        let limits = crate::truncation::TruncationLimits::default();
+        let bounded = |result: &str| {
+            crate::truncation::truncate_text(
+                result,
+                crate::truncation::tool_result_truncation_mode(
+                    crate::self_config::RUN_GRAPH_TOOL_NAME,
+                ),
+                &limits,
+            )
+            .0
+        };
+        let mut large_input = observed.clone();
+        large_input.input = json!({"payload": "x".repeat(limits.max_bytes)});
+        let mut long_input = observed.clone();
+        long_input.input = json!({"items": vec![0; limits.max_lines]});
+        let mut large_evidence = observed.clone();
+        large_evidence.failure_evidence = Some(json!("x".repeat(limits.max_bytes)));
+        for (view, keeps_view) in [
+            (large_input, true),
+            (long_input, true),
+            (large_evidence, false),
+        ] {
+            let result =
+                run_graph_tool_result("did:test:owner", &receipt, &view, json!({})).unwrap();
+            let bounded = bounded(&result);
+            assert_eq!(bounded, result, "the reply must fit the loop's limits");
+            assert_eq!(
+                run_receipt_from_tool_result(&bounded),
+                Some(receipt.clone())
+            );
+            let decoded: Value = serde_json::from_str(&bounded).unwrap();
+            assert_eq!(decoded["observed"]["status"], "running");
+            assert_eq!(decoded["observed"]["stages"].is_array(), keeps_view);
+        }
+        for text in [
+            "",
+            "not json",
+            r#"{"observed":{"run_id":"run-1"}}"#,
+            r#"{"receipt":{"run_id":"run-1"}}"#,
+        ] {
+            assert_eq!(run_receipt_from_tool_result(text), None, "{text}");
+        }
+    }
 
     #[tokio::test]
     async fn unavailable_package_revisions_fail_closed_without_failing_the_runtime_view() {
@@ -2676,13 +2797,29 @@ mod tests {
         assert_eq!(scoped.active_request_count, 0);
         assert!(scoped.failure_evidence.is_none());
 
-        assert!(
-            super::super::load_graph_run_view(&node, "did:key:intruder", &run.run_id)
+        for (actor, run_id, refusal) in [
+            (
+                "did:key:intruder",
+                run.run_id.as_str(),
+                super::super::GraphRunUnobservable::Unauthorized,
+            ),
+            (
+                graph_test_owner(),
+                "missing-run",
+                super::super::GraphRunUnobservable::Missing {
+                    run_id: "missing-run".to_owned(),
+                },
+            ),
+        ] {
+            let error = super::super::load_graph_run_view(&node, actor, run_id)
                 .await
-                .unwrap_err()
-                .to_string()
-                .contains("not authorized")
-        );
+                .unwrap_err();
+            assert_eq!(
+                error.downcast_ref::<super::super::GraphRunUnobservable>(),
+                Some(&refusal),
+                "{error:#}"
+            );
+        }
         assert_eq!(
             super::super::reconcile_owned_graph_runs(&node, graph_test_owner())
                 .await
