@@ -82,6 +82,7 @@ export function useDesktopShell({
     lastP2PAutoRestartAt,
     lastObservedP2PHealth,
     snapshot,
+    fleet,
     mutateSnapshot,
     startupPhase,
     loading,
@@ -317,6 +318,7 @@ export function useDesktopShell({
 
   return {
     snapshot,
+    fleet,
     sessionStore,
     sessionLoad,
     sessionLoadingStatus,

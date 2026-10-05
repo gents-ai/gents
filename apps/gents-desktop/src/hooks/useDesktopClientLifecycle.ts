@@ -22,6 +22,7 @@ import { isMobileTauriShell, ownsAutomaticRecovery } from "../lib/shellPlatform"
 import { createSnapshotPublicationOwner } from "./desktopSnapshotPublication";
 import { useIncompatibleHome } from "./useIncompatibleHome";
 import type { SelectionStore } from "./selectionStore";
+import { applyFleetSnapshot, createFleetStore } from "./fleetStore";
 
 export type { DesktopStartupPhase } from "../lib/loadingStatus";
 
@@ -63,10 +64,14 @@ export function useDesktopClientLifecycle({
   const startClientInFlight = useRef<Promise<DesktopClientSnapshot> | null>(null);
   const initializationInFlight = useRef<Promise<void> | null>(null);
   const [snapshot, setSnapshot] = useState<DesktopClientSnapshot | null>(null);
+  /* the same read, by key: nodes, sessions and mailbox items keep their
+     identity while unchanged, with lineage indexed once per read */
+  const [fleet] = useState(() => createFleetStore());
   const snapshotPublicationRef = useRef<
     ReturnType<typeof createSnapshotPublicationOwner> | undefined
   >(undefined);
   snapshotPublicationRef.current ??= createSnapshotPublicationOwner((next) => {
+    applyFleetSnapshot(fleet, next);
     setSnapshot(next);
     setLoading(false);
     resolveStartupPhase(next);
@@ -333,6 +338,7 @@ export function useDesktopClientLifecycle({
     lastP2PAutoRestartAt,
     lastObservedP2PHealth,
     snapshot,
+    fleet,
     mutateSnapshot,
     startupPhase,
     loading,
