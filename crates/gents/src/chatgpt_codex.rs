@@ -162,6 +162,17 @@ impl crate::oauth_http::OAuthHttpPolicy for ChatGptCodexPolicy {
             if let Some(patched) = patch_instructions_body(&body) {
                 body = patched;
             }
+            let call = crate::admission::current_call_join();
+            let affinity = gents_loop::provider_input::routing_affinity::current();
+            tracing::info!(
+                call_id = call.as_ref().map(|call| call.call_id.as_str()),
+                call_seq = call.as_ref().map(|call| call.call_seq),
+                affinity_scope_present = affinity.is_some(),
+                session_header_present = parts.headers.contains_key("session_id"),
+                client_request_header_present = parts.headers.contains_key("x-client-request-id"),
+                turn_state_header_present = parts.headers.contains_key("x-codex-turn-state"),
+                "Codex cache routing request"
+            );
         }
         Request::from_parts(parts, body)
     }
@@ -217,12 +228,29 @@ impl crate::oauth_http::OAuthHttpPolicy for ChatGptCodexPolicy {
 }
 
 fn retain_turn_state(headers: &HeaderMap) {
-    if let Some(affinity) = gents_loop::provider_input::routing_affinity::current() {
-        affinity.observe(
-            headers
-                .get("x-codex-turn-state")
-                .and_then(|header| header.to_str().ok()),
-        );
+    let affinity = gents_loop::provider_input::routing_affinity::current();
+    let returned = headers
+        .get("x-codex-turn-state")
+        .and_then(|header| header.to_str().ok());
+    let retained = affinity.as_ref().and_then(|affinity| affinity.token());
+    let call = crate::admission::current_call_join();
+    // Opaque routing tokens may carry provider state. Record presence and
+    // equality only; body comparisons use the existing rendered captures.
+    tracing::info!(
+        call_id = call.as_ref().map(|call| call.call_id.as_str()),
+        call_seq = call.as_ref().map(|call| call.call_seq),
+        provider_request_id = headers
+            .get("x-request-id")
+            .and_then(|value| value.to_str().ok()),
+        affinity_scope_present = affinity.is_some(),
+        turn_state_header_present = headers.contains_key("x-codex-turn-state"),
+        turn_state_header_valid = returned.is_some(),
+        retained_turn_state_present = retained.is_some(),
+        returned_turn_state_matches = retained.zip(returned).map(|(a, b)| a == b),
+        "Codex cache routing response"
+    );
+    if let Some(affinity) = affinity {
+        affinity.observe(returned);
     }
 }
 
