@@ -1,4 +1,5 @@
 import Proofs.BackendHealth.Transition
+import Proofs.BackendHealth.Scheduling
 
 namespace Proofs.BackendHealth
 
@@ -52,5 +53,39 @@ def transitionCases : List TransitionCase :=
 theorem transition_cases_blocks_routing_sound :
     transitionCases.all (fun c => c.blocksRouting = c.nextState.blocksRouting) := by
   native_decide
+
+structure ScheduleCase where
+  name : String
+  known : List ProbeConfiguration
+  current : List ProbeConfiguration
+  periodic : Bool
+  due : List Nat
+  observed : List ProbeConfiguration
+  deriving Repr
+
+def ScheduleCase.build (index : Nat) (known current : List ProbeConfiguration)
+    (periodic : Bool) : ScheduleCase :=
+  { name := "backend_schedule_" ++ toString index ++ "_" ++ toString periodic
+  , known, current, periodic
+  , due := scheduledProbes known current periodic
+  , observed := observedProbeConfigurations current }
+
+def scheduleObservations : List (List ProbeConfiguration) :=
+  [ []
+  , [{ backendId := 0, revision := 0, enabled := true }]
+  , [{ backendId := 0, revision := 1, enabled := true }]
+  , [{ backendId := 0, revision := 0, enabled := false }]
+  , [{ backendId := 1, revision := 0, enabled := true }]
+  , [{ backendId := 0, revision := 0, enabled := true },
+     { backendId := 1, revision := 0, enabled := true }]
+  , [{ backendId := 0, revision := 1, enabled := true },
+     { backendId := 1, revision := 0, enabled := false }]
+  ]
+
+def scheduleCases : List ScheduleCase :=
+  (scheduleObservations.flatMap fun previous =>
+    scheduleObservations.map fun current => (observedProbeConfigurations previous, current))
+    |>.zipIdx |>.flatMap fun ((known, current), index) =>
+      [false, true].map (ScheduleCase.build index known current)
 
 end Proofs.BackendHealth
