@@ -646,8 +646,10 @@ impl PackStore {
     }
 
     /// Removes the stored archive for `digest` and its unpacked copy, if
-    /// either is present. Idempotent: releasing a digest already gone, or
-    /// never stored, is not an error. Returns whether anything was removed.
+    /// either is present. An unpacked copy containing `runs/` holds operator
+    /// history and is retained, including on subsequent releases. Idempotent:
+    /// releasing a digest already gone, or never stored, is not an error.
+    /// Returns whether anything was removed.
     pub fn release(&self, digest: &str) -> Result<bool> {
         let hex = digest_hex(digest)?;
         let archive = self.path(digest)?;
@@ -664,11 +666,17 @@ impl PackStore {
                 return Err(error).with_context(|| format!("removing {}", archive.display()))
             }
         }
-        match std::fs::remove_dir_all(&unpacked) {
-            Ok(()) => released = true,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(error).with_context(|| format!("removing {}", unpacked.display()))
+        let retains_runs = unpacked
+            .symlink_metadata()
+            .is_ok_and(|metadata| metadata.is_dir())
+            && unpacked.join("runs").exists();
+        if !retains_runs {
+            match std::fs::remove_dir_all(&unpacked) {
+                Ok(()) => released = true,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(error).with_context(|| format!("removing {}", unpacked.display()))
+                }
             }
         }
         match header {

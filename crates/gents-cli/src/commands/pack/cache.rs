@@ -1,4 +1,4 @@
-//! The asset-cache directory tree, `<home>/packs/<name>/<digest>/`, and its
+//! The asset-cache directory tree, `<home>/packs/.materialized/<namespace>/<name>/<digest>/`, and its
 //! lock and prune/release rules. `gents pack prune` and `gents pack remove`
 //! share [`release_cache_root`] for the marker/`runs/` retention rule, and
 //! [`lock_exclusive`] for the per-pack cache lock, so the two cannot diverge
@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use serde_json::json;
 
 use gents::file_lock::FileLock;
-use gents::pack::PackKind;
+use gents::pack::{HomePackInstall, PackKind};
 
 use crate::cli::PackPruneArgs;
 
@@ -60,7 +60,7 @@ fn prune_stale_asset_cache(parent: &Path, current: &Path) -> Result<Vec<String>>
         // can acquire or use any sibling cache root while the probe and
         // removal occur. Shares `release_cache_root`'s marker/`runs/` rule so
         // the two cannot diverge on when a cache version is safe to delete.
-        if let CacheRelease::Removed = release_cache_root(&root)? {
+        if let CacheRelease::Removed = release_cache_root(&root, || Ok(()))? {
             removed.push(name.to_owned());
         }
     }
@@ -68,19 +68,75 @@ fn prune_stale_asset_cache(parent: &Path, current: &Path) -> Result<Vec<String>>
     Ok(removed)
 }
 
-/// [`super::asset_cache_root`] from a pack's name and digest directly, for a
+/// [`super::asset_cache_root`] from a pack's coordinate and digest directly, for a
 /// caller (`gents pack remove`) that only has a [`gents::pack::HomePackInstall`]
 /// record, not a resolved [`PackSource`].
 pub(super) fn asset_cache_root_for(
     home: &Path,
+    namespace: &str,
     name: &str,
     digest: &str,
 ) -> Result<std::path::PathBuf> {
-    // Keep the shared sha256: digest representation out of filesystem names.
-    let hash = digest
-        .strip_prefix("sha256:")
-        .context("invalid pack digest")?;
-    Ok(home.join(gents::home::PACKS_DIR_NAME).join(name).join(hash))
+    anyhow::ensure!(
+        gents::pack::is_valid_pack_name(namespace) && gents::pack::is_valid_pack_name(name),
+        "invalid pack coordinate {namespace}/{name}"
+    );
+    let hash = gents::pack_archive::digest_hex(digest)?;
+    Ok(home
+        .join(gents::home::PACKS_DIR_NAME)
+        .join(".materialized")
+        .join(namespace)
+        .join(name)
+        .join(hash))
+}
+
+/// A receipt whose path omits the namespace needs its verified pack contents
+/// to establish ownership. Its recorded parent remains the lock owner; those
+/// paths are never included in namespace-scoped pruning.
+pub(super) fn release_recorded_cache(
+    home: &Path,
+    coordinate: &str,
+    record: &HomePackInstall,
+) -> Result<CacheRelease> {
+    anyhow::ensure!(
+        record.coordinate == coordinate,
+        "pack receipt coordinate mismatch"
+    );
+    let (namespace, name) = super::split_namespace(coordinate);
+    let expected = asset_cache_root_for(Path::new(""), namespace, name, &record.digest)?;
+    let recorded = Path::new(&record.assets);
+    let unscoped = Path::new(gents::home::PACKS_DIR_NAME)
+        .join(name)
+        .join(gents::pack_archive::digest_hex(&record.digest)?);
+    anyhow::ensure!(
+        recorded == expected || recorded == unscoped,
+        "{coordinate}'s recorded asset path {} does not match {}",
+        recorded.display(),
+        expected.display()
+    );
+    let root = home.join(recorded);
+    let Some(parent) = root.parent().filter(|parent| parent.is_dir()) else {
+        return Ok(CacheRelease::Retained("already absent"));
+    };
+    let _lock = lock_exclusive(parent)?;
+    release_cache_root(&root, || {
+        if recorded == unscoped {
+            let archive = gents::pack_store::PackStore::new(home).open(&record.digest)?;
+            anyhow::ensure!(
+                archive.manifest().metadata.namespace == namespace
+                    && archive.manifest().name == name,
+                "{coordinate}'s recorded asset digest belongs to a different pack"
+            );
+            for path in gents::pack::declared_paths(archive.manifest()) {
+                anyhow::ensure!(
+                    std::fs::read(root.join(&path))? == archive.asset(&path)?,
+                    "{coordinate}'s recorded asset {path} does not match {}",
+                    record.digest
+                );
+            }
+        }
+        Ok(())
+    })
 }
 
 /// Takes the exclusive lock on a pack's cache parent directory, the same
@@ -108,7 +164,10 @@ pub(super) enum CacheRelease {
 /// delete. A digest directory that is already gone (for example `gents pack
 /// prune` removed it after a newer version became current) is reported as
 /// already absent, never as "not created by gents".
-pub(super) fn release_cache_root(root: &Path) -> Result<CacheRelease> {
+fn release_cache_root(
+    root: &Path,
+    check_owner: impl FnOnce() -> Result<()>,
+) -> Result<CacheRelease> {
     if !root.is_dir() {
         return Ok(CacheRelease::Retained("already absent"));
     }
@@ -118,6 +177,7 @@ pub(super) fn release_cache_root(root: &Path) -> Result<CacheRelease> {
     if root.join("runs").exists() {
         return Ok(CacheRelease::Retained("holds run history"));
     }
+    check_owner()?;
     std::fs::remove_dir_all(root).with_context(|| format!("removing {}", root.display()))?;
     Ok(CacheRelease::Removed)
 }
@@ -159,7 +219,61 @@ pub(super) async fn prune(args: PackPruneArgs) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::test_support::{assets_pack_dir, local_pack_source};
     use super::*;
+
+    #[tokio::test]
+    async fn pruning_keeps_other_namespaces_and_recorded_unscoped_assets() {
+        let home = tempfile::tempdir().unwrap();
+        let mut sources = Vec::new();
+        for (namespace, version) in [("acme", "1.0.0"), ("acme", "2.0.0"), ("zeta", "1.0.0")] {
+            let dir = assets_pack_dir(namespace, "tools", version);
+            let pack = local_pack_source(dir.path(), home.path());
+            let root = super::super::asset_cache_root(home.path(), &pack).unwrap();
+            super::super::materialize(&pack, &root).unwrap();
+            write_cache_marker(&root).unwrap();
+            sources.push((pack, root));
+        }
+        let unscoped = home.path().join("packs/tools").join("a".repeat(64));
+        std::fs::create_dir_all(&unscoped).unwrap();
+        write_cache_marker(&unscoped).unwrap();
+        let _other_lease =
+            FileLock::shared(cache_lock(sources[2].1.parent().unwrap()).unwrap()).unwrap();
+
+        let report = crate::request_helpers::capture_report(prune(PackPruneArgs {
+            package: "acme/tools".to_owned(),
+            home: Some(home.path().to_owned()),
+        }))
+        .await
+        .unwrap();
+
+        assert_eq!(
+            report["removed_digests"],
+            json!([gents::pack_archive::digest_hex(sources[0].0.digest()).unwrap()])
+        );
+        assert!(!sources[0].1.exists());
+        assert!(sources[1].1.exists());
+        assert!(sources[2].1.exists());
+        assert!(unscoped.exists());
+    }
+
+    #[test]
+    fn infrastructure_names_materialize_outside_store_and_unpack_directories() {
+        let home = tempfile::tempdir().unwrap();
+        assert!(!gents::pack::is_valid_pack_name(".materialized"));
+        for name in ["store", "unpacked", "materialized"] {
+            let dir = assets_pack_dir("acme", name, "1.0.0");
+            let pack = local_pack_source(dir.path(), home.path());
+            let (root, _lease) = super::super::materialize_cached_pack(home.path(), &pack).unwrap();
+            assert_eq!(
+                root.parent().unwrap(),
+                home.path().join("packs/.materialized/acme").join(name)
+            );
+            assert!(gents::pack_store::PackStore::new(home.path())
+                .open(pack.digest())
+                .is_ok());
+        }
+    }
 
     #[test]
     fn cache_pruning_removes_only_owned_versions_without_runs() {
@@ -202,7 +316,7 @@ mod tests {
         assert!(!home
             .path()
             .join(gents::home::PACKS_DIR_NAME)
-            .join("review_graph")
+            .join(".materialized")
             .exists());
     }
 }

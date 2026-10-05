@@ -22,7 +22,7 @@ pub struct HomePackInstall {
     pub digest: String,
     pub kind: PackKind,
     /// The pack's materialized asset directory, relative to the home:
-    /// `packs/<name>/<hex>`.
+    /// `packs/.materialized/<namespace>/<name>/<hex>`.
     pub assets: String,
     pub plugins: Vec<InstalledPackPlugin>,
     pub installed_at: String,

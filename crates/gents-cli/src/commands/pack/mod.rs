@@ -25,7 +25,9 @@ use gents::pack_resolve::{resolve_named, ResolveOptions, ResolvedFrom};
 use serde_json::json;
 use std::collections::BTreeMap;
 
-use cache::{asset_cache_root_for, lock_exclusive, release_cache_root, CacheRelease};
+#[cfg(test)]
+use cache::lock_exclusive;
+use cache::CacheRelease;
 
 pub(crate) fn parse_inference_slot_bindings(
     values: &[String],
@@ -230,6 +232,19 @@ pub(crate) mod test_support {
     /// path spec resolves.
     pub(crate) fn fixture_pack_source(name: &str, home: &Path) -> super::PackSource {
         local_pack_source(&fixture_dir(name), home)
+    }
+
+    pub(crate) fn assets_pack_dir(namespace: &str, name: &str, version: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        copy_tree(&fixture_dir("assets_fixture"), dir.path()).unwrap();
+        let path = dir.path().join("manifest.json");
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        manifest["namespace"] = namespace.into();
+        manifest["name"] = name.into();
+        manifest["version"] = version.into();
+        std::fs::write(path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        dir
     }
 }
 
@@ -438,7 +453,7 @@ impl SubjectPack {
 /// other spec is a pack name, even when a directory of that name is in the
 /// working directory: it resolves as `gents pack install` resolves one
 /// (local, installed, store, then registry) and materializes into
-/// `<home>/packs/<name>/<digest>`.
+/// `<home>/packs/.materialized/<namespace>/<name>/<digest>`.
 pub(crate) async fn resolve_subject_pack(
     home: &std::path::Path,
     spec: &str,
@@ -504,7 +519,12 @@ fn names_a_directory(spec: &str) -> bool {
 }
 
 fn asset_cache_root(home: &std::path::Path, pack: &PackSource) -> Result<std::path::PathBuf> {
-    cache::asset_cache_root_for(home, &pack.manifest().name, pack.digest())
+    cache::asset_cache_root_for(
+        home,
+        &pack.manifest().metadata.namespace,
+        &pack.manifest().name,
+        pack.digest(),
+    )
 }
 
 /// Thin caller over [`gents::plugin::install::install_pack_plugins`]; the

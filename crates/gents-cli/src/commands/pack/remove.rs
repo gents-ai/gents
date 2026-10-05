@@ -194,28 +194,9 @@ async fn remove_home_install(
     coordinate: &str,
     record: HomePackInstall,
 ) -> Result<Value> {
-    let (_, name) = super::split_namespace(coordinate);
-    let expected_root = super::asset_cache_root_for(home, name, &record.digest)?;
-    let recorded_root = home.join(&record.assets);
-    anyhow::ensure!(
-        expected_root == recorded_root,
-        "{coordinate}'s recorded asset path {} does not match {}",
-        recorded_root.display(),
-        expected_root.display()
-    );
-
     let mut retained = Vec::new();
     let mut assets_removed = Vec::new();
-    // A missing parent (or, inside `release_cache_root`, a missing digest
-    // directory itself) is reported as retained-absent, never dropped from
-    // the report: the file record still named this asset dir as installed.
-    let release = match recorded_root.parent().filter(|parent| parent.is_dir()) {
-        Some(parent) => {
-            let _lock = super::lock_exclusive(parent)?;
-            super::release_cache_root(&recorded_root)?
-        }
-        None => super::CacheRelease::Retained("already absent"),
-    };
+    let release = super::cache::release_recorded_cache(home, coordinate, &record)?;
     match release {
         super::CacheRelease::Removed => assets_removed.push(record.assets.clone()),
         super::CacheRelease::Retained(reason) => retained.push(json!({
