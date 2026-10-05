@@ -6,7 +6,6 @@ import { renderIn, testApp } from "./app-fixture";
 vi.mock("@/lib/router", () => ({ href: () => "#", navigate: vi.fn() }));
 
 import { TriggersPanel } from "../src/ui/screens/agent/TriggersPanel";
-import type { Shell } from "../src/ui/hooks/useShell";
 import { deployment } from "./config-panel-wiring/fixtures";
 
 function harness() {
@@ -17,10 +16,9 @@ function harness() {
     saveScheduleConfig: vi.fn().mockResolvedValue({}),
     saveEventSourceConfig: vi.fn().mockResolvedValue({}),
   };
-  const shell = { api } as unknown as Shell;
   renderIn(
     testApp({ api }),
-    <TriggersPanel shell={shell} deployment={deployment} item="trigger-a" />,
+    <TriggersPanel deployment={deployment} item="trigger-a" />,
   );
   return api;
 }

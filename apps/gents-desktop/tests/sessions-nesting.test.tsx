@@ -1,7 +1,6 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
-import type { Shell } from "@/hooks/useShell";
 import { SessionsScreen } from "../src/ui/screens/SessionsScreen";
 import { emptyFilter, filterSessions } from "../src/ui/screens/SessionFilters";
 import { publish, testApp, withApp } from "./app-fixture";
@@ -50,12 +49,6 @@ const child = session({
     causeRequestDocId: "physical-parent-1",
   },
 });
-const shell = (sessions: SessionSummary[]) =>
-  ({
-    behaviorDescriptions: {},
-    deployments: [deploymentWith(sessions)],
-    selectedDeployment: deploymentWith(sessions),
-  }) as unknown as Shell;
 const deploymentWith = (sessions: SessionSummary[]) => ({
   agentDid: "did:key:node",
   sessions,
@@ -80,7 +73,7 @@ afterEach(() => {
 describe("sessions started by another session", () => {
   it("nests by session identity when physical and logical request IDs differ, including after the parent advances", () => {
     const app = testApp({ deployments: [deploymentWith([child, parent])] });
-    const { rerender } = render(<SessionsScreen shell={shell([child, parent])} />, {
+    const { rerender } = render(<SessionsScreen />, {
       wrapper: withApp(app),
     });
     expect(screen.queryByTestId("session-child")).toBeNull();
@@ -94,7 +87,7 @@ describe("sessions started by another session", () => {
       }),
     ];
     act(() => publish(app, [deploymentWith(advanced)]));
-    rerender(<SessionsScreen shell={shell(advanced)} />);
+    rerender(<SessionsScreen />);
     expect(screen.getByTestId("session-child")).toHaveClass("pl-9");
     expect(screen.getByRole("button", { name: /1 worker/ })).toHaveAttribute(
       "aria-expanded",
@@ -104,7 +97,7 @@ describe("sessions started by another session", () => {
 
   it("does not nest under an identical session label in a different requester scope", () => {
     const sessions = [child, session({ requesterDid: "did:test:other" })];
-    render(<SessionsScreen shell={shell(sessions)} />, {
+    render(<SessionsScreen />, {
       wrapper: withApp(testApp({ deployments: [deploymentWith(sessions)] })),
     });
     expect(screen.getByTestId("session-child")).not.toHaveClass("pl-9");

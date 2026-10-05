@@ -69,7 +69,6 @@ vi.mock("@gents/ui/components/popover", async () => {
 
 import { SyncHealth } from "../src/ui/app/SyncHealth";
 import { BehaviorPicker } from "../src/ui/screens/BehaviorPicker";
-import type { Shell } from "../src/hooks/useShell";
 import { deployment } from "./config-panel-wiring/fixtures";
 
 const healthy: SyncHealthView = {
@@ -83,8 +82,6 @@ const healthy: SyncHealthView = {
   quarantinedDagCount: 0,
 };
 
-const shell = { api: {}, behaviorDescriptions: {} } as Shell;
-
 async function acknowledgeClose() {
   await act(async () => {
     for (const complete of [...popoverControl.completions.values()]) complete();
@@ -95,7 +92,6 @@ function Harness({ showPicker = true }: { showPicker?: boolean }) {
   return (
     <>
       <BehaviorPicker
-        shell={shell}
         deployment={showPicker ? deployment : { ...deployment, behaviors: [] }}
         behaviorId="default"
         onChange={vi.fn()}

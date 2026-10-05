@@ -1,4 +1,7 @@
-import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
+import type {
+  DesktopApiAdapter,
+  DesktopClientUpdatedListenerFactory,
+} from "@source-inc/gents-desktop-client";
 
 import { createChatStore } from "./chatStore";
 import { createClientLifecycle } from "./clientLifecycle";
@@ -12,12 +15,16 @@ import { createDraftStore } from "./draftStore";
 import type { ShellStores } from "./shellProjection";
 import { createShellView } from "./shellView";
 
-export type DesktopAppParams = {
+/** What the host gives the app: the bridge's API and its update events. */
+export type DesktopBridge = {
   api: DesktopApiAdapter;
+  listenToUpdates: DesktopClientUpdatedListenerFactory;
   supportsManagedServer?: boolean;
   /** shows a failed action to the person, once; the app passes its toast */
   reportFailure?: (message: string) => void;
 };
+
+export type DesktopAppParams = Omit<DesktopBridge, "listenToUpdates">;
 
 /**
  * The desktop app outside React: its stores, the client's lifecycle and

@@ -12,7 +12,6 @@ vi.mock("@/lib/router", () => ({ href: () => "#", navigate: vi.fn() }));
 
 import { createDesktopUiHarness } from "./ui-harness/desktopHarness";
 import { InferencePanel } from "../src/ui/screens/agent/InferencePanel";
-import type { Shell } from "../src/ui/hooks/useShell";
 
 const backendDocument = (backend_id: string): InferenceBackend =>
   ({
@@ -62,10 +61,9 @@ describe("harness backends keep the bridge's contract", () => {
     const api = harness.adapter;
     await api.saveBackendConfig({ document: backendDocument("backend-saved") });
     const deployment = (await api.fetchDesktopSnapshot()).client!.deployments[0]!;
-    const shell = { api } as unknown as Shell;
     renderIn(
       testApp({ api }),
-      <InferencePanel shell={shell} deployment={deployment} item="backend-saved" />,
+      <InferencePanel deployment={deployment} item="backend-saved" />,
     );
     expect(screen.getByRole("textbox", { name: "Tags" })).toBeInTheDocument();
   });

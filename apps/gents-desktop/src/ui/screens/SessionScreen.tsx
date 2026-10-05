@@ -52,7 +52,8 @@ import {
   ToolSteps,
   UserMessage,
 } from "@gents/ui/conversation";
-import type { Shell } from "@/hooks/useShell";
+import type { ShellActions } from "@/../hooks/shellActions";
+import type { ShellView } from "@/../hooks/shellView";
 import { ChatFolderPicker } from "./ChatFolderPicker";
 import { anchor, useFollowTail, useOlderPages, useScroller } from "@/lib/scroll";
 import { href, navigate } from "@/lib/router";
@@ -357,7 +358,9 @@ export function SessionSubmissionStatus({
   activityStatus,
   hint,
   reserve = true,
-}: Pick<Shell, "error" | "activityStatus"> & {
+}: {
+  error: string | null;
+  activityStatus: ShellView["shellProjection"]["activityStatus"];
   hint?: string | null;
   /** a new chat has no transcript above to hold still, so its line may
       take no room until it has something to say */
@@ -997,7 +1000,10 @@ function StoppedNotice({ cause }: { cause: DerivedCancelCauseView | null }) {
   );
 }
 
-type TranscriptActions = Pick<Shell, "loadOlderSessionTimeline" | "retryMessage">;
+type TranscriptActions = Pick<
+  ShellActions,
+  "loadOlderSessionTimeline" | "retryMessage"
+>;
 
 /* The live tail's text, revealed at a steady pace, reporting what is on
    screen so the message that replaces it can start from there. */

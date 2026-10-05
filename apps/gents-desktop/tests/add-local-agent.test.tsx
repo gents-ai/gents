@@ -13,7 +13,6 @@ import type {
   ManagedServerAuthorityInput,
   ManagedServerStatus,
 } from "@source-inc/gents-desktop-client";
-import type { Shell } from "../src/ui/hooks/useShell";
 import { AgentsScreen } from "../src/ui/screens/AgentsScreen";
 import { SetupScreen } from "../src/ui/screens/setup/SetupScreen";
 import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
@@ -221,17 +220,11 @@ describe("first-run local agent name", () => {
           initAgentDid: null,
           agentHomeExists: false,
         };
-    const shell = {
-      api,
-      snapshot: { bootstrap: snapshotBootstrap },
-      deployments: [],
-      refreshSnapshot: vi.fn(async () => undefined),
-    } as unknown as Shell;
     renderIn(
-      testApp({ api, snapshot: shell.snapshot }),
-      <SetupScreen shell={shell} onDone={vi.fn()} />,
+      testApp({ api, snapshot: { bootstrap: snapshotBootstrap } }),
+      <SetupScreen onDone={vi.fn()} />,
     );
-    return { api, shell };
+    return { api };
   }
 
   it("shows an existing home's agent by name instead of asking for one it would ignore", async () => {

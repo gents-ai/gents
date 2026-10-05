@@ -11,7 +11,6 @@ import type {
   DesktopApiAdapter,
   DesktopClientSnapshot,
 } from "@source-inc/gents-desktop-client";
-import type { Shell } from "../src/ui/hooks/useShell";
 import { SetupScreen, type ProviderId } from "../src/ui/screens/setup/SetupScreen";
 import { createDesktopUiHarness } from "./ui-harness/desktopHarness";
 
@@ -36,14 +35,7 @@ function setup(
   ] as const)
     vi.spyOn(api, name);
   const app = testApp({ api, snapshot: null });
-  const shell = {
-    api,
-    snapshot: null,
-    deployments: [],
-    selectedDeployment: null,
-    refreshSnapshot: vi.fn().mockResolvedValue(undefined),
-  } as unknown as Shell;
-  return { api, shell, app };
+  return { api, app };
 }
 
 const login = (api: DesktopApiAdapter, provider: ProviderId) =>
@@ -59,11 +51,10 @@ describe("setup provider sign-in", () => {
   it.each(["openai", "anthropic", "grok"] as const)(
     "starts the %s sign-in when its add-backend form opens",
     async (provider) => {
-      const { api, shell, app } = setup();
+      const { api, app } = setup();
       renderIn(
         app,
         <SetupScreen
-          shell={shell}
           initialStep="inference"
           purpose="add-backend"
           provider={provider}
@@ -79,15 +70,10 @@ describe("setup provider sign-in", () => {
   );
 
   it("starts sign-in for a chosen provider, not for the preselected one", async () => {
-    const { api, shell, app } = setup();
+    const { api, app } = setup();
     renderIn(
       app,
-      <SetupScreen
-        shell={shell}
-        initialStep="inference"
-        agentDid={AGENT}
-        onDone={vi.fn()}
-      />,
+      <SetupScreen initialStep="inference" agentDid={AGENT} onDone={vi.fn()} />,
     );
     expect(await screen.findByRole("button", { name: "Sign in" })).toBeVisible();
     expect(api.codexLogin).not.toHaveBeenCalled();
@@ -99,15 +85,10 @@ describe("setup provider sign-in", () => {
   });
 
   it("starts sign-in when the preselected provider is chosen", async () => {
-    const { api, shell, app } = setup();
+    const { api, app } = setup();
     renderIn(
       app,
-      <SetupScreen
-        shell={shell}
-        initialStep="inference"
-        agentDid={AGENT}
-        onDone={vi.fn()}
-      />,
+      <SetupScreen initialStep="inference" agentDid={AGENT} onDone={vi.fn()} />,
     );
     await userEvent.click(await screen.findByTestId("setup-provider-openai"));
     expect(await screen.findByText("Account connected")).toBeVisible();
@@ -116,7 +97,7 @@ describe("setup provider sign-in", () => {
 
   it("keeps a choice made before the account lookup resolves, once", async () => {
     let resolveAccounts: (accounts: []) => void = () => {};
-    const { api, shell, app } = setup({
+    const { api, app } = setup({
       listProviderAccounts: vi.fn(
         () => new Promise<[]>((resolve) => (resolveAccounts = resolve)),
       ),
@@ -129,7 +110,6 @@ describe("setup provider sign-in", () => {
     renderIn(
       app,
       <SetupScreen
-        shell={shell}
         initialStep="inference"
         purpose="add-backend"
         provider="anthropic"
@@ -150,19 +130,14 @@ describe("setup provider sign-in", () => {
 
   it("starts sign-in for the preselected provider chosen during the account lookup", async () => {
     let resolveAccounts: (accounts: []) => void = () => {};
-    const { api, shell, app } = setup({
+    const { api, app } = setup({
       listProviderAccounts: vi.fn(
         () => new Promise<[]>((resolve) => (resolveAccounts = resolve)),
       ),
     });
     renderIn(
       app,
-      <SetupScreen
-        shell={shell}
-        initialStep="inference"
-        agentDid={AGENT}
-        onDone={vi.fn()}
-      />,
+      <SetupScreen initialStep="inference" agentDid={AGENT} onDone={vi.fn()} />,
     );
     await userEvent.click(await screen.findByTestId("setup-provider-openai"));
     expect(api.codexLogin).not.toHaveBeenCalled();
@@ -172,15 +147,10 @@ describe("setup provider sign-in", () => {
   });
 
   it("starts sign-in when the OAuth connection method is chosen", async () => {
-    const { api, shell, app } = setup();
+    const { api, app } = setup();
     renderIn(
       app,
-      <SetupScreen
-        shell={shell}
-        initialStep="inference"
-        agentDid={AGENT}
-        onDone={vi.fn()}
-      />,
+      <SetupScreen initialStep="inference" agentDid={AGENT} onDone={vi.fn()} />,
     );
     const user = userEvent.setup();
     const method = () => screen.getByRole("combobox", { name: "Connection method" });
@@ -195,13 +165,12 @@ describe("setup provider sign-in", () => {
   });
 
   it("leaves sign-in to a click when the account lookup fails", async () => {
-    const { api, shell, app } = setup({
+    const { api, app } = setup({
       listProviderAccounts: vi.fn().mockRejectedValue(new Error("runtime not serving")),
     });
     renderIn(
       app,
       <SetupScreen
-        shell={shell}
         initialStep="inference"
         purpose="add-backend"
         provider="anthropic"
@@ -216,7 +185,7 @@ describe("setup provider sign-in", () => {
   });
 
   it("does not sign in again to a provider that is already connected", async () => {
-    const { api, shell, app } = setup({
+    const { api, app } = setup({
       listProviderAccounts: vi.fn().mockResolvedValue([
         {
           credentialId: "credential-claude",
@@ -234,7 +203,6 @@ describe("setup provider sign-in", () => {
     renderIn(
       app,
       <SetupScreen
-        shell={shell}
         initialStep="inference"
         purpose="add-backend"
         provider="anthropic"
@@ -449,7 +417,7 @@ describe("setup save", () => {
       dangerouslyOverwrite: false,
       reset: false,
     });
-    const { api, shell, app } = setup(
+    const { api, app } = setup(
       {
         async applyConfigComponents(request) {
           appliedAt = Date.now();
@@ -482,12 +450,7 @@ describe("setup save", () => {
     const onDone = vi.fn();
     renderIn(
       app,
-      <SetupScreen
-        shell={shell}
-        initialStep="inference"
-        agentDid={AGENT}
-        onDone={onDone}
-      />,
+      <SetupScreen initialStep="inference" agentDid={AGENT} onDone={onDone} />,
     );
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     await user.click(await screen.findByTestId("setup-provider-local"));

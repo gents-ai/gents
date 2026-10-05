@@ -3,7 +3,6 @@ import userEvent from "@testing-library/user-event";
 import { beforeAll, afterAll, describe, expect, it, vi } from "vitest";
 import { renderIn, testApp } from "./app-fixture";
 import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
-import type { Shell } from "../src/ui/hooks/useShell";
 import { ToolsPanel } from "../src/ui/screens/agent/ToolsPanel";
 import { ContextsPanel } from "../src/ui/screens/agent/ContextsPanel";
 import { deployment } from "./config-panel-wiring/fixtures";
@@ -23,17 +22,14 @@ function harness() {
     testToolService: vi.fn().mockResolvedValue({ tools: [], error: null }),
   };
   const app = testApp({ api });
-  const shell = {
-    api,
-  } as unknown as Shell;
-  return { api, shell, app };
+  return { api, app };
 }
 
 describe("canonical tool selections", () => {
   it("keeps invalid timeout text visible and blocks unrelated saves until corrected", async () => {
-    const { api, shell, app } = harness();
+    const { api, app } = harness();
     const user = userEvent.setup();
-    renderIn(app, <ToolsPanel shell={shell} deployment={deployment} item="tools-a" />);
+    renderIn(app, <ToolsPanel deployment={deployment} item="tools-a" />);
     const timeout = screen.getByRole("textbox", {
       name: "Bash timeout seconds",
     });
@@ -53,9 +49,9 @@ describe("canonical tool selections", () => {
   });
 
   it("persists file tool limits", async () => {
-    const { api, shell, app } = harness();
+    const { api, app } = harness();
     const user = userEvent.setup();
-    renderIn(app, <ToolsPanel shell={shell} deployment={deployment} item="tools-a" />);
+    renderIn(app, <ToolsPanel deployment={deployment} item="tools-a" />);
     fireEvent.change(screen.getByRole("textbox", { name: "File read byte limit" }), {
       target: { value: "5000" },
     });
@@ -69,9 +65,9 @@ describe("canonical tool selections", () => {
   });
 
   it("rejects file tool limits above their server ceilings before saving", async () => {
-    const { api, shell, app } = harness();
+    const { api, app } = harness();
     const user = userEvent.setup();
-    renderIn(app, <ToolsPanel shell={shell} deployment={deployment} item="tools-a" />);
+    renderIn(app, <ToolsPanel deployment={deployment} item="tools-a" />);
     const matches = screen.getByRole("textbox", { name: "File search match limit" });
     fireEvent.change(matches, { target: { value: "5001" } });
     expect(screen.getByRole("alert")).toHaveTextContent("at most 5,000");
@@ -85,9 +81,9 @@ describe("canonical tool selections", () => {
   });
 
   it("names the row when canonical JSON sets a file limit above its ceiling", async () => {
-    const { api, shell, app } = harness();
+    const { api, app } = harness();
     const user = userEvent.setup();
-    renderIn(app, <ToolsPanel shell={shell} deployment={deployment} item="tools-a" />);
+    renderIn(app, <ToolsPanel deployment={deployment} item="tools-a" />);
     fireEvent.change(screen.getByRole("textbox", { name: "Canonical JSON" }), {
       target: { value: JSON.stringify({ host: { files: { max_matches: 6000 } } }) },
     });
@@ -99,9 +95,9 @@ describe("canonical tool selections", () => {
   });
 
   it("cancels invalid guided limits without changing canonical settings", async () => {
-    const { api, shell, app } = harness();
+    const { api, app } = harness();
     const user = userEvent.setup();
-    renderIn(app, <ToolsPanel shell={shell} deployment={deployment} item="tools-a" />);
+    renderIn(app, <ToolsPanel deployment={deployment} item="tools-a" />);
     const field = () => screen.getByRole("textbox", { name: "Bash timeout seconds" });
     const original = (field() as HTMLInputElement).value;
     fireEvent.change(field(), { target: { value: "nope" } });
@@ -112,9 +108,9 @@ describe("canonical tool selections", () => {
   });
 
   it("keeps independent opt-ins off and persists only an explicitly selected permission", async () => {
-    const { api, shell, app } = harness();
+    const { api, app } = harness();
     const user = userEvent.setup();
-    renderIn(app, <ToolsPanel shell={shell} deployment={deployment} item="tools-a" />);
+    renderIn(app, <ToolsPanel deployment={deployment} item="tools-a" />);
     expect(
       screen.getByRole("switch", { name: "Install graph packs" }),
     ).not.toBeChecked();
@@ -128,15 +124,11 @@ describe("canonical tool selections", () => {
   });
 
   it("creates and selects a local subagent target atomically without granting spawn implicitly", async () => {
-    const { api, shell, app } = harness();
+    const { api, app } = harness();
     const user = userEvent.setup();
     renderIn(
       app,
-      <ToolsPanel
-        shell={shell}
-        deployment={{ ...deployment, subagentTargets: [] }}
-        item="tools-a"
-      />,
+      <ToolsPanel deployment={{ ...deployment, subagentTargets: [] }} item="tools-a" />,
     );
     await user.click(
       screen.getByRole("combobox", { name: "Add a local delegation target" }),
@@ -160,9 +152,9 @@ describe("canonical tool selections", () => {
   });
 
   it("selects remote services without granting discovered tools and rejects wildcards", async () => {
-    const { api, shell, app } = harness();
+    const { api, app } = harness();
     const user = userEvent.setup();
-    renderIn(app, <ToolsPanel shell={shell} deployment={deployment} item="tools-a" />);
+    renderIn(app, <ToolsPanel deployment={deployment} item="tools-a" />);
     await user.click(screen.getByRole("checkbox", { name: "Service A" }));
     await user.click(screen.getByRole("button", { name: "Save" }));
     expect(api.saveToolsConfig.mock.calls[0][0].document.remote.services).toEqual([
@@ -176,13 +168,13 @@ describe("canonical tool selections", () => {
   });
 
   it("shows discovered remote tools without granting them implicitly", async () => {
-    const { api, shell, app } = harness();
+    const { api, app } = harness();
     api.testToolService.mockResolvedValue({
       tools: [{ name: "search", description: "Search the service" }],
       error: null,
     });
     const user = userEvent.setup();
-    renderIn(app, <ToolsPanel shell={shell} deployment={deployment} item="tools-a" />);
+    renderIn(app, <ToolsPanel deployment={deployment} item="tools-a" />);
     await user.click(screen.getByRole("checkbox", { name: "Service A" }));
     await user.click(screen.getByRole("button", { name: "Discover remote tools" }));
     expect(await screen.findByRole("checkbox", { name: /search/ })).not.toBeChecked();
@@ -193,13 +185,13 @@ describe("canonical tool selections", () => {
   });
 
   it("reports remote discovery errors without changing the grant", async () => {
-    const { api, shell, app } = harness();
+    const { api, app } = harness();
     api.testToolService.mockResolvedValue({
       tools: [],
       error: "service handshake failed",
     });
     const user = userEvent.setup();
-    renderIn(app, <ToolsPanel shell={shell} deployment={deployment} item="tools-a" />);
+    renderIn(app, <ToolsPanel deployment={deployment} item="tools-a" />);
     await user.click(screen.getByRole("checkbox", { name: "Service A" }));
     await user.click(screen.getByRole("button", { name: "Discover remote tools" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(
@@ -213,7 +205,7 @@ describe("canonical tool selections", () => {
   });
 
   it("preserves unedited advanced host fields through guided save and reload", async () => {
-    const { api, shell, app } = harness();
+    const { api, app } = harness();
     const user = userEvent.setup();
     const configured = {
       ...deployment.tools[0],
@@ -228,10 +220,7 @@ describe("canonical tool selections", () => {
       tags: ["reviewed"],
     };
     const view = { ...deployment, tools: [configured] };
-    const rendered = renderIn(
-      app,
-      <ToolsPanel shell={shell} deployment={view} item="tools-a" />,
-    );
+    const rendered = renderIn(app, <ToolsPanel deployment={view} item="tools-a" />);
     await user.click(screen.getByRole("switch", { name: "Memory" }));
     await user.click(screen.getByRole("button", { name: "Save" }));
     const saved = api.saveToolsConfig.mock.calls[0][0].document;
@@ -239,11 +228,7 @@ describe("canonical tool selections", () => {
     expect(saved.host.bash.allowed_argv_prefixes).toEqual([["git", "status"]]);
     expect(saved.tags).toEqual(["reviewed"]);
     rendered.rerender(
-      <ToolsPanel
-        shell={shell}
-        deployment={{ ...view, tools: [saved] }}
-        item="tools-a"
-      />,
+      <ToolsPanel deployment={{ ...view, tools: [saved] }} item="tools-a" />,
     );
     await waitFor(() =>
       expect(screen.getByRole("switch", { name: "Memory" })).toBeChecked(),
@@ -251,7 +236,7 @@ describe("canonical tool selections", () => {
   });
 
   it("clearing selected remote tools also clears background grants", async () => {
-    const { api, shell, app } = harness();
+    const { api, app } = harness();
     const user = userEvent.setup();
     const configured = {
       ...deployment.tools[0],
@@ -267,11 +252,7 @@ describe("canonical tool selections", () => {
     };
     renderIn(
       app,
-      <ToolsPanel
-        shell={shell}
-        deployment={{ ...deployment, tools: [configured] }}
-        item="tools-a"
-      />,
+      <ToolsPanel deployment={{ ...deployment, tools: [configured] }} item="tools-a" />,
     );
     await user.clear(screen.getByRole("textbox", { name: "Service A tool names" }));
     await user.click(screen.getByRole("button", { name: "Save" }));
@@ -281,9 +262,9 @@ describe("canonical tool selections", () => {
   });
 
   it("rejects inconsistent timeout ceilings before persistence", async () => {
-    const { api, shell, app } = harness();
+    const { api, app } = harness();
     const user = userEvent.setup();
-    renderIn(app, <ToolsPanel shell={shell} deployment={deployment} item="tools-a" />);
+    renderIn(app, <ToolsPanel deployment={deployment} item="tools-a" />);
     const editor = screen.getByRole("textbox", { name: "Canonical JSON" });
     const advanced = JSON.parse((editor as HTMLTextAreaElement).value);
     advanced.host = {
@@ -326,12 +307,9 @@ describe("canonical tool selections", () => {
   ])(
     "rejects a %s ceiling below its canonical effective default",
     async (_name, groups, message) => {
-      const { api, shell, app } = harness();
+      const { api, app } = harness();
       const user = userEvent.setup();
-      renderIn(
-        app,
-        <ToolsPanel shell={shell} deployment={deployment} item="tools-a" />,
-      );
+      renderIn(app, <ToolsPanel deployment={deployment} item="tools-a" />);
       fireEvent.change(screen.getByRole("textbox", { name: "Canonical JSON" }), {
         target: { value: JSON.stringify(groups) },
       });
@@ -342,9 +320,9 @@ describe("canonical tool selections", () => {
   );
 
   it("preserves valid independent remote call and stale-health caps", async () => {
-    const { api, shell, app } = harness();
+    const { api, app } = harness();
     const user = userEvent.setup();
-    renderIn(app, <ToolsPanel shell={shell} deployment={deployment} item="tools-a" />);
+    renderIn(app, <ToolsPanel deployment={deployment} item="tools-a" />);
     fireEvent.change(screen.getByRole("textbox", { name: "Canonical JSON" }), {
       target: {
         value: JSON.stringify({
@@ -368,9 +346,9 @@ describe("canonical tool selections", () => {
   });
 
   it("keeps malformed JSON editable and blocks persistence", async () => {
-    const { api, shell, app } = harness();
+    const { api, app } = harness();
     const user = userEvent.setup();
-    renderIn(app, <ToolsPanel shell={shell} deployment={deployment} item="tools-a" />);
+    renderIn(app, <ToolsPanel deployment={deployment} item="tools-a" />);
     await user.clear(screen.getByRole("textbox", { name: "Canonical JSON" }));
     expect(screen.getByRole("alert")).toHaveTextContent("Repair");
     await user.click(screen.getByRole("button", { name: "Save" }));
@@ -378,7 +356,7 @@ describe("canonical tool selections", () => {
   });
 
   it("uses searchable skill names while persisting canonical IDs", async () => {
-    const { api, shell, app } = harness();
+    const { api, app } = harness();
     const user = userEvent.setup();
     const skills = [
       {
@@ -391,11 +369,7 @@ describe("canonical tool selections", () => {
     ];
     renderIn(
       app,
-      <ContextsPanel
-        shell={shell}
-        deployment={{ ...deployment, skills }}
-        item="context-b"
-      />,
+      <ContextsPanel deployment={{ ...deployment, skills }} item="context-b" />,
     );
     await user.type(screen.getByRole("combobox", { name: "Skills" }), "review");
     await user.click(screen.getByRole("option", { name: "Code review" }));

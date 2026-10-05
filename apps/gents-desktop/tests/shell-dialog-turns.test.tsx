@@ -121,16 +121,12 @@ vi.stubGlobal(
 );
 
 import { SyncHealth } from "../src/ui/app/SyncHealth";
-import type { Shell } from "../src/ui/hooks/useShell";
 import { AppShell } from "../src/ui/app/AppShell";
 import { TooltipProvider } from "@gents/ui/components/tooltip";
 import { SessionScreen } from "../src/ui/screens/SessionScreen";
 import { MemoryNavProvider } from "@gents/shell";
-import { selectedSessionFields } from "./session-store-fixture";
-import { createDraftStore } from "../src/hooks/draftStore";
 import { testApp } from "./app-fixture";
 import { AppProvider } from "../src/ui/app/AppContext";
-import { readSession } from "../src/hooks/sessionStore";
 
 const healthy: SyncHealthView = {
   state: "healthy",
@@ -156,9 +152,14 @@ const context = {
   lastRequest: null,
 };
 
-function sessionShell(): Shell {
-  return {
-    ...selectedSessionFields({
+/* the screen's app, holding a completed session */
+function sessionApp() {
+  return testApp({
+    api: {
+      sessionProvenance: vi.fn().mockResolvedValue(null),
+      fetchOperationsSnapshot: vi.fn().mockResolvedValue(null),
+    },
+    session: {
       sessionId: "session",
       agentDid: "did:key:agent",
       behaviorId: "behavior",
@@ -170,45 +171,14 @@ function sessionShell(): Shell {
       latestRequestOutcome: null,
       goal: null,
       context,
-    } as unknown as DesktopSessionSnapshot),
-    selectedBehaviorId: "behavior",
-    selectedAgentDid: "did:key:agent",
-    deployments: [],
-    selectedDeployment: null,
-    draftStore: createDraftStore(),
-    draftKey: "session",
-    setDraft: vi.fn(),
-    mailboxCause: null,
-    sending: false,
-    error: null,
-    activityStatus: null,
-    nonEmptyContentSendStatus: { kind: "ready" },
-    captureComposeIntent: () => 0,
-    acceptsComposeIntent: () => true,
-    selectBehavior: vi.fn(),
-    interruptVisible: false,
-    selectedTrackedRequestId: null,
-    activeRequestId: null,
-    sessionLoad: { phase: "ready" },
-    loadOlderSessionTimeline: vi.fn(),
-    retryMessage: vi.fn(),
-    refreshSnapshot: vi.fn(),
-    api: {
-      sessionProvenance: vi.fn().mockResolvedValue(null),
-      fetchOperationsSnapshot: vi.fn().mockResolvedValue(null),
-    },
-  } as unknown as Shell;
+    } as unknown as DesktopSessionSnapshot,
+    selection: { behaviorId: "behavior" },
+  });
 }
 
 /* the shell around the screen: the side panel is the shell's dock sheet */
-function Harness({ shell }: { shell: Shell }) {
-  const [app] = useState(() =>
-    testApp({
-      api: shell.api,
-      session: readSession(shell.sessionStore),
-      selection: { behaviorId: shell.selectedBehaviorId },
-    }),
-  );
+function Harness() {
+  const [app] = useState(sessionApp);
   return (
     <AppProvider value={app}>
       <MemoryNavProvider initial={{ name: "session", sessionId: "session-1" }}>
@@ -222,7 +192,7 @@ function Harness({ shell }: { shell: Shell }) {
             mailboxCount={0}
             syncHealth={healthy}
           >
-            <SessionScreen shell={shell} />
+            <SessionScreen />
           </AppShell>
         </TooltipProvider>
       </MemoryNavProvider>
@@ -241,7 +211,7 @@ const dialogs = () => document.querySelectorAll('[role="dialog"]');
 describe("shell dialogs take turns (#1778)", () => {
   it("sync popover, then context meter, then the side panel never stack", async () => {
     const user = userEvent.setup();
-    render(<Harness shell={sessionShell()} />);
+    render(<Harness />);
 
     await user.click(screen.getByRole("button", { name: /Show sync diagnostics/ }));
     expect(screen.getByRole("dialog", { name: "Database sync details" })).toBeVisible();

@@ -2,7 +2,6 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderIn, testApp } from "./app-fixture";
-import type { Shell } from "../src/ui/hooks/useShell";
 import { TaskEditor } from "../src/ui/screens/agent/TasksPanel";
 import { TriggerEditor } from "../src/ui/screens/agent/TriggersPanel";
 import { deployment } from "./config-panel-wiring/fixtures";
@@ -16,17 +15,13 @@ const harness = () => {
     saveTriggerConfig: vi.fn().mockResolvedValue({}),
   };
   const app = testApp({ api });
-  const shell = {} as unknown as Shell;
-  return { api, shell, app };
+  return { api, app };
 };
 
 describe("durable delivery editors", () => {
   it("opts a Task into outcomes without adding a Goal budget", async () => {
-    const { api, shell, app } = harness();
-    renderIn(
-      app,
-      <TaskEditor shell={shell} deployment={deployment} task={deployment.tasks[0]} />,
-    );
+    const { api, app } = harness();
+    renderIn(app, <TaskEditor deployment={deployment} task={deployment.tasks[0]} />);
     await userEvent.click(screen.getByRole("switch", { name: "Emit outcome" }));
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(api.saveTaskConfig).toHaveBeenCalledTimes(1));
@@ -37,7 +32,7 @@ describe("durable delivery editors", () => {
   });
 
   it("saves queued serial with the existing-session template", async () => {
-    const { api, shell, app } = harness();
+    const { api, app } = harness();
     const user = userEvent.setup();
     const trigger = {
       ...deployment.triggers[0],
@@ -46,10 +41,7 @@ describe("durable delivery editors", () => {
         session_id_template: "{{ doc.lead_session_id }}",
       },
     };
-    renderIn(
-      app,
-      <TriggerEditor shell={shell} deployment={deployment} trigger={trigger} />,
-    );
+    renderIn(app, <TriggerEditor deployment={deployment} trigger={trigger} />);
     expect(screen.getByLabelText("Existing session template")).toHaveValue(
       "{{ doc.lead_session_id }}",
     );

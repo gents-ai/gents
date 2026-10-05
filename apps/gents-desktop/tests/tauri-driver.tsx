@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { expect } from "vitest";
 
 import App from "../src/App";
-import { setDesktopShellTimingConfigForTests } from "../src/hooks/useDesktopShell";
+import { setDesktopShellTimingConfigForTests } from "../src/hooks/desktopShellRuntime";
 import { navigate } from "../src/ui/lib/router";
 import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 import { type DesktopClientUpdatedListenerFactory } from "@source-inc/gents-desktop-client";

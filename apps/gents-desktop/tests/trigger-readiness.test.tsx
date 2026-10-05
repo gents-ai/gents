@@ -7,7 +7,6 @@ vi.mock("@/lib/router", () => ({ href: () => "#", navigate: vi.fn() }));
 
 import { triggerReadiness } from "../src/ui/screens/agent/automation";
 import { TriggersPanel } from "../src/ui/screens/agent/TriggersPanel";
-import type { Shell } from "../src/ui/hooks/useShell";
 import { deployment } from "./config-panel-wiring/fixtures";
 
 const withReadiness = (
@@ -41,10 +40,7 @@ describe("trigger readiness", () => {
     const ready = withReadiness([
       { state: "ready", behaviorId: "default" },
     ] as DeploymentView["behaviorReadiness"]["behaviors"]);
-    renderIn(
-      testApp(),
-      <TriggersPanel shell={{} as Shell} deployment={ready} item="trigger-a" />,
-    );
+    renderIn(testApp(), <TriggersPanel deployment={ready} item="trigger-a" />);
     expect(screen.queryByText("Ready")).toBeNull();
     /* nothing to say is said with nothing, not an empty line */
     const header = screen.getByRole("heading", { name: "Trigger A" }).parentElement!;

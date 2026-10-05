@@ -22,7 +22,6 @@ import {
   unsettledManagedServerError,
   type ManagedServerWait,
 } from "../src/lib/managedServerStartup";
-import type { Shell } from "../src/ui/hooks/useShell";
 import { SetupScreen } from "../src/ui/screens/setup/SetupScreen";
 import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
 
@@ -443,14 +442,9 @@ describe("first-run local agent startup", () => {
         client: { deployments: [deployment] },
       })),
     };
-    const shell = {
-      api,
-      snapshot: { bootstrap: { ...bootstrap, initAgentName: "Forge" } },
-      deployments: [],
-    } as unknown as Shell;
     return {
       api,
-      shell,
+      snapshot: { bootstrap: { ...bootstrap, initAgentName: "Forge" } },
       observe: (next: Partial<ManagedServerStatus>) => {
         observed = managedStatus(next);
       },
@@ -482,8 +476,8 @@ describe("first-run local agent startup", () => {
   it("waits for macOS approval and a slow boot, then keeps the step log readable", async () => {
     const run = firstRun();
     renderIn(
-      testApp({ api: run.api, snapshot: run.shell.snapshot }),
-      <SetupScreen shell={run.shell} onDone={vi.fn()} />,
+      testApp({ api: run.api, snapshot: run.snapshot }),
+      <SetupScreen onDone={vi.fn()} />,
     );
     const next = screen.getByTestId("setup-next");
     await waitFor(() => expect(next).toBeEnabled());
@@ -529,8 +523,8 @@ describe("first-run local agent startup", () => {
   it("keeps observing a runtime its start left migrating, then continues without restarting it", async () => {
     const run = firstRun();
     renderIn(
-      testApp({ api: run.api, snapshot: run.shell.snapshot }),
-      <SetupScreen shell={run.shell} onDone={vi.fn()} />,
+      testApp({ api: run.api, snapshot: run.snapshot }),
+      <SetupScreen onDone={vi.fn()} />,
     );
     const next = screen.getByTestId("setup-next");
     await waitFor(() => expect(next).toBeEnabled());
@@ -568,8 +562,8 @@ describe("first-run local agent startup", () => {
       new Error("saved connections could not be written"),
     );
     renderIn(
-      testApp({ api: run.api, snapshot: run.shell.snapshot }),
-      <SetupScreen shell={run.shell} onDone={vi.fn()} />,
+      testApp({ api: run.api, snapshot: run.snapshot }),
+      <SetupScreen onDone={vi.fn()} />,
     );
     const next = screen.getByTestId("setup-next");
     await waitFor(() => expect(next).toBeEnabled());
@@ -593,8 +587,8 @@ describe("first-run local agent startup", () => {
   it("pauses on the completed step log before moving on by itself", async () => {
     const run = firstRun();
     renderIn(
-      testApp({ api: run.api, snapshot: run.shell.snapshot }),
-      <SetupScreen shell={run.shell} onDone={vi.fn()} />,
+      testApp({ api: run.api, snapshot: run.snapshot }),
+      <SetupScreen onDone={vi.fn()} />,
     );
     const next = screen.getByTestId("setup-next");
     await waitFor(() => expect(next).toBeEnabled());

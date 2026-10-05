@@ -13,7 +13,6 @@ import {
 } from "@source-inc/gents-desktop-client";
 
 import App from "../src/App";
-import type { Shell } from "../src/ui/hooks/useShell";
 import { SetupScreen } from "../src/ui/screens/setup/SetupScreen";
 import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
 
@@ -396,13 +395,11 @@ describe("setup start on a home this version cannot open", () => {
         providers: [],
       })),
     };
-    const shell = {
+    const app = testApp({
       api,
       snapshot: { bootstrap: { ...bootstrap, initAgentName: "Forge" } },
-      deployments: [],
-    } as unknown as Shell;
-    const app = testApp({ api, snapshot: shell.snapshot });
-    renderIn(app, <SetupScreen shell={shell} onDone={vi.fn()} />);
+    });
+    renderIn(app, <SetupScreen onDone={vi.fn()} />);
     const next = screen.getByTestId("setup-next");
     await waitFor(() => expect(next).toBeEnabled());
 

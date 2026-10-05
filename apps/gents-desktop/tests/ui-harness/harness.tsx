@@ -2,7 +2,7 @@ import React, { Profiler } from "react";
 import ReactDOM from "react-dom/client";
 
 import App from "../../src/App";
-import { setDesktopShellTimingConfigForTests } from "../../src/hooks/useDesktopShell";
+import { setDesktopShellTimingConfigForTests } from "../../src/hooks/desktopShellRuntime";
 import { createDesktopUiHarness } from "./desktopHarness";
 import { createLiveDesktopUiHarness } from "./liveBridgeHarness";
 

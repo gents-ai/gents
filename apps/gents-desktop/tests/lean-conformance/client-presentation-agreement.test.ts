@@ -11,7 +11,7 @@ import {
 
 import { deployment } from "../config-panel-wiring/fixtures";
 
-import type { Shell } from "../../src/ui/hooks/useShell";
+import type { ChatShellProjection } from "@source-inc/gents-desktop-chat";
 import { presentedComposerSendStatus } from "../../src/ui/screens/SessionScreen";
 
 type GeneratedPresentationCase = {
@@ -95,7 +95,7 @@ describe("ClientShell presentation agreement", () => {
       expect(actual.action, contractCase.name).toBe(contractCase.expected_action);
     }
     for (const contractCase of cases) {
-      const canonical: Shell["nonEmptyContentSendStatus"] =
+      const canonical: ChatShellProjection["nonEmptyContentSendStatus"] =
         contractCase.canonical_reason
           ? {
               kind: "disabled",

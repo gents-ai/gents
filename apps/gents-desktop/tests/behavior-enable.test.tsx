@@ -2,7 +2,6 @@ import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { Shell } from "../src/ui/hooks/useShell";
 import { BehaviorsPanel } from "../src/ui/screens/agent/BehaviorsPanel";
 import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
 import { renderIn, testApp } from "./app-fixture";
@@ -13,10 +12,9 @@ vi.mock("sonner", () => ({ toast }));
 /* the panel under an app whose failed actions are toasted, as the root's */
 function renderPanel(patch: ReturnType<typeof vi.fn>, node: typeof deployment) {
   const api = { patchConfigComponents: patch };
-  const shell = { api, snapshot: { bootstrap } } as unknown as Shell;
   return renderIn(
     testApp({ api, reportFailure: toast }),
-    <BehaviorsPanel shell={shell} deployment={node} />,
+    <BehaviorsPanel deployment={node} />,
   );
 }
 
