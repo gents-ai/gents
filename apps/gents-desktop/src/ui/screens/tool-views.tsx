@@ -3,14 +3,14 @@
    presentation kinds (command, fileRead, fileEdit, subagent, process,
    mcp, generic). Used by the activity steps in the transcript and by the
    trace panel. */
-import { useRef } from "react";
+
 import type { RenderedToolCallView } from "@source-inc/gents-desktop-client";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { cn } from "@gents/ui/lib/utils";
 import { Button } from "@gents/ui/components/button";
 import { toast } from "sonner";
 import { revealInFolder, revealInFolderLabel } from "../../lib/shellPlatform";
-import { useFollowTail } from "../lib/scroll";
+import { useFollowTail, useScroller } from "../lib/scroll";
 import { isLocalAgent } from "../lib/firstRun";
 import { useDeployment } from "./deployment-context";
 import { CopyButton } from "./Markdown";
@@ -242,8 +242,8 @@ export function ToolBody({ tool }: { tool: RenderedToolCallView }) {
 /* a running command's newest lines are the ones that matter: the box keeps
    to its foot as output arrives, unless the reader has scrolled up */
 function LiveOutput({ subject, tail }: { subject: string; tail: string }) {
-  const owner = useRef<HTMLDivElement>(null);
-  useFollowTail(owner, subject, tail);
+  const [scroller, owner] = useScroller();
+  useFollowTail(scroller, subject);
   return (
     <div ref={owner} className="grid grid-cols-[minmax(0,1fr)] gap-1">
       <span className="font-mono text-[10px] tracking-wide text-muted-foreground uppercase">

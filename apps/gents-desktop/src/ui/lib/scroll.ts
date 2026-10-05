@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { scrollParent } from "@gents/ui/conversation";
 
 /* Hold something still across a layout change. Folding a long block away
@@ -51,65 +51,60 @@ function isNearTip(viewport: HTMLElement) {
 }
 
 /**
- * Preserve the reader's intent across growth of a scroller that follows its
- * tip. Measuring whether the viewport is near the tip only after a large chunk
- * lands loses that intent: the new height itself can make a previously pinned
- * viewport appear disengaged. The ref records intent on scroll and the layout
- * effect consumes that prior observation when content grows.
- *
- * The content signal has to enumerate what can grow, and any scroll event,
- * reader's or browser's, can change the mode. A reconcile from a
- * ResizeObserver on the content box, with intent read only from the reader,
- * removes both limits while keeping this signature; the transcript's
- * activity groups and folds hold their place through `anchor` until then.
+ * The scroller inside an owner element, as state: give `owner` to the
+ * element as its ref. A scroller that mounts renders after the screen does
+ * (a session opens behind a loader) is found when it mounts, and everything
+ * keyed on it starts then.
  */
-export function useFollowTail(
-  ownerRef: RefObject<HTMLDivElement | null>,
-  /** what the scroller shows; a new subject starts pinned to its tip */
-  subject: string | null,
-  contentSignal: string,
-) {
+export function useScroller(): [
+  HTMLElement | null,
+  (owner: HTMLDivElement | null) => void,
+] {
+  const [scroller, setScroller] = useState<HTMLElement | null>(null);
+  const owner = useCallback((element: HTMLDivElement | null) => {
+    setScroller(scrollViewport(element));
+  }, []);
+  return [scroller, owner];
+}
+
+/**
+ * Keep a scroller at its foot as its content grows, unless the reader has
+ * scrolled away. Growth is observed on the content box, so whatever grows,
+ * a new row or text still being revealed, keeps the foot in view. Intent is
+ * the reader's last scroll position, recorded before growth: measured after
+ * a large chunk lands, the new height alone would read as having scrolled
+ * up. A new subject starts at its foot.
+ */
+export function useFollowTail(scroller: HTMLElement | null, subject: string | null) {
   const shouldFollow = useRef(true);
-  const openedSubject = useRef<string | null>(null);
   const [atBottom, setAtBottom] = useState(true);
 
   useLayoutEffect(() => {
-    if (!subject) {
-      openedSubject.current = null;
-      shouldFollow.current = true;
+    shouldFollow.current = true;
+    setAtBottom(true);
+    if (!scroller || !subject) return;
+    const pin = () => {
+      if (!shouldFollow.current) return;
+      scroller.scrollTop = scroller.scrollHeight;
       setAtBottom(true);
-      return;
-    }
-    const viewport = scrollViewport(ownerRef.current);
-    if (!viewport) return;
-
-    const subjectChanged = openedSubject.current !== subject;
-    if (subjectChanged) {
-      openedSubject.current = subject;
-      shouldFollow.current = true;
-    }
-    if (shouldFollow.current) {
-      viewport.scrollTop = viewport.scrollHeight;
-      setAtBottom(true);
-    }
-  }, [contentSignal, ownerRef, subject]);
-
-  useEffect(() => {
-    const viewport = scrollViewport(ownerRef.current);
-    if (!viewport || !subject) return;
+    };
+    pin();
+    const observer = new ResizeObserver(pin);
+    for (const child of Array.from(scroller.children)) observer.observe(child);
     const observeIntent = () => {
-      const nearTip = isNearTip(viewport);
+      const nearTip = isNearTip(scroller);
       shouldFollow.current = nearTip;
       setAtBottom(nearTip);
     };
-    observeIntent();
-    viewport.addEventListener("scroll", observeIntent, { passive: true });
-    return () => viewport.removeEventListener("scroll", observeIntent);
-  }, [ownerRef, subject]);
+    scroller.addEventListener("scroll", observeIntent, { passive: true });
+    return () => {
+      observer.disconnect();
+      scroller.removeEventListener("scroll", observeIntent);
+    };
+  }, [scroller, subject]);
 
   const toBottom = () => {
-    const viewport = scrollViewport(ownerRef.current);
-    if (!viewport) return;
+    if (!scroller) return;
     /* A smooth scroll is abandoned the moment anything else writes to the
        scroller, and a long transcript writes constantly: every scroll event
        on the way down re-renders hundreds of rows, and the animation is
@@ -119,74 +114,117 @@ export function useFollowTail(
        So a short way is animated and a long way is not, and either way the
        foot is claimed again on the next frame, after whatever render the
        click set off has landed. */
-    const distance = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
+    const distance = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
     shouldFollow.current = true;
-    viewport.scrollTo({
-      top: viewport.scrollHeight,
-      behavior: distance > viewport.clientHeight * 2 ? "auto" : "smooth",
+    scroller.scrollTo({
+      top: scroller.scrollHeight,
+      behavior: distance > scroller.clientHeight * 2 ? "auto" : "smooth",
     });
     requestAnimationFrame(() => {
-      if (shouldFollow.current) viewport.scrollTop = viewport.scrollHeight;
+      if (shouldFollow.current) scroller.scrollTop = scroller.scrollHeight;
     });
   };
 
   return { atBottom, toBottom };
 }
 
-/** Upward navigation loads one page at a time; mounting at the tip never does.
- * The visible row anchors prepends even if live output grows during the read. */
+/* the row under the reader when an older page was asked for, and where it was */
+type Hold = {
+  row: HTMLElement | undefined;
+  top: number | undefined;
+  scrollTop: number;
+  height: number;
+  /** the first row's key when the page was asked for */
+  oldestKey: string | null;
+  /** the older rows have been committed and the row put back */
+  landed: boolean;
+  /** the load has finished */
+  settled: boolean;
+};
+
+/* puts the held row back where the reader had it, allowing for their own
+   scrolling since; a row that left the DOM falls back to the added height */
+function restore(viewport: HTMLElement, hold: Hold) {
+  if (hold.row?.isConnected && hold.top !== undefined) {
+    const movement = viewport.scrollTop - hold.scrollTop;
+    viewport.scrollTop += hold.row.getBoundingClientRect().top - hold.top + movement;
+  } else {
+    viewport.scrollTop += viewport.scrollHeight - hold.height;
+  }
+}
+
+/**
+ * Load older pages when the reader moves up near the top, keeping the row
+ * under them in place. The older rows arrive in a React commit whose timing
+ * the loader does not control, so the row is put back in a layout effect on
+ * that commit, before paint: the commit where `oldestKey`, the first row's
+ * key, changes. The hold ends with the commit of the load's settling, which
+ * React cannot commit ahead of the rows the load queued.
+ */
 export function useOlderPages(
-  ownerRef: RefObject<HTMLDivElement | null>,
+  scroller: HTMLElement | null,
   subject: string | null,
   hasOlder: boolean,
   load: () => Promise<boolean>,
+  oldestKey: string | null,
 ) {
-  const latest = useRef({ hasOlder, load });
-  latest.current = { hasOlder, load };
+  const latest = useRef({ hasOlder, load, oldestKey });
+  latest.current = { hasOlder, load, oldestKey };
   const [loading, setLoading] = useState(false);
+  /* advanced when a load settles, so a commit always follows it, even when
+     React batched the start and end of a quick load into one */
+  const [settles, setSettles] = useState(0);
+  const hold = useRef<Hold | null>(null);
+
+  useLayoutEffect(() => {
+    const held = hold.current;
+    if (!held || !scroller) return;
+    if (!held.landed && oldestKey !== held.oldestKey) {
+      restore(scroller, held);
+      held.landed = true;
+    }
+    if (held.settled) hold.current = null;
+  }, [oldestKey, scroller, settles]);
+
   useEffect(() => {
-    const viewport = scrollViewport(ownerRef.current);
+    const viewport = scroller;
     if (!viewport || !subject) return;
     let disposed = false;
-    let busy = false;
     let lastTop = viewport.scrollTop;
-    let frame: number | null = null;
+    hold.current = null;
     setLoading(false);
     const fetchOlder = async () => {
-      if (disposed || busy || !latest.current.hasOlder || viewport.scrollTop > 160)
+      if (
+        disposed ||
+        hold.current ||
+        !latest.current.hasOlder ||
+        viewport.scrollTop > 160
+      )
         return;
-      busy = true;
       const viewportTop = viewport.getBoundingClientRect().top;
       const row = Array.from(
         viewport.querySelectorAll<HTMLElement>("[data-timeline-key]"),
       ).find((node) => node.getBoundingClientRect().bottom > viewportTop);
-      const top = row?.getBoundingClientRect().top;
-      const height = viewport.scrollHeight;
-      const scrollTop = viewport.scrollTop;
-      let accepted = false;
+      const held: Hold = {
+        row,
+        top: row?.getBoundingClientRect().top,
+        scrollTop: viewport.scrollTop,
+        height: viewport.scrollHeight,
+        oldestKey: latest.current.oldestKey,
+        landed: false,
+        settled: false,
+      };
+      hold.current = held;
       setLoading(true);
       try {
-        accepted = await latest.current.load();
+        await latest.current.load();
       } catch {
         // The paging owner reports read errors; leave scroll and retry intent intact.
-      } finally {
-        if (!disposed) {
-          frame = requestAnimationFrame(() => {
-            if (disposed) return;
-            if (accepted) {
-              if (row?.isConnected && top !== undefined) {
-                const movement = viewport.scrollTop - scrollTop;
-                viewport.scrollTop += row.getBoundingClientRect().top - top + movement;
-              } else {
-                viewport.scrollTop += viewport.scrollHeight - height;
-              }
-            }
-            lastTop = viewport.scrollTop;
-            busy = false;
-            setLoading(false);
-          });
-        }
       }
+      if (disposed || hold.current !== held) return;
+      held.settled = true;
+      setLoading(false);
+      setSettles((count) => count + 1);
     };
     const onScroll = () => {
       const upward = viewport.scrollTop < lastTop;
@@ -216,13 +254,13 @@ export function useOlderPages(
     viewport.addEventListener("keydown", onKeyDown);
     return () => {
       disposed = true;
-      if (frame !== null) cancelAnimationFrame(frame);
+      hold.current = null;
       viewport.removeEventListener("scroll", onScroll);
       viewport.removeEventListener("wheel", onWheel);
       viewport.removeEventListener("touchstart", onTouchStart);
       viewport.removeEventListener("touchmove", onTouchMove);
       viewport.removeEventListener("keydown", onKeyDown);
     };
-  }, [ownerRef, subject]);
+  }, [scroller, subject]);
   return loading;
 }

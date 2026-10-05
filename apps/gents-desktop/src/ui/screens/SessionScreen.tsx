@@ -54,7 +54,7 @@ import {
 } from "@gents/ui/conversation";
 import type { Shell } from "@/hooks/useShell";
 import { ChatFolderPicker } from "./ChatFolderPicker";
-import { anchor, scrollViewport, useFollowTail, useOlderPages } from "@/lib/scroll";
+import { anchor, useFollowTail, useOlderPages, useScroller } from "@/lib/scroll";
 import { href, navigate } from "@/lib/router";
 import {
   Collapsible,
@@ -1058,7 +1058,7 @@ export const TranscriptPanel = memo(function TranscriptPanel({
   holdsCount,
   inFlight,
   stopping = false,
-  ownerRef,
+  scroller,
   session,
   workers,
   parentWork,
@@ -1069,7 +1069,8 @@ export const TranscriptPanel = memo(function TranscriptPanel({
   holdsCount: number;
   inFlight: boolean;
   stopping?: boolean;
-  ownerRef: RefObject<HTMLDivElement | null>;
+  /** the transcript's scroller, once mounted */
+  scroller: HTMLElement | null;
   session: DesktopSessionSnapshot | null;
   workers: Workers;
   parentWork: ParentWork;
@@ -1077,10 +1078,11 @@ export const TranscriptPanel = memo(function TranscriptPanel({
   deployment: DeploymentView | null;
 }) {
   const loadingOlder = useOlderPages(
-    ownerRef,
+    scroller,
     session?.sessionId ?? null,
     session?.timelinePage?.hasOlder ?? false,
     () => actionsRef.current.loadOlderSessionTimeline(),
+    session?.timelineItems[0]?.itemKey ?? null,
   );
   const [retrying, setRetrying] = useState(false);
 
@@ -1297,32 +1299,16 @@ export function SessionScreen({ shell }: { shell: Shell }) {
   const forkNotice = useExclusivePopover();
   /* the transcript column follows new content while the reader is near
      the bottom; a reader who has scrolled up is left where they are */
-  const column = useRef<HTMLDivElement>(null);
-  const viewport = () => scrollViewport(column.current);
-  const transcriptContentSignal = useMemo(
-    () =>
-      (session?.timelineItems ?? [])
-        .map((item) => {
-          switch (item.kind) {
-            case "assistantMessage":
-            case "liveAssistant":
-              return `${item.itemKey}:${item.content?.length ?? 0}:${item.reasoning?.length ?? 0}`;
-            case "userMessage":
-              return `${item.itemKey}:${item.content?.length ?? 0}`;
-            case "pendingUserTurn":
-              return `${item.itemKey}:${item.content.length}`;
-            case "toolGroup":
-              return `${item.itemKey}:${item.tools
-                .map(
-                  (tool) =>
-                    `${tool.itemKey}:${tool.statusKind}:${tool.partialOutputTail?.length ?? 0}`,
-                )
-                .join(",")}`;
-          }
-        })
-        .join("|"),
-    [session?.timelineItems],
+  const column = useRef<HTMLDivElement | null>(null);
+  const [scroller, ownScroller] = useScroller();
+  const columnRef = useCallback(
+    (element: HTMLDivElement | null) => {
+      column.current = element;
+      ownScroller(element);
+    },
+    [ownScroller],
   );
+  const viewport = () => scroller;
   const transcriptActions = useRef<TranscriptActions>({
     loadOlderSessionTimeline: shell.loadOlderSessionTimeline,
     retryMessage: shell.retryMessage,
@@ -1334,11 +1320,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
     };
   }, [shell.loadOlderSessionTimeline, shell.retryMessage]);
   /* away from the bottom, a button offers the way back; scrolling is the cue */
-  const { atBottom, toBottom } = useFollowTail(
-    column,
-    shell.selectedSessionId,
-    transcriptContentSignal,
-  );
+  const { atBottom, toBottom } = useFollowTail(scroller, shell.selectedSessionId);
   /* once the full header scrolls out, a condensed one sticks to the top */
   const headerEnd = useRef<HTMLDivElement>(null);
   const [condensed, setCondensed] = useState(false);
@@ -1353,7 +1335,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
     return () => io.disconnect();
     /* the loader shows first and the marker mounts with the session, after
        this effect has already run once and found nothing: run again then */
-  }, [shell.selectedSessionId, session]);
+  }, [shell.selectedSessionId, session, scroller]);
   const choice = useBehaviorChoice(shell);
   const deployment = shell.selectedDeployment;
   const provenance = useSessionProvenance(shell);
@@ -1690,7 +1672,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
         />
         {/* transcript and composer scroll together in the kit's scroll area;
             the composer sticks to the foot so the bar runs the full height */}
-        <div ref={column} className="min-h-0 flex-1">
+        <div ref={columnRef} className="min-h-0 flex-1">
           <ScrollArea className="h-full">
             {/* the right gutter is the sender marks' column, so it is only
                   spent where marks can appear: a session another sent to, on a
@@ -1862,7 +1844,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                 holdsCount={holdsHere.length}
                 inFlight={inFlight}
                 stopping={stopping}
-                ownerRef={column}
+                scroller={scroller}
                 session={session}
                 workers={workers}
                 parentWork={parentWork}
