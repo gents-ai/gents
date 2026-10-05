@@ -1865,7 +1865,8 @@ def caseCoverage : List CoverageEntry :=
   , tagged (followUpCoverage "background_wake_row_cases" "BackgroundWakeRowCases"
       "Consume exact physical-parent and cross-requester authoritative rows through background publication after its owner migrates. Existing DB wake tests do not establish every generated row verdict.")
       "request-lifecycle" [Surface.runtimeInternal]
-  , tagged (followUpCoverage "configuration_scope_cases" "ConfigurationScopeCases"
+  , tagged (consumerWithFollowUp "configuration_scope_cases" "ConfigurationScopeCases"
+      "config_client::desired_state::tests::generated_default_replacements_preserve_runtime_startup_selection"
       "Resolve same-label documents through the real owner-qualified context/inference registry; do not rebuild Lean lookup in tests.")
       "apply-reconcile" [Surface.runtimeInternal]
   , tagged (followUpCoverage "discovery_scope_cases" "DiscoveryScopeCases"
