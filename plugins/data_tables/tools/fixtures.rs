@@ -10,8 +10,6 @@ use arrow::array::{
     Int64Array, ListArray, StringArray, StructArray, TimestampMicrosecondArray, UInt64Array,
 };
 use arrow::datatypes::{DataType, Field, Fields, Int32Type, Schema, TimeUnit};
-use arrow::ipc::CompressionType;
-use arrow::ipc::writer::{FileWriter, IpcWriteOptions, StreamWriter};
 use arrow::record_batch::RecordBatch;
 use parquet::arrow::ArrowWriter;
 use parquet::basic::Compression;
@@ -202,8 +200,11 @@ pub enum O {
     P(&'static str),
 }
 
-/// An ODS workbook of `sheets` (name, rows); a row is a (repeat count, cells) pair.
-pub fn ods(sheets: &[(&str, Vec<(u32, Vec<O>)>)]) -> Vec<u8> {
+/// A row of an ODS sheet: how many times it repeats and its cells.
+pub type OdsRow = (u32, Vec<O>);
+
+/// An ODS workbook of `sheets` (name, rows).
+pub fn ods(sheets: &[(&str, Vec<OdsRow>)]) -> Vec<u8> {
     let mut body = String::new();
     for (name, rows) in sheets {
         body.push_str(&format!("<table:table table:name=\"{}\">", esc(name)));
@@ -338,23 +339,6 @@ pub fn parquet(batch: &RecordBatch, codec: Compression) -> Vec<u8> {
     w.write(batch).unwrap();
     w.close().unwrap();
     out
-}
-
-/// An Arrow IPC file of `batch`, optionally compressed.
-pub fn arrow_file(batch: &RecordBatch, codec: Option<CompressionType>) -> Vec<u8> {
-    let options = IpcWriteOptions::default()
-        .try_with_compression(codec)
-        .unwrap();
-    let mut w = FileWriter::try_new_with_options(Vec::new(), &batch.schema(), options).unwrap();
-    w.write(batch).unwrap();
-    w.into_inner().unwrap()
-}
-
-/// An Arrow IPC stream of `batch`.
-pub fn arrow_stream(batch: &RecordBatch) -> Vec<u8> {
-    let mut w = StreamWriter::try_new(Vec::new(), &batch.schema()).unwrap();
-    w.write(batch).unwrap();
-    w.into_inner().unwrap()
 }
 
 /// A flat batch of two integer columns, `rows` long, for size tests.

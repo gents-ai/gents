@@ -14,15 +14,16 @@ mod export;
 #[cfg(test)]
 mod export_tests;
 mod graph;
+#[cfg(test)]
+mod hostile_tests;
 mod inline;
 mod input;
-mod ipc;
 mod json;
 mod names;
 mod ods;
-mod parquet_src;
 #[cfg(test)]
 mod paging_tests;
+mod parquet_src;
 mod query;
 #[cfg(test)]
 mod query_tests;
@@ -111,9 +112,18 @@ mod tests {
             ("{\"mode\": \"drop\"}", "invalid input"),
             ("{\"unknown\": 1}", "invalid input"),
             ("{\"path\": 5}", "invalid input"),
-            ("{}", "give path (a data file or a folder of them) or tables (rows as JSON)"),
-            ("{\"mode\": \"query\", \"tables\": {\"t\": [[1]]}}", "sql is required: give the SELECT to run"),
-            ("{\"max_rows\": 0, \"tables\": {\"t\": [[1]]}}", "max_rows must be a whole number from 1 to 100000"),
+            (
+                "{}",
+                "give path (a data file or a folder of them) or tables (rows as JSON)",
+            ),
+            (
+                "{\"mode\": \"query\", \"tables\": {\"t\": [[1]]}}",
+                "sql is required: give the SELECT to run",
+            ),
+            (
+                "{\"max_rows\": 0, \"tables\": {\"t\": [[1]]}}",
+                "max_rows must be a whole number from 1 to 100000",
+            ),
         ] {
             let e = run(raw).unwrap_err();
             assert!(e.contains(want), "{raw:?}: {e}");
@@ -123,9 +133,13 @@ mod tests {
 
     #[test]
     fn the_mode_defaults_to_query_with_sql_and_tables_without() {
-        let q: serde_json::Value = serde_json::from_str(&run("{\"tables\": {\"t\": [[1]]}, \"sql\": \"SELECT * FROM t\"}").unwrap()).unwrap();
+        let q: serde_json::Value = serde_json::from_str(
+            &run("{\"tables\": {\"t\": [[1]]}, \"sql\": \"SELECT * FROM t\"}").unwrap(),
+        )
+        .unwrap();
         assert_eq!(q["rows"], serde_json::json!([[1]]));
-        let t: serde_json::Value = serde_json::from_str(&run("{\"tables\": {\"t\": [[1]]}}").unwrap()).unwrap();
+        let t: serde_json::Value =
+            serde_json::from_str(&run("{\"tables\": {\"t\": [[1]]}}").unwrap()).unwrap();
         assert_eq!(t["tables"][0]["name"], "t");
     }
 

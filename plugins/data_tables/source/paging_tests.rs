@@ -3,9 +3,9 @@
 //! export reads back identically, and a clean integer column never turns float.
 #![cfg(test)]
 use proptest::prelude::*;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use crate::testkit::{rows, run, Dir};
+use crate::testkit::{Dir, rows, run};
 
 /// Every page of `sql`, following the cursor; the rows joined, and how many pages there were.
 fn all_pages(dir: &Dir, sql: &str, max_rows: usize) -> (Vec<Value>, usize) {
@@ -61,7 +61,11 @@ fn pages_join_into_the_one_shot_result_for_every_query_shape_and_size() {
             let (joined, pages) = all_pages(&d, sql, size);
             assert_eq!(joined.len(), whole.len(), "{sql} size {size}");
             assert_eq!(joined, whole, "{sql} size {size}");
-            assert_eq!(pages, whole.len().div_ceil(size).max(1), "{sql} size {size}");
+            assert_eq!(
+                pages,
+                whole.len().div_ceil(size).max(1),
+                "{sql} size {size}"
+            );
         }
     }
 }
@@ -74,8 +78,16 @@ fn a_result_that_fills_a_page_exactly_has_no_empty_page_after_it() {
     assert!(r.get("next").is_none());
     let r = run(json!({"path": d.s(), "sql": "SELECT n FROM t", "max_rows": 9})).unwrap();
     assert!(r["next"]["cursor"].is_string());
-    let r = run(json!({"path": d.s(), "sql": "SELECT n FROM t WHERE n > 100", "max_rows": 9})).unwrap();
-    assert_eq!((rows(&r).len(), r.get("next").is_none(), r["markdown"].as_str().unwrap()), (0, true, "| n |\n| --- |"));
+    let r =
+        run(json!({"path": d.s(), "sql": "SELECT n FROM t WHERE n > 100", "max_rows": 9})).unwrap();
+    assert_eq!(
+        (
+            rows(&r).len(),
+            r.get("next").is_none(),
+            r["markdown"].as_str().unwrap()
+        ),
+        (0, true, "| n |\n| --- |")
+    );
 }
 
 #[test]
@@ -111,7 +123,8 @@ fn the_byte_budget_ends_a_page_and_the_pages_still_join() {
     assert_eq!(joined, rows(&whole));
     assert!(pages > 5, "{pages}");
     // One row bigger than the whole budget still comes back, alone.
-    let r = run(json!({"path": d.s(), "sql": "SELECT * FROM t", "max_bytes": 4096, "max_rows": 1})).unwrap();
+    let r = run(json!({"path": d.s(), "sql": "SELECT * FROM t", "max_bytes": 4096, "max_rows": 1}))
+        .unwrap();
     assert_eq!(rows(&r).len(), 1);
 }
 
@@ -120,14 +133,28 @@ fn a_cursor_is_refused_when_the_query_the_data_or_the_options_changed() {
     let d = numbers(50);
     let first = run(json!({"path": d.s(), "sql": "SELECT * FROM t", "max_rows": 10})).unwrap();
     let cursor = first["next"]["cursor"].as_str().unwrap().to_string();
-    let call = |sql: &str, cursor: &str| run(json!({"path": d.s(), "sql": sql, "cursor": cursor, "max_rows": 10}));
+    let call = |sql: &str, cursor: &str| {
+        run(json!({"path": d.s(), "sql": sql, "cursor": cursor, "max_rows": 10}))
+    };
     assert_eq!(rows(&call("SELECT * FROM t", &cursor).unwrap())[0][0], 10);
-    for other in ["SELECT * FROM t WHERE n > 0", "select * from t", "SELECT n FROM t"] {
+    for other in [
+        "SELECT * FROM t WHERE n > 0",
+        "select * from t",
+        "SELECT n FROM t",
+    ] {
         let e = call(other, &cursor).unwrap_err();
-        assert!(e.contains("different query or the data changed"), "{other}: {e}");
+        assert!(
+            e.contains("different query or the data changed"),
+            "{other}: {e}"
+        );
     }
-    let e = run(json!({"path": d.s(), "sql": "SELECT * FROM t", "cursor": cursor, "delimiter": ";"})).unwrap_err();
-    assert!(e.contains("different query or the data changed") || e.contains("not valid"), "{e}");
+    let e =
+        run(json!({"path": d.s(), "sql": "SELECT * FROM t", "cursor": cursor, "delimiter": ";"}))
+            .unwrap_err();
+    assert!(
+        e.contains("different query or the data changed") || e.contains("not valid"),
+        "{e}"
+    );
     d.put("t.csv", "n,g,pad\n1,1,x\n");
     let e = call("SELECT * FROM t", &cursor).unwrap_err();
     assert!(e.contains("different query or the data changed"), "{e}");
@@ -142,7 +169,9 @@ fn a_cursor_may_change_the_page_size_but_not_the_rows_it_continues_from() {
     let d = numbers(100);
     let first = run(json!({"path": d.s(), "sql": "SELECT n FROM t", "max_rows": 10})).unwrap();
     let cursor = first["next"]["cursor"].as_str().unwrap();
-    let next = run(json!({"path": d.s(), "sql": "SELECT n FROM t", "max_rows": 25, "cursor": cursor})).unwrap();
+    let next =
+        run(json!({"path": d.s(), "sql": "SELECT n FROM t", "max_rows": 25, "cursor": cursor}))
+            .unwrap();
     assert_eq!(rows(&next).len(), 25);
     assert_eq!(rows(&next)[0], json!([10]));
     assert_eq!(next["offset"], 10);
@@ -151,14 +180,23 @@ fn a_cursor_may_change_the_page_size_but_not_the_rows_it_continues_from() {
 #[test]
 fn the_unordered_shapes_come_back_in_one_repeatable_order() {
     let d = numbers(300);
-    for sql in ["SELECT g, count(*) AS c FROM t GROUP BY g", "SELECT a.n FROM t a JOIN t b ON a.g = b.g AND b.n < 5", "SELECT DISTINCT pad FROM t"] {
+    for sql in [
+        "SELECT g, count(*) AS c FROM t GROUP BY g",
+        "SELECT a.n FROM t a JOIN t b ON a.g = b.g AND b.n < 5",
+        "SELECT DISTINCT pad FROM t",
+    ] {
         let a = run(json!({"path": d.s(), "sql": sql})).unwrap();
         let b = run(json!({"path": d.s(), "sql": sql})).unwrap();
         assert_eq!(a, b, "{sql}");
         assert_eq!(a["order"], "columns");
         let first_column: Vec<Value> = rows(&a).iter().map(|r| r[0].clone()).collect();
         let mut sorted = first_column.clone();
-        sorted.sort_by(|x, y| x.to_string().len().cmp(&y.to_string().len()).then(x.to_string().cmp(&y.to_string())));
+        sorted.sort_by(|x, y| {
+            x.to_string()
+                .len()
+                .cmp(&y.to_string().len())
+                .then(x.to_string().cmp(&y.to_string()))
+        });
         if first_column.iter().all(Value::is_number) {
             let mut nums: Vec<i64> = first_column.iter().map(|v| v.as_i64().unwrap()).collect();
             let copy = nums.clone();
@@ -186,7 +224,15 @@ fn table_of(rows: &[Row]) -> Dir {
 }
 
 fn arbitrary_rows() -> impl Strategy<Value = Vec<Row>> {
-    prop::collection::vec((-50i32..50, -50i32..50, prop::sample::select(vec!["x", "y", "z", "w"])).prop_map(|(a, b, c)| Row { a, b, c }), 1..40)
+    prop::collection::vec(
+        (
+            -50i32..50,
+            -50i32..50,
+            prop::sample::select(vec!["x", "y", "z", "w"]),
+        )
+            .prop_map(|(a, b, c)| Row { a, b, c }),
+        1..40,
+    )
 }
 
 proptest! {
@@ -267,7 +313,8 @@ fn arbitrary_table() -> impl Strategy<Value = Vec<Col>> {
         prop::collection::vec(
             prop_oneof![
                 prop::collection::vec(prop::option::of(any::<i64>()), n).prop_map(Col::Int),
-                prop::collection::vec(prop::option::of(-100_000i32..100_000), n).prop_map(Col::Float),
+                prop::collection::vec(prop::option::of(-100_000i32..100_000), n)
+                    .prop_map(Col::Float),
                 prop::collection::vec(prop::option::of("[ -~\n\r]{0,10}"), n).prop_map(Col::Text),
                 prop::collection::vec(prop::option::of(any::<bool>()), n).prop_map(Col::Bool),
                 prop::collection::vec(prop::option::of(0u32..30_000), n).prop_map(Col::Date),
@@ -285,7 +332,11 @@ fn render_csv(cols: &[Col]) -> String {
         Col::Bool(v) => v.len(),
         Col::Date(v) => v.len(),
     };
-    let mut out = (0..cols.len()).map(|i| format!("c{i}")).collect::<Vec<_>>().join(",") + "\n";
+    let mut out = (0..cols.len())
+        .map(|i| format!("c{i}"))
+        .collect::<Vec<_>>()
+        .join(",")
+        + "\n";
     for r in 0..n {
         let cells: Vec<String> = cols
             .iter()
@@ -296,7 +347,8 @@ fn render_csv(cols: &[Col]) -> String {
                     Col::Text(v) => v[r].clone(),
                     Col::Bool(v) => v[r].map(|x| x.to_string()),
                     Col::Date(v) => v[r].map(|d| {
-                        let date = chrono::NaiveDate::from_num_days_from_ce_opt(719_163 + d as i32).unwrap();
+                        let date = chrono::NaiveDate::from_num_days_from_ce_opt(719_163 + d as i32)
+                            .unwrap();
                         date.format("%Y-%m-%d").to_string()
                     }),
                 })

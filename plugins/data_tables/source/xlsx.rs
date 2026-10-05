@@ -255,10 +255,10 @@ fn styles(zip: &mut Zip, path: &Path) -> Res<Vec<bool>> {
             Ok(Event::End(e)) if e.local_name().as_ref() == "cellXfs" => in_cell_xfs = false,
             Ok(Event::Empty(e) | Event::Start(e)) => match e.local_name().as_ref() {
                 "numFmt" => {
-                    if let (Some(id), Some(code)) = (attr(&e, "numFmtId"), attr(&e, "formatCode")) {
-                        if let Ok(id) = id.parse() {
-                            codes.insert(id, code);
-                        }
+                    if let (Some(id), Some(code)) = (attr(&e, "numFmtId"), attr(&e, "formatCode"))
+                        && let Ok(id) = id.parse()
+                    {
+                        codes.insert(id, code);
                     }
                 }
                 "xf" if in_cell_xfs => xfs.push(

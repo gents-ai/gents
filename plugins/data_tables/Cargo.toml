@@ -11,7 +11,7 @@ name = "data_tables"
 path = "source/main.rs"
 
 [dependencies]
-arrow = { version = "59", default-features = false, features = ["json", "ipc", "ipc_compression"] }
+arrow = { version = "59", default-features = false }
 async-trait = "0.1"
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
@@ -44,3 +44,8 @@ debug = false
 [[example]]
 name = "gen_fixtures"
 path = "tools/gen_fixtures.rs"
+
+# parquet and arrow-ipc link the zstd C library, which has no wasm32 toolchain on every
+# CI host; this stand-in keeps the same calls on pure Rust (see its docs).
+[patch.crates-io]
+zstd = { path = "vendor/zstd" }

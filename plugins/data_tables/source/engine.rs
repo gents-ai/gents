@@ -82,8 +82,9 @@ impl Engine {
             .with_information_schema(false)
             .with_collect_statistics(false);
         config.options_mut().sql_parser.enable_ident_normalization = false;
-        config.options_mut().sql_parser.recursion_limit = datafusion::common::config::ConfigNonZeroUsize::try_new(MAX_EXPR_DEPTH)
-            .map_err(|e| format!("the SQL engine could not start: {e}"))?;
+        config.options_mut().sql_parser.recursion_limit =
+            datafusion::common::config::ConfigNonZeroUsize::try_new(MAX_EXPR_DEPTH)
+                .map_err(|e| format!("the SQL engine could not start: {e}"))?;
         let state = SessionStateBuilder::new()
             .with_config(config)
             .with_runtime_env(runtime)
@@ -150,7 +151,11 @@ impl Visitor for Depth {
     fn pre_visit_expr(&mut self, _: &SqlExpr) -> ControlFlow<()> {
         self.now += 1;
         self.max = self.max.max(self.now);
-        if self.max > MAX_EXPR_DEPTH { ControlFlow::Break(()) } else { ControlFlow::Continue(()) }
+        if self.max > MAX_EXPR_DEPTH {
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
+        }
     }
 
     fn post_visit_expr(&mut self, _: &SqlExpr) -> ControlFlow<()> {
@@ -160,7 +165,9 @@ impl Visitor for Depth {
 }
 
 fn depth_message() -> String {
-    format!("an expression nests more than {MAX_EXPR_DEPTH} levels deep; split it, or use IN (...) for a long list of OR conditions")
+    format!(
+        "an expression nests more than {MAX_EXPR_DEPTH} levels deep; split it, or use IN (...) for a long list of OR conditions"
+    )
 }
 
 fn check_depth(statement: &Ast) -> Res<()> {
@@ -229,7 +236,10 @@ fn file_order(p: &LogicalPlan) -> bool {
 fn order(plan: LogicalPlan) -> Res<Prepared> {
     // An EXPLAIN is a plan description, not rows to page, and must stay the root of the plan.
     if matches!(plan, LogicalPlan::Explain(_) | LogicalPlan::Analyze(_)) {
-        return Ok(Prepared { plan, order: Order::File });
+        return Ok(Prepared {
+            plan,
+            order: Order::File,
+        });
     }
     if user_sorted(&plan) {
         return Ok(Prepared {

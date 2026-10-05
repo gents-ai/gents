@@ -143,6 +143,18 @@ mod tests {
         }
     }
 
+    /// `tests/fixtures/formats/people_zstd.parquet` was written with the reference zstd library, so this
+    /// reads another encoder's frames with the pure Rust decoder the plugin links.
+    #[test]
+    fn a_file_compressed_by_the_reference_zstd_library_reads_back() {
+        let (t, _d) = open(include_bytes!(
+            "../tests/fixtures/formats/people_zstd.parquet"
+        ))
+        .unwrap();
+        assert_eq!(columns(&t), sample_columns());
+        assert_eq!(collect(&t, None).unwrap(), sample_rows());
+    }
+
     #[test]
     fn only_the_projected_columns_are_returned_and_none_still_counts_rows() {
         let (t, _d) = open(&fixtures::parquet(

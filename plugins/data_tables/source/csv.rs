@@ -27,7 +27,7 @@ use crate::typed::{Builder, ColType, Inferrer, classify};
 
 const SNIFF_BYTES: u64 = 256 * 1024;
 const SNIFF_ROWS: usize = 100;
-const CANDIDATES: [u8; 4] = [b',', b';', b'\t', b'|'];
+const CANDIDATES: [u8; 4] = *b",;\t|";
 /// The most columns a table may have.
 pub const MAX_COLUMNS: usize = 100_000;
 
@@ -89,7 +89,9 @@ struct Utf16 {
 
 impl Utf16 {
     fn units(&self, raw: &[u8]) -> Vec<u16> {
-        raw.chunks_exact(2)
+        raw.as_chunks::<2>()
+            .0
+            .iter()
             .map(|p| {
                 if self.le {
                     u16::from_le_bytes([p[0], p[1]])
@@ -158,11 +160,20 @@ fn sample_rows(bytes: &[u8], delim: u8, complete: bool) -> Rows {
     let mut reader = Reader::new(Cursor::new(bytes), delim);
     let mut rec = Record::default();
     let mut rows = Rows::new();
-    while rows.len() < SNIFF_ROWS && matches!(reader.read(&mut rec), Ok(true)) {
-        rows.push(own(&rec));
+    let mut ended_cleanly = false;
+    while rows.len() < SNIFF_ROWS {
+        match reader.read(&mut rec) {
+            Ok(true) => rows.push(own(&rec)),
+            Ok(false) => {
+                ended_cleanly = true;
+                break;
+            }
+            // A quoted record cut by the end of the window never made it into `rows`.
+            Err(_) => break,
+        }
     }
-    // Without the whole file, the last record may have been cut mid-row.
-    if !complete && rows.len() < SNIFF_ROWS {
+    // Without the whole file, an unquoted last record may have been cut mid-row.
+    if !complete && ended_cleanly {
         rows.pop();
     }
     rows

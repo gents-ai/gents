@@ -66,21 +66,8 @@ fn main() {
         "formats/people.parquet",
         fixtures::parquet(&batch, Compression::SNAPPY),
     );
-    put(
-        root,
-        "formats/people_zstd.parquet",
-        fixtures::parquet(&batch, Compression::ZSTD(Default::default())),
-    );
-    put(
-        root,
-        "formats/people.arrow",
-        fixtures::arrow_file(&batch, None),
-    );
-    put(
-        root,
-        "formats/people_stream.arrow",
-        fixtures::arrow_stream(&batch),
-    );
+    // formats/people_zstd.parquet is not written here: it was produced once with the reference zstd
+    // library, so the pure Rust decoder is tested against another encoder's frames.
     put(
         root,
         "formats/book.xlsx",

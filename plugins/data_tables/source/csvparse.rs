@@ -250,7 +250,9 @@ mod tests {
     use proptest::prelude::*;
     use std::io::Cursor;
 
-    fn parse(input: &[u8], delim: u8) -> Res<Vec<Vec<(Vec<u8>, bool)>>> {
+    type Parsed = Vec<Vec<(Vec<u8>, bool)>>;
+
+    fn parse(input: &[u8], delim: u8) -> Res<Parsed> {
         let mut reader = Reader::new(Cursor::new(input.to_vec()), delim);
         let mut rec = Record::default();
         let mut out = Vec::new();

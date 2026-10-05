@@ -15,7 +15,6 @@ use serde_json::Value;
 
 use crate::csv::{CsvTable, Options};
 use crate::inline::{InlineTable, parse_tables};
-use crate::ipc::IpcTable;
 use crate::json::JsonTable;
 use crate::names::{sanitize, unique};
 use crate::parquet_src::ParquetTable;
@@ -37,8 +36,6 @@ pub enum Fmt {
     Json,
     /// Parquet.
     Parquet,
-    /// Arrow IPC.
-    Arrow,
     /// Excel workbook.
     Xlsx,
     /// OpenDocument spreadsheet.
@@ -51,7 +48,6 @@ impl Fmt {
             Self::Csv => "csv",
             Self::Json => "json",
             Self::Parquet => "parquet",
-            Self::Arrow => "arrow",
             Self::Xlsx => "xlsx",
             Self::Ods => "ods",
         }
@@ -121,8 +117,10 @@ fn detect(path: &Path, strict: bool) -> Res<Result<Fmt, String>> {
     if head.starts_with(b"PAR1") {
         return Ok(Ok(Fmt::Parquet));
     }
-    if head.starts_with(crate::ipc::MAGIC) {
-        return Ok(Ok(Fmt::Arrow));
+    if head.starts_with(b"ARROW1") || head.starts_with(&[0xFF, 0xFF, 0xFF, 0xFF]) {
+        return Ok(Err(
+            "Arrow files are not supported; save the data as Parquet or CSV".into(),
+        ));
     }
     if head.starts_with(b"PK\x03\x04") {
         let mut zip = match Zip::open(path) {
@@ -154,11 +152,9 @@ fn detect(path: &Path, strict: bool) -> Res<Result<Fmt, String>> {
             ));
         }
         "arrow" | "feather" | "ipc" => {
-            return Ok(if head.starts_with(&[0xFF, 0xFF, 0xFF, 0xFF]) {
-                Ok(Fmt::Arrow)
-            } else {
-                Err("named like Arrow but does not start like an Arrow file".into())
-            });
+            return Ok(Err(
+                "Arrow files are not supported; save the data as Parquet or CSV".into(),
+            ));
         }
         _ => {}
     }
@@ -203,12 +199,12 @@ pub fn safe_join(root: &Path, rel: &str) -> Res<PathBuf> {
         return Err(bad());
     }
     let joined = root.join(p);
-    if let (Ok(r), Ok(j)) = (std::fs::canonicalize(root), std::fs::canonicalize(&joined)) {
-        if !j.starts_with(&r) {
-            return Err(format!(
-                "{rel} is a link that leads outside the folder and is not read"
-            ));
-        }
+    if let (Ok(r), Ok(j)) = (std::fs::canonicalize(root), std::fs::canonicalize(&joined))
+        && !j.starts_with(&r)
+    {
+        return Err(format!(
+            "{rel} is a link that leads outside the folder and is not read"
+        ));
     }
     Ok(joined)
 }
@@ -400,7 +396,8 @@ impl Catalog {
                     Err(e) => return Err(e),
                 };
                 for sheet in book.sheets.clone() {
-                    let (name, note) = Self::name_for(format!("{}_{}", stem(rel), sheet.name), rel, taken);
+                    let (name, note) =
+                        Self::name_for(format!("{}_{}", stem(rel), sheet.name), rel, taken);
                     self.push(Spec {
                         name,
                         note,
@@ -421,7 +418,8 @@ impl Catalog {
                     Err(e) => return Err(e),
                 };
                 for sheet in book.sheets.clone() {
-                    let (name, note) = Self::name_for(format!("{}_{}", stem(rel), sheet), rel, taken);
+                    let (name, note) =
+                        Self::name_for(format!("{}_{}", stem(rel), sheet), rel, taken);
                     self.push(Spec {
                         name,
                         note,
@@ -436,7 +434,7 @@ impl Catalog {
                 let (name, note) = Self::name_for(stem(rel), rel, taken);
                 self.push(Spec {
                     name,
-                        note,
+                    note,
                     source: rel.to_string(),
                     sheet: None,
                     format: fmt.name(),
@@ -473,10 +471,8 @@ impl Catalog {
             .full
             .lock()
             .is_ok_and(|mut f| f.insert(name.to_string()));
-        if fresh {
-            if let Ok(mut o) = self.opened.lock() {
-                o.remove(name);
-            }
+        if fresh && let Ok(mut o) = self.opened.lock() {
+            o.remove(name);
         }
         fresh
     }
@@ -501,7 +497,12 @@ impl Catalog {
                 Arc::new(JsonTable::open(path, name, infer, &self.warn)?)
             }
             Kind::File(path, Fmt::Parquet) => Arc::new(ParquetTable::open(path)?),
-            Kind::File(path, _) => Arc::new(IpcTable::open(path)?),
+            // Workbooks are listed as one table per sheet, never as a file.
+            Kind::File(_, Fmt::Xlsx | Fmt::Ods) => {
+                return Err(format!(
+                    "{name} is a workbook sheet and cannot be opened as a file"
+                ));
+            }
             Kind::Xlsx(book, sheet) => {
                 let (book, sheet, warn) = (Arc::clone(book), sheet.clone(), Arc::clone(&self.warn));
                 let fp = file_fingerprint(&book.path)? ^ sheet_hash(&sheet.name);
@@ -558,7 +559,7 @@ fn sheet_hash(name: &str) -> u64 {
 mod tests {
     use super::*;
     use crate::testkit::fixtures::{self, O, X};
-    use crate::testkit::{collect, cols, columns, Dir};
+    use crate::testkit::{Dir, collect, cols, columns};
     use parquet::basic::Compression;
     use serde_json::json;
 
@@ -575,14 +576,45 @@ mod tests {
             (
                 "Sales",
                 vec![
-                    vec![X::S("region"), X::S("units"), X::S("price"), X::S("day"), X::S("ok")],
-                    vec![X::S("north"), X::N("10"), X::N("2.5"), X::D("45292"), X::B(true)],
-                    vec![X::S("south"), X::N("7"), X::N("3"), X::D("45293"), X::B(false)],
+                    vec![
+                        X::S("region"),
+                        X::S("units"),
+                        X::S("price"),
+                        X::S("day"),
+                        X::S("ok"),
+                    ],
+                    vec![
+                        X::S("north"),
+                        X::N("10"),
+                        X::N("2.5"),
+                        X::D("45292"),
+                        X::B(true),
+                    ],
+                    vec![
+                        X::S("south"),
+                        X::N("7"),
+                        X::N("3"),
+                        X::D("45293"),
+                        X::B(false),
+                    ],
                     vec![X::Empty, X::Empty, X::Empty, X::Empty, X::Empty],
-                    vec![X::I("east"), X::N("5.0"), X::E("#DIV/0!"), X::T("45294.5"), X::Empty],
+                    vec![
+                        X::I("east"),
+                        X::N("5.0"),
+                        X::E("#DIV/0!"),
+                        X::T("45294.5"),
+                        X::Empty,
+                    ],
                 ],
             ),
-            ("Notes", vec![vec![X::S("note")], vec![X::F("computed")], vec![X::S("a & b <c>")]]),
+            (
+                "Notes",
+                vec![
+                    vec![X::S("note")],
+                    vec![X::F("computed")],
+                    vec![X::S("a & b <c>")],
+                ],
+            ),
         ])
     }
 
@@ -591,13 +623,33 @@ mod tests {
             (
                 "Budget",
                 vec![
-                    (1, vec![O::S("item"), O::S("cost"), O::S("due"), O::S("paid")]),
-                    (1, vec![O::S("rent"), O::F("1200"), O::D("2024-01-31"), O::B(true)]),
-                    (3, vec![O::S("tea"), O::F("2.5"), O::D("2024-02-01T09:30:00"), O::B(false)]),
+                    (
+                        1,
+                        vec![O::S("item"), O::S("cost"), O::S("due"), O::S("paid")],
+                    ),
+                    (
+                        1,
+                        vec![O::S("rent"), O::F("1200"), O::D("2024-01-31"), O::B(true)],
+                    ),
+                    (
+                        3,
+                        vec![
+                            O::S("tea"),
+                            O::F("2.5"),
+                            O::D("2024-02-01T09:30:00"),
+                            O::B(false),
+                        ],
+                    ),
                     (1_048_000, vec![O::Gap(4)]),
                 ],
             ),
-            ("Rates", vec![(1, vec![O::S("kind"), O::S("rate")]), (1, vec![O::S("tax"), O::P("0.2")])]),
+            (
+                "Rates",
+                vec![
+                    (1, vec![O::S("kind"), O::S("rate")]),
+                    (1, vec![O::S("tax"), O::P("0.2")]),
+                ],
+            ),
         ])
     }
 
@@ -606,7 +658,10 @@ mod tests {
         let d = Dir::new();
         d.put("a.csv", "x\n1\n");
         d.put("b.json", "[{\"y\":1}]");
-        d.put("c.parquet", fixtures::parquet(&fixtures::sample_batch(), Compression::SNAPPY));
+        d.put(
+            "c.parquet",
+            fixtures::parquet(&fixtures::sample_batch(), Compression::SNAPPY),
+        );
         d.put("d.xlsx", book_xlsx());
         d.put("e.ods", book_ods());
         d.put("readme.md", "# hi\n");
@@ -616,8 +671,25 @@ mod tests {
         d.put("sub/f.csv", "x\n1\n");
         d.put("sub/deep/g.csv", "x\n1\n");
         let c = discover(&d);
-        assert_eq!(names(&c), ["a", "b", "c", "d_Sales", "d_Notes", "e_Budget", "e_Rates", "sub_deep_g", "sub_f"]);
-        let listed: Vec<(&str, &str, Option<&str>)> = c.specs().iter().map(|s| (s.source.as_str(), s.format, s.sheet.as_deref())).collect();
+        assert_eq!(
+            names(&c),
+            [
+                "a",
+                "b",
+                "c",
+                "d_Sales",
+                "d_Notes",
+                "e_Budget",
+                "e_Rates",
+                "sub_deep_g",
+                "sub_f"
+            ]
+        );
+        let listed: Vec<(&str, &str, Option<&str>)> = c
+            .specs()
+            .iter()
+            .map(|s| (s.source.as_str(), s.format, s.sheet.as_deref()))
+            .collect();
         assert_eq!(
             listed,
             vec![
@@ -634,7 +706,9 @@ mod tests {
         );
         assert_eq!(
             c.listing,
-            ["2 files were skipped: readme.md: not a supported data file name; skip.bin: a binary file that is not a supported data format"]
+            [
+                "2 files were skipped: readme.md: not a supported data file name; skip.bin: a binary file that is not a supported data format"
+            ]
         );
     }
 
@@ -644,20 +718,53 @@ mod tests {
         d.put("book.xlsx", book_xlsx());
         let c = discover(&d);
         let sales = c.open("book_Sales").unwrap();
-        assert_eq!(columns(sales.as_ref()), cols(&[("region", "text"), ("units", "int64"), ("price", "float64"), ("day", "timestamp"), ("ok", "bool")]));
+        assert_eq!(
+            columns(sales.as_ref()),
+            cols(&[
+                ("region", "text"),
+                ("units", "int64"),
+                ("price", "float64"),
+                ("day", "timestamp"),
+                ("ok", "bool")
+            ])
+        );
         assert_eq!(sales.row_count(), Some(3));
         assert_eq!(
             collect(sales.as_ref(), None).unwrap(),
             vec![
-                vec![json!("north"), json!(10), json!(2.5), json!("2024-01-01T00:00:00"), json!(true)],
-                vec![json!("south"), json!(7), json!(3.0), json!("2024-01-02T00:00:00"), json!(false)],
-                vec![json!("east"), json!(5), json!(null), json!("2024-01-03T12:00:00"), json!(null)],
+                vec![
+                    json!("north"),
+                    json!(10),
+                    json!(2.5),
+                    json!("2024-01-01T00:00:00"),
+                    json!(true)
+                ],
+                vec![
+                    json!("south"),
+                    json!(7),
+                    json!(3.0),
+                    json!("2024-01-02T00:00:00"),
+                    json!(false)
+                ],
+                vec![
+                    json!("east"),
+                    json!(5),
+                    json!(null),
+                    json!("2024-01-03T12:00:00"),
+                    json!(null)
+                ],
             ]
         );
-        assert_eq!(c.warn.list(), ["cells holding spreadsheet errors (such as #DIV/0!) were read as NULL"]);
+        assert_eq!(
+            c.warn.list(),
+            ["cells holding spreadsheet errors (such as #DIV/0!) were read as NULL"]
+        );
         let notes = c.open("book_Notes").unwrap();
         assert_eq!(columns(notes.as_ref()), cols(&[("note", "text")]));
-        assert_eq!(collect(notes.as_ref(), None).unwrap(), vec![vec![json!("computed")], vec![json!("a & b <c>")]]);
+        assert_eq!(
+            collect(notes.as_ref(), None).unwrap(),
+            vec![vec![json!("computed")], vec![json!("a & b <c>")]]
+        );
     }
 
     #[test]
@@ -666,29 +773,64 @@ mod tests {
         d.put("book.ods", book_ods());
         let c = discover(&d);
         let t = c.open("book_Budget").unwrap();
-        assert_eq!(columns(t.as_ref()), cols(&[("item", "text"), ("cost", "float64"), ("due", "timestamp"), ("paid", "bool")]));
+        assert_eq!(
+            columns(t.as_ref()),
+            cols(&[
+                ("item", "text"),
+                ("cost", "float64"),
+                ("due", "timestamp"),
+                ("paid", "bool")
+            ])
+        );
         assert_eq!(t.row_count(), Some(4));
         assert_eq!(
             collect(t.as_ref(), None).unwrap(),
             vec![
-                vec![json!("rent"), json!(1200.0), json!("2024-01-31T00:00:00"), json!(true)],
-                vec![json!("tea"), json!(2.5), json!("2024-02-01T09:30:00"), json!(false)],
-                vec![json!("tea"), json!(2.5), json!("2024-02-01T09:30:00"), json!(false)],
-                vec![json!("tea"), json!(2.5), json!("2024-02-01T09:30:00"), json!(false)],
+                vec![
+                    json!("rent"),
+                    json!(1200.0),
+                    json!("2024-01-31T00:00:00"),
+                    json!(true)
+                ],
+                vec![
+                    json!("tea"),
+                    json!(2.5),
+                    json!("2024-02-01T09:30:00"),
+                    json!(false)
+                ],
+                vec![
+                    json!("tea"),
+                    json!(2.5),
+                    json!("2024-02-01T09:30:00"),
+                    json!(false)
+                ],
+                vec![
+                    json!("tea"),
+                    json!(2.5),
+                    json!("2024-02-01T09:30:00"),
+                    json!(false)
+                ],
             ]
         );
         let rates = c.open("book_Rates").unwrap();
-        assert_eq!(collect(rates.as_ref(), None).unwrap(), vec![vec![json!("tax"), json!(0.2)]]);
+        assert_eq!(
+            collect(rates.as_ref(), None).unwrap(),
+            vec![vec![json!("tax"), json!(0.2)]]
+        );
     }
 
     #[test]
     fn a_single_file_is_its_stem_and_a_sheet_adds_its_name() {
         let d = Dir::new();
         let p = d.put("My Report 2024.csv", "x\n1\n");
-        let c = Catalog::discover(Some(&p.to_string_lossy()), None, None, Options::default()).unwrap();
+        let c =
+            Catalog::discover(Some(&p.to_string_lossy()), None, None, Options::default()).unwrap();
         assert_eq!(names(&c), ["My_Report_2024"]);
         c.open("My_Report_2024").unwrap();
-        assert_eq!(c.warn.list(), ["My Report 2024.csv is the table My_Report_2024"]);
+        assert_eq!(
+            c.warn.list(),
+            ["My Report 2024.csv is the table My_Report_2024"]
+        );
     }
 
     #[test]
@@ -701,47 +843,85 @@ mod tests {
         d.put("a_b.csv", "x\n1\n");
         let c = discover(&d);
         assert_eq!(names(&c), ["t_2024", "a_b", "a_b_2", "data", "data_2"]);
-        assert!(c.warn.list().is_empty(), "naming is said when a table is used, not when it is listed");
+        assert!(
+            c.warn.list().is_empty(),
+            "naming is said when a table is used, not when it is listed"
+        );
         for n in names(&c) {
             c.open(&n).unwrap();
         }
         assert_eq!(
             c.warn.list(),
-            ["a b.csv is the table a_b", "a_b.csv is the table a_b_2", "data.json is the table data_2", "2024.csv is the table t_2024"]
-                .iter()
-                .map(|s| s.to_string())
-                .collect::<Vec<_>>()
+            [
+                "a b.csv is the table a_b",
+                "a_b.csv is the table a_b_2",
+                "data.json is the table data_2",
+                "2024.csv is the table t_2024"
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>()
         );
     }
 
     #[test]
     fn content_decides_the_format_not_the_name() {
         let d = Dir::new();
-        d.put("really_parquet.csv", fixtures::parquet(&fixtures::sample_batch(), Compression::SNAPPY));
+        d.put(
+            "really_parquet.csv",
+            fixtures::parquet(&fixtures::sample_batch(), Compression::SNAPPY),
+        );
         d.put("really_xlsx.txt", book_xlsx());
         d.put("fake.parquet", "name,score\nAna,9\n");
         d.put("fake.xlsx", "not a zip");
         d.put("noext", "a,b\n1,2\n");
         let c = discover(&d);
-        let formats: Vec<(&str, &str)> = c.specs().iter().map(|s| (s.name.as_str(), s.format)).collect();
-        assert_eq!(formats, vec![("really_parquet", "parquet"), ("really_xlsx_Sales", "xlsx"), ("really_xlsx_Notes", "xlsx")]);
+        let formats: Vec<(&str, &str)> = c
+            .specs()
+            .iter()
+            .map(|s| (s.name.as_str(), s.format))
+            .collect();
+        assert_eq!(
+            formats,
+            vec![
+                ("really_parquet", "parquet"),
+                ("really_xlsx_Sales", "xlsx"),
+                ("really_xlsx_Notes", "xlsx")
+            ]
+        );
         let w = &c.listing[0];
         assert!(w.starts_with("3 files were skipped: fake.parquet: named like Parquet but does not start like a Parquet file; fake.xlsx: named like a spreadsheet"), "{w}");
         assert!(w.contains("noext: not a supported data file name"), "{w}");
     }
 
     #[test]
-    fn a_named_file_is_read_by_content_even_without_a_known_name_and_refused_with_a_reason_when_it_is_not_data() {
+    fn a_named_file_is_read_by_content_even_without_a_known_name_and_refused_with_a_reason_when_it_is_not_data()
+     {
         let d = Dir::new();
         d.put("noext", "a,b\n1,2\n");
         d.put("records", "[{\"a\":1}]");
         d.put("fake.parquet", "name,score\n");
         d.put("blob.bin", [0u8, 255, 0]);
-        let c = Catalog::discover(Some(&d.s()), Some(&["noext".into(), "records".into()]), None, Options::default()).unwrap();
-        assert_eq!(c.specs().iter().map(|s| s.format).collect::<Vec<_>>(), ["csv", "json"]);
+        let c = Catalog::discover(
+            Some(&d.s()),
+            Some(&["noext".into(), "records".into()]),
+            None,
+            Options::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            c.specs().iter().map(|s| s.format).collect::<Vec<_>>(),
+            ["csv", "json"]
+        );
         for bad in ["fake.parquet", "blob.bin"] {
-            let err = Catalog::discover(Some(&d.s()), Some(&[bad.into()]), None, Options::default()).err().unwrap();
-            assert!(err.starts_with(&format!("{bad} cannot be read as a table: ")), "{err}");
+            let err =
+                Catalog::discover(Some(&d.s()), Some(&[bad.into()]), None, Options::default())
+                    .err()
+                    .unwrap();
+            assert!(
+                err.starts_with(&format!("{bad} cannot be read as a table: ")),
+                "{err}"
+            );
         }
     }
 
@@ -751,13 +931,40 @@ mod tests {
         d.put("b.csv", "x\n1\n");
         d.put("a.csv", "x\n1\n");
         d.put("sub/c.csv", "x\n1\n");
-        let c = Catalog::discover(Some(&d.s()), Some(&["b.csv".into(), "sub/c.csv".into(), "a.csv".into()]), None, Options::default()).unwrap();
+        let c = Catalog::discover(
+            Some(&d.s()),
+            Some(&["b.csv".into(), "sub/c.csv".into(), "a.csv".into()]),
+            None,
+            Options::default(),
+        )
+        .unwrap();
         assert_eq!(names(&c), ["b", "sub_c", "a"]);
-        for bad in ["../x.csv", "/etc/passwd", "", "a/../../x", "sub/../../x.csv", "x\0.csv", "C:\\x.csv"] {
-            let err = Catalog::discover(Some(&d.s()), Some(&[bad.into()]), None, Options::default()).err().unwrap_or_else(|| panic!("{bad:?} accepted"));
-            assert!(err.contains("not a path inside the folder") || err.contains("cannot read"), "{bad:?}: {err}");
+        for bad in [
+            "../x.csv",
+            "/etc/passwd",
+            "",
+            "a/../../x",
+            "sub/../../x.csv",
+            "x\0.csv",
+            "C:\\x.csv",
+        ] {
+            let err =
+                Catalog::discover(Some(&d.s()), Some(&[bad.into()]), None, Options::default())
+                    .err()
+                    .unwrap_or_else(|| panic!("{bad:?} accepted"));
+            assert!(
+                err.contains("not a path inside the folder") || err.contains("cannot read"),
+                "{bad:?}: {err}"
+            );
         }
-        let err = Catalog::discover(Some(&d.s()), Some(&["missing.csv".into()]), None, Options::default()).err().unwrap();
+        let err = Catalog::discover(
+            Some(&d.s()),
+            Some(&["missing.csv".into()]),
+            None,
+            Options::default(),
+        )
+        .err()
+        .unwrap();
         assert!(err.contains("cannot read"), "{err}");
     }
 
@@ -769,17 +976,44 @@ mod tests {
         outside.put("dir/x.csv", "k\n1\n");
         let d = Dir::new();
         d.put("ok.csv", "x\n1\n");
-        std::os::unix::fs::symlink(outside.path().join("secret.csv"), d.path().join("leak.csv")).unwrap();
+        std::os::unix::fs::symlink(outside.path().join("secret.csv"), d.path().join("leak.csv"))
+            .unwrap();
         std::os::unix::fs::symlink(outside.path().join("dir"), d.path().join("leakdir")).unwrap();
         std::os::unix::fs::symlink("ok.csv", d.path().join("inside.csv")).unwrap();
         let c = discover(&d);
         assert_eq!(names(&c), ["inside", "ok"]);
-        assert!(c.listing[0].contains("leak.csv: a link that leads outside the folder or to a folder, not read"), "{:?}", c.listing);
+        assert!(
+            c.listing[0].contains(
+                "leak.csv: a link that leads outside the folder or to a folder, not read"
+            ),
+            "{:?}",
+            c.listing
+        );
         assert!(c.listing[0].contains("leakdir"));
-        let err = Catalog::discover(Some(&d.s()), Some(&["leak.csv".into()]), None, Options::default()).err().unwrap();
-        assert!(err.contains("a link that leads outside the folder"), "{err}");
-        let err = Catalog::discover(Some(&d.s()), Some(&["leakdir/x.csv".into()]), None, Options::default()).err().unwrap();
-        assert!(err.contains("a link that leads outside the folder"), "{err}");
+        let err = Catalog::discover(
+            Some(&d.s()),
+            Some(&["leak.csv".into()]),
+            None,
+            Options::default(),
+        )
+        .err()
+        .unwrap();
+        assert!(
+            err.contains("a link that leads outside the folder"),
+            "{err}"
+        );
+        let err = Catalog::discover(
+            Some(&d.s()),
+            Some(&["leakdir/x.csv".into()]),
+            None,
+            Options::default(),
+        )
+        .err()
+        .unwrap();
+        assert!(
+            err.contains("a link that leads outside the folder"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -793,7 +1027,11 @@ mod tests {
         d.put("top.csv", "x\n1\n");
         let c = discover(&d);
         assert_eq!(names(&c), ["top"]);
-        assert!(c.listing[0].contains("folders nest too deep to list"), "{:?}", c.listing);
+        assert!(
+            c.listing[0].contains("folders nest too deep to list"),
+            "{:?}",
+            c.listing
+        );
 
         let many = Dir::new();
         for i in 0..(MAX_FILES + 3) {
@@ -801,23 +1039,45 @@ mod tests {
         }
         let c = discover(&many);
         assert_eq!(c.specs().len(), MAX_FILES);
-        assert!(c.listing.contains(&format!("only the first {MAX_FILES} of {} files are listed; name the files to read in files", MAX_FILES + 3)));
+        assert!(c.listing.contains(&format!(
+            "only the first {MAX_FILES} of {} files are listed; name the files to read in files",
+            MAX_FILES + 3
+        )));
     }
 
     #[test]
     fn what_is_asked_for_must_exist() {
-        let err = Catalog::discover(None, None, None, Options::default()).err().unwrap();
-        assert_eq!(err, "give path (a data file or a folder of them) or tables (rows as JSON)");
-        let err = Catalog::discover(Some("/definitely/not/here"), None, None, Options::default()).err().unwrap();
+        let err = Catalog::discover(None, None, None, Options::default())
+            .err()
+            .unwrap();
+        assert_eq!(
+            err,
+            "give path (a data file or a folder of them) or tables (rows as JSON)"
+        );
+        let err = Catalog::discover(Some("/definitely/not/here"), None, None, Options::default())
+            .err()
+            .unwrap();
         assert!(err.starts_with("cannot read /definitely/not/here"), "{err}");
         let d = Dir::new();
         let p = d.put("a.csv", "x\n1\n");
-        let err = Catalog::discover(Some(&p.to_string_lossy()), Some(&["a.csv".into()]), None, Options::default()).err().unwrap();
+        let err = Catalog::discover(
+            Some(&p.to_string_lossy()),
+            Some(&["a.csv".into()]),
+            None,
+            Options::default(),
+        )
+        .err()
+        .unwrap();
         assert_eq!(err, "files lists paths inside a folder, but path is a file");
         let empty = Dir::new();
         let c = discover(&empty);
         assert!(c.specs().is_empty());
-        assert!(c.open("x").err().unwrap().contains("there is no table named x"));
+        assert!(
+            c.open("x")
+                .err()
+                .unwrap()
+                .contains("there is no table named x")
+        );
     }
 
     #[test]

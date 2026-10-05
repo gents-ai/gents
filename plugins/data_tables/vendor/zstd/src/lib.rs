@@ -7,7 +7,7 @@
 //! Decompression honours the capacity the caller gives, so a frame that
 //! declares a small size and expands past it is an error, never an allocation.
 
-use std::io::{self, Cursor, Read};
+use std::io::{self, Cursor};
 use std::ops::RangeInclusive;
 
 /// The lowest and highest compression level a caller may ask for.
@@ -19,6 +19,9 @@ pub fn compression_level_range() -> RangeInclusive<i32> {
 pub mod zstd_safe {
     use super::Cursor;
 
+    /// A compression level.
+    pub type CompressionLevel = i32;
+
     /// The frame header named no usable content size.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct ContentSizeError;
@@ -27,6 +30,9 @@ pub mod zstd_safe {
     pub trait WriteBuf {
         /// Appends `data` and returns how many bytes were written.
         fn append(&mut self, data: &[u8]) -> usize;
+
+        /// How many more bytes the destination was sized for.
+        fn spare_capacity(&self) -> usize;
     }
 
     impl WriteBuf for Cursor<&mut Vec<u8>> {
@@ -38,6 +44,11 @@ pub mod zstd_safe {
             let end = buf.len() as u64;
             self.set_position(end);
             data.len()
+        }
+
+        fn spare_capacity(&self) -> usize {
+            let at = usize::try_from(self.position()).unwrap_or(usize::MAX);
+            self.get_ref().capacity().saturating_sub(at)
         }
     }
 
@@ -81,10 +92,11 @@ pub mod zstd_safe {
 
 /// One-shot compression and decompression of a whole buffer.
 pub mod bulk {
+    use super::io;
     use super::zstd_safe::WriteBuf;
-    use super::{io, Read};
     use ruzstd::decoding::StreamingDecoder;
     use ruzstd::encoding::{compress_to_vec, CompressionLevel};
+    use std::io::Read;
     use std::marker::PhantomData;
 
     /// Compresses buffers into zstd frames.
@@ -132,24 +144,37 @@ pub mod bulk {
             })
         }
 
+        /// Decompresses `source` into `destination`, which bounds the output: a frame that
+        /// holds more than the destination was sized for is an error.
+        pub fn decompress_to_buffer<C: WriteBuf + ?Sized>(
+            &mut self,
+            source: &[u8],
+            destination: &mut C,
+        ) -> io::Result<usize> {
+            let out = self.decompress(source, destination.spare_capacity())?;
+            Ok(destination.append(&out))
+        }
+
         /// Decompresses `source`; it is an error when the frame holds more than `capacity` bytes.
+        /// The output grows with what is actually decoded, never with `capacity`, which a damaged
+        /// file controls.
         pub fn decompress(&mut self, source: &[u8], capacity: usize) -> io::Result<Vec<u8>> {
-            let mut decoder = StreamingDecoder::new(source)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
-            let mut out = Vec::with_capacity(capacity.min(1 << 26));
-            let limit = capacity as u64;
-            decoder
-                .by_ref()
-                .take(limit.saturating_add(1))
-                .read_to_end(&mut out)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
-            if out.len() > capacity {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "the zstd frame holds more than its declared size",
-                ));
+            let bad = |e: String| io::Error::new(io::ErrorKind::InvalidData, e);
+            let mut decoder = StreamingDecoder::new(source).map_err(|e| bad(e.to_string()))?;
+            let mut out = Vec::with_capacity(capacity.min(1 << 20));
+            let mut chunk = vec![0u8; 64 * 1024];
+            loop {
+                let n = decoder.read(&mut chunk).map_err(|e| bad(e.to_string()))?;
+                if n == 0 {
+                    return Ok(out);
+                }
+                if out.len() + n > capacity {
+                    return Err(bad(
+                        "the zstd frame holds more than its declared size".into()
+                    ));
+                }
+                out.extend_from_slice(&chunk[..n]);
             }
-            Ok(out)
         }
     }
 }
@@ -204,6 +229,28 @@ mod tests {
             .unwrap()
             .decompress(&frame, 10_000)
             .is_ok());
+    }
+
+    #[test]
+    fn a_huge_declared_capacity_does_not_allocate_it() {
+        let frame = Compressor::new(1).unwrap().compress(&[9u8; 100]).unwrap();
+        let out = Decompressor::new()
+            .unwrap()
+            .decompress(&frame, usize::MAX >> 1)
+            .unwrap();
+        assert_eq!(out, vec![9u8; 100]);
+        assert!(Decompressor::new()
+            .unwrap()
+            .decompress(&frame[..frame.len() / 2], 1 << 40)
+            .is_err());
+    }
+
+    #[test]
+    fn a_frame_that_declares_a_huge_window_is_refused_without_allocating_it() {
+        // Magic, a descriptor with no size, the largest window byte, then an empty last raw block.
+        let frame = [0x28, 0xB5, 0x2F, 0xFD, 0x00, 0xFF, 0x01, 0x00, 0x00];
+        let result = Decompressor::new().unwrap().decompress(&frame, 1 << 20);
+        assert!(result.is_err(), "{result:?}");
     }
 
     #[test]
