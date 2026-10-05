@@ -291,6 +291,8 @@ async fn engineer_p2p_live_comparison() -> Result<()> {
             &|p| Ok(std::fs::read(subject.join(p))?),
             &|_| None,
         )?;
+        config.agent_principal.default_behavior_id =
+            Some(config.agent_behaviors[0].behavior_id.clone());
         config.agent_behaviors[0].inference_profile_id =
             gents::default_inference_profile_id_for_behavior(&target_ids.1);
         let mut profile = target.profile(&did);

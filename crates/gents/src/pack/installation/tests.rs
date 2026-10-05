@@ -626,3 +626,72 @@ async fn a_legacy_record_without_dependency_fields_reads_as_explicit() {
         "a legacy record with no explicit field must never be auto-released: {rows:?}"
     );
 }
+
+#[tokio::test]
+async fn installing_a_pack_keeps_the_users_default_behavior() {
+    let access = access().await;
+    let home = |collection, value: Value| DesiredStateApplyDocument {
+        collection,
+        add: value.clone(),
+        update: value,
+    };
+    let seed = crate::config_client::DesiredStateApplyPlan::new(vec![
+        home(
+            Collection::InferenceBackend,
+            json!({"agent_did":OWNER,"backend_id":"backend","name":"Local","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:8000/v1","auth":{"kind":"unauthenticated"}}),
+        ),
+        home(
+            Collection::InferenceProfile,
+            json!({"agent_did":OWNER,"profile_id":"profile","backend_id":"backend","model_name":"model"}),
+        ),
+        home(
+            Collection::AgentBehavior,
+            json!({"agent_did":OWNER,"behavior_id":"chosen","inference_profile_id":"profile"}),
+        ),
+        home(
+            Collection::AgentPrincipal,
+            json!({"agent_did":OWNER,"default_behavior_id":"chosen"}),
+        ),
+    ])
+    .unwrap();
+    access
+        .transact("test.seed", |txn| {
+            let seed = &seed;
+            Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, seed).await })
+        })
+        .await
+        .unwrap();
+
+    let manifest: crate::pack::PackManifest = serde_json::from_value(json!({
+        "manifest_version":1,"name":"demo","version":"1","description":"Demo",
+        "kind":"documents","authors":["Demo"],
+        "assets":["README.md","pack_config.json"],"config":"pack_config.json",
+    }))
+    .unwrap();
+    let authored = json!({
+        "agent_principal": {},
+        "tools": [{"tools_id":"pack-tools","display_name":"Pack tools"}],
+    });
+    let pack = crate::pack::load_pack_config(
+        &manifest,
+        &crate::pack::PackInstallOptions {
+            agent_did: OWNER.into(),
+        },
+        &|_| Ok(serde_json::to_vec(&authored)?),
+        &|_| None,
+    )
+    .unwrap();
+    install(&access, "1", &pack, DriftPolicy::Refuse)
+        .await
+        .unwrap();
+
+    let principal = access
+        .execute("{ AgentPrincipal { default_behavior_id } }")
+        .await
+        .unwrap();
+    assert_eq!(
+        principal["data"]["AgentPrincipal"],
+        json!([{"default_behavior_id": "chosen"}])
+    );
+    assert_eq!(tools_ids(&access).await, ["pack-tools"]);
+}

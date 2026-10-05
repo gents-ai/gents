@@ -576,10 +576,7 @@ async fn install(spec: &TrialSpec, home: &EmbeddedHome, workspace: &Path) -> Res
     let config = bind_inference_slots(&manifest, &config, &spec.inference)
         .context("binding the pack's inference slots to the frozen profile")?;
     let mut config = root_host_tools(config, workspace)?;
-    config
-        .agent_principal
-        .default_behavior_id
-        .get_or_insert_with(|| spec.behavior_id.clone());
+    config.agent_principal.default_behavior_id = Some(spec.behavior_id.clone());
     let access = ConfigAccess::Local(home.node.clone());
     for path in &manifest.schemas {
         let bytes = assets
@@ -2516,6 +2513,7 @@ mod tests {
             pack_digest: materialized_digest(&pack_dir),
             pack_dir,
             inference: frozen_binding(json!("frozen-profile")),
+            behavior_id: "subject".into(),
             ..TrialSpec::empty_for_tests("t1")
         };
 
@@ -2770,7 +2768,7 @@ mod tests {
         std::fs::write(
             root.join("pack_config.json"),
             serde_json::to_vec(&json!({
-                "agent_principal": {"default_behavior_id": "subject"},
+                "agent_principal": {},
                 "agent_behaviors": [{
                     "behavior_id": "subject",
                     "display_name": "Subject",

@@ -513,3 +513,18 @@ fn an_entry_input_schema_must_compile_and_declare_an_object() {
     let error = prepare_pack_config(json!({"input_schema": too_big})).unwrap_err();
     assert!(format!("{error:#}").contains("byte ceiling"), "{error:#}");
 }
+
+#[test]
+fn a_pack_that_selects_the_default_behavior_is_refused() {
+    let error = load(
+        json!({"agent_principal":{"default_behavior_id":"worker"}}),
+        false,
+    )
+    .unwrap_err();
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("must not choose the default behavior") && message.contains("worker"),
+        "{message}"
+    );
+    assert!(load(json!({"agent_principal":{}}), false).is_ok());
+}
