@@ -54,6 +54,7 @@ mod one_shot;
 mod provider_idle;
 mod repeated_tool_failure;
 mod request_assembly;
+mod schema_argument_repair;
 mod tool_dispatch;
 mod turn_threading;
 
@@ -266,7 +267,7 @@ where
             // from the transcript, so it rides in the trace.
             let mut build_path = AssemblyBuildPath::Budgeted;
             'attempts: loop {
-                let (mut stream, activity, mut audit_receiver) = loop {
+                let (mut stream, activity, mut audit_receiver, advertised_tools) = loop {
                     let prepared_dispatch = prepare_dispatch_attempt(
                         &request,
                         &config,
@@ -318,6 +319,7 @@ where
 
                     let activity =
                         crate::rendered_request::scope::attempt_activity(turn_index, attempt);
+                    let advertised_tools = dispatch_request.tools.clone();
                     match within_provider_idle(
                         model.stream(dispatch_request),
                         config.provider_idle_timeout,
@@ -327,7 +329,7 @@ where
                     .await
                     .and_then(|result| result.map_err(ProviderAttemptFailure::Completion))
                     {
-                        Ok(stream) => break (stream, activity, audit_receiver),
+                        Ok(stream) => break (stream, activity, audit_receiver, advertised_tools),
                         Err(failure) => {
                             let (classified, error_text) = failure.classify();
                             match retry.on_pre_stream_failure(
@@ -671,7 +673,27 @@ where
                         accumulator.push_provider_reasoning_delta(provider_profile, id.clone(), &reasoning);
                         yield LoopStreamItem::Item(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::ReasoningDelta { id, reasoning }));
                     }
-                    StreamedAssistantContent::ToolCall { tool_call, internal_call_id } => {
+                    StreamedAssistantContent::ToolCall { mut tool_call, internal_call_id } => {
+                        if let Some(definition) = advertised_tools.iter().find(|tool| tool.name == tool_call.function.name) {
+                            let paths = schema_argument_repair::repair_arguments(
+                                &definition.parameters,
+                                &mut tool_call.function.arguments,
+                            );
+                            if !paths.is_empty() {
+                                let recorded_paths = paths.iter().take(16)
+                                    .map(|path| path.chars().take(160).collect::<String>())
+                                    .collect::<Vec<_>>();
+                                tracing::info!(
+                                    tool = %tool_call.function.name,
+                                    tool_call_id = %internal_call_id,
+                                    turn = turn_index,
+                                    attempt,
+                                    repair_count = paths.len(),
+                                    repair_paths = ?recorded_paths,
+                                    "decoded stringified JSON containers using the advertised tool schema"
+                                );
+                            }
+                        }
                         accumulator.push_tool_call(rig_compat::from_rig_tool_call(&tool_call));
                         yield LoopStreamItem::Item(MultiTurnStreamItem::StreamAssistantItem(
                             StreamedAssistantContent::ToolCall {

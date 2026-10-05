@@ -1124,6 +1124,11 @@ def caseCoverage : List CoverageEntry :=
       "workspace::tests::generated_workspace_path_capability_cases_drive_real_git_executor")
       "isolated-workspaces" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "schema_argument_repair_cases"
+      "SchemaArgumentRepairCases"
+      "agent::loop_stream::tests::generated_schema_argument_repair_cases_drive_owned_loop")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "invalid_tool_progress_cases"
       "InvalidToolProgressCases"
       "agent::loop_stream::tests::generated_invalid_tool_progress_cases_drive_owned_loop")
