@@ -5,5 +5,10 @@
     "file": "sales.csv",
     "save": "chart"
   },
-  "bind": "fixtures/data"
+  "bind": "fixtures/data",
+  "expect": {
+    "chart": "bar",
+    "error": "chart.svg cannot be written because the folder is read-only; allow write access to it and try again",
+    "warnings": []
+  }
 }

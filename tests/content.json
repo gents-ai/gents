@@ -7,7 +7,7 @@
     },
     {
       "name": "charts reads and charts_save writes: the declared bind access is the only difference in authority",
-      "expr": "plug(\"charts\").bind_dir.access == null and plug(\"charts_save\").bind_dir.access == \"read_write\" and plug(\"charts\").bind_dir.input_field == \"path\" and plug(\"charts_save\").bind_dir.input_field == \"path\" and plug(\"charts\").bind_dir.original_field == \"path_original\" and ((plug(\"charts\") | has(\"manifold\")) | not)"
+      "expr": "plug(\"charts\").bind_dir.access == \"read\" and plug(\"charts_save\").bind_dir.access == \"read_write\" and plug(\"charts\").bind_dir.input_field == \"path\" and plug(\"charts_save\").bind_dir.input_field == \"path\" and plug(\"charts\").bind_dir.original_field == \"path_original\" and plug(\"charts\").manifold == null and plug(\"charts_save\").manifold == null"
     },
     {
       "name": "limits stay inside the host ceilings and the output limit is the host's 4 MiB",
@@ -23,7 +23,7 @@
     },
     {
       "name": "every field the schema names is explained in the tool instructions",
-      "expr": "doc_text(\"plugins/charts/TOOL.md\") as $t | [schema(\"charts\").properties | keys[] | select(. != \"path_original\") | select(($t | contains(\"`\" + . + \"`\")) | not)] == []"
+      "expr": "doc_text(\"plugins/charts/TOOL.md\") as $t | [schema(\"charts\").properties | keys[] | select(. != \"path_original\") | . as $k | select(($t | contains(\"`\" + $k + \"`\")) | not)] == []"
     },
     {
       "name": "numeric limits in the schema match the ones the tool states",
@@ -39,11 +39,11 @@
     },
     {
       "name": "the two graph nodes split on save and write one ChartResult each",
-      "expr": "row(\"event_sources\"; \"event_source_id\"; \"chart-render\").source_collection == \"ChartRequest\" and row(\"event_sources\"; \"event_source_id\"; \"chart-save\").source_collection == \"ChartRequest\" and (row(\"event_sources\"; \"event_source_id\"; \"chart-render\").filter | contains(\"save\")) and (row(\"event_sources\"; \"event_source_id\"; \"chart-save\").filter | contains(\"save\")) and (row(\"callbacks\"; \"callback_id\"; \"chart-render\").handler.plugin == \"charts\") and (row(\"callbacks\"; \"callback_id\"; \"chart-save\").handler.plugin == \"charts_save\") and all(.config.callbacks[]; .handler.outputs | length == 1 and .[0].collection == \"ChartResult\" and .[0].required == true)"
+      "expr": "row(\"event_sources\"; \"event_source_id\"; \"chart-render\").source_collection == \"ChartRequest\" and row(\"event_sources\"; \"event_source_id\"; \"chart-save\").source_collection == \"ChartRequest\" and (row(\"event_sources\"; \"event_source_id\"; \"chart-render\").filter | contains(\"save\")) and (row(\"event_sources\"; \"event_source_id\"; \"chart-save\").filter | contains(\"save\")) and (row(\"callbacks\"; \"callback_id\"; \"chart-render\").handler.plugin == \"gents/charts\") and (row(\"callbacks\"; \"callback_id\"; \"chart-save\").handler.plugin == \"gents/charts_save\") and all(.config.callbacks[]; .handler.outputs | length == 1 and .[0].collection == \"ChartResult\" and .[0].required == true)"
     },
     {
       "name": "only the save node's binding passes save, and every passed field is a ChartRequest field",
-      "expr": "(row(\"callback_bindings\"; \"binding_id\"; \"chart-render\").input_fields | index(\"save\")) == null and (row(\"callback_bindings\"; \"binding_id\"; \"chart-save\").input_fields | index(\"save\")) != null and doc_text(\"schemas/chart_request.graphql\") as $g | all(.config.callback_bindings[].input_fields[]; . as $f | $g | contains(\"  \" + $f + \":\"))"
+      "expr": "doc_text(\"schemas/chart_request.graphql\") as $g | (row(\"callback_bindings\"; \"binding_id\"; \"chart-render\").input_fields | index(\"save\")) == null and (row(\"callback_bindings\"; \"binding_id\"; \"chart-save\").input_fields | index(\"save\")) != null and all(.config.callback_bindings[].input_fields[]; . as $f | $g | contains(\"  \" + $f + \":\"))"
     },
     {
       "name": "the request fields of the schema are exactly the tool fields plus run_id",

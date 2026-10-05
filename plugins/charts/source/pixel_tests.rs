@@ -125,18 +125,17 @@ fn the_corner_is_the_theme_background_and_the_picture_is_not_blank() {
             assert_eq!(img.px(img.w as f64 - 1.0, img.h as f64 - 1.0), bg);
             let inked = img
                 .rgb
-                .chunks_exact(3)
+                .as_chunks::<3>()
+                .0
+                .iter()
                 .filter(|p| (p[0], p[1], p[2]) != bg)
                 .count();
             assert!(
                 inked as f64 > 0.02 * (img.w * img.h) as f64,
                 "{chart} {theme}: only {inked} pixels differ from the background"
             );
-            let distinct: std::collections::BTreeSet<[u8; 3]> = img
-                .rgb
-                .chunks_exact(3)
-                .map(|p| [p[0], p[1], p[2]])
-                .collect();
+            let distinct: std::collections::BTreeSet<[u8; 3]> =
+                img.rgb.as_chunks::<3>().0.iter().copied().collect();
             assert!(
                 distinct.len() >= 6,
                 "{chart} {theme}: {} colours",

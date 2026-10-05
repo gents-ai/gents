@@ -1,4 +1,11 @@
 //! charts: turns a small chart spec and data into SVG and PNG.
+//!
+//! One request in, one result out. The data is read in a single bounded pass
+//! ([`load`], [`table`]), drawn by one module per chart type on a shared frame
+//! ([`frame`], [`axes`]), and delivered as SVG text, a PNG drawn from that same
+//! SVG, a text description and warnings ([`pipeline`], [`output`]). Everything
+//! is deterministic: fixed decimals, an embedded font, no clock or randomness.
+#![deny(missing_docs)]
 pub mod axes;
 pub mod bars;
 #[cfg(test)]

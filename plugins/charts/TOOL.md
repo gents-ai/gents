@@ -54,7 +54,8 @@ Say which columns to draw:
 
 ### Options
 
-`title`, `subtitle`; `x_label`, `y_label`, `y2_label` (default: the column
+`stack` (`grouped` or `stacked`) and `horizontal` (`true`) for bar charts;
+`line_axis` (`right` or `left`) for combo charts; `title`, `subtitle`; `x_label`, `y_label`, `y2_label` (default: the column
 names; an empty string removes one); `x_scale` (`auto`, `linear`, `log`,
 `time`, `category`), `y_scale` and `y2_scale` (`linear`, `log`); `x_min`,
 `x_max`, `y_min`, `y_max` to fix the visible range; `legend` (`auto`, `right`,
