@@ -134,6 +134,11 @@ where
 {
     try_stream! {
         let provider_profile = config.provider_input_counter.profile();
+        let routing_affinity = crate::provider_input::routing_affinity::RoutingAffinity::start(
+            provider_profile == crate::provider_input::ProviderInputProfile::ChatGptCodexResponses,
+            hook.is_some(),
+            match hook.as_ref() { Some(hook) => hook.session_id().await, None => None },
+        );
         let mut replay = config.replay.clone();
         // A recovered durable checkpoint is one exact provider projection even
         // though rig's loop API carries its final message separately as the
@@ -330,7 +335,7 @@ where
                     let activity =
                         crate::rendered_request::scope::attempt_activity(turn_index, attempt);
                     match within_provider_idle(
-                        model.stream(dispatch_request),
+                        crate::provider_input::routing_affinity::scope(routing_affinity.clone(), model.stream(dispatch_request)),
                         config.provider_idle_timeout,
                         activity.as_deref(),
                         true,
@@ -457,7 +462,7 @@ where
             loop {
                 let item = loop {
                     let next_item = within_provider_idle(
-                        stream.next(),
+                        crate::provider_input::routing_affinity::scope(routing_affinity.clone(), stream.next()),
                         config.provider_idle_timeout,
                         activity.as_deref(),
                         !saw_stream_item,

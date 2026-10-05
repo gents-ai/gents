@@ -1527,4 +1527,28 @@ theorem project_sanitizeForProviderGlobal_eq_sanitizeGlobal {rows : List Provide
       (allNonDegenerate_dropOrphanedFromP hnd ∅),
     project_dropOrphanedFromP rows hnd ∅]
 
+/-- Codex conversation headers belong to a session; its first opaque server token
+belongs to one main inference execution, never to a shared client or durable row.
+Auxiliary calls and other providers cannot observe or mutate that execution's
+state. Routing affinity does not guarantee a cache hit. -/
+structure RoutingAffinity where
+  session : Option String
+  token : Option String := none
+  deriving Repr, BEq
+
+def RoutingAffinity.start (codex main : Bool) (session : Option String) : RoutingAffinity :=
+  ⟨if codex && main then session else none, none⟩
+
+def RoutingAffinity.observe (state : RoutingAffinity) (response : Option String) : RoutingAffinity :=
+  if state.session.isSome then { state with token := match state.token with | some token => some token | none => response } else state
+
+theorem routing_start_has_no_token (codex main : Bool) (session : Option String) :
+    (RoutingAffinity.start codex main session).token = none := rfl
+
+theorem routing_first_token_wins (session first : String) (later : Option String) :
+    (RoutingAffinity.observe ⟨some session, some first⟩ later).token = some first := rfl
+
+theorem routing_unscoped_cannot_capture (response : Option String) :
+    RoutingAffinity.observe ⟨none, none⟩ response = ⟨none, none⟩ := rfl
+
 end PromptAssembly.Provider

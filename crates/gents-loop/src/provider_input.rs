@@ -20,6 +20,7 @@ use crate::openai_wire::OpenAiWireApi;
 pub mod budget;
 
 pub mod replay_frontier;
+pub mod routing_affinity;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProviderInputProfile {
