@@ -6,8 +6,12 @@ import type {
   MailboxItemView,
   MailboxQuestionAnswer,
 } from "@source-inc/gents-desktop-client";
-import { dismissMailboxItemAndClearMatchingRoute } from "./desktopShellRuntime";
-import { acceptsAsyncResult } from "./desktopShellRuntime";
+import {
+  acceptsAsyncResult,
+  actionFailure,
+  dismissMailboxItemAndClearMatchingRoute,
+  shownFailure,
+} from "./desktopShellRuntime";
 
 type MailboxRouteOptions = {
   api: DesktopApiAdapter;
@@ -106,8 +110,8 @@ export function useDesktopMailboxRoute({
       return item;
     } catch (error) {
       if (!acceptsComposeIntent(capturedGeneration)) return null;
-      setError(String(error));
-      throw error;
+      setError(actionFailure("open the item", error));
+      throw shownFailure(error);
     }
   }
 
@@ -121,8 +125,8 @@ export function useDesktopMailboxRoute({
       );
       await refreshSnapshot();
     } catch (error) {
-      setError(String(error));
-      throw error;
+      setError(actionFailure("dismiss the item", error));
+      throw shownFailure(error);
     }
   }
 
@@ -149,8 +153,8 @@ export function useDesktopMailboxRoute({
       setError(null);
       await refreshSnapshot();
     } catch (error) {
-      setError(String(error));
-      throw error;
+      setError(actionFailure("send the answer", error));
+      throw shownFailure(error);
     }
   }
 

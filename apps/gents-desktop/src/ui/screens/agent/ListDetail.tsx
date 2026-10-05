@@ -28,6 +28,7 @@ import { FieldLegend, FieldRows, FieldSet } from "@gents/ui/components/field";
 import { toast } from "sonner";
 import { href, navigate, type Route } from "@/lib/router";
 import { Row } from "./rows";
+import { toastFailure } from "@/lib/failure";
 
 /* a row is a link to its document, or a button when it acts instead */
 function RowLink({
@@ -283,7 +284,7 @@ export function ListDetail({
     try {
       await onCreate();
     } catch (error) {
-      toast(`Create failed: ${error instanceof Error ? error.message : String(error)}`);
+      toastFailure("create it", error);
     } finally {
       creatingRef.current = false;
       setCreating(false);
@@ -501,7 +502,7 @@ export function ConfirmDelete({
       onOpenChange(false);
       if (after) navigate(after);
     } catch (error) {
-      toast(`Delete failed: ${error instanceof Error ? error.message : String(error)}`);
+      toastFailure(`delete ${label}`, error);
     } finally {
       setDeleting(false);
     }

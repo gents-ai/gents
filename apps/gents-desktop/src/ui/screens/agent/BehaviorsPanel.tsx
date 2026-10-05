@@ -75,6 +75,7 @@ import { ConfirmDelete, DeleteButton, ListDetail } from "./ListDetail";
 import { Group } from "./rows";
 import { rememberContextOrigin } from "./contextOrigin";
 import { clearPromptFocus, promptFocusRequested } from "./promptFocus";
+import { toastFailure } from "@/lib/failure";
 
 /* the access modes at a glance, short enough for one line */
 const short = (mode: string | null | undefined) =>
@@ -328,9 +329,7 @@ function RowControls({
       await saveEnabled(shell, deployment, behavior, next);
       toast(`${behavior.displayName} is ${next ? "enabled" : "disabled"}`);
     } catch (e) {
-      toast(
-        `Couldn’t turn it ${next ? "on" : "off"}: ${e instanceof Error ? e.message : String(e)}`,
-      );
+      toastFailure(`turn it ${next ? "on" : "off"}`, e);
     } finally {
       setBusy(false);
     }
@@ -344,9 +343,7 @@ function RowControls({
           : `${behavior.displayName} is enabled and is now the default`,
       );
     } catch (e) {
-      toast(
-        `Default behavior set failed: ${e instanceof Error ? e.message : String(e)}`,
-      );
+      toastFailure("set the default behavior", e);
     }
   };
   return (

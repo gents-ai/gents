@@ -16,6 +16,7 @@ import type {
   DesktopApiAdapter,
   DesktopSessionSnapshot,
 } from "@source-inc/gents-desktop-client";
+import { actionFailure, shownFailure } from "./desktopShellRuntime";
 
 type ChatActionParams = {
   submissionInFlight: MutableRefObject<boolean>;
@@ -154,7 +155,7 @@ export function createDesktopShellChatActions({
     } catch (err) {
       if (!acceptsComposeIntent(intentGeneration)) return null;
       setLocalWorkflow({ kind: "ready" });
-      setError(String(err));
+      setError(actionFailure("send the message", err));
       return null;
     } finally {
       setLocalWorkflow((current) =>
@@ -206,7 +207,7 @@ export function createDesktopShellChatActions({
     } catch (err) {
       if (!acceptsComposeIntent(intentGeneration)) return;
       setLocalWorkflow({ kind: "ready" });
-      setError(String(err));
+      setError(actionFailure("retry the message", err));
     } finally {
       setLocalWorkflow((current) =>
         releaseOwnedSubmissionWorkflow(current, ownedWorkflow),
@@ -234,8 +235,8 @@ export function createDesktopShellChatActions({
       await refreshSnapshot();
       await refreshSession(sessionId);
     } catch (err) {
-      setError(String(err));
-      throw err;
+      setError(actionFailure("rename the session", err));
+      throw shownFailure(err);
     }
   }
 

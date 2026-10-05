@@ -10,7 +10,7 @@ import type {
   TaskSaveRequest,
   TriggerSaveRequest,
 } from "@source-inc/gents-desktop-client";
-import { logShellEvent } from "./desktopShellRuntime";
+import { actionFailure, logShellEvent, shownFailure } from "./desktopShellRuntime";
 
 type TaskActionParams = {
   acceptsComposeIntent: (capturedGeneration: number) => boolean;
@@ -55,32 +55,27 @@ export function createDesktopShellTaskActions({
     }
   }
 
-  async function onSaveTaskConfig(request: TaskSaveRequest) {
+  /** A configuration change: busy while it runs, a fresh read once it lands,
+      and one report if it fails, naming what failed. */
+  async function change<T>(label: string, run: () => Promise<T>) {
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await mutateSnapshot(() => api.saveTaskConfig(request));
-      return next;
-    } catch (err) {
-      setError(String(err));
-      throw err;
+      return await mutateSnapshot(run);
+    } catch (error) {
+      setError(actionFailure(label, error));
+      throw shownFailure(error);
     } finally {
       setSavingConfig(false);
     }
   }
 
-  async function onSaveScheduleConfig(request: ScheduleSaveRequest) {
-    setSavingConfig(true);
-    setError(null);
-    try {
-      const next = await mutateSnapshot(() => api.saveScheduleConfig(request));
-      return next;
-    } catch (err) {
-      setError(String(err));
-      throw err;
-    } finally {
-      setSavingConfig(false);
-    }
+  function onSaveTaskConfig(request: TaskSaveRequest) {
+    return change("save the task", () => api.saveTaskConfig(request));
+  }
+
+  function onSaveScheduleConfig(request: ScheduleSaveRequest) {
+    return change("save the schedule", () => api.saveScheduleConfig(request));
   }
 
   async function onRunSchedule(request: ScheduleRunRequest): Promise<TaskRunResult> {
@@ -92,39 +87,20 @@ export function createDesktopShellTaskActions({
       await observeAcceptedRun("schedule");
       return result;
     } catch (err) {
-      if (acceptsComposeIntent(intentGeneration)) setError(String(err));
-      throw err;
+      if (!acceptsComposeIntent(intentGeneration)) throw err;
+      setError(actionFailure("run the schedule", err));
+      throw shownFailure(err);
     } finally {
       finishTaskRun();
     }
   }
 
-  async function onSaveTriggerConfig(request: TriggerSaveRequest) {
-    setSavingConfig(true);
-    setError(null);
-    try {
-      const next = await mutateSnapshot(() => api.saveTriggerConfig(request));
-      return next;
-    } catch (err) {
-      setError(String(err));
-      throw err;
-    } finally {
-      setSavingConfig(false);
-    }
+  function onSaveTriggerConfig(request: TriggerSaveRequest) {
+    return change("save the trigger", () => api.saveTriggerConfig(request));
   }
 
-  async function onSaveEventSourceConfig(request: EventSourceSaveRequest) {
-    setSavingConfig(true);
-    setError(null);
-    try {
-      const next = await mutateSnapshot(() => api.saveEventSourceConfig(request));
-      return next;
-    } catch (err) {
-      setError(String(err));
-      throw err;
-    } finally {
-      setSavingConfig(false);
-    }
+  function onSaveEventSourceConfig(request: EventSourceSaveRequest) {
+    return change("save the event source", () => api.saveEventSourceConfig(request));
   }
 
   async function onRunTask(request: TaskRunRequest): Promise<TaskRunResult> {
@@ -136,8 +112,9 @@ export function createDesktopShellTaskActions({
       await observeAcceptedRun("task");
       return result;
     } catch (err) {
-      if (acceptsComposeIntent(intentGeneration)) setError(String(err));
-      throw err;
+      if (!acceptsComposeIntent(intentGeneration)) throw err;
+      setError(actionFailure("run the task", err));
+      throw shownFailure(err);
     } finally {
       finishTaskRun();
     }

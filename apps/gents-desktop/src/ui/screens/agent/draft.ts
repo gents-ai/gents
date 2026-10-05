@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { toastFailure } from "@/lib/failure";
 
 /* A reviewable draft. Nothing crosses the bridge until the user explicitly
    saves; reset restores the last bridge-confirmed value.
@@ -59,7 +60,7 @@ export function useDraft<T extends object>(
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       setError(message);
-      toast(`Save failed: ${message}`);
+      toastFailure("save", e);
       return false;
     } finally {
       setSaving(false);

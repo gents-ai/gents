@@ -42,10 +42,11 @@ export function useDesktopShell({
   const [runningTask, setRunningTask] = useState(false);
   const runningTaskCountRef = useRef(0);
   const [error, setError] = useState<string | null>(null);
-  // A failed action is reported where
-  // it happened and is over; only the client's own state belongs in the
-  // banner. Action hooks get this setter; background projection and
-  // lifecycle errors keep setError.
+  // A failed action is reported once, as a toast, by the action itself:
+  // it happened where the person clicked and is over. Only the client's own
+  // state belongs in the banner with Reconnect: the lifecycle, the session
+  // reads and the effects that refresh in the background, so a repeated
+  // poll failure does not raise a toast every interval.
   const [actionError, setActionError] = useState<string | null>(null);
   const {
     session,
@@ -298,7 +299,7 @@ export function useDesktopShell({
     selectedSessionId,
     pendingMailboxCauseId,
     setDraft,
-    setError,
+    setError: setActionError,
     setLocalWorkflow,
     setOptimisticPendingTurn,
     setSelectedBehaviorId,

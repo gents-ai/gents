@@ -118,6 +118,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@gents/ui/components/po
 import { ReplyingTo } from "./ReplyingTo";
 import { useExclusivePopover } from "@/hooks/useExclusivePopover";
 import { workspace } from "@/app/workspace";
+import { toastFailure } from "@/lib/failure";
 
 function formatTokens(value: number) {
   if (value < 1_000) return String(value);
@@ -1175,7 +1176,7 @@ export const TranscriptPanel = memo(function TranscriptPanel({
     try {
       await actionsRef.current.retryMessage(requestId);
     } catch (error) {
-      toast(`Couldn't retry: ${String(error)}`);
+      toastFailure("retry the message", error);
     } finally {
       setRetrying(false);
     }
@@ -1921,7 +1922,7 @@ function Title({
     try {
       await onRename(next);
     } catch (e) {
-      toast(`Couldn't rename: ${String(e)}`);
+      toastFailure("rename the session", e);
       setDraft(title);
     }
   };

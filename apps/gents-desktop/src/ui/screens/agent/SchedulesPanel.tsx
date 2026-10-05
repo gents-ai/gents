@@ -17,6 +17,7 @@ import { newId, optionalInteger, str, useDraft, validateCronSchedule } from "./d
 import { DeleteButton, ListDetail } from "./ListDetail";
 import { Group } from "./rows";
 import { RowMenu } from "./RowMenu";
+import { toastFailure } from "@/lib/failure";
 
 function cadenceLabel(s: Schedule) {
   return s.cadence.kind === "cron"
@@ -94,9 +95,7 @@ export function ScheduleEditor({
       toast(`Schedule started · ${result.requestId}`);
     } catch (error) {
       if (!shell.acceptsComposeIntent(intentGeneration)) return;
-      toast(
-        `Schedule failed to start: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      toastFailure("start the schedule", error);
     } finally {
       setRunning(false);
     }

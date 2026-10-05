@@ -202,7 +202,9 @@ describe("canonical chat submission acceptance", () => {
       throw new Error("request rejected");
     });
     await expect(f.actions.submitContent("review this")).resolves.toBeNull();
-    expect(f.setError).toHaveBeenLastCalledWith("Error: request rejected");
+    expect(f.setError).toHaveBeenLastCalledWith(
+      "Couldn’t send the message: request rejected",
+    );
     expect(f.getWorkflow()).toEqual({ kind: "ready" });
     expect(f.setOptimisticPendingTurn).not.toHaveBeenCalled();
     expect(f.setSending).toHaveBeenLastCalledWith(false);

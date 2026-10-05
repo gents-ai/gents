@@ -30,6 +30,7 @@ import { TriggerEditor } from "./TriggersPanel";
 import { sourceInWords, triggerReadiness } from "./automation";
 import { Switch } from "@gents/ui/components/switch";
 import { ExternalLink, Plus } from "lucide-react";
+import { toastFailure } from "@/lib/failure";
 
 const when = (iso: string | null | undefined) =>
   iso ? new Date(iso).toLocaleString() : "—";
@@ -142,9 +143,7 @@ export function TaskEditor({
       toast(`Task started · ${r.requestId}`);
     } catch (error) {
       if (!shell.acceptsComposeIntent(intentGeneration)) return;
-      toast(
-        `Task failed to start: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      toastFailure("start the task", error);
     } finally {
       setRunning(false);
     }
