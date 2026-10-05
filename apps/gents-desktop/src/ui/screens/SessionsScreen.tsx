@@ -27,12 +27,7 @@ import {
   sessionsInScope,
   type Scope,
 } from "@/lib/scope";
-import {
-  nodeDidOf,
-  nodeOfSession,
-  parentOfSession,
-  workersBySession,
-} from "@/lib/nodes";
+import { nodeDidOf, nodeOfSession } from "@/lib/nodes";
 import { useStoredStrings } from "@/lib/stored";
 import { NodeBehaviorStack } from "./NodeBehaviorStack";
 import { NodeAxis } from "./NodeAxis";
@@ -44,6 +39,12 @@ import {
   hasFilter,
   useSessionFilter,
 } from "./SessionFilters";
+import {
+  NO_SESSIONS,
+  parentOf as parentOfIn,
+  useFleet,
+  workersOf,
+} from "../hooks/useFleet";
 
 export function SessionsScreen({
   shell,
@@ -91,7 +92,8 @@ export function SessionsScreen({
     hasFilter(filter) ||
     shell.deployments.some((n) => n.sessions.length > 0);
   /* the session whose latest request spawned this one, by provenance */
-  const parentOf = (c: SessionSummary) => parentOfSession(c, shell.deployments);
+  const fleet = useFleet(shell, (s) => s);
+  const parentOf = (c: SessionSummary) => parentOfIn(fleet, c);
 
   /* Work a session handed out sits under the session that handed it out.
      A parent with four workers is one piece of work in five sessions, and
@@ -144,7 +146,6 @@ export function SessionsScreen({
   /* every worker on any node by the session that handed it out, whether
      or not the list is showing it: the parent's marks say the whole piece
      of work, and a worker on another node is still its work */
-  const workersOf = workersBySession(shell.deployments);
   const nested = (() => {
     const shown = new Set(conversations.map((c) => c.sessionId));
     const children = new Map<string, SessionSummary[]>();
@@ -371,9 +372,7 @@ export function SessionsScreen({
                       shell.behaviorDescriptions[row.session.behaviorId ?? ""]
                     }
                     size={row.child ? "sm" : "md"}
-                    workers={
-                      row.child ? [] : (workersOf.get(row.session.sessionId) ?? [])
-                    }
+                    workers={row.child ? NO_SESSIONS : workersOf(fleet, row.session)}
                   />
                   <span
                     className={cn(

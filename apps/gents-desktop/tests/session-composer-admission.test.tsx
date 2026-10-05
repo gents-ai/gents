@@ -14,6 +14,7 @@ import { useDesktopChatProjectionState } from "../src/hooks/useDesktopChatProjec
 import { MemoryNavProvider } from "@gents/shell";
 import { selectedSessionFields } from "./session-store-fixture";
 import { readSession, writeSession } from "../src/hooks/sessionStore";
+import { fleetFor } from "./fleet-fixture";
 
 const navigate = vi.hoisted(() => vi.fn());
 const markdownRender = vi.hoisted(() => vi.fn());
@@ -52,6 +53,7 @@ function newSessionShell(
     selectedBehaviorId: "behavior",
     selectedAgentDid: "did:key:agent",
     deployments: [],
+    fleet: fleetFor(),
     selectedDeployment: {
       agentDid: "did:key:agent",
       agentPrincipal: { displayName: "Agent" },

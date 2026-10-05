@@ -5,16 +5,15 @@ import type { SurfaceContext } from "@/app/surfaces";
 import { useShellContext } from "@/app/ShellContext";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { href } from "@/lib/router";
-import { nodeOfSession, workersBySession } from "@/lib/nodes";
+import { nodeOfSession } from "@/lib/nodes";
 import { NodeBehaviorStack } from "./NodeBehaviorStack";
 import { SessionStatus } from "./SessionStatus";
 import { when } from "./time";
+import { useFleet, workersOfId } from "../hooks/useFleet";
 
 export function WorkersSurface({ sessionId }: SurfaceContext) {
   const shell = useShellContext();
-  const workers = sessionId
-    ? (workersBySession(shell.deployments).get(sessionId) ?? [])
-    : [];
+  const workers = useFleet(shell, (s) => workersOfId(s, sessionId));
   return (
     <ScrollArea className="h-full">
       <div className="px-3 py-2">

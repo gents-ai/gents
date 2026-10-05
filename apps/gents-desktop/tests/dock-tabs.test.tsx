@@ -5,10 +5,11 @@ import { ShellProvider } from "@/app/ShellContext";
 import { clearSurfaces, registerSurface } from "@/app/surfaces";
 import { workspace } from "@/app/workspace";
 import type { Shell } from "@/hooks/useShell";
+import { fleetFor } from "./fleet-fixture";
 
 const Nothing = () => null;
 const SCOPE = "session:a";
-const shell = { deployments: [] } as unknown as Shell;
+const shell = { deployments: [], fleet: fleetFor() } as unknown as Shell;
 
 const renderTabs = () =>
   render(

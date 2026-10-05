@@ -86,7 +86,7 @@ import { Thinking } from "./Thinking";
 import { activityStatus, isStopping } from "./activity-status";
 import { BehaviorAvatar } from "./parts";
 import { NodeBehaviorStack } from "./NodeBehaviorStack";
-import { isWorkingNode, nodeDidOf, workersBySession } from "@/lib/nodes";
+import { isWorkingNode, nodeDidOf } from "@/lib/nodes";
 import { Markdown } from "./Markdown";
 import { SessionLoading } from "./SessionLoading";
 import { StreamContext, StreamText } from "./StreamText";
@@ -126,6 +126,7 @@ import {
   type SessionSelection,
 } from "../hooks/useSelectedSession";
 import { useDraft } from "../../hooks/draftStore";
+import { useFleet, workersOfId } from "../hooks/useFleet";
 
 function formatTokens(value: number) {
   if (value < 1_000) return String(value);
@@ -1284,6 +1285,7 @@ export const TranscriptPanel = memo(function TranscriptPanel({
 export function SessionScreen({ shell }: { shell: Shell }) {
   const session = useSelectedSessionFields(shell, selectScreenFacts);
   const homeDid = shell.snapshot?.bootstrap.initAgentDid;
+  const sessionWorkers = useFleet(shell, (s) => workersOfId(s, session?.sessionId));
   const [draft, setDraft] = useDraft(shell.draftStore, shell.draftKey);
   const [requestedStop, setRequestedStop] = useState<string | null>(null);
   /* the transcript column follows new content while the reader is near
@@ -1684,12 +1686,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                     deployment={deployment}
                     size="sm"
                     keyboard
-                    workers={
-                      session
-                        ? (workersBySession(shell.deployments).get(session.sessionId) ??
-                          [])
-                        : []
-                    }
+                    workers={sessionWorkers}
                   />
                   <div className="min-w-0 flex-1 [&_form]:min-w-0 [&_h1]:truncate [&_h1]:text-sm [&_input]:h-7 [&_input]:text-sm">
                     {session ? (
@@ -1781,13 +1778,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                       nodeDid={session?.agentDid}
                       behaviorId={session?.behaviorId}
                       deployment={deployment}
-                      workers={
-                        session
-                          ? (workersBySession(shell.deployments).get(
-                              session.sessionId,
-                            ) ?? [])
-                          : []
-                      }
+                      workers={sessionWorkers}
                     />
                     <span className="text-sm text-muted-foreground">
                       {behaviorName(session?.behaviorId ?? null, deployment)}

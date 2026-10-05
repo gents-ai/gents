@@ -4,7 +4,7 @@
    the shell does not change. The gents chrome (rail, nav panel) never
    hosts a surface: that space is the app's own. */
 import type { ComponentType } from "react";
-import type { DeploymentView } from "@source-inc/gents-desktop-client";
+import type { FleetState } from "../../hooks/fleetStore";
 
 /** dock: the right column. inline: a block inside the main pane's flow.
     sheet: a phone, where the dock does not exist. */
@@ -25,7 +25,7 @@ export type Surface = {
   routes?: readonly string[];
   render: ComponentType<SurfaceContext>;
   /** a small count for the tab, from the shell's nodes; null shows nothing */
-  badge?: (nodes: DeploymentView[], sessionId: string | null) => number | null;
+  badge?: (fleet: FleetState, sessionId: string | null) => number | null;
 };
 
 const registry = new Map<string, Surface>();

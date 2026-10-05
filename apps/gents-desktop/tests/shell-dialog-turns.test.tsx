@@ -127,6 +127,7 @@ import { SessionScreen } from "../src/ui/screens/SessionScreen";
 import { MemoryNavProvider } from "@gents/shell";
 import { selectedSessionFields } from "./session-store-fixture";
 import { createDraftStore } from "../src/hooks/draftStore";
+import { fleetFor } from "./fleet-fixture";
 
 const healthy: SyncHealthView = {
   state: "healthy",
@@ -170,6 +171,7 @@ function sessionShell(): Shell {
     selectedBehaviorId: "behavior",
     selectedAgentDid: "did:key:agent",
     deployments: [],
+    fleet: fleetFor(),
     selectedDeployment: null,
     draftStore: createDraftStore(),
     draftKey: "session",

@@ -4,6 +4,7 @@ import type { SessionSummary } from "@source-inc/gents-desktop-client";
 import type { Shell } from "@/hooks/useShell";
 import { SessionsScreen } from "../src/ui/screens/SessionsScreen";
 import { emptyFilter, filterSessions } from "../src/ui/screens/SessionFilters";
+import { fleetFor } from "./fleet-fixture";
 
 const session = (overrides: Partial<SessionSummary>): SessionSummary => ({
   sessionId: "parent",
@@ -53,11 +54,13 @@ const shell = (sessions: SessionSummary[]) =>
   ({
     behaviorDescriptions: {},
     deployments: [deploymentWith(sessions)],
+    fleet: fleetFor([deploymentWith(sessions)]),
     selectedDeployment: deploymentWith(sessions),
   }) as unknown as Shell;
 const deploymentWith = (sessions: SessionSummary[]) => ({
   agentDid: "did:key:node",
   sessions,
+  mailboxItems: [],
   behaviors: [],
   behaviorConfigs: [],
   behaviorEnvironments: [],

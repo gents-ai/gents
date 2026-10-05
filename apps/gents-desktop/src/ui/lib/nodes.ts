@@ -27,37 +27,3 @@ export const workingNode = (
   nodes: readonly DeploymentView[],
   homeDid: string | null | undefined,
 ): DeploymentView | null => nodes.find((n) => isWorkingNode(n, homeDid)) ?? null;
-
-/* Lineage across nodes. A worker names the request that spawned it; its
-   parent is the session whose latest request that is, on whatever node
-   the parent lives, since a background worker may run remotely. */
-export const parentOfSession = (
-  session: SessionSummary,
-  nodes: readonly DeploymentView[],
-): SessionSummary | null => {
-  /* the bridge names the starting session exactly (agent, session,
-     requester), on whatever node lists it */
-  const by = session.startedBy;
-  return by
-    ? (nodes
-        .flatMap((n) => n.sessions)
-        .find(
-          (s) =>
-            s.sessionId === by.sessionId &&
-            s.agentDid === by.agentDid &&
-            s.requesterDid === by.requesterDid,
-        ) ?? null)
-    : null;
-};
-
-/* every worker on any node, by the session that handed it out */
-export const workersBySession = (
-  nodes: readonly DeploymentView[],
-): Map<string, SessionSummary[]> => {
-  const out = new Map<string, SessionSummary[]>();
-  for (const c of nodes.flatMap((n) => n.sessions)) {
-    const parent = parentOfSession(c, nodes);
-    if (parent) out.set(parent.sessionId, [...(out.get(parent.sessionId) ?? []), c]);
-  }
-  return out;
-};

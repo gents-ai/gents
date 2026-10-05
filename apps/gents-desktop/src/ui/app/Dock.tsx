@@ -12,6 +12,7 @@ import { cn } from "@gents/ui/lib/utils";
 import { dockView } from "./dock-scope";
 import type { Placement } from "./surfaces";
 import { dockScopeOf, useDockFor } from "./workspace";
+import { useFleet } from "../hooks/useFleet";
 
 /* the window bar's tabs and the dock's card are drawn apart, and joined by these */
 const DOCK_PANEL_ID = "dock-panel";
@@ -100,9 +101,9 @@ export function DockTabs({
   const { dock, activate, moveTab, closeTab, closeDock } = useDockFor(
     dockScopeOf(routeName, sessionId),
   );
+  const fleet = useFleet(shell, (s) => s);
   const paneTitle =
-    shell.deployments.flatMap((n) => n.sessions).find((x) => x.sessionId === sessionId)
-      ?.title ?? "Session";
+    (sessionId ? fleet.bySessionId[sessionId]?.title : null) ?? "Session";
   /* reordering, the way a browser does it: a press shows the tab; moved past
      a few pixels it follows the pointer while the others slide aside, and the
      order is written when it is let go. The strip's tabs share one width, so
@@ -297,7 +298,7 @@ export function DockTabs({
                   {s.title}
                 </span>
                 {(() => {
-                  const n = s.badge?.(shell.deployments, sessionId) ?? null;
+                  const n = s.badge?.(fleet, sessionId) ?? null;
                   return n === null ? null : (
                     <span className="ml-0.5 font-mono text-[10px] leading-none text-muted-foreground">
                       {n}
