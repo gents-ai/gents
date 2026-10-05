@@ -1,0 +1,652 @@
+{
+  "assets": [
+    "README.md",
+    "agent_behaviors/chart_maker/system_prompt.md",
+    "notice.md",
+    "pack_config.json",
+    "plugins/charts.afb",
+    "plugins/charts_save.afb",
+    "plugins/charts/TOOL.md",
+    "plugins/charts_save/TOOL.md",
+    "schemas/chart_request.graphql",
+    "schemas/chart_result.graphql",
+    "tests/graph_render.json",
+    "tests/install.json",
+    "tests/content.json"
+  ],
+  "authors": [
+    "gents contributors"
+  ],
+  "config": "pack_config.json",
+  "dependencies": [],
+  "description": "Draws line, area, bar, scatter, bubble, histogram, box, pie, donut, heatmap and combined charts from rows or CSV and JSON files as SVG and PNG images, as a Chart maker agent and plugins.",
+  "inference_slots": [
+    {
+      "behaviors": [
+        "chart-maker"
+      ],
+      "description": "Turns the user's data and request into a chart with the charts tool. Any capable profile; one that accepts images also checks the picture.",
+      "name": "chart_maker"
+    }
+  ],
+  "kind": "documents",
+  "manifest_version": 1,
+  "name": "charts",
+  "namespace": "gents",
+  "plugins": [
+    {
+      "artifact": "plugins/charts.afb",
+      "bind_dir": {
+        "access": "read",
+        "description": "The data file to chart, or the folder holding it",
+        "input_field": "path",
+        "original_field": "path_original"
+      },
+      "description": "Draws a chart (line, area, stacked area, bar, scatter, bubble, histogram, box, pie, donut, heatmap, combo) from rows or a CSV or JSON file and returns it as an image with an SVG and a text description.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "agg": {
+            "description": "How rows with the same category combine: sum (default), mean, count, min, max or median. Heatmaps default to mean.",
+            "enum": [
+              "sum",
+              "mean",
+              "count",
+              "min",
+              "max",
+              "median"
+            ],
+            "type": "string"
+          },
+          "bins": {
+            "anyOf": [
+              {
+                "maximum": 200,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "description": "Histograms: a number of bins from 1 to 200, or auto (default)."
+          },
+          "center": {
+            "description": "Heatmaps: the value drawn as the neutral colour of a diverging scale.",
+            "type": "number"
+          },
+          "chart": {
+            "description": "The chart type: line, area, stacked_area, bar, stacked_bar, horizontal_bar, scatter, bubble, histogram, box, pie, donut, heatmap or combo.",
+            "enum": [
+              "line",
+              "area",
+              "stacked_area",
+              "bar",
+              "stacked_bar",
+              "horizontal_bar",
+              "scatter",
+              "bubble",
+              "histogram",
+              "box",
+              "pie",
+              "donut",
+              "heatmap",
+              "combo"
+            ],
+            "type": "string"
+          },
+          "colors": {
+            "description": "Series colours as hex strings like \"#1f77b4\"; the default palette is colour-blind safe.",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 64,
+            "type": "array"
+          },
+          "data": {
+            "description": "Inline data: {\"columns\": [...], \"rows\": [[...]]} (the data_tables result), a list of objects, or CSV text with a header line. Use this or path."
+          },
+          "file": {
+            "description": "The data file inside the folder named in path.",
+            "type": "string"
+          },
+          "format": {
+            "description": "Number format for values and the y axis, like \",.0f\", \"$,.2f\", \".1%\", \"~s\" or \"{,.0f} units\".",
+            "type": "string"
+          },
+          "height": {
+            "description": "Image height in pixels, 150 to 4096 (default 480).",
+            "maximum": 4096,
+            "minimum": 150,
+            "type": "integer"
+          },
+          "horizontal": {
+            "description": "Bar charts: draw the bars horizontally.",
+            "type": "boolean"
+          },
+          "legend": {
+            "description": "Legend placement: auto (default), right, bottom, top, left or none.",
+            "enum": [
+              "auto",
+              "right",
+              "bottom",
+              "top",
+              "left",
+              "none"
+            ],
+            "type": "string"
+          },
+          "line": {
+            "description": "Combo charts: the columns drawn as lines (on the right axis).",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 24,
+            "type": "array"
+          },
+          "line_axis": {
+            "description": "Combo charts: draw the lines on the right axis (default) or the left one.",
+            "enum": [
+              "right",
+              "left"
+            ],
+            "type": "string"
+          },
+          "output": {
+            "description": "both (default), svg or png: what to return.",
+            "enum": [
+              "both",
+              "svg",
+              "png"
+            ],
+            "type": "string"
+          },
+          "path": {
+            "description": "The CSV or JSON data file, or the folder holding it; a relative path starts at the working folder. Use this or data.",
+            "type": "string"
+          },
+          "path_original": {
+            "description": "Set by the host to the real path named in path; leave it out.",
+            "type": "string"
+          },
+          "scale": {
+            "description": "PNG pixel density, 0.5 to 4 (default 1); width x height x scale squared is at most 16 million pixels.",
+            "maximum": 4,
+            "minimum": 0.5,
+            "type": "number"
+          },
+          "series": {
+            "description": "Column whose values split the rows into one series each (long-format data); then y is one column.",
+            "type": "string"
+          },
+          "size": {
+            "description": "Bubble charts: the column that sets each bubble's size.",
+            "type": "string"
+          },
+          "sort": {
+            "description": "Category order: none (data order, default), x, x_desc, value or value_desc.",
+            "enum": [
+              "none",
+              "x",
+              "x_desc",
+              "value",
+              "value_desc"
+            ],
+            "type": "string"
+          },
+          "stack": {
+            "description": "Bar charts: grouped (default) or stacked.",
+            "enum": [
+              "grouped",
+              "stacked"
+            ],
+            "type": "string"
+          },
+          "subtitle": {
+            "description": "Line under the title.",
+            "type": "string"
+          },
+          "theme": {
+            "description": "light (default) or dark.",
+            "enum": [
+              "light",
+              "dark"
+            ],
+            "type": "string"
+          },
+          "title": {
+            "description": "Chart title.",
+            "type": "string"
+          },
+          "value": {
+            "description": "Heatmaps: the column that sets each cell's colour.",
+            "type": "string"
+          },
+          "width": {
+            "description": "Image width in pixels, 200 to 4096 (default 800).",
+            "maximum": 4096,
+            "minimum": 200,
+            "type": "integer"
+          },
+          "x": {
+            "description": "Column for the x axis, the categories or the pie labels. Default: the first column.",
+            "type": "string"
+          },
+          "x_format": {
+            "description": "Format of the x axis labels: a number format, or on a time axis a date pattern like \"%b %Y\".",
+            "type": "string"
+          },
+          "x_label": {
+            "description": "X axis title; the column name by default, an empty string for none.",
+            "type": "string"
+          },
+          "x_max": {
+            "description": "Highest x shown.",
+            "type": "number"
+          },
+          "x_min": {
+            "description": "Lowest x shown.",
+            "type": "number"
+          },
+          "x_scale": {
+            "description": "X axis: auto (default), linear, log, time or category.",
+            "enum": [
+              "auto",
+              "linear",
+              "log",
+              "time",
+              "category"
+            ],
+            "type": "string"
+          },
+          "y": {
+            "description": "Value columns, one series each; default: every numeric column. For a heatmap, the column on the other axis.",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 24,
+            "type": "array"
+          },
+          "y2_format": {
+            "description": "Number format of the right axis.",
+            "type": "string"
+          },
+          "y2_label": {
+            "description": "Combo charts: title of the right axis.",
+            "type": "string"
+          },
+          "y2_scale": {
+            "description": "Combo charts: right axis, linear (default) or log.",
+            "enum": [
+              "auto",
+              "linear",
+              "log"
+            ],
+            "type": "string"
+          },
+          "y_format": {
+            "description": "Number format of the y axis; overrides format.",
+            "type": "string"
+          },
+          "y_label": {
+            "description": "Y axis title; the column name by default for one series, an empty string for none.",
+            "type": "string"
+          },
+          "y_max": {
+            "description": "Highest y shown.",
+            "type": "number"
+          },
+          "y_min": {
+            "description": "Lowest y shown.",
+            "type": "number"
+          },
+          "y_scale": {
+            "description": "Y axis: linear (default) or log; a log axis needs values above zero.",
+            "enum": [
+              "auto",
+              "linear",
+              "log"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "chart"
+        ],
+        "type": "object"
+      },
+      "instructions": "plugins/charts/TOOL.md",
+      "language": "rust",
+      "limits": {
+        "max_output_mib": 4,
+        "memory_mib": 1024,
+        "wall_clock_secs": 300
+      },
+      "name": "charts",
+      "source": "plugins/charts"
+    },
+    {
+      "artifact": "plugins/charts_save.afb",
+      "bind_dir": {
+        "access": "read_write",
+        "description": "The folder holding the data file, where the chart files are written",
+        "input_field": "path",
+        "original_field": "path_original"
+      },
+      "description": "Draws a chart (line, area, stacked area, bar, scatter, bubble, histogram, box, pie, donut, heatmap, combo) from rows or a CSV or JSON file as an SVG and a PNG image, and writes them into the folder as files.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "agg": {
+            "description": "How rows with the same category combine: sum (default), mean, count, min, max or median. Heatmaps default to mean.",
+            "enum": [
+              "sum",
+              "mean",
+              "count",
+              "min",
+              "max",
+              "median"
+            ],
+            "type": "string"
+          },
+          "bins": {
+            "anyOf": [
+              {
+                "maximum": 200,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "description": "Histograms: a number of bins from 1 to 200, or auto (default)."
+          },
+          "center": {
+            "description": "Heatmaps: the value drawn as the neutral colour of a diverging scale.",
+            "type": "number"
+          },
+          "chart": {
+            "description": "The chart type: line, area, stacked_area, bar, stacked_bar, horizontal_bar, scatter, bubble, histogram, box, pie, donut, heatmap or combo.",
+            "enum": [
+              "line",
+              "area",
+              "stacked_area",
+              "bar",
+              "stacked_bar",
+              "horizontal_bar",
+              "scatter",
+              "bubble",
+              "histogram",
+              "box",
+              "pie",
+              "donut",
+              "heatmap",
+              "combo"
+            ],
+            "type": "string"
+          },
+          "colors": {
+            "description": "Series colours as hex strings like \"#1f77b4\"; the default palette is colour-blind safe.",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 64,
+            "type": "array"
+          },
+          "data": {
+            "description": "Inline data: {\"columns\": [...], \"rows\": [[...]]} (the data_tables result), a list of objects, or CSV text with a header line. Use this or path."
+          },
+          "file": {
+            "description": "The data file inside the folder named in path.",
+            "type": "string"
+          },
+          "format": {
+            "description": "Number format for values and the y axis, like \",.0f\", \"$,.2f\", \".1%\", \"~s\" or \"{,.0f} units\".",
+            "type": "string"
+          },
+          "height": {
+            "description": "Image height in pixels, 150 to 4096 (default 480).",
+            "maximum": 4096,
+            "minimum": 150,
+            "type": "integer"
+          },
+          "horizontal": {
+            "description": "Bar charts: draw the bars horizontally.",
+            "type": "boolean"
+          },
+          "legend": {
+            "description": "Legend placement: auto (default), right, bottom, top, left or none.",
+            "enum": [
+              "auto",
+              "right",
+              "bottom",
+              "top",
+              "left",
+              "none"
+            ],
+            "type": "string"
+          },
+          "line": {
+            "description": "Combo charts: the columns drawn as lines (on the right axis).",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 24,
+            "type": "array"
+          },
+          "line_axis": {
+            "description": "Combo charts: draw the lines on the right axis (default) or the left one.",
+            "enum": [
+              "right",
+              "left"
+            ],
+            "type": "string"
+          },
+          "output": {
+            "description": "both (default), svg or png: what to return.",
+            "enum": [
+              "both",
+              "svg",
+              "png"
+            ],
+            "type": "string"
+          },
+          "path": {
+            "description": "The CSV or JSON data file, or the folder holding it; a relative path starts at the working folder. Use this or data.",
+            "type": "string"
+          },
+          "path_original": {
+            "description": "Set by the host to the real path named in path; leave it out.",
+            "type": "string"
+          },
+          "save": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "png": {
+                    "type": "string"
+                  },
+                  "svg": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            ],
+            "description": "Write the chart into the folder named in path: a base name like \"chart\" writes chart.svg and chart.png, or give {\"svg\": \"a.svg\", \"png\": \"a.png\"}. path must be a folder."
+          },
+          "scale": {
+            "description": "PNG pixel density, 0.5 to 4 (default 1); width x height x scale squared is at most 16 million pixels.",
+            "maximum": 4,
+            "minimum": 0.5,
+            "type": "number"
+          },
+          "series": {
+            "description": "Column whose values split the rows into one series each (long-format data); then y is one column.",
+            "type": "string"
+          },
+          "size": {
+            "description": "Bubble charts: the column that sets each bubble's size.",
+            "type": "string"
+          },
+          "sort": {
+            "description": "Category order: none (data order, default), x, x_desc, value or value_desc.",
+            "enum": [
+              "none",
+              "x",
+              "x_desc",
+              "value",
+              "value_desc"
+            ],
+            "type": "string"
+          },
+          "stack": {
+            "description": "Bar charts: grouped (default) or stacked.",
+            "enum": [
+              "grouped",
+              "stacked"
+            ],
+            "type": "string"
+          },
+          "subtitle": {
+            "description": "Line under the title.",
+            "type": "string"
+          },
+          "theme": {
+            "description": "light (default) or dark.",
+            "enum": [
+              "light",
+              "dark"
+            ],
+            "type": "string"
+          },
+          "title": {
+            "description": "Chart title.",
+            "type": "string"
+          },
+          "value": {
+            "description": "Heatmaps: the column that sets each cell's colour.",
+            "type": "string"
+          },
+          "width": {
+            "description": "Image width in pixels, 200 to 4096 (default 800).",
+            "maximum": 4096,
+            "minimum": 200,
+            "type": "integer"
+          },
+          "x": {
+            "description": "Column for the x axis, the categories or the pie labels. Default: the first column.",
+            "type": "string"
+          },
+          "x_format": {
+            "description": "Format of the x axis labels: a number format, or on a time axis a date pattern like \"%b %Y\".",
+            "type": "string"
+          },
+          "x_label": {
+            "description": "X axis title; the column name by default, an empty string for none.",
+            "type": "string"
+          },
+          "x_max": {
+            "description": "Highest x shown.",
+            "type": "number"
+          },
+          "x_min": {
+            "description": "Lowest x shown.",
+            "type": "number"
+          },
+          "x_scale": {
+            "description": "X axis: auto (default), linear, log, time or category.",
+            "enum": [
+              "auto",
+              "linear",
+              "log",
+              "time",
+              "category"
+            ],
+            "type": "string"
+          },
+          "y": {
+            "description": "Value columns, one series each; default: every numeric column. For a heatmap, the column on the other axis.",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 24,
+            "type": "array"
+          },
+          "y2_format": {
+            "description": "Number format of the right axis.",
+            "type": "string"
+          },
+          "y2_label": {
+            "description": "Combo charts: title of the right axis.",
+            "type": "string"
+          },
+          "y2_scale": {
+            "description": "Combo charts: right axis, linear (default) or log.",
+            "enum": [
+              "auto",
+              "linear",
+              "log"
+            ],
+            "type": "string"
+          },
+          "y_format": {
+            "description": "Number format of the y axis; overrides format.",
+            "type": "string"
+          },
+          "y_label": {
+            "description": "Y axis title; the column name by default for one series, an empty string for none.",
+            "type": "string"
+          },
+          "y_max": {
+            "description": "Highest y shown.",
+            "type": "number"
+          },
+          "y_min": {
+            "description": "Lowest y shown.",
+            "type": "number"
+          },
+          "y_scale": {
+            "description": "Y axis: linear (default) or log; a log axis needs values above zero.",
+            "enum": [
+              "auto",
+              "linear",
+              "log"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "chart"
+        ],
+        "type": "object"
+      },
+      "instructions": "plugins/charts_save/TOOL.md",
+      "language": "rust",
+      "limits": {
+        "max_output_mib": 4,
+        "memory_mib": 1024,
+        "wall_clock_secs": 300
+      },
+      "name": "charts_save",
+      "source": "plugins/charts_save"
+    }
+  ],
+  "schemas": [
+    "schemas/chart_request.graphql",
+    "schemas/chart_result.graphql"
+  ],
+  "tags": [
+    "charts",
+    "svg",
+    "png",
+    "visualization",
+    "plugin"
+  ],
+  "version": "1.0.0"
+}

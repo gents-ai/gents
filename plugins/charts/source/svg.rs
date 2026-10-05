@@ -194,10 +194,15 @@ impl PathData {
     }
 }
 
-/// The document being written.
+/// The document being written. The body is collected first; the root element
+/// with its accessible title and description is added by [`Svg::finish`],
+/// once the description is known.
 #[derive(Debug)]
 pub struct Svg {
     buf: String,
+    width: f64,
+    height: f64,
+    background: String,
     missing: BTreeSet<char>,
     clips: usize,
 }
@@ -236,30 +241,16 @@ fn attr(buf: &mut String, name: &str, v: f64) {
 }
 
 impl Svg {
-    /// Starts a `width` by `height` document on a `background` fill with an
-    /// accessible title and description.
-    pub fn new(width: f64, height: f64, background: &str, title: &str, desc: &str) -> Self {
-        let mut buf = String::with_capacity(16 * 1024);
-        buf.push_str("<svg xmlns=\"http://www.w3.org/2000/svg\"");
-        attr(&mut buf, "width", width);
-        attr(&mut buf, "height", height);
-        buf.push_str(" viewBox=\"0 0 ");
-        push_coord(&mut buf, width);
-        buf.push(' ');
-        push_coord(&mut buf, height);
-        let _ = write!(
-            buf,
-            "\" role=\"img\" aria-labelledby=\"chart-title chart-desc\" font-family=\"{STACK}\">"
-        );
-        let _ = write!(
-            buf,
-            "<title id=\"chart-title\">{}</title><desc id=\"chart-desc\">{}</desc>",
-            escape(&clean(title)),
-            escape(&clean(desc))
-        );
-        let mut svg = Self { buf, missing: BTreeSet::new(), clips: 0 };
-        svg.rect(0.0, 0.0, width, height, &Style::fill(background));
-        svg
+    /// Starts a `width` by `height` document on a `background` fill.
+    pub fn new(width: f64, height: f64, background: &str) -> Self {
+        Self {
+            buf: String::with_capacity(16 * 1024),
+            width,
+            height,
+            background: background.to_owned(),
+            missing: BTreeSet::new(),
+            clips: 0,
+        }
     }
 
     /// A rectangle.
@@ -417,10 +408,36 @@ impl Svg {
         &self.missing
     }
 
-    /// The finished document.
-    pub fn finish(mut self) -> (String, BTreeSet<char>) {
-        self.buf.push_str("</svg>");
-        (self.buf, self.missing)
+    /// The finished document with `title` and `desc` as its accessible name
+    /// and description, and the characters drawn that the font lacks.
+    pub fn finish(self, title: &str, desc: &str) -> (String, BTreeSet<char>) {
+        let mut out = String::with_capacity(self.buf.len() + 512);
+        out.push_str("<svg xmlns=\"http://www.w3.org/2000/svg\"");
+        attr(&mut out, "width", self.width);
+        attr(&mut out, "height", self.height);
+        out.push_str(" viewBox=\"0 0 ");
+        push_coord(&mut out, self.width);
+        out.push(' ');
+        push_coord(&mut out, self.height);
+        let _ = write!(
+            out,
+            "\" role=\"img\" aria-labelledby=\"chart-title chart-desc\" font-family=\"{STACK}\">"
+        );
+        let _ = write!(
+            out,
+            "<title id=\"chart-title\">{}</title><desc id=\"chart-desc\">{}</desc>",
+            escape(&clean(title)),
+            escape(&clean(desc))
+        );
+        out.push_str("<rect");
+        attr(&mut out, "x", 0.0);
+        attr(&mut out, "y", 0.0);
+        attr(&mut out, "width", self.width);
+        attr(&mut out, "height", self.height);
+        let _ = write!(out, " fill=\"{}\"/>", self.background);
+        out.push_str(&self.buf);
+        out.push_str("</svg>");
+        (out, self.missing)
     }
 }
 
@@ -429,9 +446,9 @@ mod tests {
     use super::*;
 
     fn doc(f: impl FnOnce(&mut Svg)) -> String {
-        let mut s = Svg::new(100.0, 50.0, "#fff", "T", "D");
+        let mut s = Svg::new(100.0, 50.0, "#fff");
         f(&mut s);
-        s.finish().0
+        s.finish("T", "D").0
     }
 
     #[test]
@@ -480,7 +497,7 @@ mod tests {
 
     #[test]
     fn titles_and_descriptions_are_escaped_too() {
-        let s = Svg::new(10.0, 10.0, "#fff", "</title><x/>", "a & b").finish().0;
+        let s = Svg::new(10.0, 10.0, "#fff").finish("</title><x/>", "a & b").0;
         assert!(s.contains("&lt;/title&gt;&lt;x/&gt;"));
         assert!(s.contains("a &amp; b"));
         assert_eq!(s.matches("<title").count(), 1);
@@ -512,10 +529,10 @@ mod tests {
 
     #[test]
     fn missing_glyphs_are_collected_from_every_text() {
-        let mut s = Svg::new(10.0, 10.0, "#fff", "t", "d");
+        let mut s = Svg::new(10.0, 10.0, "#fff");
         s.text(0.0, 0.0, "\u{6c49}", &TextStyle::new(10.0, "#000"));
         s.text(0.0, 0.0, "a", &TextStyle::new(10.0, "#000").full("\u{1F600}"));
-        let (_, missing) = s.finish();
+        let (_, missing) = s.finish("t", "d");
         assert_eq!(missing.len(), 2);
     }
 
@@ -531,7 +548,7 @@ mod tests {
 
     #[test]
     fn clips_get_unique_ids_and_a_usable_attribute() {
-        let mut s = Svg::new(10.0, 10.0, "#fff", "t", "d");
+        let mut s = Svg::new(10.0, 10.0, "#fff");
         let a = s.clip_rect(0.0, 0.0, 5.0, 5.0);
         let b = s.clip_rect(1.0, 1.0, 5.0, 5.0);
         assert_eq!(a, "clip-path=\"url(#clip1)\"");

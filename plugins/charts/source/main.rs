@@ -1,1 +1,4 @@
-fn main(){ charts::x(); }
+//! charts plugin entry point.
+fn main() {
+    charts::cli::main()
+}

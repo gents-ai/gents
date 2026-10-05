@@ -1,0 +1,196 @@
+{
+  "agent_behaviors": [
+    {
+      "behavior_id": "chart-maker",
+      "context_id": "chart-maker-context",
+      "display_name": "Chart maker",
+      "inference_profile_id": "gents:inference-slot:chart_maker"
+    }
+  ],
+  "agent_principal": {},
+  "callback_bindings": [
+    {
+      "binding_id": "chart-render",
+      "callback_id": "chart-render",
+      "event_source_id": "chart-render",
+      "input_fields": [
+        "run_id",
+        "chart",
+        "data",
+        "path",
+        "path_original",
+        "file",
+        "x",
+        "y",
+        "line",
+        "series",
+        "size",
+        "value",
+        "agg",
+        "sort",
+        "stack",
+        "horizontal",
+        "bins",
+        "title",
+        "subtitle",
+        "x_label",
+        "y_label",
+        "y2_label",
+        "x_scale",
+        "y_scale",
+        "y2_scale",
+        "format",
+        "x_format",
+        "y_format",
+        "y2_format",
+        "legend",
+        "theme",
+        "colors",
+        "line_axis",
+        "width",
+        "height",
+        "scale",
+        "x_min",
+        "x_max",
+        "y_min",
+        "y_max",
+        "center",
+        "output"
+      ]
+    },
+    {
+      "binding_id": "chart-save",
+      "callback_id": "chart-save",
+      "event_source_id": "chart-save",
+      "input_fields": [
+        "run_id",
+        "chart",
+        "data",
+        "path",
+        "path_original",
+        "file",
+        "x",
+        "y",
+        "line",
+        "series",
+        "size",
+        "value",
+        "agg",
+        "sort",
+        "stack",
+        "horizontal",
+        "bins",
+        "title",
+        "subtitle",
+        "x_label",
+        "y_label",
+        "y2_label",
+        "x_scale",
+        "y_scale",
+        "y2_scale",
+        "format",
+        "x_format",
+        "y_format",
+        "y2_format",
+        "legend",
+        "theme",
+        "colors",
+        "line_axis",
+        "width",
+        "height",
+        "scale",
+        "x_min",
+        "x_max",
+        "y_min",
+        "y_max",
+        "center",
+        "output",
+        "save"
+      ]
+    }
+  ],
+  "callbacks": [
+    {
+      "callback_id": "chart-render",
+      "display_name": "chart-render",
+      "handler": {
+        "correlation_field": "run_id",
+        "digest": "",
+        "kind": "plugin",
+        "outputs": [
+          {
+            "cardinality": "one",
+            "collection": "ChartResult",
+            "correlation_field": "run_id",
+            "name": "chart",
+            "required": true,
+            "schema": "ChartResult/v1"
+          }
+        ],
+        "plugin": "charts"
+      }
+    },
+    {
+      "callback_id": "chart-save",
+      "display_name": "chart-save",
+      "handler": {
+        "correlation_field": "run_id",
+        "digest": "",
+        "kind": "plugin",
+        "outputs": [
+          {
+            "cardinality": "one",
+            "collection": "ChartResult",
+            "correlation_field": "run_id",
+            "name": "chart",
+            "required": true,
+            "schema": "ChartResult/v1"
+          }
+        ],
+        "plugin": "charts_save"
+      }
+    }
+  ],
+  "contexts": [
+    {
+      "context_id": "chart-maker-context",
+      "display_name": "Chart maker",
+      "system_prompt": "./agent_behaviors/chart_maker/system_prompt.md",
+      "tools_id": "chart-maker-tools"
+    }
+  ],
+  "event_sources": [
+    {
+      "correlation_field": "run_id",
+      "display_name": "chart-render",
+      "event_kind": "created",
+      "event_source_id": "chart-render",
+      "filter": "{ _or: [ { save: { _eq: null } }, { save: { _eq: \"\" } } ] }",
+      "source_collection": "ChartRequest"
+    },
+    {
+      "correlation_field": "run_id",
+      "display_name": "chart-save",
+      "event_kind": "created",
+      "event_source_id": "chart-save",
+      "filter": "{ _and: [ { save: { _neq: null } }, { save: { _ne: \"\" } } ] }",
+      "source_collection": "ChartRequest"
+    }
+  ],
+  "tools": [
+    {
+      "display_name": "Chart maker tools",
+      "integrations": {
+        "plugins": [
+          {
+            "plugin": "gents/charts"
+          },
+          {
+            "plugin": "gents/charts_save"
+          }
+        ]
+      },
+      "tools_id": "chart-maker-tools"
+    }
+  ]
+}
