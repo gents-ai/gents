@@ -56,8 +56,8 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
             }
             if names.len() > MAX_SERIES {
                 ctx.notes.add(format!(
-                    "column {:?} has {} values; only the first {MAX_SERIES} series are drawn",
-                    t.names[sc],
+                    "column {} has {} values; only the first {MAX_SERIES} series are drawn",
+                    crate::text::quote(&t.names[sc]),
                     names.len()
                 ));
             }
@@ -209,8 +209,8 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
             .max_by_key(|(k, n)| (**n, std::cmp::Reverse(*k)))
         {
             alt.push_str(&format!(
-                " {:?}: {} values, tallest bin {} to {} holds {n}.",
-                g.0,
+                " {}: {} values, tallest bin {} to {} holds {n}.",
+                crate::text::quote(&g.0),
                 g.1.len(),
                 compact(edges[k]),
                 compact(edges[k + 1])

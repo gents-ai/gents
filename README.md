@@ -182,7 +182,7 @@ the chart types. In short:
 | --- | --- |
 | `line`, `area`, `stacked_area` | numeric, date (calendar ticks) or category x; gaps break the line; lines over 1500 points are reduced with largest-triangle-three-buckets, which keeps the first, last, lowest and highest points |
 | `bar`, `stacked_bar`, `horizontal_bar` | zero baseline, negatives hang below it, stacks add positives and negatives separately, value labels on up to 30 bars |
-| `scatter`, `bubble` | log axes, series by column, correlation per series; clouds over the cap are grouped into marks with the extreme points kept exact; bubble area follows the value |
+| `scatter`, `bubble` | log axes, series by column, correlation per series; clouds over the cap are grouped into marks with the extreme points kept exact; bubble area is proportional to the value from zero (sizes of zero or below are not drawn and are counted) |
 | `histogram` | nice bin edges or an exact bin count, overlays by series |
 | `box` | quartiles by linear interpolation, Tukey whiskers, outliers listed |
 | `pie`, `donut` | slice angles sum to 360 degrees; small slices grouped as "Other" past 12 |
@@ -237,8 +237,11 @@ cargo test --manifest-path packs/gents/charts/plugins/charts/Cargo.toml
 
 The content decides, not the name: a `.png` that holds CSV text is read as CSV,
 and a binary file is refused. Numbers are plain decimal text (`12`, `-3.5`,
-`1e3`); text with a leading zero (`007`) stays an identifier. `null`, `NA`,
-`N/A`, `NaN`, `None` and empty cells are empty. Dates are `YYYY-MM-DD`,
+`1e3`); text with a leading zero (`007`) stays an identifier. Empty cells are
+empty, and so are `null`, `NA`, `N/A`, `NaN` and `None` next to numbers or dates;
+in a text column they are ordinary labels (the country code NA stays a
+category). In a semicolon-delimited file `1,5` and `1.234,5` are read as
+numbers with a decimal comma, and the count is in `warnings`. Dates are `YYYY-MM-DD`,
 `YYYY-MM` or a timestamp with `T` or a space and an optional `Z` or offset.
 
 | Output | Notes |

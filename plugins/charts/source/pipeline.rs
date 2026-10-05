@@ -53,7 +53,10 @@ fn source(req: &Request<'_>) -> Res<Source> {
                 }
                 Ok(Source::File(path.to_path_buf()))
             } else {
-                fail(format!("{p:?} does not exist; check the path"))
+                fail(format!(
+                    "{p} does not exist; check the path",
+                    p = crate::text::quote(p)
+                ))
             }
         }
     }
@@ -67,6 +70,12 @@ fn table_notes(t: &Table, notes: &mut Notes) {
     }
     if t.ragged > 0 {
         notes.add(format!("{} rows have a different number of fields than the header; missing fields are empty and extra fields are ignored", t.ragged));
+    }
+    if t.decimal_commas > 0 {
+        notes.add(format!(
+            "{} values written with a decimal comma were read as numbers",
+            t.decimal_commas
+        ));
     }
     if t.bad_utf8 {
         notes.add("some text was not valid UTF-8; the unreadable bytes were replaced");

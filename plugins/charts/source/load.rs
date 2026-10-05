@@ -22,7 +22,8 @@ pub fn resolve(root: &Path, rel: &str) -> Res<PathBuf> {
     }
     if rel.contains(['\0', '\\']) || rel.starts_with('/') || rel.as_bytes().get(1) == Some(&b':') {
         return fail(format!(
-            "{rel:?} is not a path inside the folder; use a relative path like data/sales.csv"
+            "{rel} is not a path inside the folder; use a relative path like data/sales.csv",
+            rel = crate::text::quote(rel)
         ));
     }
     let mut path = root.to_path_buf();
@@ -34,12 +35,18 @@ pub fn resolve(root: &Path, rel: &str) -> Res<PathBuf> {
                     && meta.file_type().is_symlink()
                 {
                     return fail(format!(
-                        "{rel:?} goes through a symbolic link; name the real file inside the folder"
+                        "{rel} goes through a symbolic link; name the real file inside the folder",
+                        rel = crate::text::quote(rel)
                     ));
                 }
             }
             Component::CurDir => {}
-            _ => return fail(format!("{rel:?} leaves the folder; use a path inside it")),
+            _ => {
+                return fail(format!(
+                    "{rel} leaves the folder; use a path inside it",
+                    rel = crate::text::quote(rel)
+                ));
+            }
         }
     }
     Ok(path)

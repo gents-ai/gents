@@ -20,6 +20,8 @@ type Points = (String, Vec<(f64, f64)>, Vec<f64>);
 
 /// Bubbles drawn at most.
 const MAX_BUBBLES: usize = 2000;
+/// Smallest bubble radius in pixels, so tiny values stay visible.
+const MIN_BUBBLE_R: f64 = 1.5;
 
 /// Pearson correlation of the points, `None` below three points or without spread.
 pub fn correlation(pts: &[(f64, f64)]) -> Option<f64> {
@@ -84,8 +86,8 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
         }
         if skipped > 0 {
             ctx.notes.add(format!(
-                "series {:?}: {skipped} points have no size and are not drawn",
-                g.name
+                "series {}: {skipped} points have no size and are not drawn",
+                crate::text::quote(&g.name)
             ));
         }
         series.push((g.name.clone(), pts, sz));
@@ -114,8 +116,8 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
                 order.truncate(MAX_BUBBLES);
                 order.sort_unstable();
                 ctx.notes.add(format!(
-                    "series {:?} has {} bubbles; the {MAX_BUBBLES} largest are drawn",
-                    s.0,
+                    "series {} has {} bubbles; the {MAX_BUBBLES} largest are drawn",
+                    crate::text::quote(&s.0),
                     s.1.len()
                 ));
                 s.1 = order.iter().map(|i| s.1[*i]).collect();
@@ -127,7 +129,18 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
         .ok_or("there are no points to draw")?;
     let y_extent = common::range(series.iter().flat_map(|s| s.1.iter().map(|p| p.1)))
         .ok_or("there are no numbers to draw")?;
+    for (name, pts, _) in &series {
+        let ys = pts.iter().map(|q| q.1);
+        common::note_cut(&mut ctx.notes, name, "y", ys, spec.y_min, spec.y_max);
+        let xs = pts.iter().map(|q| q.0);
+        common::note_cut(&mut ctx.notes, name, "x", xs, spec.x_min, spec.x_max);
+    }
     let size_extent = common::range(series.iter().flat_map(|s| s.2.iter().copied()));
+    // Bubble area follows the value from zero, so the largest size sets the scale.
+    let size_top = size_extent.map_or(0.0, |e| e.1);
+    if bubble && size_top <= 0.0 {
+        return fail("no bubble has a size above zero; check the size column");
+    }
     let x_pad = if log_x {
         x_extent
     } else {
@@ -205,16 +218,17 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
             .collect();
         let mut drawn = pts.len();
         if bubble {
-            let (smin, smax) = size_extent.unwrap_or((0.0, 1.0));
             let mut order: Vec<usize> = (0..px.len()).collect();
             order.sort_by(|a, b| sz[*b].total_cmp(&sz[*a]).then(a.cmp(b)));
+            let (mut hidden, mut tiny) = (0usize, 0usize);
             for k in order {
-                let norm = if smax > smin {
-                    (sz[k] - smin) / (smax - smin)
-                } else {
-                    0.5
-                };
-                let rad = 4.0 + norm.sqrt() * (max_r - 4.0);
+                if sz[k] <= 0.0 {
+                    hidden += 1;
+                    continue;
+                }
+                let area_r = max_r * (sz[k] / size_top).sqrt();
+                tiny += usize::from(area_r < MIN_BUBBLE_R);
+                let rad = area_r.max(MIN_BUBBLE_R);
                 let tip = format!(
                     "{name}: {}, {}, size {}",
                     common::x_text(&r.x, pts[k].0),
@@ -229,14 +243,29 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
                     &tip,
                 );
             }
+            if hidden > 0 {
+                ctx.notes.add(format!(
+                    "series {name}: {} with a size of zero or below {} not drawn",
+                    common::count_of(hidden, "bubble"),
+                    if hidden == 1 { "is" } else { "are" },
+                    name = crate::text::quote(name)
+                ));
+            }
+            if tiny > 0 {
+                ctx.notes.add(format!(
+                    "series {name}: {} too small to show to scale and drawn at the smallest size",
+                    common::count_of(tiny, "bubble"),
+                    name = crate::text::quote(name)
+                ));
+            }
         } else if px.len() > per_series_cap {
             let binned = bin_scatter(&px, per_series_cap);
             drawn = binned.bins.len();
             ctx.notes.add(format!(
-                "series {name:?} has {} points; they are drawn as {} grouped marks (cells of {} px, darker marks hold more points) and the extreme points stay exact",
+                "series {name} has {} points; they are drawn as {} grouped marks (cells of {} px, darker marks hold more points) and the extreme points stay exact",
                 px.len(),
                 binned.bins.len(),
-                binned.cell
+                binned.cell, name = crate::text::quote(name)
             ));
             for b in &binned.bins {
                 let a = (0.3 + 0.7 * (b.n.min(16) as f64 / 16.0)).min(0.95);
@@ -297,11 +326,12 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
         spec.title.as_deref(),
     );
     alt.push(' ');
+    let x_range = common::x_range_text(spec, &r.x, x_extent);
     alt.push_str(&common::axis_sentence(
         "X",
         x.label.as_deref(),
-        &common::x_text(&r.x, x_extent.0),
-        &common::x_text(&r.x, x_extent.1),
+        &x_range.0,
+        &x_range.1,
     ));
     if let Some((d0, d1)) = y.domain() {
         alt.push(' ');
@@ -329,8 +359,8 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
             .map(|c| format!(", correlation {}", compact(c)))
             .unwrap_or_default();
         alt.push_str(&format!(
-            " {:?}: {} points, y from {} to {}{r_text}.",
-            s.name,
+            " {}: {} points, y from {} to {}{r_text}.",
+            crate::text::quote(&s.name),
             s.points,
             s.min.map_or("n/a".into(), compact),
             s.max.map_or("n/a".into(), compact)

@@ -106,6 +106,17 @@ pub fn escape(text: &str) -> String {
     out
 }
 
+/// `text` in plain double quotes for descriptions and warnings. Unlike a
+/// debug print it keeps every character as written (accents, combining marks,
+/// emoji, quotes and backslashes); control characters become spaces.
+pub fn quote(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 2);
+    out.push('"');
+    out.extend(text.chars().map(|c| if c.is_control() { ' ' } else { c }));
+    out.push('"');
+    out
+}
+
 /// At most `max` characters of `text`, ending in an ellipsis when it was cut.
 /// Used wherever caller text is repeated outside the picture (tooltips, the
 /// description, warnings), so a huge string cannot multiply the output.

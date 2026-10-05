@@ -127,7 +127,19 @@ pub fn resolve(
     skip.extend(series_col);
     skip.extend(extra_skip);
     let ycols = value_columns(ctx, t, named_y, &skip)?;
-    let x = build_x(ctx, t, xc, policy)?;
+    // With no x named and the first column used as a value, x is the row number.
+    let x = if ctx.spec.x.is_none() && ycols.contains(&xc) {
+        ctx.notes.add(format!(
+            "x was not given and the first column {} is a value column, so rows are numbered along x",
+            crate::text::quote(&t.names[xc])
+        ));
+        row_numbers(
+            t.rows,
+            policy == XPolicy::Cat || ctx.spec.x_scale == ScaleKind::Category,
+        )
+    } else {
+        build_x(ctx, t, xc, policy)?
+    };
 
     let mut groups = Vec::new();
     let y_name;
@@ -150,14 +162,14 @@ pub fn resolve(
             }
             if unlabeled > 0 {
                 ctx.notes.add(format!(
-                    "{unlabeled} rows have no value in column {:?} and are not drawn",
-                    t.names[sc]
+                    "{unlabeled} rows have no value in column {} and are not drawn",
+                    crate::text::quote(&t.names[sc])
                 ));
             }
             if names.len() > MAX_SERIES {
                 ctx.notes.add(format!(
-                    "column {:?} has {} values; only the first {MAX_SERIES} series are drawn",
-                    t.names[sc],
+                    "column {} has {} values; only the first {MAX_SERIES} series are drawn",
+                    crate::text::quote(&t.names[sc]),
                     names.len()
                 ));
             }
@@ -200,12 +212,33 @@ pub fn resolve(
     Ok(r)
 }
 
+/// An x axis that counts rows from 1.
+fn row_numbers(rows: usize, categories: bool) -> XData {
+    let v: Vec<f64> = if categories {
+        (0..rows).map(|i| i as f64).collect()
+    } else {
+        (1..=rows).map(|i| i as f64).collect()
+    };
+    XData {
+        kind: if categories { XKind::Cat } else { XKind::Num },
+        name: "row".into(),
+        cats: if categories {
+            (1..=rows).map(|i| i.to_string()).collect()
+        } else {
+            Vec::new()
+        },
+        v,
+        years: false,
+    }
+}
+
 fn build_x(ctx: &mut Ctx<'_>, t: &Table, xc: usize, policy: XPolicy) -> Res<XData> {
     let name = t.names[xc].clone();
     let detected = cols::kind(t, xc);
     if detected == ColKind::Empty {
         return fail(format!(
-            "column {name:?} has no values; name a column that holds the x values"
+            "column {name} has no values; name a column that holds the x values",
+            name = crate::text::quote(&name)
         ));
     }
     let scale = ctx.spec.x_scale;
@@ -228,25 +261,27 @@ fn build_x(ctx: &mut Ctx<'_>, t: &Table, xc: usize, policy: XPolicy) -> Res<XDat
     };
     if policy == XPolicy::Cont && kind == XKind::Cat {
         return fail(format!(
-            "this chart needs numbers or dates on x, but column {name:?} holds text; use a bar chart for categories"
+            "this chart needs numbers or dates on x, but column {name} holds text; use a bar chart for categories",
+            name = crate::text::quote(&name)
         ));
     }
     match kind {
         XKind::Num => {
             if detected == ColKind::Time || detected == ColKind::Text {
                 return fail(format!(
-                    "x_scale needs numbers but column {name:?} holds {}",
+                    "x_scale needs numbers but column {name} holds {}",
                     if detected == ColKind::Time {
                         "dates"
                     } else {
                         "text"
-                    }
+                    },
+                    name = crate::text::quote(&name)
                 ));
             }
             let n = cols::numeric(t, xc);
             let bad = n.nulls + n.text;
             if bad > 0 {
-                ctx.notes.add(format!("column {name:?}: {bad} values are empty or not numbers; those rows are not drawn"));
+                ctx.notes.add(format!("column {name}: {bad} values are empty or not numbers; those rows are not drawn", name = crate::text::quote(&name)));
             }
             let years = crate::common::years_like(&n.v);
             Ok(XData {
@@ -262,7 +297,8 @@ fn build_x(ctx: &mut Ctx<'_>, t: &Table, xc: usize, policy: XPolicy) -> Res<XDat
                 let bad = v.iter().filter(|x| x.is_nan()).count();
                 if bad > 0 {
                     ctx.notes.add(format!(
-                        "column {name:?}: {bad} values are empty; those rows are not drawn"
+                        "column {name}: {bad} values are empty; those rows are not drawn",
+                        name = crate::text::quote(&name)
                     ));
                 }
                 Ok(XData {
@@ -274,7 +310,8 @@ fn build_x(ctx: &mut Ctx<'_>, t: &Table, xc: usize, policy: XPolicy) -> Res<XDat
                 })
             }
             None => fail(format!(
-                "x_scale is time but column {name:?} does not hold dates; use dates like 2024-01-31 or 2024-01-31T10:00:00Z"
+                "x_scale is time but column {name} does not hold dates; use dates like 2024-01-31 or 2024-01-31T10:00:00Z",
+                name = crate::text::quote(&name)
             )),
         },
         XKind::Cat => {
@@ -283,7 +320,8 @@ fn build_x(ctx: &mut Ctx<'_>, t: &Table, xc: usize, policy: XPolicy) -> Res<XDat
             let missing = idx.iter().filter(|i| i.is_none()).count();
             if missing > 0 {
                 ctx.notes.add(format!(
-                    "column {name:?}: {missing} rows have no value and are not drawn"
+                    "column {name}: {missing} rows have no value and are not drawn",
+                    name = crate::text::quote(&name)
                 ));
             }
             let v = idx

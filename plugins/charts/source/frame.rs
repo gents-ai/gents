@@ -18,6 +18,8 @@ pub const TICK_SIZE: f64 = 11.0;
 pub const LABEL_SIZE: f64 = 12.0;
 const TICK_LEN: f64 = 4.0;
 const MIN_PLOT: f64 = 60.0;
+/// The error for a layout that leaves no room for the plot.
+pub const TOO_SMALL: &str = "the chart is too small for its labels and legend; make it larger, shorten the labels or move the legend";
 
 /// A rectangle in pixels.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -403,11 +405,21 @@ pub fn layout(ctx: &mut Ctx<'_>, spec: &FrameSpec<'_>) -> crate::err::Res<Laid> 
     let mut xt = (((ctx.w - 150.0) / 90.0).floor() as usize).clamp(2, 12);
     let mut yt = (((ctx.h - 140.0) / 55.0).floor() as usize).clamp(2, 10);
     let mut guard = 0;
+    let mut titled = true;
     loop {
         let x = (spec.x)(xt);
         let y = (spec.y)(yt);
         let y2 = spec.y2.map(|f| f(yt));
-        let frame = plan(ctx, spec, &x, &y, y2.as_ref())?;
+        let has_title = ctx.spec.title.is_some() || ctx.spec.subtitle.is_some();
+        let frame = match plan(ctx, spec, &x, &y, y2.as_ref(), titled) {
+            // A small image gives up its title before it gives up the chart.
+            Err(e) if titled && has_title && e.0 == TOO_SMALL => {
+                titled = false;
+                ctx.notes.add("the title and subtitle are left out because the image is too small for them; make it larger to show them");
+                plan(ctx, spec, &x, &y, y2.as_ref(), false)?
+            }
+            other => other?,
+        };
         guard += 1;
         let mut changed = false;
         if frame.x_crowded && xt > 2 {
@@ -458,15 +470,18 @@ fn plan(
     x: &Axis,
     y: &Axis,
     y2: Option<&Axis>,
+    titled: bool,
 ) -> crate::err::Res<Frame> {
     let (w, h) = (ctx.w, ctx.h);
     let avail_w = w - 2.0 * PAD;
     let mut title = Vec::new();
+    // Notes about the title are kept until the layout is known to fit.
+    let mut title_notes = Vec::new();
     let mut cursor = PAD;
-    if let Some(t) = &ctx.spec.title {
+    if let Some(t) = ctx.spec.title.as_ref().filter(|_| titled) {
         let (text, full, size) = fit_title(t, avail_w, &[18.0, 16.0, 14.0], true);
         if full.is_some() {
-            ctx.notes.add("the title is too long for the image and was shortened; the full text is in the description");
+            title_notes.push("the title is too long for the image and was shortened; the full text is in the description");
         }
         title.push(TextLine {
             text,
@@ -477,10 +492,10 @@ fn plan(
         });
         cursor += size + 6.0;
     }
-    if let Some(t) = &ctx.spec.subtitle {
+    if let Some(t) = ctx.spec.subtitle.as_ref().filter(|_| titled) {
         let (text, full, size) = fit_title(t, avail_w, &[13.0, 12.0, 11.0], false);
         if full.is_some() {
-            ctx.notes.add("the subtitle is too long for the image and was shortened; the full text is in the description");
+            title_notes.push("the subtitle is too long for the image and was shortened; the full text is in the description");
         }
         title.push(TextLine {
             text,
@@ -607,9 +622,10 @@ fn plan(
     let plot_y = top + 4.0;
     let plot_h = plot_bottom - plot_y;
     if plot_w < MIN_PLOT || plot_h < MIN_PLOT {
-        return crate::err::fail(
-            "the chart is too small for its labels and legend; make it larger, shorten the labels or move the legend",
-        );
+        return crate::err::fail(TOO_SMALL);
+    }
+    for n in title_notes {
+        ctx.notes.add(n);
     }
     let plot = Rect {
         x: plot_x,

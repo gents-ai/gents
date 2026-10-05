@@ -181,6 +181,17 @@ pub enum Shape {
     Record,
 }
 
+/// Smallest PNG scale the budget fallback goes down to.
+const MIN_SCALE: f64 = 0.25;
+/// Redraws the budget fallback makes at most.
+const MAX_SHRINKS: u32 = 8;
+
+/// The scale of the next, smaller PNG; `None` once the floor or the number of
+/// redraws is reached.
+fn next_scale(scale: f64, tries: u32) -> Option<f64> {
+    (scale > MIN_SCALE && tries < MAX_SHRINKS).then(|| (scale * 0.7).max(MIN_SCALE))
+}
+
 /// Builds the result JSON, shrinking it to the budget: first the SVG text is
 /// left out, then the PNG is drawn smaller. Every step is a warning.
 pub fn deliver(r: Rendered, output: Output, files: &[Written]) -> Res<String> {
@@ -212,12 +223,13 @@ pub fn deliver_as(mut r: Rendered, output: Output, files: &[Written], shape: Sha
             warnings.push("the SVG is left out of the result because it would exceed the output limit; the PNG and any saved files are complete".into());
             continue;
         }
-        if r.png.is_none() || scale <= 0.25 || tries >= 8 {
+        let next = next_scale(scale, tries).filter(|_| r.png.is_some());
+        let Some(next) = next else {
             return fail(
                 "the chart is too detailed for the output limit; reduce the data, the size or the number of series",
             );
-        }
-        scale = (scale * 0.7).max(0.25);
+        };
+        scale = next;
         tries += 1;
         r.png = Some(raster::render(&r.svg, scale)?);
         let note = format!("the PNG was drawn at {scale:.2}x so the result fits the output limit");
@@ -404,6 +416,45 @@ mod tests {
             .unwrap();
         let (width, _, _) = raster::decode(&png).unwrap();
         assert_eq!(width, 140, "200 pixels at 0.7");
+    }
+
+    #[test]
+    fn the_png_scale_steps_down_by_thirty_percent_to_a_floor_of_a_quarter() {
+        let mut seen = Vec::new();
+        let (mut scale, mut tries) = (1.0, 0);
+        while let Some(next) = next_scale(scale, tries) {
+            seen.push(next);
+            scale = next;
+            tries += 1;
+        }
+        let want = [0.7, 0.49, 0.343, 0.2401_f64.max(0.25)];
+        assert_eq!(seen.len(), want.len(), "{seen:?}");
+        for (got, want) in seen.iter().zip(want) {
+            assert!((got - want).abs() < 1e-12, "{seen:?}");
+        }
+        // Every step below one half is still taken: only the floor and the redraw count stop it.
+        assert!(next_scale(0.49, 2).is_some() && next_scale(0.343, 3).is_some());
+        assert!(next_scale(0.25, 3).is_none());
+        assert!(
+            next_scale(1.0, MAX_SHRINKS).is_none() && next_scale(1.0, MAX_SHRINKS - 1).is_some()
+        );
+    }
+
+    #[test]
+    fn a_result_of_exactly_the_budget_is_kept_and_one_byte_more_loses_the_svg() {
+        let base = deliver(rendered(0), Output::Both, &[]).unwrap().len();
+        let exact = deliver(rendered(BUDGET - base), Output::Both, &[]).unwrap();
+        assert_eq!(exact.len(), BUDGET);
+        assert!(parse(&exact)["response"]["svg"].is_string());
+        let over = deliver(rendered(BUDGET - base + 1), Output::Both, &[]).unwrap();
+        assert!(over.len() < BUDGET);
+        let v = parse(&over);
+        assert!(v["response"].get("svg").is_none());
+        assert!(
+            v["response"]["warnings"]
+                .to_string()
+                .contains("SVG is left out")
+        );
     }
 
     #[test]

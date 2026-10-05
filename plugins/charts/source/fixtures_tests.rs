@@ -15,7 +15,7 @@ fn fixtures_dir() -> std::path::PathBuf {
 fn the_generator_reproduces_every_committed_fixture_byte_for_byte() {
     let dir = fixtures_dir();
     let files = generator::files();
-    assert_eq!(files.len(), 19);
+    assert_eq!(files.len(), 20);
     for (name, bytes) in &files {
         let committed = std::fs::read(dir.join(name)).unwrap_or_else(|e| panic!("{name}: {e}"));
         assert!(

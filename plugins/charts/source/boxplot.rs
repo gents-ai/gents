@@ -108,7 +108,7 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
             "no numbers for {}; those boxes are left empty",
             empty
                 .iter()
-                .map(|e| format!("{e:?}"))
+                .map(|e| crate::text::quote(e))
                 .collect::<Vec<_>>()
                 .join(", ")
         ));
@@ -275,8 +275,8 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
     for (g, s) in groups.iter().zip(&stats).take(8) {
         if let Some(s) = s {
             alt.push_str(&format!(
-                " {:?}: median {}, quartiles {} to {}, range {} to {}, {}.",
-                g.0,
+                " {}: median {}, quartiles {} to {}, range {} to {}, {}.",
+                crate::text::quote(&g.0),
                 compact(s.median),
                 compact(s.q1),
                 compact(s.q3),

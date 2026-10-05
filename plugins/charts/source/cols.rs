@@ -6,7 +6,7 @@ use crate::dates;
 use crate::err::{Res, fail};
 use crate::format::compact;
 use crate::spec::{Agg, Sort};
-use crate::table::{Cell, Table, plain_number};
+use crate::table::{Cell, Table, is_null_marker, plain_number};
 
 const MAX_WARNINGS: usize = 40;
 
@@ -61,12 +61,14 @@ pub fn column(t: &Table, name: &str) -> Res<usize> {
             let more = if t.names.len() > 12 { ", ..." } else { "" };
             if t.names.is_empty() {
                 fail(format!(
-                    "column {name:?} is not in the data, which has no columns"
+                    "column {name} is not in the data, which has no columns",
+                    name = crate::text::quote(name)
                 ))
             } else {
                 fail(format!(
-                    "column {name:?} is not in the data; the columns are {}{more}",
-                    shown.join(", ")
+                    "column {name} is not in the data; the columns are {}{more}",
+                    shown.join(", "),
+                    name = crate::text::quote(name)
                 ))
             }
         }
@@ -88,16 +90,21 @@ pub enum ColKind {
 
 /// Classifies column `c`.
 pub fn kind(t: &Table, c: usize) -> ColKind {
-    let (mut nums, mut strs, mut dates_n) = (0usize, 0usize, 0usize);
+    let (mut nums, mut strs, mut dates_n, mut marks) = (0usize, 0usize, 0usize, 0usize);
     for cell in &t.cols[c] {
         match cell {
             Cell::Null => {}
             Cell::Num(_) => nums += 1,
+            Cell::Str(i) if is_null_marker(t.pool.get(*i)) => marks += 1,
             Cell::Str(i) => {
                 strs += 1;
                 dates_n += usize::from(dates::parse(t.pool.get(*i)).is_some());
             }
         }
+    }
+    // Markers like NA are gaps next to numbers or dates and labels without any.
+    if nums == 0 && dates_n == 0 {
+        strs += marks;
     }
     if nums + strs == 0 {
         ColKind::Empty
@@ -136,6 +143,10 @@ pub fn numeric(t: &Table, c: usize) -> Numeric {
                 n.nulls += 1;
                 n.v.push(f64::NAN);
             }
+            Cell::Str(i) if is_null_marker(t.pool.get(*i)) => {
+                n.nulls += 1;
+                n.v.push(f64::NAN);
+            }
             Cell::Str(i) => {
                 n.text += 1;
                 if n.first_text.is_none() {
@@ -160,14 +171,15 @@ fn shorten(s: &str) -> String {
 pub fn report_numeric(notes: &mut Notes, name: &str, n: &Numeric) {
     if n.nulls > 0 {
         notes.add(format!(
-            "column {name:?}: {} empty values are drawn as gaps, not zeros",
-            n.nulls
+            "column {name}: {} empty values are drawn as gaps, not zeros",
+            n.nulls,
+            name = crate::text::quote(name)
         ));
     }
     if let Some((row, text)) = &n.first_text {
         notes.add(format!(
-            "column {name:?}: {} values are not numbers (first is {text:?} in row {row}) and are drawn as gaps, not zeros",
-            n.text
+            "column {name}: {} values are not numbers (first is {text} in row {row}) and are drawn as gaps, not zeros",
+            n.text, name = crate::text::quote(name), text = crate::text::quote(text)
         ));
     }
 }
@@ -180,6 +192,7 @@ pub fn times(t: &Table, c: usize) -> Option<Vec<f64>> {
     for cell in &t.cols[c] {
         match cell {
             Cell::Null => out.push(f64::NAN),
+            Cell::Str(i) if is_null_marker(t.pool.get(*i)) => out.push(f64::NAN),
             Cell::Str(i) => {
                 out.push(dates::parse(t.pool.get(*i))?);
                 any = true;
@@ -201,11 +214,14 @@ pub fn number_label(v: f64) -> String {
 
 /// Label of each row; `None` for empty cells.
 pub fn labels(t: &Table, c: usize) -> Vec<Option<String>> {
+    // In a number or date column a marker like NA is a gap; in a text column it is a label.
+    let markers_are_gaps = kind(t, c) != ColKind::Text;
     t.cols[c]
         .iter()
         .map(|cell| match cell {
             Cell::Null => None,
             Cell::Num(v) => Some(number_label(*v)),
+            Cell::Str(i) if markers_are_gaps && is_null_marker(t.pool.get(*i)) => None,
             Cell::Str(i) => Some(t.pool.get(*i).to_owned()),
         })
         .collect()
@@ -230,13 +246,39 @@ pub fn distinct(labels: &[Option<String>]) -> (Vec<String>, Vec<Option<usize>>) 
     (names, rows)
 }
 
-fn label_order(a: &str, b: &str) -> std::cmp::Ordering {
-    match (plain_number(a), plain_number(b)) {
-        (Some(x), Some(y)) => x.total_cmp(&y),
-        _ => match (dates::parse(a), dates::parse(b)) {
-            (Some(x), Some(y)) => x.total_cmp(&y),
-            _ => a.cmp(b),
-        },
+/// A label's place in the label order: numbers, then dates, then text. Each
+/// class compares within itself, so the order is total however labels mix.
+enum LabelKey<'a> {
+    Num(f64),
+    Date(f64),
+    Text(&'a str),
+}
+
+impl<'a> LabelKey<'a> {
+    fn of(s: &'a str) -> Self {
+        if let Some(n) = plain_number(s) {
+            Self::Num(n)
+        } else if let Some(d) = dates::parse(s) {
+            Self::Date(d)
+        } else {
+            Self::Text(s)
+        }
+    }
+
+    fn rank(&self) -> u8 {
+        match self {
+            Self::Num(_) => 0,
+            Self::Date(_) => 1,
+            Self::Text(_) => 2,
+        }
+    }
+
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        match (self, other) {
+            (Self::Num(a), Self::Num(b)) | (Self::Date(a), Self::Date(b)) => a.total_cmp(b),
+            (Self::Text(a), Self::Text(b)) => a.cmp(b),
+            _ => self.rank().cmp(&other.rank()),
+        }
     }
 }
 
@@ -255,8 +297,14 @@ pub fn order(names: &[String], totals: &[f64], sort: Sort) -> Vec<usize> {
     };
     match sort {
         Sort::None => {}
-        Sort::X => idx.sort_by(|a, b| label_order(&names[*a], &names[*b])),
-        Sort::XDesc => idx.sort_by(|a, b| label_order(&names[*b], &names[*a])),
+        Sort::X | Sort::XDesc => {
+            let keys: Vec<LabelKey> = names.iter().map(|n| LabelKey::of(n)).collect();
+            if sort == Sort::X {
+                idx.sort_by(|a, b| keys[*a].cmp(&keys[*b]));
+            } else {
+                idx.sort_by(|a, b| keys[*b].cmp(&keys[*a]));
+            }
+        }
         Sort::Value => idx.sort_by(by_total),
         Sort::ValueDesc => idx.sort_by(|a, b| {
             let (x, y) = (totals[*a], totals[*b]);

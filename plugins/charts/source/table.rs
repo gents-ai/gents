@@ -3,7 +3,7 @@
 //! while a source streams into it, so a table never outgrows its budget no
 //! matter how large the input is.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// One value.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -81,6 +81,8 @@ pub struct Table {
     pub bad_utf8: bool,
     /// Columns left out because the table already holds the column limit.
     pub dropped_columns: usize,
+    /// Cells written with a decimal comma that were read as numbers.
+    pub decimal_commas: usize,
 }
 
 impl Table {
@@ -147,21 +149,37 @@ pub fn plain_number(t: &str) -> Option<f64> {
     t.parse::<f64>().ok().filter(|v| v.is_finite())
 }
 
+/// Text that stands for a missing value in a numeric column.
+pub fn is_null_marker(t: &str) -> bool {
+    ["null", "na", "n/a", "nan", "none"]
+        .iter()
+        .any(|m| t.eq_ignore_ascii_case(m))
+}
+
 /// Trims header names, names empty ones `column N` and makes repeated ones
 /// unique by appending `_2`, `_3`.
 pub fn normalize_header(header: &[String]) -> Vec<String> {
-    let mut out: Vec<String> = Vec::with_capacity(header.len());
+    let mut seen: HashSet<String> = HashSet::with_capacity(header.len());
+    // The next suffix to try per base name, so a long run of one name stays linear.
+    let mut next: HashMap<String, usize> = HashMap::new();
+    let mut out = Vec::with_capacity(header.len());
     for (i, raw) in header.iter().enumerate() {
         let base = match raw.trim() {
             "" => format!("column {}", i + 1),
             t => t.to_owned(),
         };
         let mut name = base.clone();
-        let mut n = 2;
-        while out.contains(&name) {
-            name = format!("{base}_{n}");
-            n += 1;
+        if seen.contains(&name) {
+            let n = next.entry(base.clone()).or_insert(2);
+            loop {
+                name = format!("{base}_{n}");
+                *n += 1;
+                if !seen.contains(&name) {
+                    break;
+                }
+            }
         }
+        seen.insert(name.clone());
         out.push(name);
     }
     out
@@ -174,6 +192,7 @@ pub struct Builder {
     keep: Option<Vec<String>>,
     /// For header-driven sources: the table column of each source column.
     slots: Vec<Option<usize>>,
+    by_name: HashMap<String, usize>,
     max_rows: usize,
     max_bytes: usize,
 }
@@ -190,6 +209,7 @@ impl Builder {
             table: Table::default(),
             keep,
             slots: Vec::new(),
+            by_name: HashMap::new(),
             max_rows,
             max_bytes,
         }
@@ -203,8 +223,8 @@ impl Builder {
     }
 
     fn column(&mut self, name: &str) -> Option<usize> {
-        if let Some(i) = self.table.col(name) {
-            return Some(i);
+        if let Some(i) = self.by_name.get(name) {
+            return Some(*i);
         }
         if !self.wants(name) {
             return None;
@@ -215,7 +235,9 @@ impl Builder {
         }
         self.table.names.push(name.to_owned());
         self.table.cols.push(vec![Cell::Null; self.table.rows]);
-        Some(self.table.names.len() - 1)
+        let i = self.table.names.len() - 1;
+        self.by_name.insert(name.to_owned(), i);
+        Some(i)
     }
 
     /// Declares the header of a positional source (CSV, `columns`).
@@ -253,15 +275,13 @@ impl Builder {
     }
 
     /// Text becomes a number when it is plain decimal notation, a null when
-    /// it is empty or a null marker, and stays text otherwise. Leading zeros
-    /// keep an identifier like `007` as text.
+    /// it is empty, and stays text otherwise. Leading zeros keep an identifier
+    /// like `007` as text. A null marker such as `NA` stays text here: the
+    /// column readers treat it as empty in a numeric column and as a label
+    /// (Namibia, "None") in a text column.
     pub fn text_cell(&mut self, raw: &str) -> Cell {
         let t = raw.trim();
-        if t.is_empty()
-            || ["null", "na", "n/a", "nan", "none"]
-                .iter()
-                .any(|m| t.eq_ignore_ascii_case(m))
-        {
+        if t.is_empty() {
             return Cell::Null;
         }
         match plain_number(t) {
@@ -287,6 +307,11 @@ impl Builder {
     /// Marks that a row had a different number of fields than the header.
     pub fn note_ragged(&mut self) {
         self.table.ragged += 1;
+    }
+
+    /// Records a number written with a decimal comma.
+    pub fn note_decimal_comma(&mut self) {
+        self.table.decimal_commas += 1;
     }
 
     /// Marks bytes that were not valid UTF-8.
@@ -379,14 +404,19 @@ mod tests {
     }
 
     #[test]
-    fn text_cells_are_pooled_and_null_markers_become_null() {
+    fn text_cells_are_pooled_and_only_blank_text_becomes_null() {
         let mut b = Builder::new(None);
         let a = b.text_cell("north");
         let again = b.text_cell(" north ");
         assert_eq!(a, again);
-        for marker in ["", "  ", "null", "NULL", "NA", "n/a", "NaN", "None"] {
-            assert_eq!(b.text_cell(marker), Cell::Null, "{marker:?}");
+        for blank in ["", "  "] {
+            assert_eq!(b.text_cell(blank), Cell::Null, "{blank:?}");
         }
+        for marker in ["null", "NULL", "NA", "n/a", "NaN", "None"] {
+            assert!(matches!(b.text_cell(marker), Cell::Str(_)), "{marker:?}");
+            assert!(is_null_marker(marker), "{marker:?}");
+        }
+        assert!(!is_null_marker("Namibia") && !is_null_marker("nan0"));
         assert_eq!(b.text_cell("12.5"), Cell::Num(12.5));
     }
 

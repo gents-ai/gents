@@ -220,6 +220,21 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
         | (true, AxisScale::Cont(v), AxisScale::Band(b)) => (*b, *v),
         _ => return fail("the chart could not be laid out; check the data"),
     };
+    for (k, (g, row)) in r.groups.iter().zip(&grid).take(n_bars).enumerate() {
+        let tops: Vec<f64> = if stacked {
+            layers[k].hi.clone()
+        } else {
+            row.clone()
+        };
+        common::note_cut(
+            &mut ctx.notes,
+            &g.name,
+            "y",
+            tops.into_iter(),
+            spec.y_min,
+            spec.y_max,
+        );
+    }
     let p = frame.plot;
     let clip =
         (spec.y_min.is_some() || spec.y_max.is_some()).then(|| svg.clip_rect(p.x, p.y, p.w, p.h));
@@ -456,15 +471,15 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
             .collect();
         match common::extremes(&pts) {
             Some((lo, hi)) => alt.push_str(&format!(
-                " {:?} ({}): highest {} at {}, lowest {} at {}.",
-                s.name,
+                " {} ({}): highest {} at {}, lowest {} at {}.",
+                crate::text::quote(&s.name),
                 s.mark,
                 compact(hi.1),
                 r.x.cats[hi.0 as usize],
                 compact(lo.1),
                 r.x.cats[lo.0 as usize]
             )),
-            None => alt.push_str(&format!(" {:?}: no numbers.", s.name)),
+            None => alt.push_str(&format!(" {}: no numbers.", crate::text::quote(&s.name))),
         }
     }
     if info.len() > 8 {

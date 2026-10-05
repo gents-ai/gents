@@ -373,15 +373,19 @@ fn a_missing_cell_is_drawn_empty_and_counted_not_coloured_as_zero() {
         &rows,
     ));
     let cells = cell_fills(&parse(&r.svg));
+    // An empty cell is an outline, never a fill that a colour scale could also produce.
     assert!(
         cells
             .iter()
-            .any(|c| c.0 == "b, y: no value" && c.1 == LIGHT.grid)
+            .any(|c| c.0 == "b, y: no value" && c.1 == "none")
     );
+    let doc = parse(&r.svg);
+    let rect = titled(&doc, "rect", "b, y: no value");
+    assert_eq!(rect[0].attribute("stroke-dasharray"), Some("3 2"));
     assert!(
         r.warnings
             .iter()
-            .any(|w| w.contains("1 cells have no value and are drawn empty")),
+            .any(|w| w.contains("1 cell has no value and is drawn empty")),
         "{:?}",
         r.warnings
     );
@@ -567,5 +571,80 @@ fn a_heatmap_needs_three_distinct_columns_with_numbers() {
             &[json!(["x", "y", null])]
         ))
         .contains("no numbers to colour")
+    );
+}
+
+fn gappy_diverging() -> String {
+    // Tue/am is exactly zero (the neutral colour) and Wed/am is missing.
+    with_rows(
+        "heatmap",
+        r#""x":"c","y":["r"],"value":"v""#,
+        &["r", "c", "v"],
+        &[
+            json!(["Tue", "am", 0]),
+            json!(["Tue", "pm", -4]),
+            json!(["Wed", "pm", 6]),
+        ],
+    )
+}
+
+#[test]
+fn a_missing_cell_never_looks_like_the_neutral_colour_of_a_diverging_scale() {
+    let r = ok(&gappy_diverging());
+    let cells = cell_fills(&parse(&r.svg));
+    let zero = cells.iter().find(|c| c.0 == "Tue, am: 0").unwrap();
+    let gap = cells.iter().find(|c| c.0 == "Wed, am: no value").unwrap();
+    assert_eq!(zero.1, hex(diverging(0.5, &LIGHT)));
+    assert_eq!(gap.1, "none");
+    assert_ne!(zero.1, gap.1);
+}
+
+#[test]
+fn a_heatmap_with_gaps_has_a_no_value_key_and_one_without_has_none() {
+    let gappy = parse(&ok(&gappy_diverging()).svg)
+        .descendants()
+        .filter(|n| n.is_element() && n.tag_name().name() == "text" && n.text() == Some("no value"))
+        .count();
+    assert_eq!(gappy, 1);
+    let full = ok(&grid());
+    let doc = parse(&full.svg);
+    assert!(!texts(&doc).iter().any(|t| t == "no value"));
+}
+
+#[test]
+fn heatmap_legend_placement_is_reported_when_it_cannot_be_honoured() {
+    for place in ["left", "top", "bottom"] {
+        let json = gappy_diverging().replacen("{", &format!("{{\"legend\":\"{place}\","), 1);
+        let r = ok(&json);
+        assert!(
+            r.warnings.iter().any(|w| w
+                == "legend placement is ignored for a heatmap; the colour bar stays on the right"),
+            "{place}: {:?}",
+            r.warnings
+        );
+    }
+    for place in ["right", "auto"] {
+        let json = gappy_diverging().replacen("{", &format!("{{\"legend\":\"{place}\","), 1);
+        assert!(
+            ok(&json)
+                .warnings
+                .iter()
+                .all(|w| !w.contains("legend placement")),
+            "{place}"
+        );
+    }
+}
+
+#[test]
+fn legend_none_removes_the_colour_bar_and_widens_the_plot() {
+    let with = ok(&gappy_diverging());
+    let json = gappy_diverging().replacen("{", "{\"legend\":\"none\",", 1);
+    let without = ok(&json);
+    assert!(with.svg.contains("url(#scale)") && !without.svg.contains("url(#scale)"));
+    assert!(
+        without.plot.w > with.plot.w + 60.0,
+        "{} vs {}",
+        without.plot.w,
+        with.plot.w
     );
 }

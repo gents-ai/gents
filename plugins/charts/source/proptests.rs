@@ -473,3 +473,161 @@ proptest! {
         prop_assert_eq!(first, second);
     }
 }
+
+proptest! {
+    #![proptest_config(cfg(300))]
+
+    #[test]
+    fn ordering_labels_never_panics_and_is_a_permutation(
+        labels in proptest::collection::vec(
+            prop_oneof![
+                "[0-9]{1,3}",
+                "[0-9]{1,2}[a-c]",
+                "[a-c][0-9]{1,2}",
+                (1u32..12, 1u32..28).prop_map(|(m, d)| format!("2024-{m:02}-{d:02}")),
+                "[ -~]{0,4}",
+            ],
+            0..120,
+        )
+    ) {
+        use crate::spec::Sort;
+        let totals = vec![0.0; labels.len()];
+        for sort in [Sort::X, Sort::XDesc] {
+            let mut idx = crate::cols::order(&labels, &totals, sort);
+            idx.sort_unstable();
+            prop_assert_eq!(idx, (0..labels.len()).collect::<Vec<_>>());
+        }
+    }
+}
+
+/// Labels read in order from the text elements anchored in the middle below
+/// the plot (the x tick labels of a continuous axis).
+fn x_tick_texts(svg: &str, plot: &crate::frame::Rect) -> Vec<String> {
+    let doc = parse(svg);
+    all(&doc, "text")
+        .into_iter()
+        .filter(|n| {
+            n.attribute("text-anchor") == Some("middle") && n.attribute("transform").is_none()
+        })
+        .filter(|n| num(*n, "y") > plot.bottom() && n.attribute("font-weight").is_none())
+        .map(|n| n.text().unwrap_or("").to_owned())
+        .filter(|t| t.bytes().all(|b| b.is_ascii_digit() || b == b'-'))
+        .collect()
+}
+
+proptest! {
+    #![proptest_config(cfg(300))]
+
+    #[test]
+    fn number_axes_never_repeat_a_tick_label_and_always_increase(a in magnitude(), b in magnitude(), target in 2usize..13, integer in any::<bool>()) {
+        use crate::axes::{NumSpec, numeric};
+        use crate::frame::AxisKind;
+        let (lo, hi) = if a < b { (a, b) } else { (b, a) };
+        prop_assume!(hi - lo > 1e-9 * lo.abs().max(hi.abs()));
+        let axis = numeric(
+            NumSpec { min: lo, max: hi, user_min: None, user_max: None, zero: false, nice: true, log: false, integer },
+            target,
+            None,
+            None,
+        );
+        let AxisKind::Cont { ticks, .. } = axis.kind else { panic!("continuous") };
+        prop_assert!(ticks.windows(2).all(|w| w[0].value < w[1].value));
+        let mut labels: Vec<&str> = ticks.iter().map(|t| t.label.as_str()).collect();
+        let n = labels.len();
+        labels.sort_unstable();
+        labels.dedup();
+        prop_assert_eq!(labels.len(), n, "{:?}", ticks.iter().map(|t| (t.value, t.label.clone())).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn year_axes_have_distinct_whole_year_labels(first in 1000i64..2900, len in 2i64..40, chart in 0usize..3) {
+        let rows: Vec<Value> = (0..len).map(|i| json!([first + i, 10 + (i * 7) % 13])).collect();
+        let r = ok(&with_rows(["line", "area", "scatter"][chart], r#""x":"year","y":["v"],"output":"svg""#, &["year", "v"], &rows));
+        let labels = x_tick_texts(&r.svg, &r.plot);
+        prop_assert!(labels.len() >= 2, "{labels:?}");
+        let years: Vec<i64> = labels.iter().map(|l| l.parse().unwrap_or(-1)).collect();
+        prop_assert!(years.iter().all(|y| *y >= 0), "whole years only: {labels:?}");
+        prop_assert!(years.windows(2).all(|w| w[0] < w[1]), "{labels:?}");
+    }
+
+    #[test]
+    fn time_axes_have_distinct_increasing_labels(start in 0i64..4_000_000_000, span in 60i64..3_000_000_000, target in 2usize..12) {
+        let t = dates::ticks(start as f64, (start + span) as f64, target, None);
+        prop_assert!(t.values.windows(2).all(|w| w[0] < w[1]));
+        let mut labels = t.labels.clone();
+        let n = labels.len();
+        labels.sort_unstable();
+        labels.dedup();
+        prop_assert_eq!(labels.len(), n, "{:?}", t.labels);
+    }
+}
+
+proptest! {
+    #![proptest_config(cfg(60))]
+
+    #[test]
+    fn histogram_bars_stay_inside_the_plot_area(xs in prop::collection::vec(-1000.0f64..1000.0, 2..80), bins in prop::option::of(1u32..40)) {
+        let rows: Vec<Value> = xs.iter().map(|x| json!([(x * 4.0).round() / 4.0])).collect();
+        let extra = match bins { Some(b) => format!(r#""x":"x","bins":{b}"#), None => r#""x":"x""#.to_owned() };
+        let r = ok(&with_rows("histogram", &extra, &["x"], &rows));
+        let doc = parse(&r.svg);
+        let bars = titled(&doc, "rect", "x: ");
+        prop_assert!(!bars.is_empty());
+        for b in bars {
+            let (x, y, w, h) = rect_of(b);
+            prop_assert!(inside(&r.plot, x, y, 0.011) && inside(&r.plot, x + w, y + h, 0.011), "{x} {y} {w} {h} in {:?}", r.plot);
+        }
+    }
+
+    #[test]
+    fn box_marks_and_outliers_stay_inside_the_plot_area(groups in prop::collection::vec(prop::collection::vec(-500i32..500, 1..30), 1..6)) {
+        let rows: Vec<Value> = groups.iter().enumerate().flat_map(|(g, vs)| vs.iter().map(move |v| json!([format!("g{g}"), v]))).collect();
+        let r = ok(&with_rows("box", r#""x":"g","y":["v"]"#, &["g", "v"], &rows));
+        let doc = parse(&r.svg);
+        for b in all(&doc, "rect").into_iter().filter(|b| title(*b).is_some_and(|t| t.contains("median"))) {
+            let (x, y, w, h) = rect_of(b);
+            prop_assert!(inside(&r.plot, x, y, 0.011) && inside(&r.plot, x + w, y + h, 0.011), "{x} {y} {w} {h} in {:?}", r.plot);
+        }
+        for c in all(&doc, "circle") {
+            prop_assert!(inside(&r.plot, num(c, "cx"), num(c, "cy"), 0.011), "outlier outside {:?}", r.plot);
+        }
+        for l in all(&doc, "line").into_iter().filter(|l| l.attribute("stroke-width") == Some("1.5")) {
+            for (x, y) in [(num(l, "x1"), num(l, "y1")), (num(l, "x2"), num(l, "y2"))] {
+                prop_assert!(inside(&r.plot, x, y, 0.011), "whisker end ({x}, {y}) outside {:?}", r.plot);
+            }
+        }
+    }
+
+    #[test]
+    fn heatmap_cells_stay_inside_the_plot_area(cells in prop::collection::vec((0u8..6, 0u8..6, -50i32..50), 1..30)) {
+        let rows: Vec<Value> = cells.iter().map(|(r, c, v)| json!([format!("r{r}"), format!("c{c}"), v])).collect();
+        let r = ok(&with_rows("heatmap", r#""x":"c","y":["r"],"value":"v""#, &["r", "c", "v"], &rows));
+        let doc = parse(&r.svg);
+        let marks: Vec<_> = all(&doc, "rect").into_iter().filter(|b| title(*b).is_some_and(|t| t.starts_with('r'))).collect();
+        prop_assert!(!marks.is_empty());
+        for b in marks {
+            let (x, y, w, h) = rect_of(b);
+            prop_assert!(inside(&r.plot, x, y, 0.011) && inside(&r.plot, x + w, y + h, 0.011), "{x} {y} {w} {h} in {:?}", r.plot);
+        }
+    }
+
+    #[test]
+    fn pie_slices_stay_inside_the_plot_area_and_close_the_circle(vals in prop::collection::vec(1u32..1000, 1..9), donut in any::<bool>()) {
+        let rows: Vec<Value> = vals.iter().enumerate().map(|(i, v)| json!([format!("s{i}"), v])).collect();
+        let r = ok(&with_rows(if donut { "donut" } else { "pie" }, "", &["k", "v"], &rows));
+        let doc = parse(&r.svg);
+        let slices: Vec<_> = all(&doc, "path").into_iter().filter(|p| title(*p).is_some_and(|t| t.starts_with('s'))).collect();
+        let discs: Vec<_> = all(&doc, "circle").into_iter().filter(|c| title(*c).is_some_and(|t| t.starts_with('s'))).collect();
+        prop_assert_eq!(slices.len() + discs.len(), vals.len());
+        for s in slices {
+            for (x, y) in path_points(s.attribute("d").unwrap_or("")) {
+                prop_assert!(inside(&r.plot, x, y, 0.02), "({x}, {y}) outside {:?}", r.plot);
+            }
+        }
+        // A single slice is a whole disc.
+        for c in discs {
+            let (cx, cy, rad) = (num(c, "cx"), num(c, "cy"), num(c, "r"));
+            prop_assert!(inside(&r.plot, cx - rad, cy - rad, 0.02) && inside(&r.plot, cx + rad, cy + rad, 0.02), "disc outside {:?}", r.plot);
+        }
+    }
+}

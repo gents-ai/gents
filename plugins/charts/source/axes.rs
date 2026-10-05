@@ -190,8 +190,9 @@ pub fn require_positive(
     match first {
         None => Ok(()),
         Some((row, v)) => fail(format!(
-            "the {axis} axis is logarithmic but column {column:?} has {bad} values at or below zero (first is {} in row {row}); remove them or use a linear axis",
-            crate::format::compact(v)
+            "the {axis} axis is logarithmic but column {column} has {bad} values at or below zero (first is {} in row {row}); remove them or use a linear axis",
+            crate::format::compact(v),
+            column = crate::text::quote(column)
         )),
     }
 }

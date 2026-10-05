@@ -13,7 +13,8 @@ All the `charts` fields, and:
 - `path`: the folder to write into. It must be a folder, not a file; the data
   file, if there is one, is `file` inside it. Data may also be inline in `data`.
 - `save`: what to write, inside that folder. A base name like `"revenue"`
-  writes `revenue.svg` and `revenue.png`; `{"svg": "a.svg", "png": "a.png"}`
+  writes `revenue.svg` and `revenue.png` (a base name that already ends in
+  `.svg` or `.png` is used without it); `{"svg": "a.svg", "png": "a.png"}`
   names them (either may be left out); a subfolder like `"out/revenue"` is
   created when missing. Names are relative, end in `.svg` or `.png` and stay
   inside the folder: `..`, absolute paths, backslashes and symbolic links are

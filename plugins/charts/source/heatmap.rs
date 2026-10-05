@@ -7,7 +7,7 @@ use crate::common::{self, Built, SeriesInfo, intro};
 use crate::ctx::Ctx;
 use crate::err::{Res, fail};
 use crate::format::compact;
-use crate::frame::{self, FrameSpec, Laid};
+use crate::frame::{self, FrameSpec};
 use crate::palette::{Rgb, Theme, diverging, hex, readable_on, sequential};
 use crate::scale::nice_ticks;
 use crate::spec::{Agg, Legend, MAX_HEAT, Sort};
@@ -80,6 +80,20 @@ fn axis_labels(
     (shown, idx.iter().map(|i| i.and_then(|i| pos[i])).collect())
 }
 
+/// An empty cell: an outline with a diagonal, so it never reads as a colour
+/// (a diverging scale has a near-white middle that a fill could be mistaken for).
+fn empty_cell(svg: &mut Svg, ctx: &Ctx<'_>, (x, y, w, h): (f64, f64, f64, f64), tip: &str) {
+    svg.line(x, y + h, x + w, y, &Style::stroke(ctx.theme.muted, 0.75));
+    svg.rect_titled(
+        x,
+        y,
+        w,
+        h,
+        &Style::stroke(ctx.theme.muted, 0.75).dashed("3 2"),
+        tip,
+    );
+}
+
 /// Draws the chart.
 pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
     let spec = ctx.spec;
@@ -149,24 +163,43 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
     let filled = grid.iter().flatten().filter(|v| !v.is_nan()).count();
     let empty = xcats.len() * ycats.len() - filled;
     if empty > 0 {
+        ctx.notes.add(if empty == 1 {
+            "1 cell has no value and is drawn empty".to_owned()
+        } else {
+            format!("{empty} cells have no value and are drawn empty")
+        });
+    }
+    // The colour bar is part of the picture; only "none" removes it.
+    let mut key = spec.legend != Legend::None;
+    if matches!(spec.legend, Legend::Left | Legend::Top | Legend::Bottom) {
         ctx.notes
-            .add(format!("{empty} cells have no value and are drawn empty"));
+            .add("legend placement is ignored for a heatmap; the colour bar stays on the right");
     }
     let x_label = common::label_or(&spec.x_label, &t.names[xc]);
     let y_label = common::label_or(&spec.y_label, &t.names[yc]);
     let xf = |_t: usize| crate::axes::band(xcats.clone(), x_label.clone());
     let yf = |_t: usize| crate::axes::band(ycats.clone(), y_label.clone());
-    let Laid { frame, .. } = frame::layout(
-        ctx,
-        &FrameSpec {
-            x: &xf,
-            y: &yf,
-            y2: None,
-            legend: &[],
-            extra_right: 84.0,
-            auto_legend: Legend::None,
-        },
-    )?;
+    let frame = loop {
+        let laid = frame::layout(
+            ctx,
+            &FrameSpec {
+                x: &xf,
+                y: &yf,
+                y2: None,
+                legend: &[],
+                extra_right: if key { 84.0 } else { 0.0 },
+                auto_legend: Legend::None,
+            },
+        );
+        match laid {
+            // A narrow image gives up the colour bar before it gives up the chart.
+            Err(e) if key && e.0 == frame::TOO_SMALL => {
+                key = false;
+                ctx.notes.add("the colour bar is left out because the image is too narrow for it; make it wider to show it");
+            }
+            other => break other?.frame,
+        }
+    };
 
     let mut svg = Svg::new(ctx.w, ctx.h, ctx.theme.bg);
     frame::draw_title(&mut svg, ctx, &frame);
@@ -181,12 +214,10 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
         for (c, v) in row.iter().enumerate() {
             let (x, y) = (p.x + c as f64 * cw, p.y + r as f64 * ch);
             if v.is_nan() {
-                svg.rect_titled(
-                    x + 0.5,
-                    y + 0.5,
-                    cw - 1.0,
-                    ch - 1.0,
-                    &Style::fill(ctx.theme.grid).fill_alpha(0.35),
+                empty_cell(
+                    &mut svg,
+                    ctx,
+                    (x + 0.5, y + 0.5, cw - 1.0, ch - 1.0),
                     &format!("{}, {}: no value", ycats[r], xcats[c]),
                 );
                 continue;
@@ -213,34 +244,51 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
     }
     frame::draw_axes(&mut svg, ctx, &frame);
 
-    // Colour bar.
-    let bar_h = p.h.min(240.0);
-    let bx = p.right() + 16.0;
-    let by = p.y + (p.h - bar_h) / 2.0;
-    let stops: Vec<(f64, String)> = (0..=10)
-        .map(|i| {
-            let tt = f64::from(i) / 10.0;
-            (tt, hex(norm.color(lo + tt * (hi - lo), &ctx.theme)))
-        })
-        .collect();
-    svg.vertical_gradient("scale", &stops);
-    svg.rect(bx, by, 14.0, bar_h, &Style::fill("url(#scale)"));
-    let ticks = nice_ticks(lo, hi, 4);
-    for v in ticks.values.iter().filter(|v| **v >= lo && **v <= hi) {
-        let ty = by + bar_h - (v - lo) / (hi - lo).max(f64::MIN_POSITIVE) * bar_h;
-        svg.line(
-            bx + 14.0,
-            ty,
-            bx + 18.0,
-            ty,
-            &Style::stroke(ctx.theme.axis, 1.0),
-        );
-        svg.text(
-            bx + 22.0,
-            ty + 3.5,
-            &fmt(*v),
-            &TextStyle::new(10.0, ctx.theme.muted),
-        );
+    // Colour bar, with a key for empty cells below it.
+    if key {
+        let bar_h = if empty > 0 {
+            (p.h - 28.0).max(20.0)
+        } else {
+            p.h
+        }
+        .min(240.0);
+        let bx = p.right() + 16.0;
+        let by = p.y + (p.h - bar_h - if empty > 0 { 28.0 } else { 0.0 }) / 2.0;
+        let stops: Vec<(f64, String)> = (0..=10)
+            .map(|i| {
+                let tt = f64::from(i) / 10.0;
+                (tt, hex(norm.color(lo + tt * (hi - lo), &ctx.theme)))
+            })
+            .collect();
+        svg.vertical_gradient("scale", &stops);
+        svg.rect(bx, by, 14.0, bar_h, &Style::fill("url(#scale)"));
+        let ticks = nice_ticks(lo, hi, 4);
+        for v in ticks.values.iter().filter(|v| **v >= lo && **v <= hi) {
+            let ty = by + bar_h - (v - lo) / (hi - lo).max(f64::MIN_POSITIVE) * bar_h;
+            svg.line(
+                bx + 14.0,
+                ty,
+                bx + 18.0,
+                ty,
+                &Style::stroke(ctx.theme.axis, 1.0),
+            );
+            svg.text(
+                bx + 22.0,
+                ty + 3.5,
+                &fmt(*v),
+                &TextStyle::new(10.0, ctx.theme.muted),
+            );
+        }
+        if empty > 0 {
+            let ky = by + bar_h + 12.0;
+            empty_cell(&mut svg, ctx, (bx, ky, 14.0, 10.0), "no value");
+            svg.text(
+                bx + 22.0,
+                ky + 8.5,
+                "no value",
+                &TextStyle::new(10.0, ctx.theme.muted),
+            );
+        }
     }
 
     let mut extra = serde_json::Map::new();

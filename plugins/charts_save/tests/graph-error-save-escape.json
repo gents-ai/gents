@@ -8,7 +8,7 @@
   "bind": "save",
   "expect": {
     "chart": "bar",
-    "error": "save file \"../escaped.svg\" must stay inside the folder: no empty parts, . or ..",
+    "error": "save file \"../escaped\" must stay inside the folder: no empty parts, . or ..",
     "warnings": []
   }
 }

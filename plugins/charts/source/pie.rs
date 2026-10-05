@@ -256,8 +256,8 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
     ));
     for (s, _) in slices.iter().zip(&angles).take(12) {
         alt.push_str(&format!(
-            " {:?} {} ({}).",
-            s.0,
+            " {} {} ({}).",
+            crate::text::quote(&s.0),
             fmt(s.1),
             percent(s.1 / total)
         ));

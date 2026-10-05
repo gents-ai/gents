@@ -40,14 +40,29 @@ pub fn write(dir: &Path, name: &str, bytes: &[u8]) -> Res<()> {
         .map(|f| f.to_string_lossy().into_owned())
         .unwrap_or_default();
     let tmp = parent.join(format!(".{file}.tmp"));
-    let result = std::fs::File::create(&tmp)
-        .and_then(|mut f| f.write_all(bytes).and_then(|()| f.sync_all()))
-        .and_then(|()| std::fs::rename(&tmp, &target));
-    if let Err(e) = result {
-        let _ = std::fs::remove_file(&tmp);
-        return fail(describe(name, &e));
+    publish(&tmp, &target, bytes).map_err(|e| describe(name, &e).into())
+}
+
+/// Writes `bytes` to `tmp` and renames it over `target`; `tmp` is gone
+/// afterwards, whether or not the write worked. A stale `tmp`, even a
+/// symbolic link, is removed first and `tmp` is created exclusively, so the
+/// write can never follow a link out of the folder.
+fn publish(tmp: &Path, target: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    match std::fs::remove_file(tmp) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
     }
-    Ok(())
+    let result = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(tmp)
+        .and_then(|mut f| f.write_all(bytes).and_then(|()| f.sync_all()))
+        .and_then(|()| std::fs::rename(tmp, target));
+    if result.is_err() {
+        let _ = std::fs::remove_file(tmp);
+    }
+    result
 }
 
 #[cfg(test)]
@@ -154,5 +169,58 @@ mod tests {
             );
             assert!(!d.path().join(".chart.svg.tmp").exists());
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_stale_temporary_symbolic_link_is_replaced_not_followed() {
+        let d = TempDir::new();
+        let outside = TempDir::new();
+        let victim = outside.write("victim.txt", b"keep me");
+        std::os::unix::fs::symlink(&victim, d.path().join(".chart.svg.tmp")).unwrap();
+        write(d.path(), "chart.svg", b"fresh").unwrap();
+        assert_eq!(std::fs::read(&victim).unwrap(), b"keep me");
+        assert_eq!(std::fs::read(d.path().join("chart.svg")).unwrap(), b"fresh");
+        assert!(d.path().join(".chart.svg.tmp").symlink_metadata().is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_dangling_temporary_symbolic_link_does_not_create_the_file_it_points_to() {
+        let d = TempDir::new();
+        let outside = TempDir::new();
+        let ghost = outside.path().join("ghost.txt");
+        std::os::unix::fs::symlink(&ghost, d.path().join(".chart.png.tmp")).unwrap();
+        write(d.path(), "chart.png", b"png").unwrap();
+        assert!(!ghost.exists());
+    }
+
+    #[test]
+    fn a_stale_temporary_file_is_replaced() {
+        let d = TempDir::new();
+        d.write(".chart.svg.tmp", b"half of an old write");
+        write(d.path(), "chart.svg", b"new").unwrap();
+        assert_eq!(std::fs::read(d.path().join("chart.svg")).unwrap(), b"new");
+        assert!(!d.path().join(".chart.svg.tmp").exists());
+    }
+
+    #[test]
+    fn a_failed_publish_removes_its_temporary_file() {
+        let d = TempDir::new();
+        let target = d.path().join("target");
+        std::fs::create_dir(&target).unwrap();
+        let tmp = d.path().join(".target.tmp");
+        // Renaming a file over a folder fails after the bytes were written.
+        assert!(publish(&tmp, &target, b"x").is_err());
+        assert!(!tmp.exists(), "the temporary file is cleaned up");
+        assert!(target.is_dir());
+    }
+
+    #[test]
+    fn a_temporary_name_that_is_a_folder_is_an_error_not_a_panic() {
+        let d = TempDir::new();
+        std::fs::create_dir(d.path().join(".chart.svg.tmp")).unwrap();
+        let e = write(d.path(), "chart.svg", b"x").unwrap_err();
+        assert!(e.0.contains("chart.svg"), "{e}");
     }
 }

@@ -117,7 +117,7 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
         for (name, row) in names.iter().zip(&matrix) {
             let missing = row.iter().filter(|v| v.is_nan()).count();
             if missing > 0 {
-                ctx.notes.add(format!("series {name:?} has no value at {missing} of {} positions; it counts as zero there in the stack", row.len()));
+                ctx.notes.add(format!("series {name} has no value at {missing} of {} positions; it counts as zero there in the stack", row.len(), name = crate::text::quote(name)));
             }
         }
         layers = stack(&matrix);
@@ -139,6 +139,19 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
         common::range(data.iter().flat_map(|d| d.iter().map(|p| p.1)))
     }
     .ok_or("there are no numbers to draw; check the value column")?;
+
+    for (i, name) in names.iter().enumerate() {
+        let ys: Box<dyn Iterator<Item = f64> + '_> = if kind == Kind::StackedArea {
+            Box::new(layers[i].hi.iter().copied())
+        } else {
+            Box::new(data[i].iter().map(|p| p.1))
+        };
+        common::note_cut(&mut ctx.notes, name, "y", ys, spec.y_min, spec.y_max);
+        if r.x.kind != XKind::Cat {
+            let xs = data[i].iter().map(|p| p.0);
+            common::note_cut(&mut ctx.notes, name, "x", xs, spec.x_min, spec.x_max);
+        }
+    }
 
     let legend: Vec<LegendItem> = names
         .iter()
@@ -271,8 +284,8 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
             };
             if finite > MAX_LINE_POINTS {
                 ctx.notes.add(format!(
-                    "series {:?} has {finite} points; {} are drawn, chosen by largest-triangle reduction, which keeps the first, last, lowest and highest points",
-                    s.name,
+                    "series {} has {finite} points; {} are drawn, chosen by largest-triangle reduction, which keeps the first, last, lowest and highest points",
+                    crate::text::quote(&s.name),
                     keep.len()
                 ));
             }
@@ -341,10 +354,7 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
             r.x.cats.first().cloned().unwrap_or_default(),
             r.x.cats.last().cloned().unwrap_or_default(),
         ),
-        _ => (
-            common::x_text(&r.x, x_extent.0),
-            common::x_text(&r.x, x_extent.1),
-        ),
+        _ => common::x_range_text(spec, &r.x, x_extent),
     };
     alt.push_str(&common::axis_sentence(
         "X",
@@ -365,15 +375,15 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
     for (s, ext) in info.iter().zip(&summaries).take(8) {
         match ext {
             Some((lo, hi)) => alt.push_str(&format!(
-                " {:?}: {} points, lowest {} at {}, highest {} at {}.",
-                s.name,
+                " {}: {} points, lowest {} at {}, highest {} at {}.",
+                crate::text::quote(&s.name),
                 s.points,
                 compact(lo.1),
                 common::x_text(&r.x, lo.0),
                 compact(hi.1),
                 common::x_text(&r.x, hi.0)
             )),
-            None => alt.push_str(&format!(" {:?}: no numbers.", s.name)),
+            None => alt.push_str(&format!(" {}: no numbers.", crate::text::quote(&s.name))),
         }
     }
     if info.len() > 8 {

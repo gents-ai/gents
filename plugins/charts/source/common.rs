@@ -120,7 +120,7 @@ pub fn x_axis(spec: &Spec, x: &XData, extent: (f64, f64), target: usize, nice: b
                     zero: false,
                     nice,
                     log: spec.x_scale == crate::spec::ScaleKind::Log,
-                    integer: false,
+                    integer: x.years,
                 },
                 target,
                 fmt.as_ref(),
@@ -229,10 +229,50 @@ pub fn count_of(n: usize, noun: &str) -> String {
     }
 }
 
+/// Warns about the finite `values` of `series` that fall outside the fixed
+/// range `[lo, hi]` of `axis` ("x" or "y"); the drawing clips them.
+pub fn note_cut(
+    notes: &mut crate::cols::Notes,
+    series: &str,
+    axis: &str,
+    values: impl Iterator<Item = f64>,
+    lo: Option<f64>,
+    hi: Option<f64>,
+) {
+    let (mut below, mut above) = (0usize, 0usize);
+    for v in values.filter(|v| v.is_finite()) {
+        below += usize::from(lo.is_some_and(|l| v < l));
+        above += usize::from(hi.is_some_and(|h| v > h));
+    }
+    for (n, side) in [(below, "below"), (above, "above")] {
+        if n > 0 {
+            let (noun, verb) = if n == 1 {
+                ("value", "is")
+            } else {
+                ("values", "are")
+            };
+            let bound = if side == "below" { "min" } else { "max" };
+            notes.add(format!(
+                "series {}: {n} {noun} {verb} {side} {axis}_{bound} and {verb} cut off",
+                crate::text::quote(series)
+            ));
+        }
+    }
+}
+
+/// The x range as the axis draws it: a fixed `x_min` or `x_max` replaces the
+/// data end it overrides.
+pub fn x_range_text(spec: &Spec, x: &XData, extent: (f64, f64)) -> (String, String) {
+    (
+        x_text(x, spec.x_min.unwrap_or(extent.0)),
+        x_text(x, spec.x_max.unwrap_or(extent.1)),
+    )
+}
+
 /// Opening sentence of a description.
 pub fn intro(kind: &str, title: Option<&str>) -> String {
     match title {
-        Some(t) => format!("{kind} titled {t:?}."),
+        Some(t) => format!("{kind} titled {t}.", t = crate::text::quote(t)),
         None => format!("{kind}."),
     }
 }

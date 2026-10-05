@@ -1,8 +1,10 @@
 //! Number formats: a short pattern language for axis and label text, the
 //! automatic axis format, and the compact form used in descriptions.
 //!
-//! A pattern is a spec, optionally inside literal text with the spec in
-//! braces: `,.2f`, `$,.0f`, `{.1%}`, `${~s} USD`. The spec is `,` (thousands
+//! A pattern is a spec, optionally inside literal text. Symbols may sit
+//! directly around the spec (`$,.0f`, `,.1f %`); any other text goes around
+//! a spec in braces: `{.1%}`, `${~s} USD`, `EUR {,.0f}`. Exact halves round
+//! away from zero (2.5 is 3, -2.5 is -3), as in a spreadsheet. The spec is `,` (thousands
 //! separators), `.N` (decimals), `~` (drop trailing zeros) and a type:
 //! `f` fixed, `d` whole numbers, `%` percent (the value times 100), `s` SI
 //! prefix (k, M, G), `e` scientific. Everything is plain decimal arithmetic.
@@ -62,13 +64,15 @@ impl NumFormat {
 pub fn parse(pattern: &str) -> Res<NumFormat> {
     let bad = || {
         fail(format!(
-            "format {pattern:?} is not understood; examples are \",.2f\", \"$,.0f\", \".1%\", \"~s\" and \"{{,.0f}} units\""
+            "format {pattern} is not understood; examples are \",.2f\", \"$,.0f\", \".1%\", \"~s\" and \"{{,.0f}} units\"",
+            pattern = crate::text::quote(pattern)
         ))
     };
     if pattern.chars().count() > 64 {
         return bad();
     }
-    let (prefix, spec, suffix) = match pattern.find('{') {
+    let braced = pattern.find('{');
+    let (prefix, spec, suffix) = match braced {
         Some(open) => {
             let Some(close) = pattern[open..].find('}') else {
                 return bad();
@@ -79,7 +83,12 @@ pub fn parse(pattern: &str) -> Res<NumFormat> {
                 &pattern[open + close + 1..],
             )
         }
-        None => ("", pattern, ""),
+        None => {
+            let lead = pattern
+                .find(|c: char| c.is_ascii_alphanumeric() || ",.~%".contains(c))
+                .unwrap_or(pattern.len());
+            (&pattern[..lead], &pattern[lead..], "")
+        }
     };
     if prefix.contains('}') || suffix.contains(['{', '}']) {
         return bad();
@@ -110,20 +119,42 @@ pub fn parse(pattern: &str) -> Res<NumFormat> {
         f.trim = true;
         rest = r;
     }
-    f.kind = match rest {
-        "" if f.digits.is_some() => Kind::Fixed,
-        "" => Kind::Auto,
-        "f" => Kind::Fixed,
-        "d" => Kind::Whole,
-        "%" => Kind::Percent,
-        "s" => Kind::Si,
-        "e" => Kind::Sci,
-        _ => return bad(),
+    let (kind, after) = match rest.chars().next() {
+        Some('f') => (Kind::Fixed, &rest[1..]),
+        Some('d') => (Kind::Whole, &rest[1..]),
+        Some('%') => (Kind::Percent, &rest[1..]),
+        Some('s') => (Kind::Si, &rest[1..]),
+        Some('e') => (Kind::Sci, &rest[1..]),
+        _ if f.digits.is_some() => (Kind::Fixed, rest),
+        _ => (Kind::Auto, rest),
     };
+    f.kind = kind;
+    if braced.is_none() {
+        // Without braces a symbol prefix and a symbol or space suffix may
+        // surround the spec; letters after it stay an error.
+        if after.starts_with(|c: char| c.is_ascii_alphanumeric()) || after.contains(['{', '}']) {
+            return bad();
+        }
+        f.suffix = after.into();
+    } else if !after.is_empty() {
+        return bad();
+    }
     if f.kind == Kind::Auto {
         f.group = true;
     }
     Ok(f)
+}
+
+/// `a` (non-negative) rounded to `decimals` with exact halves going up, as a
+/// spreadsheet does; the default float formatting rounds halves to even.
+fn round_half_up(a: f64, decimals: usize) -> f64 {
+    let p = pow10(decimals as i32);
+    let scaled = a * p;
+    if scaled < 4.5e15 {
+        scaled.round() / p
+    } else {
+        a
+    }
 }
 
 fn group_thousands(int_part: &str) -> String {
@@ -147,7 +178,7 @@ fn trim_zeros(s: &mut String) {
 
 /// `v` with `decimals` decimals, optional separators and trimmed zeros.
 fn fixed(v: f64, decimals: usize, group: bool, trim: bool) -> String {
-    let mut body = format!("{:.*}", decimals, v.abs());
+    let mut body = format!("{:.*}", decimals, round_half_up(v.abs(), decimals));
     if trim {
         trim_zeros(&mut body);
     }
@@ -195,11 +226,19 @@ fn si(v: f64, digits: Option<usize>, trim: bool) -> String {
             2
         })
     };
-    let mut text = format!("{:.*}", decimals(scaled), scaled);
+    let mut text = format!(
+        "{:.*}",
+        decimals(scaled),
+        round_half_up(scaled, decimals(scaled))
+    );
     if text.parse::<f64>().is_ok_and(|r| r >= 1000.0) && e3 < 24 {
         e3 += 3;
         scaled = scale(e3);
-        text = format!("{:.*}", decimals(scaled), scaled);
+        text = format!(
+            "{:.*}",
+            decimals(scaled),
+            round_half_up(scaled, decimals(scaled))
+        );
     }
     if trim || digits.is_none() {
         trim_zeros(&mut text);
@@ -243,7 +282,10 @@ impl NumFormat {
                 s
             }
         };
-        format!("{}{}{}", self.prefix, body, self.suffix)
+        match body.strip_prefix('-') {
+            Some(digits) => format!("-{}{}{}", self.prefix, digits, self.suffix),
+            None => format!("{}{}{}", self.prefix, body, self.suffix),
+        }
     }
 }
 
@@ -262,6 +304,18 @@ pub fn axis_format(user: Option<&NumFormat>, ticks: &[f64], decimals: usize) -> 
         f.kind = Kind::Sci;
         f.digits = Some(1);
         f.trim = true;
+    }
+    // A short form that writes two ticks alike (a narrow span far from zero)
+    // gives way to the plain one, which carries every digit the step needs.
+    let distinct = |f: &NumFormat| {
+        let mut labels = tick_labels(f, ticks, decimals);
+        let n = labels.len();
+        labels.sort_unstable();
+        labels.dedup();
+        labels.len() == n
+    };
+    if f.kind != Kind::Auto && !distinct(&f) {
+        f = NumFormat::auto();
     }
     f
 }
@@ -357,6 +411,36 @@ mod tests {
         assert_eq!(f("EUR {,.0f}", 99.0), "EUR 99");
         assert_eq!(f("${~s} USD", 2500.0), "$2.5k USD");
         assert_eq!(f("{}", 1234.5), "1,234.50");
+    }
+
+    #[test]
+    fn symbols_around_an_unbraced_spec_are_a_prefix_and_suffix() {
+        assert_eq!(f("$,.0f", 1234.0), "$1,234");
+        assert_eq!(f("$,.2f", 1234.5), "$1,234.50");
+        assert_eq!(f("\u{20ac}.1f", 2.0), "\u{20ac}2.0");
+        assert_eq!(f(".0f units", 3.0), "3 units");
+        assert_eq!(f(".1f%", 3.0), "3.0%");
+        assert_eq!(f("$~s", 2500.0), "$2.5k");
+    }
+
+    #[test]
+    fn the_minus_sign_comes_before_the_prefix() {
+        assert_eq!(f("$,.0f", -1234.0), "-$1,234");
+        assert_eq!(f("${~s} USD", -1234.0), "-$1.23k USD");
+        assert_eq!(f("$,.0f", -0.2), "$0");
+    }
+
+    #[test]
+    fn exact_halves_round_away_from_zero() {
+        assert_eq!(f(".0f", 2.5), "3");
+        assert_eq!(f(".0f", 3.5), "4");
+        assert_eq!(f(".0f", 0.5), "1");
+        assert_eq!(f("d", -1234.5), "-1235");
+        assert_eq!(f(".1f", 0.25), "0.3");
+        assert_eq!(f(".1f", -0.25), "-0.3");
+        assert_eq!(f(".0f", 2.4999), "2");
+        assert_eq!(f("s", 2500.0), "2.5k");
+        assert_eq!(f(".0s", 2500.0), "3k");
     }
 
     #[test]

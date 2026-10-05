@@ -238,24 +238,93 @@ fn bubbles() -> String {
 fn bubble_area_is_proportional_to_the_size_value() {
     let r = ok(&bubbles());
     let d = dots(&parse(&r.svg));
-    let by_x = |i: usize| d.iter().find(|c| (c.0 - d[i].0).abs() < 1e-9).unwrap().2;
-    let mut radii: Vec<(f64, f64)> = vec![];
-    for c in &d {
-        radii.push((c.0, c.2));
-    }
+    let mut radii: Vec<(f64, f64)> = d.iter().map(|c| (c.0, c.2)).collect();
     radii.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let extra = |r: f64| (r - 4.0) * (r - 4.0);
-    // Sizes 100, 400, 900, 100: (size - min) / (max - min) is 0, 3/8, 1, 0.
-    let top = extra(radii[2].1);
+    // Sizes 100, 400, 900, 100: the area ratios are the value ratios.
+    let area = |i: usize| radii[i].1 * radii[i].1;
     assert!(
-        (extra(radii[1].1) / top - 3.0 / 8.0).abs() < 0.01,
+        (area(1) / area(2) - 400.0 / 900.0).abs() < 1e-3,
         "{radii:?}"
     );
     assert!(
-        (radii[0].1 - 4.0).abs() < 1e-9 && (radii[3].1 - 4.0).abs() < 1e-9,
-        "the smallest value gets the smallest bubble"
+        (area(0) / area(2) - 100.0 / 900.0).abs() < 1e-3,
+        "{radii:?}"
     );
-    assert!(by_x(0) > 0.0);
+    assert!(
+        (area(0) - area(3)).abs() < 1e-9,
+        "equal sizes, equal bubbles"
+    );
+}
+
+#[test]
+fn nearly_equal_sizes_draw_nearly_equal_bubbles() {
+    let rows = [json!([1, 1, 100]), json!([2, 2, 101])];
+    let r = ok(&with_rows(
+        "bubble",
+        r#""x":"a","y":"b","size":"s""#,
+        &["a", "b", "s"],
+        &rows,
+    ));
+    let d = dots(&parse(&r.svg));
+    let (a, b) = (d[0].2.min(d[1].2), d[0].2.max(d[1].2));
+    assert!(b / a < 1.01, "radii {a} and {b}");
+}
+
+#[test]
+fn bubbles_with_a_size_of_zero_or_below_are_not_drawn_and_counted() {
+    let rows = [
+        json!([1, 1, -5]),
+        json!([2, 2, 0]),
+        json!([3, 3, 10]),
+        json!([4, 4, 40]),
+    ];
+    let r = ok(&with_rows(
+        "bubble",
+        r#""x":"a","y":"b","size":"s""#,
+        &["a", "b", "s"],
+        &rows,
+    ));
+    assert_eq!(dots(&parse(&r.svg)).len(), 2);
+    assert!(
+        r.warnings
+            .iter()
+            .any(|w| w.contains("2 bubbles with a size of zero or below are not drawn")),
+        "{:?}",
+        r.warnings
+    );
+}
+
+#[test]
+fn bubbles_need_at_least_one_size_above_zero() {
+    let rows = [json!([1, 1, -5]), json!([2, 2, 0])];
+    let e = err(&with_rows(
+        "bubble",
+        r#""x":"a","y":"b","size":"s""#,
+        &["a", "b", "s"],
+        &rows,
+    ));
+    assert!(e.contains("no bubble has a size above zero"), "{e}");
+}
+
+#[test]
+fn a_bubble_far_smaller_than_the_largest_is_floored_and_reported() {
+    let rows = [json!([1, 1, 1]), json!([2, 2, 1_000_000])];
+    let r = ok(&with_rows(
+        "bubble",
+        r#""x":"a","y":"b","size":"s""#,
+        &["a", "b", "s"],
+        &rows,
+    ));
+    let d = dots(&parse(&r.svg));
+    assert!(d.iter().any(|c| (c.2 - 1.5).abs() < 1e-9), "{d:?}");
+    assert!(
+        r.warnings
+            .iter()
+            .any(|w| w
+                .contains("1 bubble too small to show to scale and drawn at the smallest size")),
+        "{:?}",
+        r.warnings
+    );
 }
 
 #[test]

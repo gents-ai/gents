@@ -50,7 +50,10 @@ pub fn theme(name: &str) -> Res<Theme> {
     match name {
         "light" => Ok(LIGHT),
         "dark" => Ok(DARK),
-        other => fail(format!("theme {other:?} is not known; use light or dark")),
+        other => fail(format!(
+            "theme {other} is not known; use light or dark",
+            other = crate::text::quote(other)
+        )),
     }
 }
 
@@ -129,7 +132,8 @@ pub fn custom(colors: &[String]) -> Res<Vec<String>> {
         .map(|c| match parse_hex(c.trim()) {
             Some(rgb) => Ok(hex(rgb)),
             None => fail(format!(
-                "colors entry {c:?} is not a hex colour like \"#1f77b4\""
+                "colors entry {c} is not a hex colour like \"#1f77b4\"",
+                c = crate::text::quote(c)
             )),
         })
         .collect()

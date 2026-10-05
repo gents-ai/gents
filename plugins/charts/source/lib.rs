@@ -35,6 +35,8 @@ pub mod graph;
 pub mod heatmap;
 pub mod hist;
 pub mod jsonio;
+#[cfg(test)]
+mod kill_tests;
 pub mod line;
 #[cfg(test)]
 mod line_tests;
@@ -55,6 +57,8 @@ mod pixel_tests;
 mod proptests;
 pub mod raster;
 pub mod reduce;
+#[cfg(test)]
+mod regress_tests;
 pub mod save;
 pub mod scale;
 pub mod scatter;
@@ -92,7 +96,8 @@ pub(crate) fn request_error(e: &serde_json::Error) -> String {
     if let Some(rest) = msg.strip_prefix("unknown field `") {
         let name = rest.split('`').next().unwrap_or(rest);
         return format!(
-            "the field {name:?} is not known; check the field names in the tool description"
+            "the field {name} is not known; check the field names in the tool description",
+            name = crate::text::quote(name)
         );
     }
     if e.is_eof() {

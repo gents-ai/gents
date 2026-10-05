@@ -128,9 +128,35 @@ impl Parser {
     }
 }
 
+/// A number written with a decimal comma (`-1,5`, `1.234,56`), or `None`.
+fn comma_number(s: &str) -> Option<f64> {
+    let t = s.trim();
+    let body = t.strip_prefix(['+', '-']).unwrap_or(t);
+    let (int, frac) = body.split_once(',')?;
+    let digits = |g: &str| g.bytes().all(|b| b.is_ascii_digit());
+    // Whole digits, or digits in groups of three after a leading one to three.
+    let grouped = |int: &str| {
+        let mut parts = int.split('.');
+        let first = parts.next().unwrap_or("");
+        (1..=3).contains(&first.len()) && digits(first) && parts.all(|g| g.len() == 3 && digits(g))
+    };
+    let groups_ok = |int: &str| (!int.is_empty() && digits(int)) || grouped(int);
+    if !groups_ok(int) || frac.is_empty() || !digits(frac) {
+        return None;
+    }
+    let plain = format!(
+        "{}{}.{frac}",
+        &t[..t.len() - body.len()],
+        int.replace('.', "")
+    );
+    crate::table::plain_number(&plain)
+}
+
 /// Where a record goes: the header first, then the rows.
 struct Sink<'a> {
     builder: &'a mut Builder,
+    /// A semicolon file is read as European: `1,5` and `1.234,5` are numbers.
+    decimal_comma: bool,
     header_done: bool,
     cells: Vec<Cell>,
 }
@@ -168,7 +194,14 @@ impl Sink<'_> {
         for (i, f) in fields.iter().enumerate() {
             if self.builder.slot(i).is_some() {
                 let s = self.text(f);
-                cells.push(self.builder.text_cell(&s));
+                let cell = match self.decimal_comma.then(|| comma_number(&s)).flatten() {
+                    Some(v) => {
+                        self.builder.note_decimal_comma();
+                        Cell::Num(v)
+                    }
+                    None => self.builder.text_cell(&s),
+                };
+                cells.push(cell);
             } else {
                 cells.push(Cell::Null);
             }
@@ -193,6 +226,7 @@ pub fn read<R: BufRead>(mut r: R, builder: &mut Builder) -> Res<()> {
     let mut parser = Parser::new(delim);
     let mut sink = Sink {
         builder,
+        decimal_comma: delim == b';',
         header_done: false,
         cells: Vec::new(),
     };
@@ -307,11 +341,11 @@ mod tests {
     }
 
     #[test]
-    fn empty_and_null_marker_cells_are_null() {
+    fn empty_cells_are_null_and_null_markers_stay_text_for_the_column_readers() {
         let t = load(b"a,b\n,N/A\nNULL,x\n");
         assert_eq!(cell(&t, "a", 0), "<null>");
-        assert_eq!(cell(&t, "b", 0), "<null>");
-        assert_eq!(cell(&t, "a", 1), "<null>");
+        assert_eq!(cell(&t, "b", 0), "N/A");
+        assert_eq!(cell(&t, "a", 1), "NULL");
         assert_eq!(cell(&t, "b", 1), "x");
     }
 
@@ -388,5 +422,45 @@ mod tests {
     fn duplicate_header_names_are_made_unique() {
         let t = load(b"a,a,\n1,2,3\n");
         assert_eq!(t.names, ["a", "a_2", "column 3"]);
+    }
+
+    #[test]
+    fn comma_numbers_need_well_formed_digits_and_groups() {
+        for (text, want) in [
+            ("1,5", Some(1.5)),
+            ("-0,25", Some(-0.25)),
+            ("+3,0", Some(3.0)),
+            ("1.234,56", Some(1234.56)),
+            ("12.345.678,9", Some(12_345_678.9)),
+            ("12.34,5", None),
+            ("1,2,3", None),
+            (",5", None),
+            ("1,", None),
+            ("007,5", None),
+            ("1.2345,5", None),
+            ("1,5e3", None),
+            ("a,5", None),
+            ("1 5,5", None),
+            ("", None),
+        ] {
+            assert_eq!(comma_number(text), want, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn only_a_semicolon_file_reads_decimal_commas() {
+        let t = load(b"a;b\n1,5;x\n2,5;y\n");
+        assert_eq!((cell(&t, "a", 0).as_str(), t.decimal_commas), ("#1.5", 2));
+        let t = load(b"a,b\n\"1,5\",x\n");
+        assert_eq!((cell(&t, "a", 0).as_str(), t.decimal_commas), ("1,5", 0));
+    }
+
+    #[test]
+    fn a_tie_between_delimiters_prefers_the_first_in_the_list() {
+        assert_eq!(sniff(b"a,b;c\n"), b',');
+        assert_eq!(sniff(b"a;b\tc\n"), b';');
+        assert_eq!(sniff(b"a\tb|c\n"), b'\t');
+        assert_eq!(sniff(b"a|b;c|d;e\n"), b';');
+        assert_eq!(sniff(b"plain\n"), b',');
     }
 }

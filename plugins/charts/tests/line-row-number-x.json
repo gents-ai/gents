@@ -1,0 +1,51 @@
+{
+  "input": {
+    "chart": "line",
+    "data": {
+      "columns": [
+        "v"
+      ],
+      "rows": [
+        [
+          5
+        ],
+        [
+          9
+        ],
+        [
+          7
+        ]
+      ]
+    },
+    "height": 360,
+    "output": "svg",
+    "width": 560,
+    "y": [
+      "v"
+    ]
+  },
+  "expect": {
+    "response": {
+      "alt": "Line chart. X axis: row, from 1 to 3. Y axis: v, from 4 to 10. 1 series. \"v\": 3 points, lowest 5 at 1, highest 9 at 2.",
+      "chart": "line",
+      "height": 360,
+      "series": [
+        {
+          "axis": "left",
+          "color": "#0072b2",
+          "gaps": 0,
+          "mark": "line",
+          "max": 9.0,
+          "min": 5.0,
+          "name": "v",
+          "points": 3
+        }
+      ],
+      "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"560\" height=\"360\" viewBox=\"0 0 560 360\" role=\"img\" aria-labelledby=\"chart-title chart-desc\" font-family=\"Liberation Sans, Arial, Helvetica, sans-serif\"><title id=\"chart-title\">line chart</title><desc id=\"chart-desc\">Line chart. X axis: row, from 1 to 3. Y axis: v, from 4 to 10. 1 series. &quot;v&quot;: 3 points, lowest 5 at 1, highest 9 at 2.</desc><rect x=\"0\" y=\"0\" width=\"560\" height=\"360\" fill=\"#ffffff\"/><line x1=\"53.24\" y1=\"256.5\" x2=\"536.35\" y2=\"256.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"53.24\" y1=\"209.5\" x2=\"536.35\" y2=\"209.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"53.24\" y1=\"162.5\" x2=\"536.35\" y2=\"162.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"53.24\" y1=\"114.5\" x2=\"536.35\" y2=\"114.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"53.24\" y1=\"67.5\" x2=\"536.35\" y2=\"67.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"174.5\" y1=\"20\" x2=\"174.5\" y2=\"303\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"295.5\" y1=\"20\" x2=\"295.5\" y2=\"303\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"416.5\" y1=\"20\" x2=\"416.5\" y2=\"303\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><path d=\"M 53.24,255.83 L 294.79,67.17 L 536.35,161.5\" fill=\"none\" stroke=\"#0072b2\" stroke-width=\"2\" stroke-linejoin=\"round\" stroke-linecap=\"round\"/><circle cx=\"53.24\" cy=\"255.83\" r=\"3\" fill=\"#0072b2\" stroke=\"#ffffff\" stroke-width=\"1\"><title>v: 1, 5</title></circle><circle cx=\"294.79\" cy=\"67.17\" r=\"3\" fill=\"#0072b2\" stroke=\"#ffffff\" stroke-width=\"1\"><title>v: 2, 9</title></circle><circle cx=\"536.35\" cy=\"161.5\" r=\"3\" fill=\"#0072b2\" stroke=\"#ffffff\" stroke-width=\"1\"><title>v: 3, 7</title></circle><line x1=\"53.24\" y1=\"303.5\" x2=\"536.35\" y2=\"303.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"52.74\" y1=\"20\" x2=\"52.74\" y2=\"303\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"53.5\" y1=\"303\" x2=\"53.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"53.24\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">1.0</text><line x1=\"174.5\" y1=\"303\" x2=\"174.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"174.02\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">1.5</text><line x1=\"295.5\" y1=\"303\" x2=\"295.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"294.79\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">2.0</text><line x1=\"416.5\" y1=\"303\" x2=\"416.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"415.57\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">2.5</text><line x1=\"536.5\" y1=\"303\" x2=\"536.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"536.35\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">3.0</text><line x1=\"49.24\" y1=\"303.5\" x2=\"53.24\" y2=\"303.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"45.24\" y=\"307\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">4</text><line x1=\"49.24\" y1=\"256.5\" x2=\"53.24\" y2=\"256.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"45.24\" y=\"259.83\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">5</text><line x1=\"49.24\" y1=\"209.5\" x2=\"53.24\" y2=\"209.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"45.24\" y=\"212.67\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">6</text><line x1=\"49.24\" y1=\"162.5\" x2=\"53.24\" y2=\"162.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"45.24\" y=\"165.5\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">7</text><line x1=\"49.24\" y1=\"114.5\" x2=\"53.24\" y2=\"114.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"45.24\" y=\"118.33\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">8</text><line x1=\"49.24\" y1=\"67.5\" x2=\"53.24\" y2=\"67.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"45.24\" y=\"71.17\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">9</text><line x1=\"49.24\" y1=\"20.5\" x2=\"53.24\" y2=\"20.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"45.24\" y=\"24\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">10</text><text x=\"294.79\" y=\"340\" font-size=\"12\" text-anchor=\"middle\" fill=\"#1f2328\">row</text><text x=\"27\" y=\"161.5\" font-size=\"12\" text-anchor=\"middle\" fill=\"#1f2328\" transform=\"rotate(-90 27 161.5)\">v</text></svg>",
+      "warnings": [
+        "x was not given and the first column \"v\" is a value column, so rows are numbered along x"
+      ],
+      "width": 560
+    }
+  }
+}

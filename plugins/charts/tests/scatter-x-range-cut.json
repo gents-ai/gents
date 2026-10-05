@@ -1,0 +1,66 @@
+{
+  "input": {
+    "chart": "scatter",
+    "data": {
+      "columns": [
+        "a",
+        "b"
+      ],
+      "rows": [
+        [
+          1,
+          5
+        ],
+        [
+          2,
+          6
+        ],
+        [
+          3,
+          7
+        ],
+        [
+          9,
+          8
+        ]
+      ]
+    },
+    "height": 360,
+    "output": "svg",
+    "width": 560,
+    "x": "a",
+    "x_max": 4,
+    "x_min": 2,
+    "y": [
+      "b"
+    ]
+  },
+  "expect": {
+    "response": {
+      "alt": "Scatter chart. X axis: a, from 2 to 4. Y axis: b, from 4 to 9. 1 series. \"b\": 4 points, y from 5 to 8, correlation 0.898.",
+      "chart": "scatter",
+      "height": 360,
+      "series": [
+        {
+          "axis": "left",
+          "color": "#0072b2",
+          "correlation": 0.898,
+          "gaps": 0,
+          "mark": "point",
+          "max": 8.0,
+          "min": 5.0,
+          "name": "b",
+          "points": 4,
+          "x_max": 9.0,
+          "x_min": 1.0
+        }
+      ],
+      "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"560\" height=\"360\" viewBox=\"0 0 560 360\" role=\"img\" aria-labelledby=\"chart-title chart-desc\" font-family=\"Liberation Sans, Arial, Helvetica, sans-serif\"><title id=\"chart-title\">scatter chart</title><desc id=\"chart-desc\">Scatter chart. X axis: a, from 2 to 4. Y axis: b, from 4 to 9. 1 series. &quot;b&quot;: 4 points, y from 5 to 8, correlation 0.898.</desc><rect x=\"0\" y=\"0\" width=\"560\" height=\"360\" fill=\"#ffffff\"/><line x1=\"47.12\" y1=\"246.5\" x2=\"536.35\" y2=\"246.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"47.12\" y1=\"190.5\" x2=\"536.35\" y2=\"190.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"47.12\" y1=\"133.5\" x2=\"536.35\" y2=\"133.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"47.12\" y1=\"77.5\" x2=\"536.35\" y2=\"77.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"169.5\" y1=\"20\" x2=\"169.5\" y2=\"303\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"292.5\" y1=\"20\" x2=\"292.5\" y2=\"303\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"414.5\" y1=\"20\" x2=\"414.5\" y2=\"303\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><clipPath id=\"clip1\"><rect x=\"47.12\" y=\"20\" width=\"489.24\" height=\"283\"/></clipPath><g clip-path=\"url(#clip1)\"><circle cx=\"-197.5\" cy=\"246.4\" r=\"4\" fill=\"#0072b2\" fill-opacity=\"0.78\" stroke=\"#ffffff\" stroke-width=\"0.75\"><title>b: 1, 5</title></circle><circle cx=\"47.12\" cy=\"189.8\" r=\"4\" fill=\"#0072b2\" fill-opacity=\"0.78\" stroke=\"#ffffff\" stroke-width=\"0.75\"><title>b: 2, 6</title></circle><circle cx=\"291.74\" cy=\"133.2\" r=\"4\" fill=\"#0072b2\" fill-opacity=\"0.78\" stroke=\"#ffffff\" stroke-width=\"0.75\"><title>b: 3, 7</title></circle><circle cx=\"1759.45\" cy=\"76.6\" r=\"4\" fill=\"#0072b2\" fill-opacity=\"0.78\" stroke=\"#ffffff\" stroke-width=\"0.75\"><title>b: 9, 8</title></circle></g><line x1=\"47.12\" y1=\"303.5\" x2=\"536.35\" y2=\"303.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"46.62\" y1=\"20\" x2=\"46.62\" y2=\"303\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"47.5\" y1=\"303\" x2=\"47.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"47.12\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">2.0</text><line x1=\"169.5\" y1=\"303\" x2=\"169.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"169.43\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">2.5</text><line x1=\"292.5\" y1=\"303\" x2=\"292.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"291.74\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">3.0</text><line x1=\"414.5\" y1=\"303\" x2=\"414.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"414.05\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">3.5</text><line x1=\"536.5\" y1=\"303\" x2=\"536.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"536.35\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">4.0</text><line x1=\"43.12\" y1=\"303.5\" x2=\"47.12\" y2=\"303.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"39.12\" y=\"307\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">4</text><line x1=\"43.12\" y1=\"246.5\" x2=\"47.12\" y2=\"246.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"39.12\" y=\"250.4\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">5</text><line x1=\"43.12\" y1=\"190.5\" x2=\"47.12\" y2=\"190.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"39.12\" y=\"193.8\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">6</text><line x1=\"43.12\" y1=\"133.5\" x2=\"47.12\" y2=\"133.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"39.12\" y=\"137.2\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">7</text><line x1=\"43.12\" y1=\"77.5\" x2=\"47.12\" y2=\"77.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"39.12\" y=\"80.6\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">8</text><line x1=\"43.12\" y1=\"20.5\" x2=\"47.12\" y2=\"20.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"39.12\" y=\"24\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">9</text><text x=\"291.74\" y=\"340\" font-size=\"12\" text-anchor=\"middle\" fill=\"#1f2328\">a</text><text x=\"27\" y=\"161.5\" font-size=\"12\" text-anchor=\"middle\" fill=\"#1f2328\" transform=\"rotate(-90 27 161.5)\">b</text></svg>",
+      "warnings": [
+        "series \"b\": 1 value is below x_min and is cut off",
+        "series \"b\": 1 value is above x_max and is cut off"
+      ],
+      "width": 560
+    }
+  }
+}

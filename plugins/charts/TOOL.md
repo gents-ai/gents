@@ -26,7 +26,7 @@ Say which columns to draw:
 
 | Field | Meaning | Default |
 | --- | --- | --- |
-| `x` | x axis, categories, pie labels | the first column |
+| `x` | x axis, categories, pie labels | the first column (the row number when that column is also in `y`) |
 | `y` | list of value columns, one series each | every numeric column |
 | `series` | a column whose values split the rows into series (long data); then `y` is one column | none |
 | `size` | bubble size column | none |
@@ -45,7 +45,7 @@ Say which columns to draw:
 | `bar` | grouped bars; `stack: "stacked"` stacks them, `horizontal: true` lays them down | value labels on up to 30 bars |
 | `stacked_bar`, `horizontal_bar` | shorthands for the two options | |
 | `scatter` | points; `series` colours groups | each group's correlation is in the result |
-| `bubble` | points sized by `size` | bubble area follows the value |
+| `bubble` | points sized by `size` | bubble area is proportional to the value, from zero; sizes of zero or below are not drawn and are counted |
 | `histogram` | counts of one numeric column; `bins` is a number (1 to 200) or `auto` | `series` overlays groups on shared bins |
 | `box` | box and whisker per `x` group, or per value column | whiskers reach 1.5 interquartile ranges, outliers are dots |
 | `pie`, `donut` | shares of a whole | more than 12 slices: the smallest become "Other" |
@@ -58,7 +58,8 @@ Say which columns to draw:
 `line_axis` (`right` or `left`) for combo charts; `title`, `subtitle`; `x_label`, `y_label`, `y2_label` (default: the column
 names; an empty string removes one); `x_scale` (`auto`, `linear`, `log`,
 `time`, `category`), `y_scale` and `y2_scale` (`linear`, `log`); `x_min`,
-`x_max`, `y_min`, `y_max` to fix the visible range; `legend` (`auto`, `right`,
+`x_max`, `y_min`, `y_max` to fix the visible range (values outside it are cut
+off and counted in `warnings`); `legend` (`auto`, `right`,
 `bottom`, `top`, `left`, `none`); `theme` (`light`, `dark`); `colors` (hex
 list); `width` and `height` (200 to 4096, default 800 by 480), `scale` (PNG
 pixel density, 0.5 to 4); `output` (`both`, `svg`, `png`).
@@ -69,8 +70,13 @@ pixel density, 0.5 to 4); `output` (`both`, `svg`, `png`).
 - `format`, `y_format`, `y2_format`, `x_format` take a number format: `,.2f`
   (thousands separators, two decimals), `.1%` (percent), `~s` (1.5k, 2M),
   `d` (whole numbers), `e` (scientific), with optional text around the spec in
-  braces: `${,.0f}`, `{.1%}`, `{~s} units`. On a time axis `x_format` is a date
+  braces: `${,.0f}`, `{.1%}`, `{~s} units`; a symbol directly around the spec
+  needs no braces (`$,.0f`, `.1f%`). Exact halves round away from zero (2.5 is
+  3, -2.5 is -3), and the minus sign comes before the symbol (`-$1,234`). On a time axis `x_format` is a date
   pattern: `%Y %m %d %H %M %S %b %B`.
+- A heatmap's colour bar is on the right whatever `legend` says (`none` removes
+  it); an empty cell is a dashed outline with a diagonal, never a colour.
+- A title is left out, with a warning, when the picture is too small for it.
 - A log axis needs values above zero; a zero or negative value is an error
   that names the first one.
 - Pick colours with `colors` only when asked; the default palette stays

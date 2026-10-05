@@ -53,6 +53,13 @@ pub fn files() -> Vec<(String, Vec<u8>)> {
     }
     add("data/events.ndjson", events);
 
+    // A European file: semicolons, decimal commas, and the labels NA (a country
+    // code) and None, which are categories here and not missing values.
+    add(
+        "data/european.csv",
+        "country;gdp;growth\nNA;1.234,5;2,5\nUS;21000;1,9\nNone;0,75;-0,5\nDE;3800;0,3\n".into(),
+    );
+
     add(
         "data/semicolon.csv",
         "city;population;area\nOslo;709;454.0\nBergen;286;465.3\nTrondheim;212;342.2\nStavanger;144;71.0\nTromso;78;2521.3\nDrammen;102;137.7\n".into(),

@@ -418,7 +418,8 @@ fn kind_of(name: &str) -> Res<(Kind, Option<bool>, bool)> {
         "combo" => (Kind::Combo, None, false),
         other => {
             return fail(format!(
-                "chart type {other:?} is not known; use line, area, stacked_area, bar, stacked_bar, horizontal_bar, scatter, bubble, histogram, box, pie, donut, heatmap or combo"
+                "chart type {other} is not known; use line, area, stacked_area, bar, stacked_bar, horizontal_bar, scatter, bubble, histogram, box, pie, donut, heatmap or combo",
+                other = crate::text::quote(other)
             ));
         }
     })
@@ -429,8 +430,9 @@ fn choice<T: Copy>(field: &str, value: Option<&str>, default: T, table: &[(&str,
     match table.iter().find(|(name, _)| *name == v) {
         Some((_, t)) => Ok(*t),
         None => fail(format!(
-            "{field} {v:?} is not known; use {}",
-            table.iter().map(|(n, _)| *n).collect::<Vec<_>>().join(", ")
+            "{field} {v} is not known; use {}",
+            table.iter().map(|(n, _)| *n).collect::<Vec<_>>().join(", "),
+            v = crate::text::quote(v)
         )),
     }
 }
@@ -478,6 +480,24 @@ fn check_x_format(f: &str) -> Res<()> {
     }
 }
 
+/// Checks that `n` stays inside the folder; errors quote `shown`, the
+/// caller's own text.
+fn check_relative(n: &str, shown: &str) -> Res<()> {
+    if n.contains(['\0', '\\']) || n.starts_with('/') || n.as_bytes().get(1) == Some(&b':') {
+        return fail(format!(
+            "save file {name} must be a relative path inside the folder",
+            name = crate::text::quote(shown)
+        ));
+    }
+    if n.split('/').any(|p| p.is_empty() || p == "." || p == "..") {
+        return fail(format!(
+            "save file {name} must stay inside the folder: no empty parts, . or ..",
+            name = crate::text::quote(shown)
+        ));
+    }
+    Ok(())
+}
+
 /// Checks a file name for `save`: a relative path with the right extension.
 pub fn save_name(name: &str, ext: &str) -> Res<String> {
     let n = name.trim();
@@ -485,18 +505,12 @@ pub fn save_name(name: &str, ext: &str) -> Res<String> {
     let ok_ext =
         last.len() > ext.len() + 1 && last.to_ascii_lowercase().ends_with(&format!(".{ext}"));
     if !ok_ext {
-        return fail(format!("save file {name:?} needs a name ending in .{ext}"));
-    }
-    if n.contains(['\0', '\\']) || n.starts_with('/') || n.as_bytes().get(1) == Some(&b':') {
         return fail(format!(
-            "save file {name:?} must be a relative path inside the folder"
+            "save file {name} needs a name ending in .{ext}",
+            name = crate::text::quote(name)
         ));
     }
-    if n.split('/').any(|p| p.is_empty() || p == "." || p == "..") {
-        return fail(format!(
-            "save file {name:?} must stay inside the folder: no empty parts, . or .."
-        ));
-    }
+    check_relative(n, name)?;
     if n.len() > 200 {
         return fail("save file names are limited to 200 characters");
     }
@@ -658,12 +672,23 @@ impl Request<'_> {
             None => None,
             Some(SaveArg::Base(base)) => {
                 let b = base.trim();
-                if b.is_empty() || b.contains(['\0', '\\']) || b.ends_with('/') {
+                // A base name that already ends in .svg or .png is that name without it.
+                let stem = [".svg", ".png"]
+                    .iter()
+                    .find_map(|e| {
+                        let cut = b.len().checked_sub(e.len())?;
+                        b.get(cut..)
+                            .filter(|t| t.eq_ignore_ascii_case(e))
+                            .map(|_| &b[..cut])
+                    })
+                    .unwrap_or(b);
+                if stem.is_empty() || b.contains(['\0', '\\']) || stem.ends_with('/') {
                     return fail("save needs a file name like \"chart\"");
                 }
+                check_relative(stem, b)?;
                 Some(SaveSpec {
-                    svg: Some(save_name(&format!("{b}.svg"), "svg")?),
-                    png: Some(save_name(&format!("{b}.png"), "png")?),
+                    svg: Some(save_name(&format!("{stem}.svg"), "svg")?),
+                    png: Some(save_name(&format!("{stem}.png"), "png")?),
                 })
             }
             Some(SaveArg::Files { svg, png }) => {
