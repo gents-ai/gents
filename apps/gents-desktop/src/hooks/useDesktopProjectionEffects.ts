@@ -1,9 +1,8 @@
 import { useEffect } from "react";
 
-import type {
-  DesktopClientUpdatedListenerFactory,
-  DesktopSessionSnapshot,
-} from "@source-inc/gents-desktop-client";
+import { useStore } from "zustand";
+
+import type { DesktopClientUpdatedListenerFactory } from "@source-inc/gents-desktop-client";
 import { listenToDesktopClientUpdates } from "@source-inc/gents-desktop-client";
 
 import { createDesktopProjectionController } from "./desktopProjectionController";
@@ -12,42 +11,26 @@ import {
   logShellEvent,
   timingConfig,
 } from "./desktopShellRuntime";
-import type { SelectionStore } from "./selectionStore";
-
-type DesktopProjectionEffectsArgs = {
-  clientAvailable: boolean;
-  listenToUpdates: DesktopClientUpdatedListenerFactory;
-  refreshSession: (sessionId: string | null) => Promise<DesktopSessionSnapshot | null>;
-  refreshSessionLiveDelta: () => Promise<boolean>;
-  refreshSnapshot: () => Promise<void>;
-  selectedAgentDid: string | null;
-  selectedSessionId: string | null;
-  /** the selection, read when an observed result lands */
-  store: SelectionStore;
-  selectedTrackedRequestId: string | null;
-  /** the request being tracked now, read when an update lands */
-  trackedRequestId: () => string | null;
-  setError: (error: string | null) => void;
-};
+import type { DesktopApp } from "./desktopApp";
 
 /**
  * Own all event, polling, selection, and foreground reads for the bounded
  * desktop projection. Keeping this lifecycle beside the controller prevents
  * new shell effects from accidentally creating a second refresh owner.
  */
-export function useDesktopProjectionEffects({
-  clientAvailable,
-  listenToUpdates,
-  refreshSession,
-  refreshSessionLiveDelta,
-  refreshSnapshot,
-  selectedAgentDid,
-  selectedSessionId,
-  store,
-  selectedTrackedRequestId,
-  trackedRequestId,
-  setError,
-}: DesktopProjectionEffectsArgs) {
+export function useDesktopProjectionEffects(
+  { stores, view, actions, lifecycle, trackedRequestId }: DesktopApp,
+  listenToUpdates: DesktopClientUpdatedListenerFactory,
+) {
+  const store = stores.selection;
+  const clientAvailable = useStore(stores.client, (state) =>
+    Boolean(state.snapshot?.client),
+  );
+  const selectedAgentDid = useStore(store, (state) => state.agentDid);
+  const selectedSessionId = useStore(store, (state) => state.sessionId);
+  const selectedTrackedRequestId = useStore(view, (state) => state.trackedRequestId);
+  const { refreshSession, refreshSessionLiveDelta, refreshSnapshot } = actions;
+  const setError = lifecycle.setError;
   useEffect(() => {
     // There is no bounded desktop projection to observe until the client is
     // running. Starting this owner during configuration bootstrap races the
@@ -134,6 +117,7 @@ export function useDesktopProjectionEffects({
       unlisten?.();
     };
   }, [
+    actions,
     clientAvailable,
     listenToUpdates,
     selectedAgentDid,

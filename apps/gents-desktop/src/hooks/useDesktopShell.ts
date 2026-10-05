@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { useStore } from "zustand";
-import { useShallow } from "zustand/react/shallow";
 
 import type {
   DesktopApiAdapter,
@@ -9,12 +8,11 @@ import type {
 
 import { folderOf } from "./chatFolders";
 import { createDesktopApp } from "./desktopApp";
-import { useDesktopShellEffects } from "./desktopShellEffects";
 import { setDesktopShellTimingConfigForTests } from "./desktopShellRuntime";
 import { useSelection } from "./selectionStore";
-import { setterOf } from "./chatStore";
 import { useSessionValue } from "./sessionStore";
 import { useDesktopClientLifecycle } from "./useDesktopClientLifecycle";
+import { useDesktopRuntime } from "./useDesktopRuntime";
 
 export { setDesktopShellTimingConfigForTests };
 export type { DesktopStartupPhase } from "./useDesktopClientLifecycle";
@@ -57,8 +55,6 @@ export function useDesktopShell({
     diagnosticsHint,
     canRestartManagedServer,
   } = useDesktopClientLifecycle(api, stores.client, lifecycle);
-  const { selectAgent, refreshSession, refreshSessionLiveDelta, refreshSnapshot } =
-    actions;
   const deployments = snapshot?.client?.deployments ?? [];
   const selectedDeployment =
     deployments.find((deployment) => deployment.agentDid === selectedAgentDid) ?? null;
@@ -68,14 +64,7 @@ export function useDesktopShell({
     ) ?? null;
   const behaviorOptions = selectedDeployment?.behaviors ?? [];
   const runtimeHealth = snapshot?.client?.p2pHealth ?? null;
-  const [setLocalWorkflow] = useState(() => setterOf(stores.chat, "localWorkflow"));
-  const { localWorkflow, sending } = useStore(
-    stores.chat,
-    useShallow((state) => ({
-      localWorkflow: state.localWorkflow,
-      sending: state.sending,
-    })),
-  );
+  const sending = useStore(stores.chat, (state) => state.sending);
   const {
     operationalState,
     behaviorReadiness,
@@ -86,36 +75,7 @@ export function useDesktopShell({
     pendingTurn: optimisticPendingTurn,
     draftKey: draftContextKey,
   } = useStore(app.view);
-  useDesktopShellEffects({
-    api,
-    recovery: lifecycle.recovery,
-    deployments,
-    localWorkflow,
-    clientAutostarts: lifecycle.clientAutostarts,
-    listenToUpdates,
-    composingFor: current.composingFor,
-    onStartClient: lifecycle.onStartClient,
-    refreshSession,
-    refreshSessionLiveDelta,
-    refreshSnapshot,
-    restartDesktopClient: lifecycle.restartDesktopClient,
-    runtimeHealth,
-    selectedAgentDid,
-    selectedBehaviorId,
-    selectedDeployment,
-    selectedSessionId,
-    store,
-    trackedRequestId: app.trackedRequestId,
-    selectedTrackedRequestId,
-    sending,
-    setLocalWorkflow,
-    projectedWorkflow: shellProjection.workflow,
-    setError: lifecycle.setError,
-    selectAgent,
-    snapshot,
-    starting,
-    stopping,
-  });
+  useDesktopRuntime(app, listenToUpdates);
 
   const chatFolder = useStore(stores.chat, (state) =>
     folderOf(state.folders, selectedSessionId),

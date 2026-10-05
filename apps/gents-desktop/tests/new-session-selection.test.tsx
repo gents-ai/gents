@@ -12,7 +12,7 @@ import { setterOf } from "../src/hooks/chatStore";
 import { applyFleetSnapshot } from "../src/hooks/fleetStore";
 import { readSession, writeSession } from "../src/hooks/sessionStore";
 import { admittingProjection, shellStores } from "./shell-fixture";
-import { useDesktopShellEffects } from "../src/hooks/desktopShellEffects";
+import { useSelectionReconcile } from "../src/hooks/useDesktopRuntime";
 import { createDesktopShellSelectionActions } from "../src/hooks/desktopShellSelectionActions";
 import { createSelectionStore, useSelection } from "../src/hooks/selectionStore";
 import { createDesktopShellChatActions } from "../src/hooks/desktopShellChatActions";
@@ -77,41 +77,7 @@ function useHarness(
       setError: vi.fn(),
     }),
   }));
-  useDesktopShellEffects({
-    api,
-    recovery: {
-      autostartAttempted: true,
-      autoRestartInFlight: false,
-      lastP2PAutoRestartAt: null,
-      lastObservedP2PHealth: null,
-    },
-    deployments,
-    localWorkflow: workflow,
-    clientAutostarts: () => false,
-    listenToUpdates: async () => () => {},
-    composingFor: current.composingFor,
-    refreshSession: async () => null,
-    refreshSessionLiveDelta: async () => false,
-    refreshSnapshot: async () => {},
-    restartDesktopClient: async () => {},
-    runtimeHealth: null,
-    selectedAgentDid: current.agentDid,
-    selectedBehaviorId: current.behaviorId,
-    selectedDeployment: deployment,
-    selectedSessionId: current.sessionId,
-    store,
-    trackedRequestId: () => null,
-    selectedTrackedRequestId: null,
-    sending: false,
-    projectedWorkflow: workflow,
-    setLocalWorkflow: setterOf(stores.chat, "localWorkflow"),
-    setError: vi.fn(),
-    selectAgent: route.selectAgent,
-    snapshot: null,
-    starting: false,
-    stopping: false,
-    onStartClient: async () => {},
-  });
+  useSelectionReconcile({ stores, actions });
   return {
     agent: current.agentDid,
     selected: current.sessionId,
