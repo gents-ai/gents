@@ -19,11 +19,28 @@ export function useShell(
   const shellRef = useRef(d);
   shellRef.current = d;
 
+  /* the desktop reads a session through its selected node, so a session
+     that lives on another node selects that node first */
+  const routeNodeDid =
+    routeSessionId &&
+    d.deployments.find((deployment) =>
+      deployment.sessions.some((session) => session.sessionId === routeSessionId),
+    )?.agentDid;
+  const selectedAgentDid = d.selectedAgentDid ?? d.deployments[0]?.agentDid ?? null;
   useEffect(() => {
     const shell = shellRef.current;
     if (routeSessionId === undefined) return;
     if (routeSessionId === null) {
+      // A mailbox item opened into a new session already holds it, with the
+      // item as the next message's cause.
+      if (shell.selectedSessionId === null && shell.pendingMailboxCauseId) return;
       shell.onStartNewSession();
+      return;
+    }
+    // Selecting a node clears its session; this runs again once the node has
+    // settled and selects the route's session against it.
+    if (routeNodeDid && routeNodeDid !== selectedAgentDid) {
+      shell.setSelectedAgentDid(routeNodeDid);
       return;
     }
     // Session selection is behavior-aware. The route must use the same owner
@@ -35,7 +52,7 @@ export function useShell(
     // set up for it, such as the item the next message answers.
     if (shell.selectedSessionId === routeSessionId) return;
     shell.onSelectSession(routeSessionId);
-  }, [routeSessionId]);
+  }, [routeSessionId, routeNodeDid, selectedAgentDid]);
 
   const configApi = useMemo(
     () => ({

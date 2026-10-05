@@ -2,7 +2,7 @@
    browser, on the app's own history: Cmd+[ and Cmd+] (Alt+arrow on
    Windows and Linux), and the two side buttons of a mouse. A field that
    is being typed in keeps its keys. */
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import type { History } from "./router";
 
 const typing = (target: EventTarget | null) =>
@@ -10,9 +10,13 @@ const typing = (target: EventTarget | null) =>
   Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
 
 export function useHistoryInputs(history: History) {
+  const latest = useRef(history);
+  latest.current = history;
+
   useEffect(() => {
     const mac = navigator.platform.toUpperCase().includes("MAC");
     const onKey = (e: KeyboardEvent) => {
+      const history = latest.current;
       if (typing(e.target)) return;
       const chord = mac ? e.metaKey && !e.altKey : e.altKey && !e.metaKey;
       if (!chord || e.ctrlKey || e.shiftKey) return;
@@ -27,6 +31,7 @@ export function useHistoryInputs(history: History) {
       }
     };
     const onMouse = (e: MouseEvent) => {
+      const history = latest.current;
       if (e.button === 3 && history.canBack) {
         e.preventDefault();
         history.back();
@@ -41,5 +46,5 @@ export function useHistoryInputs(history: History) {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("mouseup", onMouse);
     };
-  }, [history]);
+  }, []);
 }

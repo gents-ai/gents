@@ -38,7 +38,7 @@ import { Shortcuts } from "./ui/screens/Shortcuts";
 import { SetupScreen } from "./ui/screens/setup/SetupScreen";
 import { useShell, type ShellBridge } from "./ui/hooks/useShell";
 import { ShellProvider } from "./ui/app/ShellContext";
-import { nodeDidOf, setHomeDid, workingNode } from "./ui/lib/nodes";
+import { setHomeDid, workingNode } from "./ui/lib/nodes";
 import {
   defaultScope,
   mailboxInScope,
@@ -116,31 +116,6 @@ function AppHost({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
     toast(shell.actionError);
     shell.clearActionError();
   }, [shell.actionError, shell.clearActionError]);
-  /* the desktop reads a session through its selected node, so a session
-     that lives on another node selects that node first */
-  const routeSessionId = route.name === "session" ? route.sessionId : null;
-  useEffect(() => {
-    if (!routeSessionId) return;
-    const owner = shell.deployments.find((d) =>
-      d.sessions.some((c) => c.sessionId === routeSessionId),
-    );
-    if (!owner) return;
-    if (nodeDidOf(owner) !== shell.selectedAgentDid)
-      shell.selectAgent(nodeDidOf(owner));
-    /* selecting a node clears its session; once the node has settled, the
-       route's session is selected again against it */ else if (
-      shell.selectedSessionId !== routeSessionId
-    )
-      shell.selectSession(routeSessionId);
-  }, [
-    routeSessionId,
-    shell.deployments,
-    shell.selectedAgentDid,
-    shell.selectedSessionId,
-    shell.selectAgent,
-    shell.selectSession,
-  ]);
-
   useEffect(() => {
     initTheme();
     applyShellPlatform();

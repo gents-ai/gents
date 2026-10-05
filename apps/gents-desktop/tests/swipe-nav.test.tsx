@@ -136,6 +136,31 @@ describe("useSwipeNav", () => {
     expect(chip.style.transform).toBe("");
   });
 
+  it("commits once when AppKit repeats the end phase while it animates", async () => {
+    const h = history();
+    renderHook(() => useSwipeNav(h));
+    await vi.waitFor(() => expect(native.handler).not.toBeNull());
+    swipe(COMMIT, "moving");
+    swipe(COMMIT, "ended");
+    swipe(0.7, "ended");
+    swipe(1, "ended");
+    expect(h.back).toHaveBeenCalledTimes(1);
+    swipe(COMMIT, "moving");
+    swipe(COMMIT, "ended");
+    expect(h.back).toHaveBeenCalledTimes(2);
+  });
+
+  it("clears the handle when the swipe settles at zero with no entry ahead", async () => {
+    render(<SwipeHandles />);
+    renderHook(() => useSwipeNav(history(true, false)));
+    await vi.waitFor(() => expect(native.handler).not.toBeNull());
+    const chip = document.querySelector<HTMLElement>('[data-swipe-handle="back"]')!;
+    swipe(COMMIT / 2, "moving");
+    expect(chip.style.transform).not.toBe("");
+    swipe(0, "cancelled");
+    expect(chip.style.transform).toBe("");
+  });
+
   it("tells native the scroll room under the pointer, only when it changes", async () => {
     const el = scroller(200, 300, 0);
     document.elementFromPoint = () => el;

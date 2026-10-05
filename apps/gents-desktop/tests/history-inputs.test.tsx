@@ -74,4 +74,21 @@ describe("useHistoryInputs", () => {
     expect(h.back).not.toHaveBeenCalled();
     expect(h.forward).not.toHaveBeenCalled();
   });
+
+  it("keeps its listeners across renders and reads the latest history", () => {
+    platform("MacIntel");
+    const add = vi.spyOn(window, "addEventListener");
+    const first = { ...history(), canBack: false };
+    const { rerender } = renderHook(({ h }) => useHistoryInputs(h), {
+      initialProps: { h: first },
+    });
+    const bound = add.mock.calls.length;
+    const next = history();
+    rerender({ h: next });
+    expect(add.mock.calls.length).toBe(bound);
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "[", metaKey: true }));
+    expect(first.back).not.toHaveBeenCalled();
+    expect(next.back).toHaveBeenCalledTimes(1);
+    add.mockRestore();
+  });
 });

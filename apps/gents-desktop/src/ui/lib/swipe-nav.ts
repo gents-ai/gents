@@ -103,21 +103,29 @@ export function useSwipeNav(history: History) {
     const stopReporting = reportScrollRoom();
     let unlisten: (() => void) | undefined;
     let disposed = false;
+    /* AppKit keeps reporting the end phase while it animates the amount
+       after lift, so a gesture settles on its first end only */
+    let settled = false;
     void getCurrentWindow()
       .listen<SwipeProgress>("native-swipe", ({ payload }) => {
         const h = latest.current;
         const back = payload.amount > 0;
-        if (!(back ? h.canBack : h.canForward)) return;
-        const el = handle(back ? "back" : "forward");
         if (payload.phase === "moving") {
+          settled = false;
+          if (!(back ? h.canBack : h.canForward)) return;
+          const el = handle(back ? "back" : "forward");
           if (el) show(el, Math.abs(payload.amount), back ? 1 : -1);
           return;
         }
-        if (el) hide(el);
-        if (payload.phase === "ended" && Math.abs(payload.amount) >= COMMIT) {
-          if (back) h.back();
-          else h.forward();
+        if (settled) return;
+        settled = true;
+        for (const direction of ["back", "forward"] as const) {
+          const el = handle(direction);
+          if (el) hide(el);
         }
+        if (payload.phase !== "ended" || Math.abs(payload.amount) < COMMIT) return;
+        if (back && h.canBack) h.back();
+        else if (!back && h.canForward) h.forward();
       })
       .then((stop) => {
         if (disposed) stop();

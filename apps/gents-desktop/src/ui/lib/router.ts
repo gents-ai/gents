@@ -17,8 +17,11 @@ export function href(route: Route) {
   return pathFor(route);
 }
 
+/* the memory nav pushes every call, and an entry equal to the one shown
+   would make Back look like it did nothing */
 export function navigate(route: Route) {
-  current?.navigate(route);
+  if (!current || pathFor(route) === pathFor(current.route)) return;
+  current.navigate(route);
 }
 
 export function useRoute(): Route {
