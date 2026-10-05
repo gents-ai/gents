@@ -223,6 +223,44 @@ pub struct ProbeCycleOutcome {
     pub promotable: Vec<String>,
 }
 
+#[derive(Default)]
+struct ProbeSchedule {
+    known: HashMap<String, InferenceBackend>,
+}
+
+impl ProbeSchedule {
+    fn select(&mut self, backends: &[InferenceBackend], periodic: bool) -> HashSet<String> {
+        let due = backends
+            .iter()
+            .filter(|backend| backend.enabled)
+            .filter(|backend| {
+                periodic
+                    || self
+                        .known
+                        .get(&backend.backend_id)
+                        .is_none_or(|previous| !same_probe_inputs(previous, backend))
+            })
+            .map(|backend| backend.backend_id.clone())
+            .collect();
+        self.known = backends
+            .iter()
+            .filter(|backend| backend.enabled)
+            .map(|backend| (backend.backend_id.clone(), backend.clone()))
+            .collect();
+        due
+    }
+}
+
+/// Discovery depends on connection inputs. Observations and unrelated settings
+/// must not schedule probes: a repeated write cannot consume the failure budget.
+fn same_probe_inputs(previous: &InferenceBackend, current: &InferenceBackend) -> bool {
+    previous.provider_kind == current.provider_kind
+        && previous.endpoint == current.endpoint
+        && previous.auth == current.auth
+        && previous.connect_timeout_secs == current.connect_timeout_secs
+        && previous.discovery_timeout_secs == current.discovery_timeout_secs
+}
+
 /// Node + principal used to refresh and resolve agent-scoped OAuth credentials
 /// during a probe cycle. Refresh and discovery go through the existing
 /// OAuth credential owner (`bootstrap_oauth_client` and the bearer it mints);
@@ -336,16 +374,37 @@ pub async fn probe_backends_cycle(
     options: &BackendProberOptions,
     oauth: Option<OAuthProbeContext<'_>>,
 ) -> ProbeCycleOutcome {
+    probe_selected_backends(
+        node, client, backends, now, health_map, options, oauth, None,
+    )
+    .await
+}
+
+async fn probe_selected_backends(
+    node: &EmbeddedNode,
+    client: &reqwest::Client,
+    backends: &[InferenceBackend],
+    now: DateTime<Utc>,
+    health_map: &BackendHealthMap,
+    options: &BackendProberOptions,
+    oauth: Option<OAuthProbeContext<'_>>,
+    selected: Option<&HashSet<String>>,
+) -> ProbeCycleOutcome {
     let mut outcome = ProbeCycleOutcome::default();
     let mut probed_ids = HashSet::new();
 
     for backend in backends {
+        if backend.provider_kind.is_agent_scoped_oauth() && oauth.is_none() {
+            continue;
+        }
+        probed_ids.insert(backend.backend_id.clone());
+        if selected.is_some_and(|due| !due.contains(&backend.backend_id)) {
+            continue;
+        }
         if backend.provider_kind.is_agent_scoped_oauth() {
             let Some(context) = oauth.as_ref() else {
                 continue;
             };
-            probed_ids.insert(backend.backend_id.clone());
-
             let (event, error_text) = match oauth_credential_for_probe(context, backend).await {
                 Ok(credential) => {
                     let probe_result = tokio::time::timeout(
@@ -389,8 +448,6 @@ pub async fn probe_backends_cycle(
             .await;
             continue;
         }
-
-        probed_ids.insert(backend.backend_id.clone());
 
         let (event, error_text) = match backend.auth.resolve_api_key() {
             Err(error) => (ProbeEvent::ProbeFail, Some(error.to_string())),
@@ -515,6 +572,17 @@ pub async fn run_backend_probe_cycle(
     options: &BackendProberOptions,
     principal_did: &str,
 ) -> ProbeCycleOutcome {
+    run_scheduled_backend_probe_cycle(node, client, health_map, options, principal_did, None).await
+}
+
+async fn run_scheduled_backend_probe_cycle(
+    node: Arc<EmbeddedNode>,
+    client: &reqwest::Client,
+    health_map: &BackendHealthMap,
+    options: &BackendProberOptions,
+    principal_did: &str,
+    schedule: Option<(&mut ProbeSchedule, bool)>,
+) -> ProbeCycleOutcome {
     let backends = match list_enabled_backends_for_agent(node.as_ref(), principal_did).await {
         Ok(backends) => backends,
         Err(error) => {
@@ -523,8 +591,9 @@ pub async fn run_backend_probe_cycle(
         }
     };
 
+    let selected = schedule.map(|(schedule, periodic)| schedule.select(&backends, periodic));
     let now = Utc::now();
-    let outcome = probe_backends_cycle(
+    let outcome = probe_selected_backends(
         node.as_ref(),
         client,
         &backends,
@@ -535,6 +604,7 @@ pub async fn run_backend_probe_cycle(
             node: node.clone(),
             principal_did,
         }),
+        selected.as_ref(),
     )
     .await;
 
@@ -578,6 +648,7 @@ pub fn spawn_backend_prober(
     cancel: CancellationToken,
     principal_did: String,
 ) -> tokio::task::JoinHandle<()> {
+    let mut changes = node.subscribe_document_changes();
     tokio::spawn(async move {
         let client = match reqwest::Client::builder()
             .timeout(options.probe_timeout)
@@ -592,26 +663,47 @@ pub fn spawn_backend_prober(
 
         let mut ticker = tokio::time::interval(options.probe_interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut schedule = ProbeSchedule::default();
 
         loop {
-            tokio::select! {
+            let periodic = tokio::select! {
+                biased;
                 _ = cancel.cancelled() => {
                     tracing::debug!("backend prober cancelled");
                     return;
                 }
-                _ = ticker.tick() => {
-                    let outcome = run_backend_probe_cycle(
-                        node.clone(),
-                        &client,
-                        &health_map,
-                        &options,
-                        &principal_did,
-                    )
-                    .await;
-                    if !outcome.flipped.is_empty() {
-                        let _ = health_events_tx.try_send(());
+                _ = ticker.tick() => true,
+                batch = changes.recv() => {
+                    let Some(batch) = batch else {
+                        return;
+                    };
+                    if !batch.resync_required {
+                        let collection = match node.get_collection("InferenceBackend") {
+                            Ok(Some(collection)) => collection,
+                            Ok(None) => continue,
+                            Err(error) => {
+                                tracing::warn!(%error, "backend prober: could not resolve backend collection");
+                                continue;
+                            }
+                        };
+                        if !batch.changes.iter().any(|change| change.collection_id == collection.collection_id) {
+                            continue;
+                        }
                     }
+                    false
                 }
+            };
+            let outcome = run_scheduled_backend_probe_cycle(
+                node.clone(),
+                &client,
+                &health_map,
+                &options,
+                &principal_did,
+                Some((&mut schedule, periodic)),
+            )
+            .await;
+            if !outcome.flipped.is_empty() {
+                let _ = health_events_tx.try_send(());
             }
         }
     })
@@ -619,6 +711,8 @@ pub fn spawn_backend_prober(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use axum::{routing::get, Json, Router};
     use tokio::sync::oneshot;
 
@@ -684,12 +778,128 @@ mod tests {
         }
     }
 
+    #[test]
+    fn generated_backend_probe_schedule_cases_match_runtime_selection() {
+        fn configuration(
+            value: &crate::lean_vocab_test::LeanBackendProbeConfiguration,
+        ) -> InferenceBackend {
+            let mut backend = backend(
+                &format!("backend-{}", value.backend_id),
+                format!("http://localhost/revision-{}", value.revision),
+            );
+            backend.enabled = value.enabled;
+            backend
+        }
+
+        for case in crate::lean_vocab_test::lean_backend_probe_schedule_cases() {
+            let mut schedule = ProbeSchedule::default();
+            schedule.select(
+                &case.known.iter().map(configuration).collect::<Vec<_>>(),
+                true,
+            );
+            let selected = schedule.select(
+                &case.current.iter().map(configuration).collect::<Vec<_>>(),
+                case.periodic,
+            );
+            let expected = case
+                .due
+                .iter()
+                .map(|id| format!("backend-{id}"))
+                .collect::<HashSet<_>>();
+            assert_eq!(selected, expected, "{}", case.name);
+            let observed = case
+                .observed
+                .iter()
+                .map(configuration)
+                .map(|backend| (backend.backend_id.clone(), backend))
+                .collect::<HashMap<_, _>>();
+            assert_eq!(
+                serde_json::to_value(&schedule.known).unwrap(),
+                serde_json::to_value(observed).unwrap(),
+                "{}",
+                case.name
+            );
+        }
+    }
+
+    #[test]
+    fn backend_fields_refine_the_modeled_probe_revision() {
+        type Edit = (&'static str, fn(&mut InferenceBackend), u32);
+        let edits: &[Edit] = &[
+            (
+                "provider",
+                |value| {
+                    value.provider_kind = crate::backend_provider::BackendProviderKind::OpenRouter
+                },
+                1,
+            ),
+            ("endpoint", |value| value.endpoint.push_str("/changed"), 1),
+            (
+                "auth",
+                |value| {
+                    value.auth = crate::document_config::BackendAuth::ApiKey {
+                        key: "test-key".into(),
+                    }
+                },
+                1,
+            ),
+            (
+                "connect timeout",
+                |value| value.connect_timeout_secs = Some(20),
+                1,
+            ),
+            (
+                "discovery timeout",
+                |value| value.discovery_timeout_secs = Some(20),
+                1,
+            ),
+            ("name", |value| value.name = "Renamed".into(), 0),
+            ("tags", |value| value.tags = vec!["changed".into()], 0),
+            ("capacity", |value| value.max_concurrent = Some(2), 0),
+            ("queue capacity", |value| value.max_queue_depth = Some(2), 0),
+        ];
+        let base = backend("backend-0", "http://localhost/v1".into());
+        for (name, edit, revision) in edits {
+            let mut changed = base.clone();
+            edit(&mut changed);
+            let mut schedule = ProbeSchedule::default();
+            schedule.select(std::slice::from_ref(&base), true);
+            for known_revision in [0, *revision] {
+                let modeled = crate::lean_vocab_test::lean_backend_probe_schedule_cases()
+                    .iter()
+                    .find(|case| {
+                        !case.periodic
+                            && case.known.len() == 1
+                            && case.current.len() == 1
+                            && case.known[0].backend_id == 0
+                            && case.known[0].revision == known_revision
+                            && case.known[0].enabled
+                            && case.current[0].backend_id == 0
+                            && case.current[0].revision == *revision
+                            && case.current[0].enabled
+                    })
+                    .expect("the model emits changed and unchanged enabled configurations");
+                let expected = modeled
+                    .due
+                    .iter()
+                    .map(|id| format!("backend-{id}"))
+                    .collect::<HashSet<_>>();
+                assert_eq!(
+                    schedule.select(std::slice::from_ref(&changed), false),
+                    expected,
+                    "{name}"
+                );
+            }
+        }
+    }
+
     /// Minimal /v1/models responder on a real socket. Serving on the ambient
     /// Tokio runtime keeps the probe client and responder under one scheduler;
     /// an independently scheduled blocking thread made these tests flaky under
     /// full-suite CPU contention (#743).
     struct ModelsListener {
         port: u16,
+        requests: Arc<AtomicUsize>,
         shutdown: Option<oneshot::Sender<()>>,
         handle: Option<tokio::task::JoinHandle<std::io::Result<()>>>,
     }
@@ -704,14 +914,20 @@ mod tests {
             let port = listener.local_addr().expect("local addr").port();
             let listener =
                 tokio::net::TcpListener::from_std(listener).expect("build async models listener");
-            let models = || async {
-                Json(serde_json::json!({
-                    "data": [{"id": "test-model"}],
-                    "models": [{"model": "test-model", "name": "Test model"}]
-                }))
+            let requests = Arc::new(AtomicUsize::new(0));
+            let observed = requests.clone();
+            let models = move || {
+                let observed = observed.clone();
+                async move {
+                    observed.fetch_add(1, Ordering::Relaxed);
+                    Json(serde_json::json!({
+                        "data": [{"id": "test-model"}],
+                        "models": [{"model": "test-model", "name": "Test model"}]
+                    }))
+                }
             };
             let app = Router::new()
-                .route("/v1/models", get(models))
+                .route("/v1/models", get(models.clone()))
                 .route("/v1/models-v2", get(models));
             let (shutdown_tx, shutdown_rx) = oneshot::channel();
             let handle = tokio::spawn(async move {
@@ -723,6 +939,7 @@ mod tests {
             });
             Self {
                 port,
+                requests,
                 shutdown: Some(shutdown_tx),
                 handle: Some(handle),
             }
@@ -730,6 +947,10 @@ mod tests {
 
         fn endpoint(&self) -> String {
             format!("http://127.0.0.1:{}/v1", self.port)
+        }
+
+        fn requests(&self) -> usize {
+            self.requests.load(Ordering::Relaxed)
         }
 
         async fn shutdown(mut self) {
@@ -771,11 +992,7 @@ mod tests {
         }
     }
 
-    async fn seed_backend_observation(
-        node: &EmbeddedNode,
-        backend: &InferenceBackend,
-        status: &str,
-    ) {
+    async fn upsert_backend_configuration(node: &EmbeddedNode, backend: &InferenceBackend) {
         use crate::config_client::{
             ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
         };
@@ -792,6 +1009,14 @@ mod tests {
         })
         .await
         .unwrap();
+    }
+
+    async fn seed_backend_observation(
+        node: &EmbeddedNode,
+        backend: &InferenceBackend,
+        status: &str,
+    ) {
+        upsert_backend_configuration(node, backend).await;
         crate::backend_registry::set_backend_probe_status(
             node,
             &backend.agent_did,
@@ -808,6 +1033,252 @@ mod tests {
             probe_timeout: Duration::from_secs(2),
             failure_threshold_k: 3,
         }
+    }
+
+    async fn scheduled_cycle(
+        node: &Arc<EmbeddedNode>,
+        health: &BackendHealthMap,
+        schedule: &mut ProbeSchedule,
+        periodic: bool,
+    ) -> ProbeCycleOutcome {
+        run_scheduled_backend_probe_cycle(
+            node.clone(),
+            &reqwest::Client::new(),
+            health,
+            &probe_options(),
+            "did:key:backend-owner",
+            Some((schedule, periodic)),
+        )
+        .await
+    }
+
+    fn assert_modeled_probe(
+        previous: Option<&BackendHealthSnapshot>,
+        current: &BackendHealthSnapshot,
+        event: &str,
+    ) {
+        let (state, count) = previous
+            .map(|snapshot| (snapshot.state, snapshot.failure_count))
+            .unwrap_or((BackendHealthState::Unknown, 0));
+        let modeled = lean_backend_health_cases()
+            .iter()
+            .find(|case| {
+                case.start_state == state.as_str()
+                    && case.start_count == count as usize
+                    && case.event == event
+                    && case.threshold_k == probe_options().failure_threshold_k as usize
+            })
+            .expect("the model emits this probe transition");
+        assert_eq!(current.state.as_str(), modeled.next_state);
+        assert_eq!(current.failure_count as usize, modeled.next_count);
+    }
+
+    async fn wait_for_promotion(node: &EmbeddedNode, backend: &InferenceBackend) {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let observation = crate::backend_registry::lookup_backend_observation(
+                    node,
+                    &backend.agent_did,
+                    &backend.backend_id,
+                )
+                .await
+                .unwrap()
+                .unwrap();
+                if observation.probe_status.as_deref() == Some("healthy")
+                    && observation.last_probe.is_some()
+                {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the backend was not probed before the periodic interval");
+    }
+
+    #[tokio::test]
+    async fn spawned_prober_observes_a_new_backend_before_the_next_periodic_tick() {
+        let node = Arc::new(test_node().await);
+        let listener = ModelsListener::start();
+        let initial = backend("initial", listener.endpoint());
+        seed_backend_observation(&node, &initial, "unknown").await;
+        let health = BackendHealthMap::new();
+        let cancel = CancellationToken::new();
+        let _cancel_on_drop = cancel.clone().drop_guard();
+        let (events, _received) = mpsc::channel(1);
+        let prober = tokio_util::task::AbortOnDropHandle::new(spawn_backend_prober(
+            node.clone(),
+            health.clone(),
+            BackendProberOptions {
+                probe_interval: Duration::from_secs(3600),
+                ..probe_options()
+            },
+            events,
+            cancel.clone(),
+            initial.agent_did.clone(),
+        ));
+        wait_for_promotion(&node, &initial).await;
+        let initial_health = health.get(&initial.backend_id).await.unwrap();
+        assert_modeled_probe(None, &initial_health, "probeSuccess");
+
+        let added = backend("added", listener.endpoint());
+        upsert_backend_configuration(&node, &added).await;
+        wait_for_promotion(&node, &added).await;
+        assert_modeled_probe(
+            None,
+            &health.get(&added.backend_id).await.unwrap(),
+            "probeSuccess",
+        );
+        assert_eq!(
+            health.get(&initial.backend_id).await.unwrap().last_probe_at,
+            initial_health.last_probe_at
+        );
+        assert_eq!(listener.requests(), 2);
+
+        cancel.cancel();
+        tokio::time::timeout(Duration::from_secs(10), prober)
+            .await
+            .expect("the prober did not cancel")
+            .unwrap();
+        node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn scheduled_cycles_preserve_health_across_observations_and_unrelated_edits() {
+        let node = Arc::new(test_node().await);
+        let listener = ModelsListener::start();
+        let mut reachable = backend("reachable", listener.endpoint());
+        let failing = backend("failing", format!("{}/missing", listener.endpoint()));
+        seed_backend_observation(&node, &reachable, "unknown").await;
+        seed_backend_observation(&node, &failing, "unknown").await;
+        let health = BackendHealthMap::new();
+        let mut schedule = ProbeSchedule::default();
+        scheduled_cycle(&node, &health, &mut schedule, true).await;
+        let reachable_before = health.get("reachable").await.unwrap();
+        let failing_before = health.get("failing").await.unwrap();
+        assert_modeled_probe(None, &reachable_before, "probeSuccess");
+        assert_modeled_probe(None, &failing_before, "probeFail");
+        let observation = crate::backend_registry::lookup_backend_observation(
+            &node,
+            &reachable.agent_did,
+            &reachable.backend_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(observation.probe_status.as_deref(), Some("healthy"));
+        assert_eq!(observation.catalogs.len(), 1);
+
+        scheduled_cycle(&node, &health, &mut schedule, false).await;
+        crate::backend_registry::record_model_catalog(
+            &node,
+            &reachable,
+            observation.catalogs[0].clone(),
+        )
+        .await
+        .unwrap();
+        crate::backend_registry::set_backend_probe_status(
+            &node,
+            &failing.agent_did,
+            &failing.backend_id,
+            "healthy",
+        )
+        .await
+        .unwrap();
+        reachable.name = "Renamed".into();
+        reachable.tags = vec!["tagged".into()];
+        reachable.max_concurrent = Some(2);
+        seed_backend_observation(&node, &reachable, "healthy").await;
+        scheduled_cycle(&node, &health, &mut schedule, false).await;
+        assert_eq!(listener.requests(), 1);
+        assert_eq!(
+            health.get("reachable").await.unwrap().last_probe_at,
+            reachable_before.last_probe_at
+        );
+        let unchanged = health.get("failing").await.unwrap();
+        assert_eq!(unchanged.failure_count, failing_before.failure_count);
+        assert_eq!(unchanged.last_probe_at, failing_before.last_probe_at);
+
+        let replacement = ModelsListener::start();
+        reachable.endpoint = replacement.endpoint();
+        seed_backend_observation(&node, &reachable, "healthy").await;
+        scheduled_cycle(&node, &health, &mut schedule, false).await;
+        assert_eq!(replacement.requests(), 1);
+        assert_eq!(
+            health.get("failing").await.unwrap().last_probe_at,
+            failing_before.last_probe_at
+        );
+        scheduled_cycle(&node, &health, &mut schedule, true).await;
+        assert_eq!(replacement.requests(), 2);
+        assert_modeled_probe(
+            Some(&failing_before),
+            &health.get("failing").await.unwrap(),
+            "probeFail",
+        );
+        node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn disabled_and_removed_backends_are_probed_again_when_observed_enabled() {
+        let node = Arc::new(test_node().await);
+        let listener = ModelsListener::start();
+        let mut value = backend("returning", format!("{}/missing", listener.endpoint()));
+        let health = BackendHealthMap::new();
+        let mut schedule = ProbeSchedule::default();
+        seed_backend_observation(&node, &value, "unknown").await;
+        scheduled_cycle(&node, &health, &mut schedule, true).await;
+        assert_modeled_probe(
+            None,
+            &health.get(&value.backend_id).await.unwrap(),
+            "probeFail",
+        );
+
+        value.enabled = false;
+        seed_backend_observation(&node, &value, "unknown").await;
+        scheduled_cycle(&node, &health, &mut schedule, false).await;
+        assert!(health.get(&value.backend_id).await.is_none());
+        assert!(!schedule.known.contains_key(&value.backend_id));
+        value.enabled = true;
+        seed_backend_observation(&node, &value, "unknown").await;
+        scheduled_cycle(&node, &health, &mut schedule, false).await;
+        assert_modeled_probe(
+            None,
+            &health.get(&value.backend_id).await.unwrap(),
+            "probeFail",
+        );
+
+        let plan = crate::config_client::DesiredStateApplyPlan::new(Vec::new())
+            .unwrap()
+            .with_removals(vec![(
+                crate::Collection::InferenceBackend,
+                value.agent_did.clone(),
+                value.backend_id.clone(),
+            )])
+            .unwrap();
+        crate::config_client::ConfigAccess::transact_local(
+            &node,
+            None,
+            "test.backend.remove",
+            |txn| {
+                let plan = &plan;
+                Box::pin(
+                    async move { crate::config_client::apply_desired_state_plan(txn, plan).await },
+                )
+            },
+        )
+        .await
+        .unwrap();
+        scheduled_cycle(&node, &health, &mut schedule, false).await;
+        assert!(health.get(&value.backend_id).await.is_none());
+        assert!(!schedule.known.contains_key(&value.backend_id));
+        seed_backend_observation(&node, &value, "unknown").await;
+        scheduled_cycle(&node, &health, &mut schedule, false).await;
+        assert_modeled_probe(
+            None,
+            &health.get(&value.backend_id).await.unwrap(),
+            "probeFail",
+        );
+        node.shutdown().await;
     }
 
     #[tokio::test]
