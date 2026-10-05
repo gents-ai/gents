@@ -3,9 +3,10 @@ import Proofs.RequestExecutionLease.State
 namespace RequestExecutionLease
 
 /-!
-Every authoritative read and its commit is one `step?` while holding
-`Boundary.mutationWriteGate`. This models local serialization only. It does not
-claim that another process, native handle, or remote merge shares the mutex.
+`step?` models authorization-time policy. Ordinary writes hold the local
+mutation gate. Renewal may instead use a native validated transaction. The
+observed-transaction owner exposes delay and native OCC separately; this machine
+does not claim that another process or remote merge shares the local mutex.
 
 Raw output append is the only producer write that does not rewrite the request's
 explicit deadline. Exact replay is identity and never stamps fresh progress.
@@ -101,7 +102,8 @@ def step? {Generation : Type} [DecidableEq Generation]
   | .renew boundary generation expectedDeadline =>
       match pre.lease with
       | .active owner duration explicitDeadline =>
-          if admitted pre boundary generation ∧ explicitDeadline = expectedDeadline ∧
+          if (boundary = .mutationWriteGate ∨ boundary = .validatedTransaction) ∧
+              admitted pre .mutationWriteGate generation ∧ explicitDeadline = expectedDeadline ∧
               renewalDue duration explicitDeadline ≤ pre.now ∧
               explicitDeadline < renewDeadline pre duration ∧
               renewableLifecycle pre.request then

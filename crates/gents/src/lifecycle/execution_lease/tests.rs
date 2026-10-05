@@ -1256,3 +1256,169 @@ async fn native_doc_id_targeting_preserves_request_update_filters() {
         );
     }
 }
+
+async fn observed_case_request(
+    node: &Arc<EmbeddedNode>,
+    case: &crate::lean_vocab_test::LeanRequestExecutionObservedCase,
+    epoch: DateTime<Utc>,
+) -> RequestLifecycle {
+    let lifecycle = owner(node).await;
+    let doc_id = escape_graphql_string(&lifecycle.request.doc_id);
+    let deadline =
+        epoch + chrono::Duration::seconds(case.pre.lease.explicit_deadline.unwrap() as i64);
+    crate::config_client::ConfigAccess::write_local(node, "test.observed_lease_seed", &format!(
+        r#"mutation {{ update_AgentRequest(docID: "{doc_id}", input: {{ execution_lease_secs: {}, execution_lease_expires_at: "{}" }}) {{ _docID }} }}"#,
+        case.pre.lease.duration.unwrap(), escape_graphql_string(&deadline.to_rfc3339()),
+    )).await.unwrap();
+    lifecycle
+}
+
+#[tokio::test]
+async fn generated_renewal_invalidates_real_publication_point_read_transaction() {
+    use crate::lean_vocab_test::LeanRequestExecutionAction;
+    let case = crate::lean_vocab_test::lean_request_execution_lease_observed_cases()
+        .iter()
+        .find(|case| case.name == "renewal_invalidates_admitted_publication")
+        .unwrap();
+    let (node, _dir) = test_node().await;
+    let epoch = Utc::now();
+    let lifecycle = observed_case_request(&node, case, epoch).await;
+    let row = request_row(&node, &lifecycle.request.doc_id).await;
+    let request = escape_graphql_string(&lifecycle.request.doc_id);
+    let txn = crate::config_client::ConfigApplyTxn::begin_local(&node, None)
+        .await
+        .unwrap();
+    txn.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{request}" }} }}) {{ execution_generation execution_lease_expires_at }} }}"#)).await.unwrap();
+    let [LeanRequestExecutionAction::Renew {
+        expected_deadline, ..
+    }] = case.intervening.as_slice()
+    else {
+        panic!("generated renewal interleaving")
+    };
+    let renewed = tokio::time::timeout(
+        Duration::from_secs(10),
+        crate::lifecycle::renew_execution_lease_once_at(
+            &node,
+            &lifecycle.request.doc_id,
+            row.execution_generation.as_deref().unwrap(),
+            epoch + chrono::Duration::seconds(*expected_deadline as i64),
+            epoch + chrono::Duration::seconds(case.pre.now as i64),
+        ),
+    )
+    .await
+    .expect("renewal must not wait for the held ordinary gate")
+    .unwrap();
+    assert_eq!(renewed, crate::lifecycle::RenewalAttemptOutcome::Committed);
+    let result = txn.commit().await;
+    assert_eq!(result.is_ok(), case.expected.is_some(), "{}", case.name);
+    assert!(crate::config_client::is_classified_transaction_conflict(
+        &result.unwrap_err()
+    ));
+}
+
+#[tokio::test]
+async fn generated_recovery_invalidates_real_admitted_renewal_transaction() {
+    use crate::lean_vocab_test::LeanRequestExecutionAction;
+    let case = crate::lean_vocab_test::lean_request_execution_lease_observed_cases()
+        .iter()
+        .find(|case| case.name == "recovery_invalidates_admitted_renewal")
+        .unwrap();
+    let (node, _dir) = test_node().await;
+    let epoch = Utc::now();
+    let lifecycle = observed_case_request(&node, case, epoch).await;
+    let row = request_row(&node, &lifecycle.request.doc_id).await;
+    let generation = row.execution_generation.as_deref().unwrap();
+    let expiry = row.execution_lease_expires_at.as_deref().unwrap();
+    let deadline = DateTime::parse_from_rfc3339(expiry)
+        .unwrap()
+        .with_timezone(&Utc);
+    let txn = crate::config_client::ConfigApplyTxn::begin_execution_renewal_for_test(&node)
+        .await
+        .unwrap();
+    let renewed = crate::lifecycle::renew_in_transaction(
+        &txn,
+        &lifecycle.request.doc_id,
+        generation,
+        Some(deadline),
+        Some(epoch + chrono::Duration::seconds(case.pre.now as i64)),
+    )
+    .await
+    .unwrap();
+    assert_eq!(renewed, crate::lifecycle::RenewalAttemptOutcome::Committed);
+    let [LeanRequestExecutionAction::AdvanceTime { now }, LeanRequestExecutionAction::RecoverExpiredAndFail {
+        fresh_generation, ..
+    }] = case.intervening.as_slice()
+    else {
+        panic!("generated recovery interleaving")
+    };
+    let fresh = format!("modeled-recovery-{fresh_generation}");
+    let recovered = crate::lifecycle::recover_expired_generation_with_facts(
+        &node,
+        &row,
+        generation,
+        expiry,
+        fresh.clone(),
+        epoch + chrono::Duration::seconds(*now as i64),
+        Some(crate::lifecycle::RecoverySelectionChoice::NoMessage),
+        Some(RequestLifecycleState::Failed),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        recovered,
+        crate::lifecycle::RecoveryResult::Won { .. }
+    ));
+    let result = txn.commit().await;
+    assert_eq!(result.is_ok(), case.expected.is_some(), "{}", case.name);
+    assert!(crate::config_client::is_classified_transaction_conflict(
+        &result.unwrap_err()
+    ));
+    let terminal = request_row(&node, &lifecycle.request.doc_id).await;
+    assert_eq!(
+        terminal.lifecycle_state,
+        Some(RequestLifecycleState::Failed)
+    );
+    assert_eq!(
+        terminal.execution_generation.as_deref(),
+        Some(fresh.as_str())
+    );
+}
+
+#[tokio::test]
+async fn renewal_expiring_during_mutation_rolls_back_before_commit_admission() {
+    let cases = crate::lean_vocab_test::lean_request_execution_lease_observed_cases();
+    let admitted = cases
+        .iter()
+        .find(|case| {
+            case.name == "admitted_renewal_can_commit_after_clock_expiry_without_storage_conflict"
+        })
+        .unwrap();
+    let expired = cases
+        .iter()
+        .find(|case| case.name == "renewal_admission_after_expiry_is_rejected")
+        .unwrap();
+    let (node, _dir) = test_node().await;
+    let epoch = Utc::now();
+    let lifecycle = observed_case_request(&node, admitted, epoch).await;
+    let before = request_row(&node, &lifecycle.request.doc_id).await;
+    let deadline =
+        epoch + chrono::Duration::seconds(admitted.pre.lease.explicit_deadline.unwrap() as i64);
+    let result = crate::lifecycle::renew_with_recheck_at(
+        &node,
+        &lifecycle.request.doc_id,
+        before.execution_generation.as_deref().unwrap(),
+        deadline,
+        epoch + chrono::Duration::seconds(admitted.pre.now as i64),
+        epoch + chrono::Duration::seconds(expired.pre.now as i64),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        result == crate::lifecycle::RenewalAttemptOutcome::Committed,
+        expired.expected.is_some()
+    );
+    assert_eq!(result, crate::lifecycle::RenewalAttemptOutcome::Lost);
+    let after = request_row(&node, &lifecycle.request.doc_id).await;
+    assert_eq!(lease_tuple(&after), lease_tuple(&before));
+    assert_eq!(after.lifecycle_state, before.lifecycle_state);
+}

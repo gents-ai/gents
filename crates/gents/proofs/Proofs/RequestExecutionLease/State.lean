@@ -7,8 +7,9 @@ The generation parameter is deliberately abstract. The owner may compare
 generations for equality and remember used values, but cannot derive a successor.
 Claims, recovery, and revocation therefore require a fresh opaque value.
 
-Output never changes lease expiry or recovery authority. Only the owner's
-explicit, cadence-bounded deadline CAS may renew a live lease.
+Output never changes lease expiry or recovery authority. The owner's explicit,
+cadence-bounded deadline CAS requires a live lease at admission. Native durable
+commit can occur later; the observed-transaction model exposes that distinction.
 -/
 
 namespace RequestExecutionLease
@@ -21,10 +22,12 @@ inductive Outcome where
   | superseded
   deriving DecidableEq, Repr
 
-/-- The local mutation gate is the only authority represented by this machine.
-An observing replica can supply hints, but cannot admit writes or recover work. -/
+/-- Ordinary writes use the local mutation gate. Exact-request renewal can use
+a native transaction whose point-read observation is validated at commit. An
+observing replica cannot admit writes or recover work. -/
 inductive Boundary where
   | mutationWriteGate
+  | validatedTransaction
   | observingReplica
   deriving DecidableEq, Repr
 

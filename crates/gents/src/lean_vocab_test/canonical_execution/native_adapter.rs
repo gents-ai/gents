@@ -2706,11 +2706,9 @@ async fn generated_tool_append_rejects_invalid_durable_deadline_without_writing(
 /// In-process, fixture-time gate experiment: this binds a generated lease-ordering
 /// trace to the real transaction owner, not to host clock jumps or OS suspension.
 #[tokio::test]
-async fn generated_renewal_holds_write_gate_until_stale_recovery_loses() {
+async fn generated_renewal_commits_while_ordinary_write_gate_is_held() {
     use crate::config_client::ConfigApplyTxn;
     use crate::lifecycle::{RecoveryResult, RecoverySelectionChoice, RenewalAttemptOutcome};
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use tokio::sync::Notify;
 
     let case = crate::lean_vocab_test::lean_contract_snapshot()
         .canonical_execution_gate_cases
@@ -2813,12 +2811,9 @@ async fn generated_renewal_holds_write_gate_until_stale_recovery_loses() {
         Some(physical_generation.as_str())
     );
 
-    let reached = Arc::new(Notify::new());
-    let release = Arc::new(Notify::new());
-    let mut renewal = Box::pin(ConfigApplyTxn::with_successful_mutation_pause_at(
-        1,
-        Arc::clone(&reached),
-        Arc::clone(&release),
+    let holder = ConfigApplyTxn::begin_local(&node, None).await.unwrap();
+    let renewed = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
         crate::lifecycle::renew_execution_lease_once_at(
             &node,
             &request_doc_id,
@@ -2826,66 +2821,25 @@ async fn generated_renewal_holds_write_gate_until_stale_recovery_loses() {
             native.fixture_time(*expected_deadline).unwrap(),
             native.fixture_time(*renewal_now).unwrap(),
         ),
-    ));
-    tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        tokio::select! {
-            biased;
-            completed = &mut renewal => panic!("renewal completed before its held mutation: {completed:?}"),
-            _ = reached.notified() => {}
-        }
-    })
+    )
     .await
-    .expect("renewal must reach the held write gate");
-
-    let queued = Arc::new(Notify::new());
-    let acquired = Arc::new(AtomicBool::new(false));
-    let mut recovery = Box::pin(ConfigApplyTxn::with_write_gate_observation(
-        Arc::clone(&queued),
-        Arc::clone(&acquired),
-        crate::lifecycle::recover_expired_generation_with_facts(
-            &node,
-            &stale,
-            &physical_generation,
-            stale_expiry,
-            physical_fresh_generation,
-            native.fixture_time(*recovery_now).unwrap(),
-            Some(choice),
-            Some(target),
-        ),
-    ));
-    tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        tokio::select! {
-            biased;
-            completed = &mut recovery => panic!("stale recovery completed before queuing: {completed:?}"),
-            _ = queued.notified() => {}
-        }
-    })
-    .await
-    .expect("stale recovery must queue at the held write gate");
-    assert!(
-        !acquired.load(Ordering::Acquire),
-        "stale recovery must not acquire the gate before renewal commits"
-    );
-
-    release.notify_one();
-    let (renewed, fired) = tokio::time::timeout(std::time::Duration::from_secs(10), renewal)
-        .await
-        .expect("held renewal must finish after release");
-    assert!(
-        fired,
-        "renewal must pause after its real successful mutation"
-    );
-    assert_eq!(renewed.unwrap(), RenewalAttemptOutcome::Committed);
+    .expect("renewal must commit while another ordinary transaction holds the gate")
+    .unwrap();
+    assert_eq!(renewed, RenewalAttemptOutcome::Committed);
     assert_eq!(native.observe(true).await.unwrap(), *expected_after_renewal);
-
-    let recovered = tokio::time::timeout(std::time::Duration::from_secs(10), recovery)
-        .await
-        .expect("queued stale recovery must finish after renewal")
-        .unwrap();
-    assert!(
-        acquired.load(Ordering::Acquire),
-        "recovery must acquire the gate after renewal releases it"
-    );
+    holder.commit().await.unwrap();
+    let recovered = crate::lifecycle::recover_expired_generation_with_facts(
+        &node,
+        &stale,
+        &physical_generation,
+        stale_expiry,
+        physical_fresh_generation,
+        native.fixture_time(*recovery_now).unwrap(),
+        Some(choice),
+        Some(target),
+    )
+    .await
+    .unwrap();
     assert_eq!(recovered, RecoveryResult::Lost);
     assert_eq!(
         native.observe(false).await.unwrap(),

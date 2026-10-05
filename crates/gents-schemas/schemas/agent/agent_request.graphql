@@ -67,11 +67,12 @@ type AgentRequest @branchable {
     claimed_at: String
     # Runtime-owned execution lease (#1571). Claim installs a fresh generation,
     # the lease length and the claim's own deadline. Streaming flushes do not
-    # rewrite this row. The owning runtime alone decides expiry, inside its
-    # config_client mutation gate: live only before execution_lease_expires_at.
+    # rewrite this row. The owning runtime alone decides expiry through its
+    # config_client transaction owner: live at admission only before
+    # execution_lease_expires_at; native commit can occur after admission.
     # The existing owner renews explicitly at bounded cadence while owning work,
     # including silent inference and foreground tool waits. Renewal compares
-    # generation and observed deadline; early/stale/expired attempts cannot renew.
+    # generation and observed deadline; early/stale/expired admissions cannot renew.
     # Output facts and publication/dispatch never extend the lease. Decisions
     # (close/retract, accept+publish, dispatch, terminalize, recover) keep the
     # matching-generation CAS here without implicit renewal. Tool-owned output

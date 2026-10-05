@@ -541,6 +541,16 @@ def caseCoverage : List CoverageEntry :=
       "ProviderEofCases"
       "lean_vocab_test::request_execution_lease_policy::generated_provider_eof_cases_fence_production_policy")
       "request-execution-lease" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "request_execution_lease_observed_cases"
+      "RequestExecutionObservedCases"
+      "lifecycle::execution_lease::tests::generated_renewal_invalidates_real_publication_point_read_transaction")
+      "request-execution-lease" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "request_execution_lease_observed_cases"
+      "RequestExecutionObservedCases"
+      "lifecycle::execution_lease::tests::generated_recovery_invalidates_real_admitted_renewal_transaction")
+      "request-execution-lease" [Surface.runtimeInternal]
   , tagged (followUpCoverage
       "request_execution_lease_cases"
       "RequestExecutionLeaseCases"

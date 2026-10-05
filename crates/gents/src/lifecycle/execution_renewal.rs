@@ -116,6 +116,42 @@ pub(crate) async fn renew_once_at(
     .await
 }
 
+#[cfg(test)]
+tokio::task_local! {
+    static RENEWAL_RECHECK_TIME: DateTime<Utc>;
+}
+
+#[cfg(test)]
+pub(crate) async fn renew_with_recheck_at(
+    node: &EmbeddedNode,
+    request_doc_id: &str,
+    generation: &str,
+    expected_deadline: DateTime<Utc>,
+    admission: DateTime<Utc>,
+    recheck: DateTime<Utc>,
+) -> Result<RenewalAttemptOutcome> {
+    RENEWAL_RECHECK_TIME
+        .scope(
+            recheck,
+            renew_once_at(
+                node,
+                request_doc_id,
+                generation,
+                expected_deadline,
+                admission,
+            ),
+        )
+        .await
+}
+
+fn renewal_recheck_time(fixture_now: Option<DateTime<Utc>>) -> DateTime<Utc> {
+    #[cfg(test)]
+    if let Ok(now) = RENEWAL_RECHECK_TIME.try_with(|now| *now) {
+        return now;
+    }
+    fixture_now.unwrap_or_else(Utc::now)
+}
+
 async fn renew_once_with_time(
     node: &EmbeddedNode,
     request_doc_id: &str,
@@ -123,56 +159,99 @@ async fn renew_once_with_time(
     expected_deadline: Option<DateTime<Utc>>,
     fixture_now: Option<DateTime<Utc>>,
 ) -> Result<RenewalAttemptOutcome> {
-    crate::config_client::ConfigAccess::transact_local_idempotent(
-        node, None, crate::config_client::IdempotentTransactionRetry::Standard,
-        "lifecycle.renew_execution_lease", move |txn| Box::pin(async move {
-            let doc_id = escape_graphql_string(request_doc_id);
-            let result = txn.execute_local_response(&format!(r#"{{ AgentRequest(
+    match crate::config_client::ConfigAccess::renew_execution_lease(
+        node,
+        request_doc_id,
+        generation,
+        expected_deadline,
+        fixture_now,
+    )
+    .await
+    {
+        Err(error) if error.is::<RenewalAdmissionExpired>() => Ok(RenewalAttemptOutcome::Lost),
+        result => result,
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("execution lease expired before renewal commit admission")]
+struct RenewalAdmissionExpired;
+
+pub(crate) async fn renew_in_transaction(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    request_doc_id: &str,
+    generation: &str,
+    expected_deadline: Option<DateTime<Utc>>,
+    fixture_now: Option<DateTime<Utc>>,
+) -> Result<RenewalAttemptOutcome> {
+    let doc_id = escape_graphql_string(request_doc_id);
+    let result = txn.execute_local_response(&format!(r#"{{ AgentRequest(
                 filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1
             ) {{ request_id lifecycle_state execution_generation execution_lease_expires_at execution_lease_secs }} }}"#)).await?;
-            let Some(row) = crate::graphql::first_row::<AgentRequestRow>(&result, "AgentRequest")? else {
-                return Ok(RenewalAttemptOutcome::Lost);
-            };
-            let state = row.lifecycle_state.context("missing execution lifecycle")?;
-            if !renewable_lifecycle(state) || row.execution_generation.as_deref() != Some(generation) {
-                return Ok(RenewalAttemptOutcome::Lost);
-            }
-            let owner = row.execution_generation.as_deref().context("missing execution generation")?;
-            let expiry = row.execution_lease_expires_at.as_deref().context("missing execution deadline")?;
-            let deadline = DateTime::parse_from_rfc3339(expiry)?.timestamp_millis();
-            let duration = row.execution_lease_secs.context("missing execution duration")?
-                .checked_mul(1000).context("execution duration overflow")?;
-            anyhow::ensure!(duration > 0, "execution duration must be positive");
-            // Production reads wall time under the mutation gate on every
-            // retry. The fixture supplies an immutable modeled observation;
-            // it never changes production admission timing.
-            let now = fixture_now.unwrap_or_else(Utc::now).timestamp_millis();
-            let observed = LeaseObservation { request: state, generation: owner, deadline_ms: deadline };
-            if !renewable_lifecycle(state) || !is_live(observed, generation, now) {
-                return Ok(RenewalAttemptOutcome::Lost);
-            }
-            let expected = expected_deadline
-                .as_ref()
-                .map_or(deadline, DateTime::timestamp_millis);
-            if expected != deadline {
-                return Ok(RenewalAttemptOutcome::Lost);
-            }
-            let Some(next) = authorize_renewal(observed, generation, expected, duration, now) else {
-                return Ok(RenewalAttemptOutcome::Skipped);
-            };
-            let next = DateTime::<Utc>::from_timestamp_millis(next).context("renewal date overflow")?;
-            let owner = escape_graphql_string(owner);
-            let state = escape_graphql_string(state.as_str());
-            let expiry = escape_graphql_string(expiry);
-            let next = escape_graphql_string(&next.to_rfc3339());
-            let result = txn.execute_local_response(&format!(r#"mutation {{ update_AgentRequest(
+    let Some(row) = crate::graphql::first_row::<AgentRequestRow>(&result, "AgentRequest")? else {
+        return Ok(RenewalAttemptOutcome::Lost);
+    };
+    let state = row.lifecycle_state.context("missing execution lifecycle")?;
+    if !renewable_lifecycle(state) || row.execution_generation.as_deref() != Some(generation) {
+        return Ok(RenewalAttemptOutcome::Lost);
+    }
+    let owner = row
+        .execution_generation
+        .as_deref()
+        .context("missing execution generation")?;
+    let expiry = row
+        .execution_lease_expires_at
+        .as_deref()
+        .context("missing execution deadline")?;
+    let deadline = DateTime::parse_from_rfc3339(expiry)?.timestamp_millis();
+    let duration = row
+        .execution_lease_secs
+        .context("missing execution duration")?
+        .checked_mul(1000)
+        .context("execution duration overflow")?;
+    anyhow::ensure!(duration > 0, "execution duration must be positive");
+    let now = fixture_now.unwrap_or_else(Utc::now).timestamp_millis();
+    let observed = LeaseObservation {
+        request: state,
+        generation: owner,
+        deadline_ms: deadline,
+    };
+    if !renewable_lifecycle(state) || !is_live(observed, generation, now) {
+        return Ok(RenewalAttemptOutcome::Lost);
+    }
+    let expected = expected_deadline
+        .as_ref()
+        .map_or(deadline, DateTime::timestamp_millis);
+    if expected != deadline {
+        return Ok(RenewalAttemptOutcome::Lost);
+    }
+    let Some(next) = authorize_renewal(observed, generation, expected, duration, now) else {
+        return Ok(RenewalAttemptOutcome::Skipped);
+    };
+    let next = DateTime::<Utc>::from_timestamp_millis(next).context("renewal date overflow")?;
+    let owner = escape_graphql_string(owner);
+    let state = escape_graphql_string(state.as_str());
+    let expiry = escape_graphql_string(expiry);
+    let next = escape_graphql_string(&next.to_rfc3339());
+    let result = txn.execute_local_response(&format!(r#"mutation {{ update_AgentRequest(
                 docID: "{doc_id}", filter: {{ _docID: {{ _eq: "{doc_id}" }}, lifecycle_state: {{ _eq: "{state}" }},
                     execution_generation: {{ _eq: "{owner}" }}, execution_lease_expires_at: {{ _eq: "{expiry}" }} }},
                 input: {{ execution_lease_expires_at: "{next}" }}
             ) {{ _docID }} }}"#)).await?;
-            anyhow::ensure!(result.data.as_ref().and_then(|data| data.get("update_AgentRequest"))
-                .is_some_and(response_has_documents), "lease renewal lost deadline CAS");
-            Ok(RenewalAttemptOutcome::Committed)
-        }),
-    ).await
+    anyhow::ensure!(
+        result
+            .data
+            .as_ref()
+            .and_then(|data| data.get("update_AgentRequest"))
+            .is_some_and(response_has_documents),
+        "lease renewal lost deadline CAS"
+    );
+    if !is_live(
+        observed,
+        generation,
+        renewal_recheck_time(fixture_now).timestamp_millis(),
+    ) {
+        return Err(RenewalAdmissionExpired.into());
+    }
+    Ok(RenewalAttemptOutcome::Committed)
 }

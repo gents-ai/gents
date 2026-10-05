@@ -16,7 +16,8 @@ mod execution_renewal;
 #[cfg(test)]
 pub(crate) use execution_renewal::renew_once_at as renew_execution_lease_once_at;
 #[cfg(test)]
-pub(crate) use execution_renewal::RenewalAttemptOutcome;
+pub(crate) use execution_renewal::renew_with_recheck_at;
+pub(crate) use execution_renewal::{renew_in_transaction, RenewalAttemptOutcome};
 mod terminal_binding;
 pub(crate) use terminal_binding::is_exact_invocation_reply;
 mod terminal_tools;

@@ -358,7 +358,7 @@ async fn cancellation_after_embedded_begin_reports_and_completes_rollback() {
                 let (rollback_on_drop, handle) = tokio::spawn(super::begin_embedded_owned(
                     runner,
                     None,
-                    write_guard,
+                    Some(write_guard),
                     rollback_scheduled,
                     move |handle| async move {
                         *lock(&registered) = Some(handle);
