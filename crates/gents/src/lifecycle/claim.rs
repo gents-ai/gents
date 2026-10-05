@@ -361,7 +361,7 @@ impl RequestLifecycle {
                         terminalized_at: "{terminalized_at}",
                         terminal_redrive_attempts: 0
                     }}
-                ) {{ _docID }}
+                ) {{ _docID request_id workspace_id workspace_owner_agent_did }}
             }}"#
         );
         let request = &self.request;
@@ -375,12 +375,16 @@ impl RequestLifecycle {
                 let terminalized_at = &terminalized_at;
                 Box::pin(async move {
                     let response = txn.execute_local_response(mutation).await?;
-                    if response
+                    if let Some(rows) = response
                         .data
                         .as_ref()
                         .and_then(|data| data.get("update_AgentRequest"))
-                        .is_some_and(response_has_documents)
+                        .and_then(serde_json::Value::as_array)
+                        .filter(|rows| !rows.is_empty())
                     {
+                        for row in rows {
+                            crate::workspace::release_terminal_writer_binding(txn, row).await?;
+                        }
                         crate::trigger_engine::durable::publish_request_outcome(
                             txn,
                             &request.agent_did,
@@ -440,7 +444,7 @@ impl RequestLifecycle {
                         terminalized_at: "{terminalized_at}",
                         terminal_redrive_attempts: 0
                     }}
-                ) {{ _docID }}
+                ) {{ _docID request_id workspace_id workspace_owner_agent_did }}
             }}"#
         );
         let request = &self.request;
@@ -454,12 +458,16 @@ impl RequestLifecycle {
                 let terminalized_at = &terminalized_at;
                 Box::pin(async move {
                     let response = txn.execute_local_response(mutation).await?;
-                    if response
+                    if let Some(rows) = response
                         .data
                         .as_ref()
                         .and_then(|data| data.get("update_AgentRequest"))
-                        .is_some_and(response_has_documents)
+                        .and_then(serde_json::Value::as_array)
+                        .filter(|rows| !rows.is_empty())
                     {
+                        for row in rows {
+                            crate::workspace::release_terminal_writer_binding(txn, row).await?;
+                        }
                         crate::trigger_engine::durable::publish_request_outcome(
                             txn,
                             &request.agent_did,
@@ -525,47 +533,53 @@ impl RequestLifecycle {
                         terminal_redrive_attempts: 0,
                         terminal_output: $terminal_output
                     }}
-                ) {{ _docID }}
+                ) {{ _docID request_id workspace_id workspace_owner_agent_did }}
             }}"#
         );
         let request_mutation = &request_mutation;
         let request = &self.request;
         let outcome_reason = reason_text.as_str();
         let outcome_time = terminalized_at_value.as_str();
-        let updated =
-            crate::config_client::ConfigAccess::transact_local_idempotent(
-                &self.node,
-                None,
-                crate::config_client::IdempotentTransactionRetry::Standard,
-                "lifecycle.reject_admission",
-                move |txn| {
-                    Box::pin(async move {
-                        let response = txn.execute_with_variables(
-                        request_mutation,
-                        &serde_json::json!({
-                            "terminal_output": gents_protocol::output::TerminalOutput::NoMessage
-                        }),
-                    ).await?;
-                        let updated = response
-                            .get("data")
-                            .and_then(|data| data.get("update_AgentRequest"))
-                            .is_some_and(response_has_documents);
-                        if updated {
-                            crate::trigger_engine::durable::publish_request_outcome(
-                                txn,
-                                &request.agent_did,
-                                &request.request_id,
-                                "failed",
-                                outcome_reason,
-                                outcome_time,
-                            )
-                            .await?;
+        let updated = crate::config_client::ConfigAccess::transact_local_idempotent(
+            &self.node,
+            None,
+            crate::config_client::IdempotentTransactionRetry::Standard,
+            "lifecycle.reject_admission",
+            move |txn| {
+                Box::pin(async move {
+                    let response = txn
+                        .execute_with_variables(
+                            request_mutation,
+                            &serde_json::json!({
+                                "terminal_output": gents_protocol::output::TerminalOutput::NoMessage
+                            }),
+                        )
+                        .await?;
+                    let updated = response
+                        .get("data")
+                        .and_then(|data| data.get("update_AgentRequest"))
+                        .is_some_and(response_has_documents);
+                    if updated {
+                        if let Some(rows) = response["data"]["update_AgentRequest"].as_array() {
+                            for row in rows {
+                                crate::workspace::release_terminal_writer_binding(txn, row).await?;
+                            }
                         }
-                        Ok::<_, anyhow::Error>(updated)
-                    })
-                },
-            )
-            .await?;
+                        crate::trigger_engine::durable::publish_request_outcome(
+                            txn,
+                            &request.agent_did,
+                            &request.request_id,
+                            "failed",
+                            outcome_reason,
+                            outcome_time,
+                        )
+                        .await?;
+                    }
+                    Ok::<_, anyhow::Error>(updated)
+                })
+            },
+        )
+        .await?;
 
         if !updated {
             let request_view = self.request_view().await?;
@@ -796,6 +810,96 @@ mod tests {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
         node
+    }
+
+    #[tokio::test]
+    async fn pending_interrupt_and_expiry_release_workspace_bindings_atomically() {
+        use crate::request_admission::workspace_cleanup_tests::Fixture;
+
+        for interrupted in [true, false] {
+            let fixture = Fixture::new().await;
+            let (_, mutations) =
+                crate::config_client::ConfigApplyTxn::assert_every_mutation_rolls_back(
+                    || async {
+                        let mut lifecycle = fixture.lifecycle();
+                        if interrupted {
+                            lifecycle
+                                .transition_pending_to_interrupted("2026-09-01T00:00:01Z")
+                                .await
+                        } else {
+                            lifecycle.transition_pending_to_dead_stale().await
+                        }
+                    },
+                    || fixture.observe(),
+                )
+                .await;
+            assert!(
+                mutations >= 2,
+                "terminal and binding must share the transaction"
+            );
+            let observed = fixture.observe().await;
+            assert_eq!(
+                observed["AgentRequest"][0]["lifecycle_state"],
+                if interrupted { "interrupted" } else { "dead" }
+            );
+            assert_eq!(
+                observed["WorkspaceBinding"][0]["lifecycle_state"],
+                "released"
+            );
+
+            fixture.write_binding(&fixture.binding).await;
+            let before_replay = fixture.observe().await;
+            let mut replay = fixture.lifecycle();
+            if interrupted {
+                replay
+                    .transition_pending_to_interrupted("2026-09-01T00:00:01Z")
+                    .await
+                    .unwrap();
+            } else {
+                replay.transition_pending_to_dead_stale().await.unwrap();
+            }
+            assert_eq!(
+                fixture.observe().await,
+                before_replay,
+                "replayed terminal cannot release again"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn pending_interrupt_and_expiry_cannot_release_a_claimed_workspace_binding() {
+        use crate::request_admission::workspace_cleanup_tests::Fixture;
+
+        for interrupted in [true, false] {
+            let fixture = Fixture::new().await;
+            let doc_id = escape_graphql_string(&fixture.request.doc_id);
+            crate::config_client::ConfigAccess::write_local(
+                &fixture.node,
+                "test.pending_workspace_terminal_lost_cas",
+                &format!(
+                    r#"mutation {{ update_AgentRequest(
+                    filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
+                    input: {{ lifecycle_state: "claimed" }}
+                ) {{ _docID }} }}"#
+                ),
+            )
+            .await
+            .unwrap();
+            let before = fixture.observe().await;
+            let mut lifecycle = fixture.lifecycle();
+            let result = if interrupted {
+                lifecycle
+                    .transition_pending_to_interrupted("2026-09-01T00:00:01Z")
+                    .await
+            } else {
+                lifecycle.transition_pending_to_dead_stale().await
+            };
+            assert!(
+                result.is_err(),
+                "a claimed request lost the pending terminal CAS"
+            );
+            assert_eq!(fixture.observe().await, before);
+        }
     }
 
     async fn insert_pending_request(

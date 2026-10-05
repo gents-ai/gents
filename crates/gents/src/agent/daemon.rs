@@ -521,11 +521,11 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                     Err(error) => {
                         record_current_request_outcome("worker_ticket_missing");
                         record_current_failure_class(&error);
-                        let _ = finalize_request_failure(
+                        self.finalize_failure_before_work(
                             &mut lifecycle,
                             &stream_writer,
                             &error.to_string(),
-                            &request.request_id,
+                            &request,
                         )
                         .await;
                         return Ok(());
@@ -536,11 +536,11 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                     let error = anyhow::Error::new(error);
                     record_current_request_outcome("worker_ticket_refused");
                     record_current_failure_class(&error);
-                    let _ = finalize_request_failure(
+                    self.finalize_failure_before_work(
                         &mut lifecycle,
                         &stream_writer,
                         &error.to_string(),
-                        &request.request_id,
+                        &request,
                     )
                     .await;
                     return Ok(());
@@ -635,11 +635,11 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                 requested_behavior_id = %requested_behavior_id,
                 "rejecting request for unroutable behavior"
             );
-            finalize_request_failure(
+            self.finalize_failure_before_work(
                 &mut lifecycle,
                 &stream_writer,
                 &error.to_string(),
-                &request.request_id,
+                &request,
             )
             .await;
             return Ok(());
@@ -710,11 +710,11 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                     error = %error,
                     "failed to inspect writer workspace seal state"
                 );
-                finalize_request_failure(
+                self.finalize_failure_before_work(
                     &mut lifecycle,
                     &stream_writer,
                     &error.to_string(),
-                    &request.request_id,
+                    &request,
                 )
                 .await;
                 return Ok(());

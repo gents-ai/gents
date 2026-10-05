@@ -238,7 +238,7 @@ pub(crate) async fn terminalize_pending_request_rejection(
                     terminal_redrive_attempts: 0,
                     terminal_output: $terminal_output
                 }}
-            ) {{ _docID request_id }}
+            ) {{ _docID request_id workspace_id workspace_owner_agent_did }}
         }}"#
     );
     let mutation = &mutation;
@@ -264,6 +264,7 @@ pub(crate) async fn terminalize_pending_request_rejection(
                     .and_then(serde_json::Value::as_array)
                 {
                     for row in rows {
+                        crate::workspace::release_terminal_writer_binding(txn, row).await?;
                         if let Some(request_id) = row["request_id"].as_str() {
                             crate::trigger_engine::durable::publish_request_outcome(
                                 txn, owner, request_id, "failed", reason, now,
@@ -1169,6 +1170,9 @@ pub(crate) async fn load_request_for_admission_test(
 
 #[cfg(test)]
 mod title_tests;
+
+#[cfg(test)]
+pub(crate) mod workspace_cleanup_tests;
 
 #[cfg(test)]
 mod tests {

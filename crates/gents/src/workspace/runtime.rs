@@ -477,22 +477,72 @@ pub async fn release_writer_binding(node: &EmbeddedNode, request: &AgentRequest)
     let Some(workspace_id) = optional_id(request.workspace_id.as_deref()) else {
         return Ok(());
     };
-    let bindings = super::overlay::load_workspace_bindings_for(
+    let owner = super::overlay::request_workspace_owner(request)?;
+    crate::config_client::ConfigAccess::transact_local_idempotent(
         node,
-        workspace_id,
-        super::overlay::request_workspace_owner(request)?,
+        None,
+        crate::config_client::IdempotentTransactionRetry::Standard,
+        "workspace.release_writer_binding",
+        |txn| {
+            Box::pin(release_writer_binding_in_txn(
+                txn,
+                &request.doc_id,
+                &request.request_id,
+                workspace_id,
+                owner,
+            ))
+        },
     )
+    .await
+}
+
+/// Pending terminal paths can encounter malformed request rows. Cleanup
+/// requires the complete binding tuple from the winning update, but absent
+/// provenance must not prevent rejection by physical document ID.
+pub(crate) async fn release_terminal_writer_binding(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    request: &serde_json::Value,
+) -> Result<()> {
+    let string = |field: &str| {
+        request[field]
+            .as_str()
+            .filter(|value| !value.trim().is_empty())
+    };
+    let (Some(doc_id), Some(request_id), Some(workspace_id), Some(owner)) = (
+        string("_docID"),
+        string("request_id"),
+        string("workspace_id"),
+        string("workspace_owner_agent_did"),
+    ) else {
+        return Ok(());
+    };
+    release_writer_binding_in_txn(txn, doc_id, request_id, workspace_id, owner).await
+}
+
+async fn release_writer_binding_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    request_doc_id: &str,
+    request_id: &str,
+    workspace_id: &str,
+    owner: &str,
+) -> Result<()> {
+    let request_doc_id = escape_graphql_string(request_doc_id);
+    let request_id = escape_graphql_string(request_id);
+    let workspace_id = escape_graphql_string(workspace_id);
+    let owner = escape_graphql_string(owner);
+    txn.execute(&format!(
+        r#"mutation {{ update_WorkspaceBinding(
+            filter: {{
+                workspace_id: {{ _eq: "{workspace_id}" }},
+                owner_agent_did: {{ _eq: "{owner}" }},
+                request_id: {{ _eq: "{request_id}" }},
+                request_doc_id: {{ _eq: "{request_doc_id}" }},
+                lifecycle_state: {{ _eq: "active" }}
+            }},
+            input: {{ lifecycle_state: "released" }}
+        ) {{ _docID }} }}"#,
+    ))
     .await?;
-    for binding in bindings {
-        if binding.is_active()
-            && binding.request_id == request.request_id
-            && binding.request_doc_id == request.doc_id
-            && Some(binding.owner_agent_did.as_str())
-                == request.workspace_owner_agent_did.as_deref()
-        {
-            super::overlay::persist_workspace_binding_doc(node, &release_binding(binding)).await?;
-        }
-    }
     Ok(())
 }
 
