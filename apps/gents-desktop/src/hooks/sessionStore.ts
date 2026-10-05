@@ -8,6 +8,7 @@ import type {
   RenderedTimelineItem,
   RenderedToolCallView,
 } from "@source-inc/gents-desktop-client";
+import type { SessionLoadState } from "../lib/loadingStatus";
 
 /**
  * What the screens ask of a session's transcript besides drawing it, kept
@@ -31,6 +32,8 @@ export type SessionState = {
   /** the selected session as last read; never persisted */
   session: DesktopSessionSnapshot | null;
   facts: SessionFacts;
+  /** the last read asked for, and how it went */
+  load: SessionLoadState;
 };
 
 export type SessionStore = StoreApi<SessionState>;
@@ -45,8 +48,20 @@ const NO_FACTS: SessionFacts = {
   userRequestIds: NO_REQUESTS,
 };
 
+export const IDLE_LOAD: SessionLoadState = {
+  phase: "idle",
+  sessionId: null,
+  agentDid: null,
+  found: null,
+  error: null,
+};
+
 export function createSessionStore(session: DesktopSessionSnapshot | null = null) {
-  const store = createStore<SessionState>(() => ({ session: null, facts: NO_FACTS }));
+  const store = createStore<SessionState>(() => ({
+    session: null,
+    facts: NO_FACTS,
+    load: IDLE_LOAD,
+  }));
   if (session) writeSession(store, session);
   return store;
 }
@@ -63,8 +78,12 @@ export function writeSession(
   store.setState((state) => {
     const session = typeof next === "function" ? next(state.session) : next;
     if (session === state.session) return state;
-    return { session, facts: factsOf(state, session) };
+    return { ...state, session, facts: factsOf(state, session) };
   });
+}
+
+export function writeSessionLoad(store: SessionStore, load: SessionLoadState) {
+  store.setState({ load });
 }
 
 /* the same items in the same order, the live reply left out */

@@ -1,4 +1,3 @@
-import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import type {
@@ -6,13 +5,9 @@ import type {
   DesktopSessionSnapshot,
   SessionLiveDeltaView,
 } from "@source-inc/gents-desktop-client";
-import { useDesktopSessionProjection } from "../src/hooks/useDesktopSessionProjection";
+import { createSessionReads } from "../src/hooks/sessionReads";
 import { createSelectionStore } from "../src/hooks/selectionStore";
-import {
-  createSessionStore,
-  readSession,
-  type SessionStore,
-} from "../src/hooks/sessionStore";
+import { createSessionStore, readSession } from "../src/hooks/sessionStore";
 
 function session(
   keys: string[],
@@ -57,22 +52,22 @@ function session(
   };
 }
 
-function renderProjection(
+function readsFor(
   api: DesktopApiAdapter,
   store = createSelectionStore({ agentDid: "did:key:test", sessionId: "session-1" }),
 ) {
-  return renderHook(() =>
-    useDesktopSessionProjection({
-      api,
-      store,
-      sessionStore: sessionStores.get(api) ?? remember(api),
-      trackedRequestId: () => "request-1",
-      setError: vi.fn(),
-    }),
-  );
+  const sessionStore = createSessionStore();
+  const reads = createSessionReads({
+    api,
+    store,
+    sessionStore,
+    trackedRequestId: () => "request-1",
+    setError: vi.fn(),
+  });
+  return { ...reads, sessionStore };
 }
 
-describe("useDesktopSessionProjection", () => {
+describe("createSessionReads", () => {
   it("keeps rendered replies while a database refresh stalls and then fails", async () => {
     const page = {
       totalItems: 1,
@@ -102,29 +97,20 @@ describe("useDesktopSessionProjection", () => {
       .fn()
       .mockResolvedValueOnce(saved)
       .mockReturnValueOnce(stalled);
-    const { result } = renderProjection({
+    const reads = readsFor({
       fetchSessionSnapshot,
     } as unknown as DesktopApiAdapter);
-    await act(async () => {
-      await result.current.refreshSession("session-1");
-    });
-    let refresh!: Promise<DesktopSessionSnapshot | null>;
-    act(() => {
-      refresh = result.current.refreshSession("session-1");
-    });
-    expect(readSession(result.current.sessionStore)?.timelineItems).toEqual(
-      saved.timelineItems,
+    await reads.refreshSession("session-1");
+    const refresh = reads.refreshSession("session-1");
+    expect(readSession(reads.sessionStore)?.timelineItems).toEqual(saved.timelineItems);
+    expect(reads.sessionStore.getState().load.phase).toBe("loading");
+    reject(new Error("database read timed out"));
+    await refresh;
+    expect(readSession(reads.sessionStore)?.timelineItems).toEqual(saved.timelineItems);
+    expect(reads.sessionStore.getState().load.phase).toBe("failed");
+    expect(reads.sessionStore.getState().load.error).toContain(
+      "database read timed out",
     );
-    expect(result.current.sessionLoad.phase).toBe("loading");
-    await act(async () => {
-      reject(new Error("database read timed out"));
-      await refresh;
-    });
-    expect(readSession(result.current.sessionStore)?.timelineItems).toEqual(
-      saved.timelineItems,
-    );
-    expect(result.current.sessionLoad.phase).toBe("failed");
-    expect(result.current.sessionLoad.error).toContain("database read timed out");
   });
 
   it("retains a read failure during retry and clears it only when the read succeeds", async () => {
@@ -132,28 +118,24 @@ describe("useDesktopSessionProjection", () => {
     const retry = new Promise<null>((done) => {
       resolve = done;
     });
-    const { result } = renderProjection({
+    const reads = readsFor({
       fetchSessionSnapshot: vi
         .fn()
         .mockRejectedValueOnce(new Error("read timed out"))
         .mockReturnValueOnce(retry),
     } as unknown as DesktopApiAdapter);
-    await act(async () => {
-      await result.current.refreshSession("session-1");
-    });
-    let refresh!: Promise<DesktopSessionSnapshot | null>;
-    act(() => {
-      refresh = result.current.refreshSession("session-1");
-    });
-    expect(result.current.sessionLoad).toMatchObject({
+    await reads.refreshSession("session-1");
+    const refresh = reads.refreshSession("session-1");
+    expect(reads.sessionStore.getState().load).toMatchObject({
       phase: "loading",
       error: "Error: read timed out",
     });
-    await act(async () => {
-      resolve(null);
-      await refresh;
+    resolve(null);
+    await refresh;
+    expect(reads.sessionStore.getState().load).toMatchObject({
+      phase: "loaded",
+      error: null,
     });
-    expect(result.current.sessionLoad).toMatchObject({ phase: "loaded", error: null });
   });
 
   it("rejects an old snapshot after navigating away and back to the same session", async () => {
@@ -181,32 +163,21 @@ describe("useDesktopSessionProjection", () => {
       agentDid: "did:key:test",
       sessionId: "session-1",
     });
-    const { result } = renderProjection(
+    const reads = readsFor(
       { fetchSessionSnapshot } as unknown as DesktopApiAdapter,
       store,
     );
-    let first!: Promise<DesktopSessionSnapshot | null>;
-    act(() => {
-      first = result.current.refreshSession("session-1");
-    });
+    const first = reads.refreshSession("session-1");
     store.setState({ sessionId: "session-2" });
-    await act(async () => {
-      await result.current.refreshSession("session-2");
-    });
+    await reads.refreshSession("session-2");
     store.setState({ sessionId: "session-1" });
-    await act(async () => {
-      await result.current.refreshSession("session-1");
-    });
-    expect(readSession(result.current.sessionStore)?.turnState).toBe("interrupted");
-    await act(async () => {
-      release(old);
-      await first;
-    });
-    expect(readSession(result.current.sessionStore)?.turnState).toBe("interrupted");
-    expect(readSession(result.current.sessionStore)?.timelineItems[0]?.itemKey).toBe(
-      "k2",
-    );
-    expect(result.current.sessionLoad.phase).toBe("loaded");
+    await reads.refreshSession("session-1");
+    expect(readSession(reads.sessionStore)?.turnState).toBe("interrupted");
+    release(old);
+    await first;
+    expect(readSession(reads.sessionStore)?.turnState).toBe("interrupted");
+    expect(readSession(reads.sessionStore)?.timelineItems[0]?.itemKey).toBe("k2");
+    expect(reads.sessionStore.getState().load.phase).toBe("loaded");
   });
 
   it("crosses a hidden-only durable page to the next visible rows", async () => {
@@ -242,17 +213,12 @@ describe("useDesktopSessionProjection", () => {
       .mockResolvedValueOnce(tip)
       .mockResolvedValueOnce(hidden)
       .mockResolvedValueOnce(visible);
-    const { result } = renderProjection({
+    const reads = readsFor({
       fetchSessionSnapshot,
     } as unknown as DesktopApiAdapter);
 
-    await act(async () => {
-      await result.current.refreshSession("session-1");
-    });
-    let loaded = false;
-    await act(async () => {
-      loaded = await result.current.loadOlderSessionTimeline();
-    });
+    await reads.refreshSession("session-1");
+    const loaded = await reads.loadOlderSessionTimeline();
 
     expect(loaded).toBe(true);
     expect(fetchSessionSnapshot).toHaveBeenCalledTimes(3);
@@ -263,9 +229,7 @@ describe("useDesktopSessionProjection", () => {
       beforeItemKey: "tools-7",
     });
     expect(
-      readSession(result.current.sessionStore)?.timelineItems.map(
-        (item) => item.itemKey,
-      ),
+      readSession(reads.sessionStore)?.timelineItems.map((item) => item.itemKey),
     ).toEqual(["k1", "k2", "k8", "k9"]);
   });
 
@@ -303,21 +267,14 @@ describe("useDesktopSessionProjection", () => {
       .fn()
       .mockResolvedValueOnce(tip)
       .mockResolvedValueOnce(older);
-    const { result } = renderProjection({
+    const reads = readsFor({
       fetchSessionSnapshot,
       fetchSessionLiveDelta: vi.fn(() => deltaResponse),
     } as unknown as DesktopApiAdapter);
 
-    await act(async () => {
-      await result.current.refreshSession("session-1");
-    });
-    let pendingDelta!: Promise<boolean>;
-    act(() => {
-      pendingDelta = result.current.refreshSessionLiveDelta();
-    });
-    await act(async () => {
-      await result.current.loadOlderSessionTimeline();
-    });
+    await reads.refreshSession("session-1");
+    const pendingDelta = reads.refreshSessionLiveDelta();
+    await reads.loadOlderSessionTimeline();
     resolveDelta({
       outcome: "delta",
       revision: { storeVersion: 8, reconcileVersion: 3 },
@@ -337,18 +294,12 @@ describe("useDesktopSessionProjection", () => {
         hash: "811c9dc5",
       },
     });
-    await act(async () => {
-      await pendingDelta;
-    });
+    await pendingDelta;
 
     expect(
-      readSession(result.current.sessionStore)?.timelineItems.map(
-        (item) => item.itemKey,
-      ),
+      readSession(reads.sessionStore)?.timelineItems.map((item) => item.itemKey),
     ).toEqual(["k1", "k8", "live-assistant"]);
-    expect(
-      readSession(result.current.sessionStore)?.timelineItems.at(-1),
-    ).toMatchObject({
+    expect(readSession(reads.sessionStore)?.timelineItems.at(-1)).toMatchObject({
       content: "hello world",
     });
   });
@@ -376,23 +327,16 @@ describe("useDesktopSessionProjection", () => {
       agentDid: "did:key:test",
       sessionId: "session-1",
     });
-    const { result } = renderProjection(
+    const reads = readsFor(
       { fetchSessionSnapshot } as unknown as DesktopApiAdapter,
       store,
     );
 
-    let first: Promise<DesktopSessionSnapshot | null>;
-    await act(async () => {
-      first = result.current.refreshSession("session-1");
-    });
+    const first = reads.refreshSession("session-1");
     store.setState({ sessionId: "session-2" });
-    await act(async () => {
-      await result.current.refreshSession("session-2");
-    });
-    expect(readSession(result.current.sessionStore)?.sessionId).toBe("session-2");
-    expect(readSession(result.current.sessionStore)?.timelineItems[0]?.itemKey).toBe(
-      "other",
-    );
+    await reads.refreshSession("session-2");
+    expect(readSession(reads.sessionStore)?.sessionId).toBe("session-2");
+    expect(readSession(reads.sessionStore)?.timelineItems[0]?.itemKey).toBe("other");
 
     const stale = session(["stale"], {
       totalItems: 1,
@@ -403,24 +347,11 @@ describe("useDesktopSessionProjection", () => {
       oldestItemKey: "stale",
       newestItemKey: "stale",
     });
-    await act(async () => {
-      release(stale);
-      await first!;
-    });
-    expect(readSession(result.current.sessionStore)?.sessionId).toBe("session-2");
+    release(stale);
+    await first!;
+    expect(readSession(reads.sessionStore)?.sessionId).toBe("session-2");
     expect(
-      readSession(result.current.sessionStore)?.timelineItems.map(
-        (item) => item.itemKey,
-      ),
+      readSession(reads.sessionStore)?.timelineItems.map((item) => item.itemKey),
     ).toEqual(["other"]);
   });
 });
-
-/* one session store per test's api, since the hook's options are rebuilt on
-   every render */
-const sessionStores = new WeakMap<object, SessionStore>();
-function remember(api: object) {
-  const store = createSessionStore();
-  sessionStores.set(api, store);
-  return store;
-}

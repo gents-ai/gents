@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState, type SetStateAction } from "react";
 
 import { setDesktopShellTimingConfigForTests } from "./desktopShellRuntime";
 import { createDesktopShellChatActions } from "./desktopShellChatActions";
@@ -19,14 +19,16 @@ import {
   headerOf,
   useSessionFields,
   useSessionValue,
+  writeSession,
 } from "./sessionStore";
 import { selectedIn } from "../ui/hooks/useSelectedSession";
-import { useDesktopSessionProjection } from "./useDesktopSessionProjection";
+import { createSessionReads } from "./sessionReads";
 import { createDesktopShellPeerActions } from "./desktopShellPeerActions";
 import { createDesktopShellTaskActions } from "./desktopShellTaskActions";
 import type {
   DesktopApiAdapter,
   DesktopClientUpdatedListenerFactory,
+  DesktopSessionSnapshot,
 } from "@source-inc/gents-desktop-client";
 import { projectSessionLoadingStatus } from "../lib/loadingStatus";
 
@@ -84,21 +86,28 @@ export function useDesktopShell({
     },
     [reportFailure],
   );
-  const {
-    sessionStore,
-    sessionLoad,
-    setSession,
-    refreshSession,
-    retrySessionHydration,
-    refreshSessionLiveDelta,
-    loadOlderSessionTimeline,
-  } = useDesktopSessionProjection({
-    api,
-    store,
-    sessionStore: stores.session,
-    trackedRequestId,
-    setError,
-  });
+  const sessionStore = stores.session;
+  const [setSession] = useState(
+    () => (next: SetStateAction<DesktopSessionSnapshot | null>) =>
+      writeSession(sessionStore, next),
+  );
+  const [
+    {
+      refreshSession,
+      retrySessionHydration,
+      refreshSessionLiveDelta,
+      loadOlderSessionTimeline,
+    },
+  ] = useState(() =>
+    createSessionReads({
+      api,
+      store,
+      sessionStore,
+      trackedRequestId,
+      setError,
+    }),
+  );
+  const sessionLoad = useSessionValue(sessionStore, (state) => state.load);
   const {
     autostartAttempted,
     clientAutostarts,
