@@ -111,8 +111,8 @@ pub struct TrialIdentity {
     pub trial_index: u32,
     /// A resumed trial is a new row with `attempt + 1`.
     pub attempt: u32,
-    pub trial_agent_did: String,
-    /// With `trial_agent_did`, the durable evidence reference.
+    pub trial_node_did: String,
+    /// With `trial_node_did`, the durable evidence reference.
     pub session_id: String,
     pub seed: i64,
     /// A locator only. Never identity.
