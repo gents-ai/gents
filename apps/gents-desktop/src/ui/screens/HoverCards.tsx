@@ -33,11 +33,15 @@ export function AgentHoverCard({
   deployment,
   root,
   ceiling,
+  side = "right",
   children,
 }: {
   deployment: DeploymentView;
   root?: string | null;
   ceiling?: string | null;
+  /** where the card opens; the default suits the rail and lists, a
+      neighbor that must stay hoverable wants 'bottom' */
+  side?: "right" | "bottom" | "top" | "left";
   children: ReactElement;
 }) {
   const online = deployment.dialSucceeded;
@@ -47,7 +51,7 @@ export function AgentHoverCard({
   return (
     <HoverCard>
       <HoverCardTrigger delay={500} render={children} />
-      <HoverCardContent side="right" align="start" className="w-80">
+      <HoverCardContent side={side} align="start" className="w-80">
         <div className="flex items-baseline justify-between gap-3">
           <span className="font-heading text-lg font-medium text-heading">
             {deployment.agentPrincipal.displayName ?? deployment.label}
@@ -87,11 +91,13 @@ export function BehaviorHoverCard({
   deployment,
   behaviorId,
   description,
+  side = "right",
   children,
 }: {
   deployment: DeploymentView | null;
   behaviorId: string | null;
   description?: string;
+  side?: "right" | "bottom" | "top" | "left";
   children: ReactElement;
 }) {
   const [open, setOpen] = useState(false);
@@ -114,7 +120,7 @@ export function BehaviorHoverCard({
     <HoverCard open={open} onOpenChange={setOpen}>
       <HoverCardTrigger delay={500} render={children} onFocus={() => setOpen(true)} />
       <HoverCardContent
-        side="right"
+        side={side}
         align="start"
         className="w-80"
         data-testid="behavior-hover-card"

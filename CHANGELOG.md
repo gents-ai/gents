@@ -6,6 +6,14 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- Desktop lists span nodes: the sessions list and the mailbox cover every
+  node the client can see, with a node axis to narrow them, and each row
+  wears the node and behavior it belongs to; the navigation panel shows the
+  working node and recent sessions; the mailbox is grouped by urgency,
+  searchable, and dismissable in bulk with a selection bar; a failed action
+  is reported once where it happened, and the banner keeps only the
+  client's own state.
+
 - Desktop transcript: consecutive tool calls form one activity group that
   is placed once and only grows at its end; live text is revealed at a
   steady pace and held until its message arrives; a step opens only from

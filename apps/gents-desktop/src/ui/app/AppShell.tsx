@@ -1,5 +1,5 @@
-/* The App Shell from the Branding file: a header with the mark, a
-   breadcrumb and settings; a rail with the agent, new session, mailbox and
+/* The App Shell from the Branding file: a header with the mark and
+   settings; a rail with the agent, new session, mailbox and
    sessions; the content slot on the ground. Chrome and canvas share the
    ground; content that needs a surface brings its own. */
 import type { ReactElement, ReactNode } from "react";
@@ -9,6 +9,7 @@ import {
   Menu,
   Plus,
   ScrollText,
+  Waypoints,
   SlidersHorizontal,
   X,
 } from "lucide-react";
@@ -24,14 +25,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@gents/ui/components/dropdown-menu";
-import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbLink,
-  BreadcrumbList,
-  BreadcrumbPage,
-  BreadcrumbSeparator,
-} from "@gents/ui/components/breadcrumb";
 import { Button } from "@gents/ui/components/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@gents/ui/components/tooltip";
 import { cn } from "@gents/ui/lib/utils";
@@ -42,7 +35,19 @@ import { navPreference, saveNavPreference, type NavMode } from "@/nav";
 import { ROOMY_WINDOW, useMediaQuery } from "@/lib/media";
 import { AgentAvatar } from "@/screens/AgentAvatar";
 import { AgentHoverCard } from "@/screens/HoverCards";
-import type { DeploymentView, SyncHealthView } from "@source-inc/gents-desktop-client";
+import type {
+  SessionSummary,
+  DeploymentView,
+  SyncHealthView,
+} from "@source-inc/gents-desktop-client";
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from "@gents/ui/components/breadcrumb";
 import { Mark } from "./Mark";
 import { SyncHealth } from "./SyncHealth";
 import { WindowControls } from "./WindowControls";
@@ -179,6 +184,9 @@ export function AppShell({
   online,
   mailboxCount,
   holds,
+  recent,
+  working,
+  nodeCount,
   syncHealth,
   error,
   onDismissError,
@@ -193,6 +201,9 @@ export function AppShell({
   ceiling?: string | null;
   online: boolean;
   mailboxCount: number;
+  recent?: SessionSummary[];
+  working?: DeploymentView | null;
+  nodeCount?: number;
   holds?: Set<string>;
   syncHealth?: SyncHealthView | null;
   /** a shell error, shown as a banner over the canvas until dismissed */
@@ -291,19 +302,22 @@ export function AppShell({
               mailboxCount={mailboxCount}
               holds={holds}
               settings={panelSettings}
+              recent={recent}
+              working={working}
+              nodeCount={nodeCount}
             />
           </SheetContent>
         </Sheet>
         <a
           href={href({ name: "agents" })}
           aria-label="Agents"
-          className="grid size-7 place-items-center rounded-md bg-ink text-background"
+          className="grid size-7 shrink-0 place-items-center rounded-md bg-ink text-background"
         >
           <Mark className="h-3" />
         </a>
         <Breadcrumb>
           <BreadcrumbList>
-            {route.name === "agents" ? (
+            {route.name === "agents" || route.name === "nodes" ? (
               <BreadcrumbItem>
                 <BreadcrumbPage>Agents</BreadcrumbPage>
               </BreadcrumbItem>
@@ -334,7 +348,7 @@ export function AppShell({
           "grid min-h-0",
           "grid-cols-[1fr]",
           shownNav === "expanded"
-            ? "md:grid-cols-[16.5rem_1fr]"
+            ? "md:grid-cols-[18.5rem_1fr]"
             : "md:grid-cols-[3.5rem_1fr]",
         )}
       >
@@ -347,12 +361,28 @@ export function AppShell({
             online={online}
             mailboxCount={mailboxCount}
             holds={holds}
+            recent={recent}
+            working={working}
+            nodeCount={nodeCount}
             mode={shownNav}
             settings={panelSettings}
           >
             <nav className="flex h-full flex-col items-center gap-2 pt-4">
-              {/* the agent: its avatar opens the agent's configuration; a card on hover */}
+              {/* the working node: its avatar opens its configuration; a card on
+                  hover. With no node on this machine the slot says so and goes
+                  to the Nodes list, as the panel's does */}
               {(() => {
+                if (!deployment)
+                  return (
+                    <a
+                      href={href({ name: "nodes" })}
+                      aria-label="No local node"
+                      title="No local node"
+                      className="mb-2 grid size-7 place-items-center rounded-full border border-dashed border-border text-muted-foreground hover:text-foreground"
+                    >
+                      <Waypoints className="size-3.5" />
+                    </a>
+                  );
                 const link = (
                   <a
                     href={
@@ -411,7 +441,17 @@ export function AppShell({
               >
                 <ScrollText className="size-4" />
               </RailItem>
-              <div className="mt-auto pb-2">{railSettings}</div>
+              {/* at the foot with settings, where the panel keeps it */}
+              <div className="mt-auto flex flex-col items-center gap-1 pb-2">
+                <RailItem
+                  label="Nodes"
+                  to={{ name: "nodes" }}
+                  active={route.name === "nodes" || route.name === "agents"}
+                >
+                  <Waypoints className="size-4" />
+                </RailItem>
+                {railSettings}
+              </div>
             </nav>
           </RailFlyout>
         </div>

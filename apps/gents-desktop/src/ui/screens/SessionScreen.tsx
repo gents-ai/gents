@@ -66,6 +66,14 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@gents/ui/components/collapsible";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@gents/ui/components/dropdown-menu";
 import { Hint } from "./Hint";
 
 import { ToolIcon } from "./tool-icon";
@@ -81,8 +89,9 @@ import { useSlashSkills } from "./useSlashSkills";
 import { Thinking } from "./Thinking";
 import { activityStatus, isStopping } from "./activity-status";
 import { TracePanel } from "./TracePanel";
-import { BehaviorAvatar, BehaviorChip } from "./parts";
-import { BehaviorHoverCard } from "./HoverCards";
+import { BehaviorAvatar } from "./parts";
+import { NodeBehaviorStack } from "./NodeBehaviorStack";
+import { isWorkingNode, nodeDidOf, workersBySession } from "@/lib/nodes";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -358,11 +367,21 @@ export function SessionSubmissionStatus({
   error,
   activityStatus,
   hint,
-}: Pick<Shell, "error" | "activityStatus"> & { hint?: string | null }) {
+  reserve = true,
+}: Pick<Shell, "error" | "activityStatus"> & {
+  hint?: string | null;
+  /** a new chat has no transcript above to hold still, so its line may
+      take no room until it has something to say */
+  reserve?: boolean;
+}) {
   const status = activityStatus && !error ? activityStatus : null;
   const quiet = !status && !error && hint;
+  const empty = !status && !error && !quiet;
   return (
-    <div className="mt-2 min-h-4 px-1" data-testid="composer-status">
+    <div
+      className={cn("px-1", reserve ? "mt-2 min-h-4" : !empty && "mt-2")}
+      data-testid="composer-status"
+    >
       {status && (
         <div
           role="status"
@@ -1439,7 +1458,10 @@ export function SessionScreen({ shell }: { shell: Shell }) {
     }),
     [shell.api],
   );
-  const agentName = deployment?.agentPrincipal.displayName ?? "the agent";
+  /* the principal name, or the pairing label while a paired node has not
+     replicated its principal yet */
+  const agentName =
+    deployment?.agentPrincipal.displayName ?? deployment?.label ?? "the agent";
   /* the snapshot says what happened in a session; the summary says where it
      came from, which is the list's own view of it */
   const summary =
@@ -1493,7 +1515,60 @@ export function SessionScreen({ shell }: { shell: Shell }) {
           <AgentAvatar name={agentName} className="size-8" />
           <div>
             <h1 className="font-heading text-lg font-medium text-heading">
-              Start a new chat with {agentName}
+              Start a new chat with{" "}
+              {shell.deployments.length > 1 ? (
+                /* the node the chat starts on, where there is a choice: the
+                   name is the button's own text, so the heading still reads
+                   as one sentence */
+                <DropdownMenu>
+                  <DropdownMenuTrigger
+                    render={
+                      <button
+                        type="button"
+                        title="Choose a node"
+                        className="inline-flex items-center gap-1 underline decoration-border underline-offset-4 hover:decoration-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-sm"
+                      />
+                    }
+                  >
+                    {agentName}
+                    <ChevronDown className="size-4 opacity-50" />
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="w-56">
+                    <DropdownMenuRadioGroup
+                      value={shell.selectedAgentDid ?? ""}
+                      onValueChange={(did) => shell.selectAgent(did)}
+                    >
+                      {shell.deployments.map((n, i, all) => (
+                        <Fragment key={n.agentDid}>
+                          {/* a faint line between the local node and the paired ones */}
+                          {i > 0 && isWorkingNode(all[i - 1]!) && !isWorkingNode(n) && (
+                            <DropdownMenuSeparator className="opacity-60" />
+                          )}
+                          <DropdownMenuRadioItem
+                            value={n.agentDid}
+                            disabled={!n.dialSucceeded}
+                          >
+                            <AgentAvatar
+                              name={n.agentPrincipal.displayName ?? n.label}
+                              className="size-5 text-[9px]"
+                            />
+                            <span className="min-w-0 flex-1 truncate">
+                              {n.agentPrincipal.displayName ?? n.label}
+                            </span>
+                            {isWorkingNode(n) && (
+                              <span className="text-xs text-muted-foreground">
+                                local
+                              </span>
+                            )}
+                          </DropdownMenuRadioItem>
+                        </Fragment>
+                      ))}
+                    </DropdownMenuRadioGroup>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              ) : (
+                agentName
+              )}
             </h1>
             <p className="mt-1 text-sm text-muted-foreground">
               {shell.mailboxCause
@@ -1537,11 +1612,14 @@ export function SessionScreen({ shell }: { shell: Shell }) {
             sending={shell.sending}
             placeholder={placeholderFor(startStatus, "Ask anything")}
           />
+          {/* inside the composer's row, so the grid's gap is not paid twice
+              around a line that is usually empty */}
+          <SessionSubmissionStatus
+            error={null}
+            activityStatus={shell.activityStatus}
+            reserve={false}
+          />
         </div>
-        <SessionSubmissionStatus
-          error={shell.error}
-          activityStatus={shell.activityStatus}
-        />
         <p className="text-xs text-muted-foreground">
           {chosenName} <strong className="font-medium text-foreground">can</strong>{" "}
           {env
@@ -1659,22 +1737,14 @@ export function SessionScreen({ shell }: { shell: Shell }) {
             >
               <ArrowLeft className="size-4" />
             </a>
-            <BehaviorHoverCard
+            <NodeBehaviorStack
+              nodes={shell.deployments}
+              nodeDid={session?.agentDid}
+              behaviorId={session?.behaviorId}
               deployment={deployment}
-              behaviorId={session?.behaviorId ?? null}
-            >
-              <button
-                type="button"
-                aria-label={`About ${behaviorName(session?.behaviorId ?? null, deployment)} behavior`}
-                className="rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-              >
-                <BehaviorAvatar
-                  name={behaviorName(session?.behaviorId ?? null, deployment)}
-                  behaviorId={session?.behaviorId}
-                  className="size-6 text-[10px]"
-                />
-              </button>
-            </BehaviorHoverCard>
+              size="sm"
+              keyboard
+            />
             <span className="min-w-0 flex-1 truncate font-heading text-sm font-medium text-heading">
               {session?.title}
             </span>
@@ -1767,10 +1837,32 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                       </div>
                     )}
                   <div className="mt-3 flex flex-wrap items-center gap-2">
-                    <BehaviorChip
-                      behaviorId={session?.behaviorId ?? null}
+                    <NodeBehaviorStack
+                      nodes={shell.deployments}
+                      nodeDid={session?.agentDid}
+                      behaviorId={session?.behaviorId}
                       deployment={deployment}
+                      workers={
+                        session
+                          ? (workersBySession(shell.deployments).get(
+                              session.sessionId,
+                            ) ?? [])
+                          : []
+                      }
                     />
+                    <span className="text-sm text-muted-foreground">
+                      {behaviorName(session?.behaviorId ?? null, deployment)}
+                      {/* the node only when it is not the local one, as the
+                          marks beside it do */}
+                      {(() => {
+                        const node = shell.deployments.find(
+                          (n) => nodeDidOf(n) === session?.agentDid,
+                        );
+                        return node && !isWorkingNode(node)
+                          ? ` on ${node.agentPrincipal.displayName ?? node.label}`
+                          : null;
+                      })()}
+                    </span>
                     {session?.context && <SessionContext context={session.context} />}
                   </div>
                 </div>
@@ -1935,7 +2027,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                 {/* the placeholder already says why sending is off while the
                     box is empty; the hint is only for when typed text hides it */}
                 <SessionSubmissionStatus
-                  error={shell.error}
+                  error={null}
                   activityStatus={shell.activityStatus}
                   hint={
                     status.kind === "disabled" && !inFlight && draft.trim() !== ""
