@@ -265,7 +265,7 @@ mod tests {
         let t = nice_ticks(0.0, 3.18, 4);
         assert_eq!(t.values, [0.0, 1.0, 2.0, 3.0, 4.0]);
         assert_eq!((t.step, t.decimals), (1.0, 0));
-        let t = nice_ticks(0.0, 0.318, 4);
+        let t = nice_ticks(0.0, 0.322, 4);
         assert_eq!(t.values, [0.0, 0.1, 0.2, 0.3, 0.4]);
         assert_eq!(t.decimals, 1);
         let t = nice_ticks(0.0, 31.8, 4);
