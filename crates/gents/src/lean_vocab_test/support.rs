@@ -169,6 +169,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) completion_retry_cases: Vec<LeanCompletionRetryCase>,
     pub(crate) mcp_health_cases: Vec<LeanMcpHealthCase>,
     pub(crate) backend_health_cases: Vec<LeanBackendHealthCase>,
+    pub(crate) backend_probe_schedule_cases: Vec<LeanBackendProbeScheduleCase>,
     pub(crate) boundaries: Vec<LeanBoundary>,
     pub(crate) deviations: Vec<LeanDeviation>,
     pub(crate) command_policy_cases: Vec<LeanCommandPolicyCase>,
@@ -1982,6 +1983,10 @@ pub(crate) fn lean_mcp_health_cases() -> &'static [LeanMcpHealthCase] {
 
 pub(crate) fn lean_backend_health_cases() -> &'static [LeanBackendHealthCase] {
     &lean_contract_snapshot().backend_health_cases
+}
+
+pub(crate) fn lean_backend_probe_schedule_cases() -> &'static [LeanBackendProbeScheduleCase] {
+    &lean_contract_snapshot().backend_probe_schedule_cases
 }
 
 pub(crate) fn lean_command_policy_cases() -> &'static [LeanCommandPolicyCase] {

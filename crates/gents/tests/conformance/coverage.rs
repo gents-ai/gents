@@ -881,6 +881,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "BackendHealthTransitionCases".to_string(),
         ));
     }
+    if !snapshot.backend_probe_schedule_cases.is_empty() {
+        emitted.insert((
+            "backend_probe_schedule_cases".to_string(),
+            "BackendProbeScheduleCases".to_string(),
+        ));
+    }
     if !snapshot.native_filesystem_boundary_cases.is_empty() {
         emitted.insert((
             "native_filesystem_boundary_cases".to_string(),

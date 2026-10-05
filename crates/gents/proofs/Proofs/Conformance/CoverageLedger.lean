@@ -978,6 +978,11 @@ def caseCoverage : List CoverageEntry :=
       "backend_health::tests::generated_backend_health_cases_match_prober_transitions")
       "backend-health" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "backend_probe_schedule_cases"
+      "BackendProbeScheduleCases"
+      "backend_health::tests::generated_backend_probe_schedule_cases_match_runtime_selection")
+      "backend-health" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "inference_registry_cases"
       "InferenceRegistryCases"
       "admission::registry::contract_tests::generated_inference_registry_cases_drive_real_permits")
