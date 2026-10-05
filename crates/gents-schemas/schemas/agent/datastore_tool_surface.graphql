@@ -1,6 +1,6 @@
-type DatastoreToolSurface @branchable @index(fields: ["agent_did", "surface_id"], unique: true) {
+type DatastoreToolSurface @branchable @index(fields: ["node_did", "surface_id"], unique: true) {
     surface_id: String @index
-    agent_did: String @index
+    node_did: String @index
     display_name: String
     enabled: Boolean @index
     # Canonical write/query declarations stored as native JSON values.
