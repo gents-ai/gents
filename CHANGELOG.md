@@ -6,6 +6,10 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- Desktop shell: Back and Forward in the window bar replace the session
+  screen's back link, with a real forward cursor. Cmd+[ / Cmd+] on macOS,
+  Alt+Left / Alt+Right on Windows and Linux, and mouse side buttons on all
+  three.
 - Desktop shell: a window bar across the top carries each screen's title,
   marks and actions; the side panel becomes a dock of tabbed surfaces
   (trace, workers) beside the pane, resized by a divider that

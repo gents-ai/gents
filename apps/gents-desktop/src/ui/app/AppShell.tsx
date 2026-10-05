@@ -12,6 +12,8 @@ import {
   Waypoints,
   SlidersHorizontal,
   X,
+  ArrowLeft,
+  ArrowRight,
 } from "lucide-react";
 import { useContext, useEffect, useRef, useState } from "react";
 import {
@@ -28,7 +30,7 @@ import {
 import { Button } from "@gents/ui/components/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@gents/ui/components/tooltip";
 import { cn } from "@gents/ui/lib/utils";
-import { href, type Route } from "@/lib/router";
+import { href, type History, type Route } from "@/lib/router";
 import { applyTheme, themePreference, type ThemePreference } from "@/theme";
 import { navPreference, saveNavPreference, type NavMode } from "@/nav";
 /* the surfaces this app registers, wherever the shell is rendered */
@@ -51,6 +53,7 @@ import type {
   DeploymentView,
   SyncHealthView,
 } from "@source-inc/gents-desktop-client";
+import { Hint } from "@/screens/Hint";
 import { Mark } from "./Mark";
 import { SyncHealth } from "./SyncHealth";
 import { WindowControls } from "./WindowControls";
@@ -204,6 +207,7 @@ function RailSyncDot({ syncHealth }: { syncHealth?: SyncHealthView | null }) {
 
 export function AppShell({
   route,
+  history,
   agentName,
   agentDid,
   deployment,
@@ -222,6 +226,8 @@ export function AppShell({
   children,
 }: {
   route: Route;
+  /** where the person came from and went back from: the bar's own back and forward */
+  history?: History;
   agentName: string | null;
   agentDid: string | null;
   deployment: DeploymentView | null;
@@ -486,6 +492,37 @@ export function AppShell({
             >
               <Mark className="h-3" />
             </a>
+            {/* back and forward, the shell's: the way to where the person came
+                from, so no screen draws its own back arrow */}
+            {history && (
+              <div
+                className="flex shrink-0 items-center gap-0.5"
+                data-testid="history-nav"
+              >
+                <Hint label="Back">
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label="Back"
+                    disabled={!history.canBack}
+                    onClick={history.back}
+                  >
+                    <ArrowLeft />
+                  </Button>
+                </Hint>
+                <Hint label="Forward">
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label="Forward"
+                    disabled={!history.canForward}
+                    onClick={history.forward}
+                  >
+                    <ArrowRight />
+                  </Button>
+                </Hint>
+              </div>
+            )}
             {/* what the screen puts here: its title, marks and actions */}
             <div
               ref={setPaneBar}
