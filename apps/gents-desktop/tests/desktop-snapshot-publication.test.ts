@@ -8,6 +8,8 @@ import type {
 } from "@source-inc/gents-desktop-client";
 import { createDesktopShellConfigActions } from "../src/hooks/desktopShellConfigActions";
 import { useDesktopClientLifecycle } from "../src/hooks/useDesktopClientLifecycle";
+import { storesFor } from "./fleet-fixture";
+import { createSelectionStore } from "../src/hooks/selectionStore";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -31,9 +33,10 @@ function renderLifecycle(api: DesktopApiAdapter) {
   return renderHook(() =>
     useDesktopClientLifecycle({
       api,
+      ...storesFor(api),
       supportsManagedServer: false,
       refreshSession: vi.fn(async () => null),
-      selectedSessionIdRef: { current: null },
+      store: selectionFor(api),
       setError: vi.fn(),
       setSession: vi.fn(),
     }),
@@ -125,3 +128,10 @@ describe("desktop snapshot publication", () => {
     expect(result.current.snapshot).toBe(observed);
   });
 });
+
+const selections = new WeakMap<object, ReturnType<typeof createSelectionStore>>();
+function selectionFor(api: object) {
+  const found = selections.get(api) ?? createSelectionStore();
+  selections.set(api, found);
+  return found;
+}

@@ -1,4 +1,4 @@
-import { useEffect, type MutableRefObject } from "react";
+import { useEffect } from "react";
 
 import type {
   DesktopClientUpdatedListenerFactory,
@@ -25,7 +25,8 @@ type DesktopProjectionEffectsArgs = {
   /** the selection, read when an observed result lands */
   store: SelectionStore;
   selectedTrackedRequestId: string | null;
-  selectedTrackedRequestIdRef: MutableRefObject<string | null>;
+  /** the request being tracked now, read when an update lands */
+  trackedRequestId: () => string | null;
   setError: (error: string | null) => void;
 };
 
@@ -44,7 +45,7 @@ export function useDesktopProjectionEffects({
   selectedSessionId,
   store,
   selectedTrackedRequestId,
-  selectedTrackedRequestIdRef,
+  trackedRequestId,
   setError,
 }: DesktopProjectionEffectsArgs) {
   useEffect(() => {
@@ -79,7 +80,7 @@ export function useDesktopProjectionEffects({
         const scope = desktopUpdateRefreshScope(
           event.reason,
           store.getState().sessionId,
-          selectedTrackedRequestIdRef.current,
+          trackedRequestId(),
         );
         await controller.request(scope);
       },
@@ -138,7 +139,7 @@ export function useDesktopProjectionEffects({
     selectedAgentDid,
     selectedSessionId,
     selectedTrackedRequestId,
-    selectedTrackedRequestIdRef,
+    trackedRequestId,
     setError,
     store,
   ]);

@@ -9,8 +9,17 @@ import { useDesktopClientLifecycle } from "./useDesktopClientLifecycle";
 import { useDesktopChatProjectionState } from "./useDesktopChatProjectionState";
 import { createDesktopShellMailboxActions } from "./desktopShellMailboxActions";
 import { createDesktopShellSelectionActions } from "./desktopShellSelectionActions";
+import { createChatStore } from "./chatStore";
+import { createClientStore } from "./clientStore";
+import { createFleetStore } from "./fleetStore";
 import { createSelectionStore, selection, useSelection } from "./selectionStore";
-import { headerOf, useSessionFields, useSessionValue } from "./sessionStore";
+import { projectShell, projectionInputsOf, type ShellStores } from "./shellProjection";
+import {
+  createSessionStore,
+  headerOf,
+  useSessionFields,
+  useSessionValue,
+} from "./sessionStore";
 import { selectedIn } from "../ui/hooks/useSelectedSession";
 import { useDesktopSessionProjection } from "./useDesktopSessionProjection";
 import { createDesktopShellPeerActions } from "./desktopShellPeerActions";
@@ -38,8 +47,19 @@ export function useDesktopShell({
   supportsManagedServer = false,
   reportFailure,
 }: DesktopShellBridge) {
-  /* what the person is looking at: one store, read by actions when they run */
-  const [store] = useState(() => createSelectionStore());
+  /* every store the shell is projected from, created once: screens select
+     from them, and actions read them when they run */
+  const [stores] = useState<ShellStores>(() => ({
+    selection: createSelectionStore(),
+    session: createSessionStore(),
+    fleet: createFleetStore(),
+    client: createClientStore(),
+    chat: createChatStore(),
+  }));
+  /* the projection as the stores hold it now, for an action or a read */
+  const [projectNow] = useState(() => () => projectShell(projectionInputsOf(stores)));
+  const [trackedRequestId] = useState(() => () => projectNow().trackedRequestId);
+  const store = stores.selection;
   const current = useSelection(store);
   const selectedAgentDid = current.agentDid;
   const selectedSessionId = current.sessionId;
@@ -48,8 +68,6 @@ export function useDesktopShell({
   const captureComposeIntent = () => selection.captureIntent(store);
   const acceptsComposeIntent = (captured: number) =>
     selection.acceptsIntent(store, captured);
-  const selectedTrackedRequestIdRef = useRef<string | null>(null);
-  const [sending, setSending] = useState(false);
   const submissionInFlight = useRef(false);
   const [error, setError] = useState<string | null>(null);
   // A failed action is reported once, as a toast, by the action itself:
@@ -72,7 +90,8 @@ export function useDesktopShell({
   } = useDesktopSessionProjection({
     api,
     store,
-    selectedTrackedRequestIdRef,
+    sessionStore: stores.session,
+    trackedRequestId,
     setError,
   });
   const {
@@ -82,7 +101,6 @@ export function useDesktopShell({
     lastP2PAutoRestartAt,
     lastObservedP2PHealth,
     snapshot,
-    fleet,
     mutateSnapshot,
     startupPhase,
     loading,
@@ -105,6 +123,8 @@ export function useDesktopShell({
     supportsManagedServer,
     refreshSession,
     store,
+    client: stores.client,
+    fleet: stores.fleet,
     setError,
     setSession,
   });
@@ -141,6 +161,8 @@ export function useDesktopShell({
     setDraft,
     localWorkflow,
     setLocalWorkflow,
+    sending,
+    setSending,
     optimisticPendingTurn,
     setOptimisticPendingTurn,
     operationalState,
@@ -149,16 +171,9 @@ export function useDesktopShell({
     retryShellProjection,
     selectedTrackedRequestId,
   } = useDesktopChatProjectionState({
-    clientAvailable: Boolean(snapshot?.client),
-    selectedAgentDid,
-    selectedBehaviorId,
-    selectedSessionSummary,
-    selectedDeployment,
-    selectedSessionId,
-    sending,
+    stores,
     session: selectedSessionHeader,
     userRequestIds,
-    syncHealth: snapshot?.client?.syncHealth ?? null,
   });
   const sessionLoadingStatus = useMemo(
     () =>
@@ -177,7 +192,6 @@ export function useDesktopShell({
       sessionLoad,
     ],
   );
-  selectedTrackedRequestIdRef.current = selectedTrackedRequestId;
   const { selectAgent, selectBehavior, selectSession, startNewSession, followRoute } =
     createDesktopShellSelectionActions({
       store,
@@ -209,7 +223,7 @@ export function useDesktopShell({
     selectedDeployment,
     selectedSessionId,
     store,
-    selectedTrackedRequestIdRef,
+    trackedRequestId,
     selectedTrackedRequestId,
     sending,
     setLocalWorkflow,
@@ -318,7 +332,7 @@ export function useDesktopShell({
 
   return {
     snapshot,
-    fleet,
+    fleet: stores.fleet,
     sessionStore,
     sessionLoad,
     sessionLoadingStatus,

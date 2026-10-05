@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useDesktopClientLifecycle } from "../src/hooks/useDesktopClientLifecycle";
 import { createSelectionStore } from "../src/hooks/selectionStore";
+import { storesFor } from "./fleet-fixture";
 
 const ownership = vi.hoisted(() => ({ main: true }));
 vi.mock("../src/lib/shellPlatform", () => ({
@@ -42,6 +43,7 @@ describe("desktop client restart selection ordering", () => {
       const { result } = renderHook(() =>
         useDesktopClientLifecycle({
           api,
+          ...storesFor(api),
           supportsManagedServer: true,
           refreshSession: vi.fn(async () => null),
           store: createSelectionStore(),
@@ -73,6 +75,7 @@ describe("desktop client restart selection ordering", () => {
     const { result } = renderHook(() =>
       useDesktopClientLifecycle({
         api,
+        ...storesFor(api),
         supportsManagedServer: false,
         refreshSession: vi.fn(async () => null),
         store,
@@ -119,6 +122,7 @@ describe("desktop client restart selection ordering", () => {
       const { result } = renderHook(() =>
         useDesktopClientLifecycle({
           api,
+          ...storesFor(api),
           supportsManagedServer: false,
           refreshSession: vi.fn(async () => null),
           store: createSelectionStore(),
@@ -168,6 +172,7 @@ describe("desktop client restart selection ordering", () => {
     const { result } = renderHook(() =>
       useDesktopClientLifecycle({
         api,
+        ...storesFor(api),
         supportsManagedServer: false,
         refreshSession: vi.fn(async () => null),
         store: createSelectionStore(),
@@ -206,6 +211,7 @@ describe("desktop client restart selection ordering", () => {
     const { result } = renderHook(() =>
       useDesktopClientLifecycle({
         api,
+        ...storesFor(api),
         supportsManagedServer: false,
         refreshSession: vi.fn(async () => null),
         store: createSelectionStore(),
@@ -243,6 +249,7 @@ describe("desktop client restart selection ordering", () => {
     const { result } = renderHook(() =>
       useDesktopClientLifecycle({
         api,
+        ...storesFor(api),
         supportsManagedServer: false,
         refreshSession: vi.fn(async () => null),
         store,
@@ -285,6 +292,7 @@ describe("desktop client restart selection ordering", () => {
     const { result } = renderHook(() =>
       useDesktopClientLifecycle({
         api,
+        ...storesFor(api),
         supportsManagedServer: false,
         refreshSession: vi.fn(async () => null),
         store: createSelectionStore(),

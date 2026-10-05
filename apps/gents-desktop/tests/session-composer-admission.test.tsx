@@ -15,6 +15,13 @@ import { MemoryNavProvider } from "@gents/shell";
 import { selectedSessionFields } from "./session-store-fixture";
 import { readSession, writeSession } from "../src/hooks/sessionStore";
 import { fleetFor } from "./fleet-fixture";
+import { useLayoutEffect, useState } from "react";
+import { createChatStore } from "../src/hooks/chatStore";
+import { createClientStore } from "../src/hooks/clientStore";
+import { createFleetStore } from "../src/hooks/fleetStore";
+import { createSelectionStore } from "../src/hooks/selectionStore";
+import { createSessionStore as newSessionStore } from "../src/hooks/sessionStore";
+import type { ShellStores } from "../src/hooks/shellProjection";
 
 const navigate = vi.hoisted(() => vi.fn());
 const markdownRender = vi.hoisted(() => vi.fn());
@@ -117,18 +124,30 @@ function existingSessionShell(status: Shell["nonEmptyContentSendStatus"]): Shell
 
 // Exercise the real context-keyed draft owner as well as the real kit Composer.
 function OwnedSessionScreen({ shell }: { shell: Shell }) {
+  const [stores] = useState<ShellStores>(() => ({
+    selection: createSelectionStore(),
+    session: newSessionStore(),
+    fleet: createFleetStore(),
+    client: createClientStore(),
+    chat: createChatStore(),
+  }));
+  /* the drafts are keyed by the selection, which follows the shell rendered */
+  useLayoutEffect(() => {
+    stores.selection.setState({
+      agentDid: shell.selectedAgentDid,
+      sessionId: shell.selectedSessionId,
+      behaviorId: shell.selectedBehaviorId,
+    });
+  }, [
+    stores,
+    shell.selectedAgentDid,
+    shell.selectedSessionId,
+    shell.selectedBehaviorId,
+  ]);
   const { draftStore, draftContextKey, setDraft } = useDesktopChatProjectionState({
-    clientAvailable: true,
-    selectedAgentDid: shell.selectedAgentDid,
-    selectedBehaviorId: shell.selectedBehaviorId,
-    selectedSessionId: shell.selectedSessionId,
-    selectedSessionSummary: null,
-    deployments: [],
-    selectedDeployment: null,
-    sending: false,
+    stores,
     session: null,
-    userRequestIds: new Set(),
-    syncHealth: null,
+    userRequestIds: NO_REQUESTS,
   });
   return (
     <MemoryNavProvider
@@ -423,3 +442,5 @@ function reselect(shell: Shell, patch: Partial<DesktopSessionSnapshot>): Shell {
     ...selectedSessionFields({ ...readSession(shell.sessionStore)!, ...patch }),
   };
 }
+
+const NO_REQUESTS: ReadonlySet<string> = new Set();

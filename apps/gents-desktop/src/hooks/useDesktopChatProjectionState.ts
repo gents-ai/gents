@@ -1,87 +1,77 @@
 import { useCallback, useEffect, useMemo, useState, type SetStateAction } from "react";
+import { useStore } from "zustand";
 
-import {
-  projectChatShell,
-  reconcileProjectedWorkflow,
-  type ChatWorkflowState,
-  type OptimisticPendingTurn,
-} from "@source-inc/gents-desktop-chat";
-import type {
-  SessionSummary,
-  DeploymentView,
-  SyncHealthView,
-} from "@source-inc/gents-desktop-client";
-import {
-  isTerminalTurnState,
-  projectDeploymentOperationalState,
-  selectedBehaviorReadinessDecision,
-} from "@source-inc/gents-desktop-client";
-import { trackedRequestIdForSession } from "./desktopShellRuntime";
+import { reconcileProjectedWorkflow } from "@source-inc/gents-desktop-chat";
+
+import { setterOf } from "./chatStore";
 import { createDraftStore, readDraft, writeDraft } from "./draftStore";
 import type { SessionHeader } from "./sessionStore";
+import { projectShell, summaryIn, type ShellStores } from "./shellProjection";
 
 type ChatProjectionStateOptions = {
-  clientAvailable: boolean;
-  selectedAgentDid: string | null;
-  selectedBehaviorId: string | null;
-  selectedSessionSummary: SessionSummary | null;
-  selectedDeployment: DeploymentView | null;
-  selectedSessionId: string | null;
-  sending: boolean;
+  stores: ShellStores;
+  /** the selected session's header, while the held read is the selected one */
   session: SessionHeader | null;
   /** the requests whose user row the transcript holds */
   userRequestIds: ReadonlySet<string>;
-  syncHealth: SyncHealthView | null;
 };
 
 /** Own local compose state and reconcile it with the bounded durable projection. */
 export function useDesktopChatProjectionState({
-  clientAvailable,
-  selectedAgentDid,
-  selectedBehaviorId,
-  selectedSessionSummary,
-  selectedDeployment,
-  selectedSessionId,
-  sending,
+  stores,
   session,
   userRequestIds,
-  syncHealth,
 }: ChatProjectionStateOptions) {
-  const [localWorkflow, setLocalWorkflow] = useState<ChatWorkflowState>({
-    kind: "ready",
-  });
-  const [optimisticPendingTurn, setOptimisticPendingTurn] =
-    useState<OptimisticPendingTurn | null>(null);
+  const selection = useStore(stores.selection);
+  const agentDid = selection.agentDid;
+  const node = useStore(stores.fleet, (s) =>
+    agentDid ? (s.nodes[agentDid] ?? null) : null,
+  );
+  const sessionSummary = useStore(stores.fleet, (s) =>
+    summaryIn(s, agentDid, selection.sessionId),
+  );
+  const clientAvailable = useStore(stores.client, (s) => Boolean(s.snapshot?.client));
+  const syncHealth = useStore(
+    stores.client,
+    (s) => s.snapshot?.client?.syncHealth ?? null,
+  );
+  const { localWorkflow, sending, optimisticPendingTurn } = useStore(stores.chat);
+  const [setLocalWorkflow] = useState(() => setterOf(stores.chat, "localWorkflow"));
+  const [setOptimisticPendingTurn] = useState(() =>
+    setterOf(stores.chat, "optimisticPendingTurn"),
+  );
+  const [setSending] = useState(() => setterOf(stores.chat, "sending"));
+
+  /* the same pure projection an action reads when it runs */
+  const projection = useMemo(
+    () =>
+      projectShell({
+        clientAvailable,
+        syncHealth,
+        selection,
+        node,
+        sessionSummary,
+        session,
+        localWorkflow,
+        sending,
+      }),
+    [
+      clientAvailable,
+      syncHealth,
+      selection,
+      node,
+      sessionSummary,
+      session,
+      localWorkflow,
+      sending,
+    ],
+  );
+
   const [draftStore] = useState(createDraftStore);
-  const operationalState = useMemo(
-    () =>
-      selectedDeployment
-        ? projectDeploymentOperationalState(
-            selectedDeployment,
-            selectedBehaviorId,
-            syncHealth,
-          )
-        : null,
-    [selectedBehaviorId, selectedDeployment, syncHealth],
-  );
-  const behaviorReadiness =
-    operationalState?.behaviorReadiness ??
-    selectedBehaviorReadinessDecision(null, selectedBehaviorId);
-  const retryOperationalState = useMemo(
-    () =>
-      selectedDeployment
-        ? projectDeploymentOperationalState(
-            selectedDeployment,
-            session?.behaviorId ?? null,
-            syncHealth,
-          )
-        : null,
-    [selectedDeployment, session?.behaviorId, syncHealth],
-  );
   const draftContextKey = JSON.stringify(
-    selectedSessionId
-      ? ["session", selectedAgentDid, selectedSessionId]
-      : ["new", selectedAgentDid, behaviorReadiness.behaviorId],
+    selection.sessionId
+      ? ["session", agentDid, selection.sessionId]
+      : ["new", agentDid, projection.behaviorReadiness.behaviorId],
   );
   /* the draft itself is read by the composer, not here: the workflow does
      not depend on it, and a keystroke must not re-render the shell */
@@ -93,55 +83,12 @@ export function useDesktopChatProjectionState({
     () => readDraft(draftStore, draftContextKey),
     [draftStore, draftContextKey],
   );
-  const shellProjection = useMemo(() => {
-    return projectChatShell({
-      clientAvailable,
-      selectedAgentDid,
-      selectedSessionId,
-      sending,
-      session,
-      selectedSessionSummary,
-      localWorkflow,
-      operationalState,
-    });
-  }, [
-    clientAvailable,
-    localWorkflow,
-    selectedAgentDid,
-    selectedSessionSummary,
-    operationalState,
-    selectedSessionId,
-    sending,
-    session,
-  ]);
-  const retryShellProjection = useMemo(() => {
-    return projectChatShell({
-      clientAvailable,
-      selectedAgentDid,
-      selectedSessionId,
-      sending,
-      session,
-      selectedSessionSummary,
-      localWorkflow,
-      operationalState: retryOperationalState,
-    });
-  }, [
-    clientAvailable,
-    localWorkflow,
-    retryOperationalState,
-    selectedAgentDid,
-    selectedSessionSummary,
-    selectedDeployment,
-    selectedSessionId,
-    sending,
-    session,
-  ]);
 
   useEffect(() => {
     setLocalWorkflow((current) =>
-      reconcileProjectedWorkflow(current, shellProjection.workflow),
+      reconcileProjectedWorkflow(current, projection.shellProjection.workflow),
     );
-  }, [shellProjection.workflow]);
+  }, [projection.shellProjection.workflow, setLocalWorkflow]);
 
   /* the optimistic turn stands in for a sent message until the transcript
      holds its durable row; derived, so it ends whichever arrives first */
@@ -154,12 +101,6 @@ export function useDesktopChatProjectionState({
       ? optimisticPendingTurn
       : null;
 
-  const selectedTrackedRequestId =
-    trackedRequestIdForSession(selectedSessionId, shellProjection.workflow) ??
-    (!isTerminalTurnState(shellProjection.turnState)
-      ? shellProjection.activeRequestId
-      : null);
-
   return {
     draftStore,
     draftContextKey,
@@ -167,12 +108,14 @@ export function useDesktopChatProjectionState({
     setDraft,
     localWorkflow,
     setLocalWorkflow,
+    sending,
+    setSending,
     optimisticPendingTurn: visiblePendingTurn,
     setOptimisticPendingTurn,
-    operationalState,
-    behaviorReadiness,
-    shellProjection,
-    retryShellProjection,
-    selectedTrackedRequestId,
+    operationalState: projection.operationalState,
+    behaviorReadiness: projection.behaviorReadiness,
+    shellProjection: projection.shellProjection,
+    retryShellProjection: projection.retryShellProjection,
+    selectedTrackedRequestId: projection.trackedRequestId,
   };
 }

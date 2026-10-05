@@ -356,7 +356,7 @@ export function projectRouteOperationalStatus(
 }
 
 export function projectDeploymentOperationalState(
-  deployment: DeploymentView,
+  deployment: DeploymentSettings,
   selectedBehaviorId: string | null = null,
   syncHealth: SyncHealthView | null = null,
 ): DeploymentOperationalState {

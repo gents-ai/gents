@@ -1,0 +1,39 @@
+import type { SetStateAction } from "react";
+import { createStore, type StoreApi } from "zustand/vanilla";
+
+import type {
+  ChatWorkflowState,
+  OptimisticPendingTurn,
+} from "@source-inc/gents-desktop-chat";
+
+/** The compose side of a chat: the submission workflow the client runs
+    locally, whether a send is in flight, and the turn shown for a sent
+    message until the transcript holds it. */
+export type ChatState = {
+  localWorkflow: ChatWorkflowState;
+  sending: boolean;
+  optimisticPendingTurn: OptimisticPendingTurn | null;
+};
+
+export type ChatStore = StoreApi<ChatState>;
+
+export function createChatStore(initial: Partial<ChatState> = {}) {
+  return createStore<ChatState>(() => ({
+    localWorkflow: { kind: "ready" },
+    sending: false,
+    optimisticPendingTurn: null,
+    ...initial,
+  }));
+}
+
+/** A setter for one field, taking a value or an updater, as React's did. */
+export function setterOf<K extends keyof ChatState>(store: ChatStore, key: K) {
+  return (next: SetStateAction<ChatState[K]>) =>
+    store.setState((state) => {
+      const value =
+        typeof next === "function"
+          ? (next as (current: ChatState[K]) => ChatState[K])(state[key])
+          : next;
+      return Object.is(value, state[key]) ? state : { [key]: value };
+    });
+}

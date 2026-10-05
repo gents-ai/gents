@@ -1,10 +1,4 @@
-import {
-  useCallback,
-  useRef,
-  useState,
-  type MutableRefObject,
-  type SetStateAction,
-} from "react";
+import { useCallback, useRef, useState, type SetStateAction } from "react";
 
 import type {
   DesktopApiAdapter,
@@ -22,13 +16,16 @@ import {
 } from "./desktopTimelinePaging";
 import type { SessionLoadState } from "../lib/loadingStatus";
 import type { SelectionStore } from "./selectionStore";
-import { createSessionStore, readSession, writeSession } from "./sessionStore";
+import { readSession, writeSession, type SessionStore } from "./sessionStore";
 
 type SessionProjectionOptions = {
   api: DesktopApiAdapter;
   /** the selection, read when a read lands */
   store: SelectionStore;
-  selectedTrackedRequestIdRef: MutableRefObject<string | null>;
+  /** where the selected session's reads land */
+  sessionStore: SessionStore;
+  /** the request being tracked now, read when a live read is asked for */
+  trackedRequestId: () => string | null;
   setError: (error: string | null) => void;
 };
 
@@ -38,12 +35,11 @@ const MAX_HIDDEN_PAGE_HOPS = 8;
 export function useDesktopSessionProjection({
   api,
   store,
-  selectedTrackedRequestIdRef,
+  sessionStore,
+  trackedRequestId,
   setError,
 }: SessionProjectionOptions) {
   const refreshSeq = useRef(0);
-  /* the selected session's reads land here; screens select what they draw */
-  const [sessionStore] = useState(() => createSessionStore());
   const [sessionLoad, setSessionLoad] = useState<SessionLoadState>({
     phase: "idle",
     sessionId: null,
@@ -93,7 +89,7 @@ export function useDesktopSessionProjection({
       const next = await api.fetchSessionSnapshot(
         nextSessionId,
         agentDid,
-        selectedTrackedRequestIdRef.current,
+        trackedRequestId(),
         { limit: SESSION_TIMELINE_PAGE_SIZE },
       );
       const stillCurrent =
@@ -147,7 +143,7 @@ export function useDesktopSessionProjection({
 
   async function refreshSessionLiveDelta(): Promise<boolean> {
     const current = readSession(sessionStore);
-    const requestId = selectedTrackedRequestIdRef.current;
+    const requestId = trackedRequestId();
     if (!current || !requestId || !api.fetchSessionLiveDelta) return false;
     const request = sessionLiveDeltaRequest(current, requestId);
     if (!request) return false;
@@ -175,7 +171,7 @@ export function useDesktopSessionProjection({
         const older = await api.fetchSessionSnapshot(
           current.sessionId,
           current.agentDid ?? store.getState().agentDid,
-          selectedTrackedRequestIdRef.current,
+          trackedRequestId(),
           { limit: SESSION_TIMELINE_PAGE_SIZE, beforeItemKey: cursor },
         );
         if (!older || store.getState().sessionId !== current.sessionId) return false;

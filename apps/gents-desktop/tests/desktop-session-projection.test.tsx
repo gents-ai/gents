@@ -8,7 +8,11 @@ import type {
 } from "@source-inc/gents-desktop-client";
 import { useDesktopSessionProjection } from "../src/hooks/useDesktopSessionProjection";
 import { createSelectionStore } from "../src/hooks/selectionStore";
-import { readSession } from "../src/hooks/sessionStore";
+import {
+  createSessionStore,
+  readSession,
+  type SessionStore,
+} from "../src/hooks/sessionStore";
 
 function session(
   keys: string[],
@@ -61,7 +65,8 @@ function renderProjection(
     useDesktopSessionProjection({
       api,
       store,
-      selectedTrackedRequestIdRef: { current: "request-1" },
+      sessionStore: sessionStores.get(api) ?? remember(api),
+      trackedRequestId: () => "request-1",
       setError: vi.fn(),
     }),
   );
@@ -410,3 +415,12 @@ describe("useDesktopSessionProjection", () => {
     ).toEqual(["other"]);
   });
 });
+
+/* one session store per test's api, since the hook's options are rebuilt on
+   every render */
+const sessionStores = new WeakMap<object, SessionStore>();
+function remember(api: object) {
+  const store = createSessionStore();
+  sessionStores.set(api, store);
+  return store;
+}

@@ -22,7 +22,10 @@ import { isMobileTauriShell, ownsAutomaticRecovery } from "../lib/shellPlatform"
 import { createSnapshotPublicationOwner } from "./desktopSnapshotPublication";
 import { useIncompatibleHome } from "./useIncompatibleHome";
 import type { SelectionStore } from "./selectionStore";
-import { applyFleetSnapshot, createFleetStore } from "./fleetStore";
+import { useStore } from "zustand";
+
+import type { ClientStore } from "./clientStore";
+import { applyFleetSnapshot, type FleetStore } from "./fleetStore";
 
 export type { DesktopStartupPhase } from "../lib/loadingStatus";
 
@@ -32,6 +35,9 @@ type ClientLifecycleOptions = {
   refreshSession: (sessionId: string | null) => Promise<DesktopSessionSnapshot | null>;
   /** the selection, read when a restart finishes */
   store: SelectionStore;
+  /** where each read is published: the client as read, and its fleet by key */
+  client: ClientStore;
+  fleet: FleetStore;
   setError: (error: string | null) => void;
   setSession: (next: SetStateAction<DesktopSessionSnapshot | null>) => void;
 };
@@ -42,6 +48,8 @@ export function useDesktopClientLifecycle({
   supportsManagedServer,
   refreshSession,
   store,
+  client,
+  fleet,
   setError,
   setSession,
 }: ClientLifecycleOptions) {
@@ -63,16 +71,14 @@ export function useDesktopClientLifecycle({
   const startupPhaseRef = useRef<DesktopStartupPhase>(initialStartupPhase);
   const startClientInFlight = useRef<Promise<DesktopClientSnapshot> | null>(null);
   const initializationInFlight = useRef<Promise<void> | null>(null);
-  const [snapshot, setSnapshot] = useState<DesktopClientSnapshot | null>(null);
-  /* the same read, by key: nodes, sessions and mailbox items keep their
-     identity while unchanged, with lineage indexed once per read */
-  const [fleet] = useState(() => createFleetStore());
+  const snapshot = useStore(client, (state) => state.snapshot);
   const snapshotPublicationRef = useRef<
     ReturnType<typeof createSnapshotPublicationOwner> | undefined
   >(undefined);
   snapshotPublicationRef.current ??= createSnapshotPublicationOwner((next) => {
+    /* by key first, so a screen reading the fleet sees the same read */
     applyFleetSnapshot(fleet, next);
-    setSnapshot(next);
+    client.setState({ snapshot: next });
     setLoading(false);
     resolveStartupPhase(next);
   });
@@ -338,7 +344,6 @@ export function useDesktopClientLifecycle({
     lastP2PAutoRestartAt,
     lastObservedP2PHealth,
     snapshot,
-    fleet,
     mutateSnapshot,
     startupPhase,
     loading,

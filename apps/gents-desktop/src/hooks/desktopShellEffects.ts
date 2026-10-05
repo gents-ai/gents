@@ -42,7 +42,8 @@ type DesktopShellEffectsArgs = {
   selectedSessionId: string | null;
   /** the selection, read when an observed result lands */
   store: SelectionStore;
-  selectedTrackedRequestIdRef: MutableRefObject<string | null>;
+  /** the request being tracked now, read when an update lands */
+  trackedRequestId: () => string | null;
   selectedTrackedRequestId: string | null;
   sending: boolean;
   setLocalWorkflow: (workflow: ChatWorkflowState) => void;
@@ -75,7 +76,7 @@ export function useDesktopShellEffects({
   selectedDeployment,
   selectedSessionId,
   store,
-  selectedTrackedRequestIdRef,
+  trackedRequestId,
   selectedTrackedRequestId,
   sending,
   setLocalWorkflow,
@@ -174,7 +175,7 @@ export function useDesktopShellEffects({
     selectedSessionId,
     store,
     selectedTrackedRequestId,
-    selectedTrackedRequestIdRef,
+    trackedRequestId,
     setError,
   });
 
