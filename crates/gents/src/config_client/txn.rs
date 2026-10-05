@@ -415,6 +415,7 @@ impl Drop for RollbackOnDrop {
 async fn begin_embedded_owned<F, Fut>(
     runner: Arc<dyn query::QueryExecutor>,
     node_identity: Option<String>,
+    read_only: bool,
     write_guard: Option<MutationWriteGuard>,
     cancellation_rollback_scheduled: Arc<AtomicBool>,
     after_begin: F,
@@ -436,7 +437,10 @@ where
     };
     let handle = tokio::time::timeout(
         EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
-        defra_core::current_identity::with_scoped_identity(node_identity, runner.begin_txn(false)),
+        defra_core::current_identity::with_scoped_identity(
+            node_identity,
+            runner.begin_txn(read_only),
+        ),
     )
     .await
     .map_err(|_| embedded_phase_timeout("begin", EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT))?
@@ -571,6 +575,7 @@ pub struct ConfigApplyTxn<'a> {
 enum EmbeddedTransactionPurpose {
     Mutation,
     ExecutionRenewal,
+    ReadOnly,
 }
 
 impl<'a> ConfigApplyTxn<'a> {
@@ -772,16 +777,20 @@ impl<'a> ConfigApplyTxn<'a> {
         cancellation_rollback_scheduled: Arc<AtomicBool>,
         purpose: EmbeddedTransactionPurpose,
     ) -> Result<Self> {
+        let read_only = matches!(purpose, EmbeddedTransactionPurpose::ReadOnly);
         let write_guard = match purpose {
             EmbeddedTransactionPurpose::Mutation => {
                 Some(mutation_write_gate(node).acquire(operation).await?)
             }
-            EmbeddedTransactionPurpose::ExecutionRenewal => None,
+            EmbeddedTransactionPurpose::ExecutionRenewal | EmbeddedTransactionPurpose::ReadOnly => {
+                None
+            }
         };
         let runner = node.runner().clone();
         let (rollback_on_drop, handle) = tokio::spawn(begin_embedded_owned(
             runner,
             node.node_identity_did().map(str::to_owned),
+            read_only,
             write_guard,
             cancellation_rollback_scheduled,
             |_| std::future::ready(()),
@@ -1817,6 +1826,41 @@ impl ConfigAccess {
                         operation,
                         rollback,
                         EmbeddedTransactionPurpose::Mutation,
+                    )
+                    .await
+                })
+            },
+            callback,
+        )
+        .await
+        .map(expect_committed)
+    }
+
+    /// Native snapshot reads retain the supplied ACP DID without taking the
+    /// mutation gate. DefraDB's native read-only transaction rejects mutations.
+    pub async fn transact_local_readonly<'a, T, F>(
+        node: &'a EmbeddedNode,
+        identity: Option<Did>,
+        operation: &'static str,
+        callback: F,
+    ) -> Result<T>
+    where
+        T: Send + 'a,
+        F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T>> + Send + 'a,
+    {
+        transact_owned(
+            operation,
+            WriteBackend::Embedded,
+            TransactionMode::ConflictRetry,
+            move |operation, rollback| {
+                let identity = identity.clone();
+                Box::pin(async move {
+                    ConfigApplyTxn::begin_local_owned(
+                        node,
+                        identity,
+                        operation,
+                        rollback,
+                        EmbeddedTransactionPurpose::ReadOnly,
                     )
                     .await
                 })
