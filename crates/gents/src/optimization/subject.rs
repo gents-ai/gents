@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde_json::Value;
 
-use crate::document_config::PackConfig;
+use crate::document_config::{EvalDefinition, EvalSplit, PackConfig, TriggerSource};
 use crate::eval::runner::freeze::{load_pack, write_pack_files};
 use crate::eval::runner::CellSource;
 use crate::optimization::target::{JobTarget, TargetField};
@@ -97,6 +97,53 @@ pub fn materialize_pack(
         target_id,
         prompt_asset,
     })
+}
+
+/// `Optimization.missingTaskSeedSplits` over the baseline pack's configured
+/// seed routes. Filter matching and group completion remain runtime evidence.
+pub(crate) fn missing_task_seed_splits(
+    config: &PackConfig,
+    target: &JobTarget,
+    definition: &EvalDefinition,
+) -> Vec<EvalSplit> {
+    let JobTarget::Task(task_id) = target else {
+        return Vec::new();
+    };
+    let task_enabled = config
+        .tasks
+        .iter()
+        .any(|task| task.task_id == *task_id && task.enabled);
+    let collections: Vec<&str> = config
+        .triggers
+        .iter()
+        .filter(|trigger| trigger.enabled && trigger.task_id == *task_id)
+        .filter_map(|trigger| match &trigger.source {
+            TriggerSource::Event { event_source_id } => Some(event_source_id),
+            TriggerSource::Schedule { .. } => None,
+        })
+        .flat_map(|id| {
+            config.event_sources.iter().filter_map(move |source| {
+                (source.event_source_id == *id
+                    && source.event_kind.as_deref().unwrap_or("created") == "created")
+                    .then_some(source.source_collection.as_str())
+            })
+        })
+        .collect();
+    [EvalSplit::Train, EvalSplit::Validation]
+        .into_iter()
+        .filter(|split| {
+            !task_enabled
+                || !definition.cases.iter().any(|case| {
+                    case.split == *split
+                        && case.stages.iter().any(|stage| {
+                            stage
+                                .seed
+                                .as_ref()
+                                .is_some_and(|seed| collections.contains(&seed.collection.as_str()))
+                        })
+                })
+        })
+        .collect()
 }
 
 /// The raw target field of `target_id`'s document in `pack_config.json`.
@@ -262,6 +309,95 @@ pub(crate) mod tests {
     }
 
     pub(crate) const FIXTURE_TEMPLATE: &str = "Plan {{ doc.goal }} for {{ doc.owner }}.\n";
+
+    #[test]
+    fn task_seed_coverage_matches_lean_for_canonical_pack_and_definition_inputs() {
+        let rows = &crate::lean_vocab_test::lean_optimization_cases().seed_coverage;
+        assert!(!rows.is_empty());
+        for row in rows {
+            let triggers: Vec<Value> = row
+                .triggers
+                .iter()
+                .enumerate()
+                .map(|(index, trigger)| {
+                    let source = match &trigger.event_source_id {
+                        Some(id) => json!({"kind": "event", "event_source_id": id}),
+                        None => json!({"kind": "schedule", "schedule_id": "scheduled"}),
+                    };
+                    json!({
+                        "agent_did": OWNER,
+                        "trigger_id": format!("trigger-{index}"),
+                        "task_id": trigger.task_id,
+                        "enabled": trigger.enabled,
+                        "source": source,
+                    })
+                })
+                .collect();
+            let sources: Vec<Value> = row
+                .sources
+                .iter()
+                .map(|source| {
+                    json!({
+                        "agent_did": OWNER,
+                        "event_source_id": source.event_source_id,
+                        "source_collection": source.source_collection,
+                        "event_kind": source.event_kind,
+                    })
+                })
+                .collect();
+            let config: PackConfig = serde_json::from_value(json!({
+                "agent_principal": {"agent_did": OWNER},
+                "tasks": [{
+                    "agent_did": OWNER, "task_id": "target", "behavior_id": "monitor",
+                    "prompt_template": "Work", "enabled": row.task_enabled,
+                }],
+                "triggers": triggers,
+                "event_sources": sources,
+            }))
+            .unwrap();
+            let cases: Vec<Value> = row
+                .cases
+                .iter()
+                .enumerate()
+                .map(|(index, case)| {
+                    let mut stages = vec![json!({
+                        "stage_id": "prompt", "prompt": "Work", "deadline_secs": 1,
+                    })];
+                    stages.extend(case.seed_collections.iter().enumerate().map(
+                        |(index, collection)| {
+                            json!({
+                                "stage_id": format!("seed-{index}"), "deadline_secs": 1,
+                                "seed": {"collection": collection, "document": {"value": "work"}},
+                            })
+                        },
+                    ));
+                    json!({
+                        "case_id": format!("case-{index}"), "split": case.split,
+                        "fixtures": {"documents": [{"collection": "Work", "document": {"value": "fixture"}}]},
+                        "stages": stages,
+                    })
+                })
+                .collect();
+            let definition = serde_json::from_value(json!({
+                "definition_id": "coverage", "agent_did": OWNER, "comparability_version": 1,
+                "subject": {"kind": "behavior", "inference_slots": ["primary"]},
+                "fixtures": {"documents": [{"collection": "Work", "document": {"value": "shared fixture"}}]},
+                "cases": cases,
+            }))
+            .unwrap();
+            let target = row
+                .target_task
+                .as_ref()
+                .map_or(JobTarget::Context, |task| JobTarget::Task(task.clone()));
+            assert_eq!(
+                serde_json::to_value(missing_task_seed_splits(&config, &target, &definition))
+                    .unwrap(),
+                json!(row.missing_splits),
+                "{}",
+                row.name,
+            );
+        }
+    }
 
     /// The fixture pack with one task of the monitor behavior, its prompt
     /// template in a sidecar or inline in `pack_config.json`, fired by an

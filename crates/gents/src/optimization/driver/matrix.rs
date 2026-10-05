@@ -702,9 +702,7 @@ pub(crate) async fn accepting_harness(job_id: &str) -> (Harness, JobRequest) {
 
 pub(crate) const CANDIDATE_TEMPLATE: &str = "Do {{ doc.goal }} for {{ doc.owner }}, and say why.\n";
 
-/// [`accepting_harness`] for a task prompt template target: the live task
-/// `plan` of the monitor behavior and a pack holding it as a sidecar.
-pub(crate) async fn accepting_task_harness(job_id: &str) -> (Harness, JobRequest) {
+async fn task_harness() -> (Harness, PathBuf) {
     use crate::optimization::subject::tests::{write_task_fixture_pack, FIXTURE_TEMPLATE};
     let harness = Harness::new().await;
     harness
@@ -739,6 +737,97 @@ pub(crate) async fn accepting_task_harness(job_id: &str) -> (Harness, JobRequest
         .await;
     let pack = harness.jobs_dir.parent().unwrap().join("task-subject");
     write_task_fixture_pack(&pack, false);
+    (harness, pack)
+}
+
+async fn install_task_definition(harness: &Harness, seeded_splits: &[&str]) {
+    let mut value = definition(DEFINITION, "captured_rows_count", &VALIDATION_CASES, 1);
+    for case in value["cases"].as_array_mut().unwrap() {
+        if seeded_splits.contains(&case["split"].as_str().unwrap()) {
+            let stage = &mut case["stages"][0];
+            stage["prompt"] = json!("");
+            stage["seed"] = json!({
+                "collection": "PlanItem", "document": {"goal": "plan work", "owner": "operator"},
+            });
+        }
+    }
+    harness
+        .install(vec![(Collection::EvalDefinition, value)])
+        .await;
+}
+
+#[tokio::test]
+async fn an_unexercised_task_target_is_refused_before_any_job_or_trial_is_created() {
+    let (harness, pack) = task_harness().await;
+    let rows = &crate::lean_vocab_test::lean_optimization_cases().seed_coverage;
+    let scenarios = rows.iter().filter(|row| {
+        matches!(
+            row.name.as_str(),
+            "task_prompt_only"
+                | "only_train_seeds"
+                | "only_validation_seeds"
+                | "only_held_out_seeds"
+        )
+    });
+    assert_eq!(scenarios.clone().count(), 4);
+    for row in scenarios {
+        let seeded_splits: Vec<&str> = row
+            .cases
+            .iter()
+            .filter(|case| !case.seed_collections.is_empty())
+            .map(|case| case.split.as_str())
+            .collect();
+        install_task_definition(&harness, &seeded_splits).await;
+        let request = JobRequest {
+            baseline_pack: pack.clone(),
+            target: JobTarget::Task("plan".into()),
+            ..harness.request(&row.name, DEFINITION, budgets(1_000))
+        };
+        let executor = base_executor();
+        let proposer = repeating_proposer(CANDIDATE_TEMPLATE);
+        let error = drive(
+            &harness,
+            &request,
+            &executor,
+            &proposer,
+            &CheckRegistry::builtin(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+        let reason = &super::job_refused(&error)
+            .unwrap_or_else(|| panic!("{error:#}"))
+            .0;
+        assert!(reason.contains("task target \"plan\""), "{reason}");
+        assert!(
+            reason.contains(&format!(
+                "in the {} split",
+                row.missing_splits.join(" and ")
+            )),
+            "{}: {reason}",
+            row.name,
+        );
+        assert!(executor.calls.lock().unwrap().is_empty());
+        assert!(proposer.calls.lock().unwrap().is_empty());
+        assert!(load_job(harness.access(), OWNER, &request.job_id)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(!super::job_dir(&request.jobs_dir, &request.job_id).exists());
+    }
+    let rows = harness
+        .access()
+        .execute("{ EvalRun { run_id } }")
+        .await
+        .unwrap();
+    assert_eq!(rows["data"]["EvalRun"], json!([]));
+}
+
+/// [`accepting_harness`] for a task prompt template target: the live task
+/// `plan` of the monitor behavior and a pack holding it as a sidecar.
+pub(crate) async fn accepting_task_harness(job_id: &str) -> (Harness, JobRequest) {
+    let (harness, pack) = task_harness().await;
+    install_task_definition(&harness, &["train", "validation", "held_out"]).await;
     let executor = script(base_executor(), "baseline", &VALIDATION_CASES, |_| fail());
     let request = JobRequest {
         baseline_pack: pack,

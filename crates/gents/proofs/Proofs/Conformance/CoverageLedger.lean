@@ -830,6 +830,16 @@ def caseCoverage : List CoverageEntry :=
       "optimization::policy::tests::gates_costs_and_decisions_match_lean")
       "optimization" [Surface.operatorCli]
   , tagged (consumerCoverage
+      "optimization_cases"
+      "OptimizationCases"
+      "optimization::subject::tests::task_seed_coverage_matches_lean_for_canonical_pack_and_definition_inputs")
+      "optimization" [Surface.operatorCli]
+  , tagged (consumerCoverage
+      "optimization_cases"
+      "OptimizationCases"
+      "optimization::driver::matrix::an_unexercised_task_target_is_refused_before_any_job_or_trial_is_created")
+      "optimization" [Surface.operatorCli]
+  , tagged (consumerCoverage
       "tool_policy_cases"
       "ToolPolicyCases"
       "conformance::generated_tool_policy_cases_match_lean_composition")
