@@ -1013,6 +1013,15 @@ impl ObservedStage {
     }
 }
 
+#[derive(Debug)]
+enum StageSubmission {
+    Submitted {
+        request_id: String,
+        remaining: Duration,
+    },
+    Failed(OutcomeKind),
+}
+
 async fn submit_and_observe(
     spec: &TrialSpec,
     cancel: &CancellationToken,
@@ -1030,12 +1039,18 @@ async fn submit_and_observe(
     // request it observes gets the remainder.
     let submit = async {
         match &stage.seed {
-            Some(seed) => seed_and_await_fire(home, ready, seed, deadline).await,
+            Some(seed) => {
+                seed_and_await_fire(home, ready, seed, deadline, &spec.trial_id, &stage.stage_id)
+                    .await
+            }
             None => {
                 let request_id = uuid::Uuid::new_v4().to_string();
                 submit_stage(&home.node, locator, &spec.behavior_id, stage, &request_id)
                     .await
-                    .map(|()| (request_id, deadline))
+                    .map(|()| StageSubmission::Submitted {
+                        request_id,
+                        remaining: deadline,
+                    })
             }
         }
     };
@@ -1047,7 +1062,16 @@ async fn submit_and_observe(
         submitted = submit => submitted,
     };
     let (request_id, remaining) = match submitted {
-        Ok(submitted) => submitted,
+        Ok(StageSubmission::Submitted {
+            request_id,
+            remaining,
+        }) => (request_id, remaining),
+        Ok(StageSubmission::Failed(kind)) => {
+            return ObservedStage {
+                failure_kind: Some(kind),
+                ..ObservedStage::unsubmitted()
+            };
+        }
         Err(error) => {
             tracing::warn!(
                 error = %format!("{error:#}"),
@@ -1187,6 +1211,7 @@ async fn submit_and_observe(
                     &home.node,
                     &locator.trial_agent_did,
                     &stage_started,
+                    None,
                     &spec.trial_id,
                     &stage.stage_id,
                 )
@@ -1440,17 +1465,26 @@ fn provider_reason(
 /// asynchronously after the fire, so an error recorded after the stage is read
 /// is attributed to the next stage, and one recorded after the final stage is
 /// not attributed at all.
+/// A seed wait supplies its physical source ID: another fire in the same
+/// trial, including one attempted in the same timestamp second, is unrelated.
 async fn trigger_failure(
     node: &EmbeddedNode,
     agent_did: &str,
     since: &str,
+    source_doc_id: Option<&str>,
     trial_id: &str,
     stage_id: &str,
 ) -> Option<OutcomeKind> {
     let agent_did = escape_graphql_string(agent_did);
     let since = escape_graphql_string(since);
+    let source_filter = source_doc_id.map_or_else(String::new, |doc_id| {
+        format!(
+            r#", last_fired_source_doc_id: {{ _eq: "{}" }}"#,
+            escape_graphql_string(doc_id)
+        )
+    });
     let query = format!(
-        r#"{{ Trigger(filter: {{ agent_did: {{ _eq: "{agent_did}" }}, last_status: {{ _eq: "error" }}, last_attempt_at: {{ _geq: "{since}" }} }}) {{ trigger_id last_attempt_at last_status last_error }} }}"#
+        r#"{{ Trigger(filter: {{ agent_did: {{ _eq: "{agent_did}" }}, last_status: {{ _eq: "error" }}, last_attempt_at: {{ _geq: "{since}" }}{source_filter} }}) {{ trigger_id last_attempt_at last_fired_source_doc_id last_status last_error }} }}"#
     );
     let errored = match graphql_with_transaction_retry(node, &query, "eval trial trigger status")
         .await
@@ -1563,7 +1597,9 @@ async fn seed_and_await_fire(
     ready: &watch::Receiver<Reconciled>,
     seed: &FixtureDocument,
     deadline: Duration,
-) -> Result<(String, Duration)> {
+    trial_id: &str,
+    stage_id: &str,
+) -> Result<StageSubmission> {
     let reconciled = tokio::time::timeout(
         RUNTIME_READY_TIMEOUT,
         ready.clone().wait_for(Option::is_some),
@@ -1576,6 +1612,7 @@ async fn seed_and_await_fire(
         anyhow::bail!("the trial runtime's event sources did not reconcile: {error}");
     }
     let access = ConfigAccess::Local(home.node.clone());
+    let since = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let doc_id = create_document(
         &access,
         "eval.trial.seed_document",
@@ -1587,7 +1624,22 @@ async fn seed_and_await_fire(
     let started = Instant::now();
     loop {
         if let Some(request_id) = fired_request(&home.node, &doc_id).await? {
-            return Ok((request_id, deadline.saturating_sub(started.elapsed())));
+            return Ok(StageSubmission::Submitted {
+                request_id,
+                remaining: deadline.saturating_sub(started.elapsed()),
+            });
+        }
+        if let Some(kind) = trigger_failure(
+            &home.node,
+            home.did(),
+            &since,
+            Some(&doc_id),
+            trial_id,
+            stage_id,
+        )
+        .await
+        {
+            return resolve_seed_failure(&home.node, &doc_id, kind, deadline, started).await;
         }
         anyhow::ensure!(
             started.elapsed() < deadline,
@@ -1596,6 +1648,25 @@ async fn seed_and_await_fire(
         );
         tokio::time::sleep(POLL).await;
     }
+}
+
+/// Request publication and trigger bookkeeping are observed in separate read
+/// snapshots. A matching request committed during the status read takes
+/// precedence over a delayed failure from an earlier fire attempt.
+async fn resolve_seed_failure(
+    node: &EmbeddedNode,
+    doc_id: &str,
+    kind: OutcomeKind,
+    deadline: Duration,
+    started: Instant,
+) -> Result<StageSubmission> {
+    Ok(match fired_request(node, doc_id).await? {
+        Some(request_id) => StageSubmission::Submitted {
+            request_id,
+            remaining: deadline.saturating_sub(started.elapsed()),
+        },
+        None => StageSubmission::Failed(kind),
+    })
 }
 
 /// The earliest request an event trigger fired for the seed document: the
@@ -2002,6 +2073,20 @@ fn count(total: usize) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn assert_failure_class(
+        observed: Option<OutcomeKind>,
+        kind: OutcomeKind,
+        class: crate::eval::EvidenceClass,
+    ) {
+        assert_eq!(observed, Some(kind));
+        let modeled = crate::lean_vocab_test::lean_eval_outcome_cases()
+            .iter()
+            .find(|case| case.kind == kind.as_str() && case.provider_reason.is_none())
+            .expect("the Lean model classifies every outcome without a provider reason");
+        assert_eq!(modeled.class, class.as_str());
+        assert_eq!(crate::eval::classify(kind, None).as_str(), modeled.class);
+    }
 
     #[test]
     fn a_trial_ceiling_grants_bash_only_when_the_definition_asks_for_it() {
@@ -2932,7 +3017,11 @@ mod tests {
 
         assert_eq!(evidence.stage_id, "only");
         assert_eq!(evidence.request_id, None);
-        assert_eq!(evidence.failure_kind, Some(OutcomeKind::Infrastructure));
+        assert_failure_class(
+            evidence.failure_kind,
+            OutcomeKind::Infrastructure,
+            crate::eval::EvidenceClass::NotEvidence,
+        );
         let CaptureResult::Documents { rows } = &evidence.captures["requests"] else {
             panic!("expected a document capture, got {:?}", evidence.captures);
         };
@@ -3005,13 +3094,13 @@ mod tests {
         let home = EmbeddedHome::create_temp("trigger-error").await.unwrap();
         let since = "2026-06-01T00:00:00Z";
         assert_eq!(
-            trigger_failure(&home.node, home.did(), since, "t1", "only").await,
+            trigger_failure(&home.node, home.did(), since, None, "t1", "only").await,
             None
         );
 
         seed_trigger(&home, "healthy", "fired", None, since).await;
         assert_eq!(
-            trigger_failure(&home.node, home.did(), since, "t1", "only").await,
+            trigger_failure(&home.node, home.did(), since, None, "t1", "only").await,
             None
         );
 
@@ -3024,15 +3113,315 @@ mod tests {
         )
         .await;
         assert_eq!(
-            trigger_failure(&home.node, home.did(), since, "t1", "only").await,
+            trigger_failure(&home.node, home.did(), since, None, "t1", "only").await,
             Some(OutcomeKind::Runtime)
         );
         assert_eq!(
-            trigger_failure(&home.node, "did:key:zSomeoneElse", since, "t1", "only").await,
+            trigger_failure(
+                &home.node,
+                "did:key:zSomeoneElse",
+                since,
+                None,
+                "t1",
+                "only"
+            )
+            .await,
             None,
             "another principal's trigger is not this trial's"
         );
         home.node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_seed_template_failure_ends_the_stage_before_its_deadline() {
+        let backend = crate::support::streaming_backend::MockStreamingBackend::start_with_plans(
+            "frozen-model",
+            Vec::new(),
+        )
+        .unwrap();
+        let mut inference = frozen_binding(json!("frozen-profile"));
+        inference.backend["endpoint"] = json!(backend.endpoint());
+        let dir = tempfile::tempdir().unwrap();
+        let pack_dir = dir.path().join("pack");
+        write_slot_pack(&pack_dir, "gents:inference-slot:primary");
+        let path = pack_dir.join("pack_config.json");
+        let mut config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        config["tasks"] = json!([{
+            "task_id": "seed-task",
+            "behavior_id": "subject",
+            "prompt_template": "{{ doc.payload.required }}"
+        }]);
+        config["event_sources"] = json!([{
+            "event_source_id": "seed-source",
+            "source_collection": "EvalSeed"
+        }]);
+        config["triggers"] = json!([{
+            "trigger_id": "seed-trigger",
+            "task_id": "seed-task",
+            "source": {"kind": "event", "event_source_id": "seed-source"}
+        }]);
+        std::fs::write(path, serde_json::to_vec(&config).unwrap()).unwrap();
+        let spec = TrialSpec {
+            pack_digest: materialized_digest(&pack_dir),
+            pack_dir,
+            behavior_id: "subject".into(),
+            inference,
+            ..TrialSpec::empty_for_tests("seed-template-failure")
+        };
+        let home = EmbeddedHome::create_temp("seed-template-failure")
+            .await
+            .unwrap();
+        let workspace = dir.path().join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        install_schema(
+            &ConfigAccess::Local(home.node.clone()),
+            "type EvalSeed { payload: JSON }",
+        )
+        .await
+        .unwrap();
+        install(&spec, &home, &workspace).await.unwrap();
+        let (event_sources_ready, ready) = watch::channel(None);
+        let options = DocumentRuntimeOptions {
+            runtime_snapshot_observer: Some(Arc::new(EventSourcesReady(event_sources_ready))),
+            ..Default::default()
+        };
+        let (runtime, _agent) = crate::eval::runner::embedded::home::boot_runtime_within(
+            &home,
+            home.identity.clone(),
+            options,
+            Duration::from_secs(30),
+        )
+        .await
+        .unwrap();
+        let locator = TrialLocator {
+            trial_agent_did: home.did().to_owned(),
+            session_id: "seed-session".into(),
+            home_hint: None,
+        };
+        let stage = StageSpec {
+            stage_id: "seed".into(),
+            prompt: String::new(),
+            seed: Some(FixtureDocument {
+                collection: "EvalSeed".into(),
+                document: json!({"payload": {}}),
+            }),
+            deadline_secs: 600,
+            settle: false,
+            continuation: None,
+            review_previous: false,
+            captures: vec![Capture::Documents {
+                name: "trigger".into(),
+                collection: "Trigger".into(),
+                filter: json!({"trigger_id": {"_eq": "seed-trigger"}}),
+                fields: vec![
+                    "last_status".into(),
+                    "last_error".into(),
+                    "last_fired_source_doc_id".into(),
+                ],
+            }],
+        };
+        let result = tokio::time::timeout(
+            Duration::from_secs(30),
+            run_stage(
+                &spec,
+                &CancellationToken::new(),
+                &home,
+                &runtime,
+                &locator,
+                &workspace,
+                &stage,
+                &ready,
+            ),
+        )
+        .await;
+        tokio::time::timeout(Duration::from_secs(30), runtime.shutdown())
+            .await
+            .unwrap_or_else(|_| {
+                panic!(
+                    "fixture runtime did not stop; stage: {result:?}; event sources: {:?}",
+                    *ready.borrow()
+                )
+            })
+            .unwrap();
+        home.node.shutdown().await;
+
+        let evidence = result.expect("the failed trigger must end the seed wait promptly");
+        assert_failure_class(
+            evidence.failure_kind,
+            OutcomeKind::Runtime,
+            crate::eval::EvidenceClass::Fail,
+        );
+        assert_eq!(evidence.request_id, None);
+        assert!(evidence.inference_calls.is_empty());
+        assert!(backend.observed_completion_bodies().is_empty());
+        let CaptureResult::Documents { rows } = &evidence.captures["trigger"] else {
+            panic!("the failed stage must retain its trigger evidence");
+        };
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["last_status"], "error");
+        assert!(
+            rows[0]["last_error"]
+                .as_str()
+                .is_some_and(|error| error.contains("template:")),
+            "{rows:?}"
+        );
+        assert!(rows[0]["last_fired_source_doc_id"].as_str().is_some());
+    }
+
+    #[tokio::test]
+    async fn a_seed_ignores_unrelated_and_stale_trigger_errors() {
+        let home = EmbeddedHome::create_temp("seed-trigger-scope")
+            .await
+            .unwrap();
+        let since = "2026-06-01T00:00:00Z";
+        let source = "seed-\"current";
+        for (trigger_id, doc_id, attempted) in [
+            ("unrelated", "another-seed", since),
+            ("stale", source, "2026-01-01T00:00:00Z"),
+        ] {
+            seed_trigger(
+                &home,
+                trigger_id,
+                "error",
+                Some("unrelated failure"),
+                attempted,
+            )
+            .await;
+            crate::document_config::update_trigger_runtime_fields(
+                &home.node,
+                home.did(),
+                trigger_id,
+                crate::document_config::TriggerRuntimeUpdate {
+                    last_fired_source_doc_id: Some(doc_id.into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        }
+        assert_eq!(
+            trigger_failure(&home.node, home.did(), since, Some(source), "t1", "seed").await,
+            None
+        );
+        crate::document_config::update_trigger_runtime_fields(
+            &home.node,
+            home.did(),
+            "stale",
+            crate::document_config::TriggerRuntimeUpdate {
+                last_attempt_at: Some(since.into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_failure_class(
+            trigger_failure(&home.node, home.did(), since, Some(source), "t1", "seed").await,
+            OutcomeKind::Runtime,
+            crate::eval::EvidenceClass::Fail,
+        );
+        home.node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn an_unreadable_seed_trigger_status_is_infrastructure() {
+        let node = EmbeddedNode::builder().build().await.unwrap();
+        let failure = trigger_failure(
+            &node,
+            "did:key:trial",
+            "2026-06-01T00:00:00Z",
+            Some("seed"),
+            "t1",
+            "seed",
+        )
+        .await;
+        node.shutdown().await;
+        assert_failure_class(
+            failure,
+            OutcomeKind::Infrastructure,
+            crate::eval::EvidenceClass::NotEvidence,
+        );
+    }
+
+    #[tokio::test]
+    async fn a_request_published_between_seed_observations_takes_precedence() {
+        let home = EmbeddedHome::create_temp("seed-observation-race")
+            .await
+            .unwrap();
+        let access = ConfigAccess::Local(home.node.clone());
+        install_schema(&access, "type RaceSeed { label: String }")
+            .await
+            .unwrap();
+        let doc_id = create_document(
+            &access,
+            "eval.test.seed_race",
+            "RaceSeed",
+            &json!({"label": "race"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(fired_request(&home.node, &doc_id).await.unwrap(), None);
+
+        create_document(
+            &access,
+            "eval.test.seed_race_lineage",
+            "AgentRequest",
+            &json!({
+                "request_id": "fired",
+                "agent_did": home.did(),
+                "requester_did": home.did(),
+                "behavior_id": "seeded-behavior",
+                "session_id": "s-1",
+                "content": "x",
+                "execution_origin": "event",
+                "lifecycle_state": "completed",
+                "created_at": "2026-01-01T00:00:00Z",
+                "caused_by_source_doc_id": doc_id,
+            }),
+        )
+        .await
+        .unwrap();
+        let since = "2026-06-01T00:00:00Z";
+        seed_trigger(
+            &home,
+            "seed-trigger",
+            "error",
+            Some("earlier attempt"),
+            since,
+        )
+        .await;
+        crate::document_config::update_trigger_runtime_fields(
+            &home.node,
+            home.did(),
+            "seed-trigger",
+            crate::document_config::TriggerRuntimeUpdate {
+                last_fired_source_doc_id: Some(doc_id.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let failure = trigger_failure(&home.node, home.did(), since, Some(&doc_id), "t1", "seed")
+            .await
+            .expect("the second observation sees the delayed trigger failure");
+        let resolved = resolve_seed_failure(
+            &home.node,
+            &doc_id,
+            failure,
+            Duration::from_secs(600),
+            Instant::now(),
+        )
+        .await
+        .unwrap();
+        home.node.shutdown().await;
+        let StageSubmission::Submitted {
+            request_id,
+            remaining,
+        } = resolved
+        else {
+            panic!("the committed request must take precedence: {resolved:?}");
+        };
+        assert_eq!(request_id, "fired");
+        assert!(!remaining.is_zero());
     }
 
     #[test]
@@ -3066,7 +3455,15 @@ mod tests {
         seed_trigger(&home, "stale", "error", Some("old"), "2026-01-01T00:00:00Z").await;
 
         assert_eq!(
-            trigger_failure(&home.node, home.did(), "2026-06-01T00:00:00Z", "t1", "only").await,
+            trigger_failure(
+                &home.node,
+                home.did(),
+                "2026-06-01T00:00:00Z",
+                None,
+                "t1",
+                "only"
+            )
+            .await,
             None
         );
         home.node.shutdown().await;
