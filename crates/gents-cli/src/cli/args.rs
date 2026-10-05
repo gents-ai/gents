@@ -4113,6 +4113,11 @@ pub(crate) struct EvalTrialArgs {
     pub(crate) trial_index: Option<u32>,
     #[arg(long)]
     pub(crate) json: bool,
+    #[arg(
+        long,
+        help = "Read original request content and lineage from the finished trial's retained home (maximum 1000 requests)"
+    )]
+    pub(crate) requests: bool,
     #[command(flatten)]
     pub(crate) scope: EvalScopeArgs,
 }

@@ -90,6 +90,34 @@ impl EmbeddedHome {
         let identity: Arc<dyn AgentIdentity> = Arc::new(
             KeyIdentity::load_or_create(path.join("node.key"), None).context("node identity")?,
         );
+        Self::open_with_identity(path, p2p, identity, true).await
+    }
+
+    pub(super) async fn open_for_inspection(dir: &Path, expected_did: &str) -> Result<Self> {
+        ensure!(
+            dir.is_dir(),
+            "retained trial home {} is missing",
+            dir.display()
+        );
+        crate::storage_backend::require_existing_store(dir)?;
+        let identity: Arc<dyn AgentIdentity> = Arc::new(
+            KeyIdentity::load_existing(dir.join("node.key"), None)
+                .context("loading the retained trial identity")?,
+        );
+        ensure!(
+            identity.did() == expected_did,
+            "retained trial identity {} does not match recorded DID {expected_did}",
+            identity.did()
+        );
+        Self::open_with_identity(dir.to_path_buf(), None, identity, false).await
+    }
+
+    async fn open_with_identity(
+        path: PathBuf,
+        p2p: Option<P2PConfigForPath>,
+        identity: Arc<dyn AgentIdentity>,
+        initialize_schemas: bool,
+    ) -> Result<Self> {
         let did = identity.did().to_string();
         let mut builder = EmbeddedNode::builder()
             .data_path(&path)
@@ -99,9 +127,11 @@ impl EmbeddedHome {
             builder = builder.with_p2p(p2p(&path));
         }
         let node = Arc::new(builder.build().await.context("embedded node")?);
-        ensure_runtime_schemas(&node)
-            .await
-            .context("runtime schemas")?;
+        if initialize_schemas {
+            ensure_runtime_schemas(&node)
+                .await
+                .context("runtime schemas")?;
+        }
         Ok(Self {
             node,
             identity,

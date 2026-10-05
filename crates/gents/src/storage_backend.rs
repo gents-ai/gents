@@ -131,6 +131,18 @@ pub fn reject_legacy_store(data_path: &Path) -> Result<()> {
     }
 }
 
+/// Refuse to open a new store when a caller only intends to inspect retained
+/// data. The backend otherwise creates an empty database in a key-only home.
+pub(crate) fn require_existing_store(data_path: &Path) -> Result<()> {
+    reject_legacy_store(data_path)?;
+    anyhow::ensure!(
+        data_path.join("MANIFEST").is_file(),
+        "{} has no existing database",
+        data_path.display()
+    );
+    Ok(())
+}
+
 /// The store refusal carried by `error`, if any: a legacy-backend rejection,
 /// an identity key refused for unsafe permissions (reported at the key's
 /// path), or the migration engine refusing a lineage it does not know. The engine
@@ -263,6 +275,24 @@ mod tests {
 
         std::fs::write(tempdir.path().join("MANIFEST"), b"REGOMAN\x01rest").unwrap();
         reject_legacy_store(tempdir.path()).unwrap();
+    }
+
+    #[test]
+    fn inspection_requires_an_existing_compatible_store() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let error = require_existing_store(tempdir.path()).unwrap_err();
+        assert!(error.to_string().contains("has no existing database"));
+        assert_eq!(std::fs::read_dir(tempdir.path()).unwrap().count(), 0);
+
+        std::fs::write(tempdir.path().join("MANIFEST"), b"REGOMAN\x01rest").unwrap();
+        require_existing_store(tempdir.path()).unwrap();
+
+        std::fs::write(tempdir.path().join("CURRENT"), "MANIFEST-000005\n").unwrap();
+        let error = require_existing_store(tempdir.path()).unwrap_err();
+        assert_eq!(
+            incompatible_store(&error, tempdir.path()).map(|store| store.kind),
+            Some(IncompatibleStoreKind::LegacyRocksDb)
+        );
     }
 
     /// A Regolith store written by an older build: a managed collection

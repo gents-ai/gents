@@ -363,37 +363,15 @@ impl TrialExecutor for EmbeddedExecutor {
     /// caught.
     async fn recollect(&self, at: &TrialLocator, captures: &[Capture]) -> Option<TrialEvidence> {
         let hint = at.home_hint.as_deref()?;
-        let trial_dir = self.runs_dir.join(hint);
+        let trial_dir = match super::inspect::retained_trial_dir(&self.runs_dir, hint) {
+            Ok(dir) => dir,
+            Err(error) => {
+                tracing::warn!(home_hint = hint, %error, "eval trial home hint is invalid");
+                return None;
+            }
+        };
         let dir = trial_dir.join("home");
         let workspace = workspace_dir(&trial_dir);
-        // Read back from the database, so it is checked the way `collect_files`
-        // checks a glob: lexically, then by where the trial directory, its home
-        // and its workspace resolve, since a symlink under `runs_dir` can lead
-        // out of it. A path that is not there resolves nowhere: a missing home
-        // is reported as unreadable when it is opened, and a missing workspace
-        // only leaves the file captures empty.
-        let resolved_runs = self.runs_dir.canonicalize();
-        let outside = |path: &Path| match path.canonicalize() {
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
-            resolved => !resolved.is_ok_and(|resolved| {
-                resolved_runs
-                    .as_ref()
-                    .is_ok_and(|runs| resolved.starts_with(runs))
-            }),
-        };
-        if !Path::new(hint)
-            .components()
-            .all(|component| matches!(component, Component::Normal(_)))
-            || outside(&trial_dir)
-            || outside(&dir)
-            || outside(&workspace)
-        {
-            tracing::warn!(
-                home_hint = hint,
-                "eval trial home hint does not resolve inside the runs directory"
-            );
-            return None;
-        }
         let home =
             match opened(move || async move { EmbeddedHome::open_retained(&dir).await }).await {
                 Ok(home) => home,

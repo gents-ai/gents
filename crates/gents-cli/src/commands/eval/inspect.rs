@@ -195,6 +195,8 @@ pub(crate) struct TrialView {
     /// counted one: the counted attempt is the latest completed one, so a
     /// retry in flight has no verdicts here yet.
     pub(crate) verdicts: Vec<TrialVerdict>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) requests: Option<Vec<gents::eval::runner::embedded::RetainedRequest>>,
 }
 
 pub(super) async fn trial(
@@ -238,6 +240,31 @@ pub(super) async fn trial(
             &right.verdict_id,
         ))
     });
+    let requests = if args.requests {
+        let trials = gents::eval::load_trials(&ctx.access, &ctx.owner, &args.run_id).await?;
+        let trial = trials
+            .iter()
+            .find(|trial| trial.identity.trial_id == latest.trial_id)
+            .context("trial disappeared while inspecting the run")?;
+        anyhow::ensure!(
+            trial.completion.is_some(),
+            "trial {} is still active or unfinished; request inspection requires a finished trial",
+            latest.trial_id
+        );
+        Some(
+            gents::eval::runner::embedded::inspect_retained_requests(
+                &ctx.runs_dir(),
+                &gents::eval::runner::TrialLocator {
+                    trial_agent_did: latest.trial_agent_did.clone(),
+                    session_id: latest.session_id.clone(),
+                    home_hint: latest.home_hint.clone(),
+                },
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
     let view = TrialView {
         run_id: args.run_id.clone(),
         cell_id: args.cell.clone(),
@@ -247,6 +274,7 @@ pub(super) async fn trial(
             .map(|hint| ctx.runs_dir().join(hint)),
         slot: slot.clone(),
         verdicts,
+        requests,
     };
     if args.json {
         write_json(out, &view)
@@ -437,6 +465,7 @@ mod tests {
         assert_eq!(json["slot"]["trial_index"], 0);
         assert_eq!(json["verdicts"][0]["reason_code"], "in_range");
         assert_eq!(json["verdicts"][0]["raw"]["count"], 1);
+        assert!(json.get("requests").is_none());
 
         let cancelled = CancellationToken::new();
         cancelled.cancel();
@@ -446,6 +475,116 @@ mod tests {
             .unwrap_err();
         assert!(
             error.to_string().contains("has no attempt yet"),
+            "{error:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn trial_requests_read_original_content_without_changing_eval_records() {
+        use gents::eval::runner::embedded::EmbeddedHome;
+        use gents::eval::runner::{ScriptedExecutor, TrialLocator};
+        use gents::graphql::escape_graphql_string;
+        use gents::ConfigAccess;
+
+        let fixture = Fixture::new().await;
+        let path = fixture.ctx.runs_dir().join("retained/home");
+        let home = EmbeddedHome::create_retained(&path).await.unwrap();
+        let did = home.did().to_owned();
+        let prompt = "Inspect the original \"request\"\nwithout another model turn.";
+        ConfigAccess::write_local(&home.node, "eval.cli.test.retained_request", &format!(
+            r#"mutation {{ create_AgentRequest(input: {{ request_id: "child", purpose: "normal", agent_did: "{}", session_id: "child-session", content: "{}", lifecycle_state: "completed", retry_root_request: "root", caused_by_parent_request_id: "parent", caused_by_parent_tool_call_id: "tool", caused_by_source_doc_id: "source", created_at: "2026-01-01T00:00:00Z" }}) {{ _docID }} }}"#,
+            escape_graphql_string(&did), escape_graphql_string(prompt),
+        )).await.unwrap();
+        home.node.shutdown().await;
+        drop(home);
+        let mut evidence = ScriptedExecutor::passed_evidence(
+            &did,
+            "check",
+            "findings",
+            vec![serde_json::json!({})],
+        );
+        evidence.locator = TrialLocator {
+            trial_agent_did: did.clone(),
+            session_id: "session".into(),
+            home_hint: Some("retained".into()),
+        };
+        let scripted = ScriptedExecutor::new().with_default(evidence);
+        let mut request = fixture.request("r1");
+        request.cells.truncate(1);
+        request.case_ids = Some(vec!["val-a".into()]);
+        request.trials_per_case = 1;
+        gents::eval::runner::run(
+            &fixture.ctx.access,
+            &request,
+            &scripted,
+            &gents::eval::checks::CheckRegistry::builtin(),
+            CancellationToken::new(),
+            &super::super::testing::fast(),
+        )
+        .await
+        .unwrap();
+        let records_before =
+            gents::eval::load_trials(&fixture.ctx.access, &fixture.ctx.owner, "r1")
+                .await
+                .unwrap();
+        let verdicts_before =
+            gents::eval::load_verdicts(&fixture.ctx.access, &fixture.ctx.owner, "r1")
+                .await
+                .unwrap();
+        let json: serde_json::Value = serde_json::from_str(
+            &eval(
+                &fixture,
+                &["trial", "r1", "baseline", "val-a", "--requests", "--json"],
+            )
+            .await
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(json["requests"][0]["content"], prompt);
+        assert_eq!(json["requests"][0]["agent_did"], did);
+        assert_eq!(json["requests"][0]["retry_root_request"], "root");
+        assert_eq!(json["requests"][0]["caused_by_parent_request_id"], "parent");
+        assert_eq!(json["requests"][0]["caused_by_source_doc_id"], "source");
+        assert!(json["requests"][0]["request_doc_id"]
+            .as_str()
+            .is_some_and(|id| !id.is_empty()));
+        let text = eval(
+            &fixture,
+            &["trial", "r1", "baseline", "val-a", "--requests"],
+        )
+        .await
+        .unwrap();
+        assert!(text.contains(prompt), "{text}");
+        assert!(text.contains("retry_root root"), "{text}");
+        assert!(text.contains("parent_request parent"), "{text}");
+        assert!(text.contains("source_document source"), "{text}");
+        assert_eq!(
+            gents::eval::load_trials(&fixture.ctx.access, &fixture.ctx.owner, "r1")
+                .await
+                .unwrap(),
+            records_before
+        );
+        assert_eq!(
+            gents::eval::load_verdicts(&fixture.ctx.access, &fixture.ctx.owner, "r1")
+                .await
+                .unwrap(),
+            verdicts_before
+        );
+
+        let mut active = records_before[0].identity.clone();
+        active.attempt += 1;
+        active.trial_id = "unfinished-inspection".into();
+        gents::eval::create_trial(&fixture.ctx.access, &fixture.ctx.owner, &active)
+            .await
+            .unwrap();
+        let error = eval(
+            &fixture,
+            &["trial", "r1", "baseline", "val-a", "--requests"],
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("still active or unfinished"),
             "{error:#}"
         );
     }
