@@ -30,6 +30,7 @@ impl ToolCallLifecycle {
         let mutation = format!(
             r#"mutation {{
                 update_AgentToolCall(
+                    docID: "{escaped_doc_id}",
                     filter: {{
                         _docID: {{ _eq: "{escaped_doc_id}" }},
                         lifecycle_state: {{ _eq: "running" }},
@@ -91,6 +92,7 @@ impl ToolCallLifecycle {
         let mutation = format!(
             r#"mutation {{
                 update_AgentToolCall(
+                    docID: "{escaped_doc_id}",
                     filter: {{
                         _docID: {{ _eq: "{escaped_doc_id}" }},
                         lifecycle_state: {{ _eq: "running" }},
