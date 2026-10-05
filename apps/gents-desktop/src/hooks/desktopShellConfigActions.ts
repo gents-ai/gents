@@ -34,33 +34,24 @@ import { actionFailure, shownFailure } from "./desktopShellRuntime";
 type ConfigActionParams = {
   api: DesktopApiAdapter;
   setError: Dispatch<SetStateAction<string | null>>;
-  setSavingBehaviorConfig: Dispatch<SetStateAction<boolean>>;
-  setSavingConfig: Dispatch<SetStateAction<boolean>>;
   mutateSnapshot: <T>(operation: () => Promise<T>) => Promise<T>;
 };
 
 export function createDesktopShellConfigActions({
   api,
   setError,
-  setSavingBehaviorConfig,
-  setSavingConfig,
   mutateSnapshot,
 }: ConfigActionParams) {
-  /** A configuration change: busy while it runs, a fresh read once it lands,
-      and one report if it fails, naming what failed. The caller still sees
-      the failure, to keep what the person typed. */
-  async function change<T>(label: string, run: () => Promise<T>, behavior = false) {
-    if (behavior) setSavingBehaviorConfig(true);
-    setSavingConfig(true);
+  /** A configuration change: a fresh read once it lands, and one report if
+      it fails, naming what failed. The caller still sees the failure, to keep
+      what the person typed. */
+  async function change<T>(label: string, run: () => Promise<T>) {
     setError(null);
     try {
       return await mutateSnapshot(run);
     } catch (error) {
       setError(actionFailure(label, error));
       throw shownFailure(error);
-    } finally {
-      if (behavior) setSavingBehaviorConfig(false);
-      setSavingConfig(false);
     }
   }
 
@@ -81,7 +72,7 @@ export function createDesktopShellConfigActions({
     onSetDefaultBehavior: (request: DefaultBehaviorSetRequest) =>
       change("set the default behavior", () => api.setDefaultBehavior(request)),
     onSaveBehaviorConfig: (request: BehaviorSaveRequest) =>
-      change("save the behavior", () => api.saveBehaviorConfig(request), true),
+      change("save the behavior", () => api.saveBehaviorConfig(request)),
     onSaveSkillConfig: (request: SkillSaveRequest) =>
       change("save the skill", () => api.saveSkillConfig(request)),
     onDeleteSkillConfig: (request: SkillDeleteRequest) =>

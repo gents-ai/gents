@@ -1,4 +1,4 @@
-import type { Dispatch, MutableRefObject, SetStateAction } from "react";
+import type { Dispatch, SetStateAction } from "react";
 
 import type {
   DesktopApiAdapter,
@@ -18,10 +18,7 @@ type TaskActionParams = {
   captureComposeIntent: () => number;
   mutateSnapshot: <T>(operation: () => Promise<T>) => Promise<T>;
   refreshSnapshot: () => Promise<void>;
-  runningTaskCountRef: MutableRefObject<number>;
   setError: Dispatch<SetStateAction<string | null>>;
-  setRunningTask: Dispatch<SetStateAction<boolean>>;
-  setSavingConfig: Dispatch<SetStateAction<boolean>>;
 };
 
 export function createDesktopShellTaskActions({
@@ -30,21 +27,8 @@ export function createDesktopShellTaskActions({
   captureComposeIntent,
   mutateSnapshot,
   refreshSnapshot,
-  runningTaskCountRef,
   setError,
-  setRunningTask,
-  setSavingConfig,
 }: TaskActionParams) {
-  function beginTaskRun() {
-    runningTaskCountRef.current += 1;
-    setRunningTask(true);
-  }
-
-  function finishTaskRun() {
-    runningTaskCountRef.current = Math.max(0, runningTaskCountRef.current - 1);
-    if (runningTaskCountRef.current === 0) setRunningTask(false);
-  }
-
   async function observeAcceptedRun(kind: "task" | "schedule") {
     try {
       await refreshSnapshot();
@@ -55,18 +39,15 @@ export function createDesktopShellTaskActions({
     }
   }
 
-  /** A configuration change: busy while it runs, a fresh read once it lands,
-      and one report if it fails, naming what failed. */
+  /** A configuration change: a fresh read once it lands, and one report if
+      it fails, naming what failed. */
   async function change<T>(label: string, run: () => Promise<T>) {
-    setSavingConfig(true);
     setError(null);
     try {
       return await mutateSnapshot(run);
     } catch (error) {
       setError(actionFailure(label, error));
       throw shownFailure(error);
-    } finally {
-      setSavingConfig(false);
     }
   }
 
@@ -80,7 +61,6 @@ export function createDesktopShellTaskActions({
 
   async function onRunSchedule(request: ScheduleRunRequest): Promise<TaskRunResult> {
     const intentGeneration = captureComposeIntent();
-    beginTaskRun();
     setError(null);
     try {
       const result = await api.runSchedule(request);
@@ -90,8 +70,6 @@ export function createDesktopShellTaskActions({
       if (!acceptsComposeIntent(intentGeneration)) throw err;
       setError(actionFailure("run the schedule", err));
       throw shownFailure(err);
-    } finally {
-      finishTaskRun();
     }
   }
 
@@ -105,7 +83,6 @@ export function createDesktopShellTaskActions({
 
   async function onRunTask(request: TaskRunRequest): Promise<TaskRunResult> {
     const intentGeneration = captureComposeIntent();
-    beginTaskRun();
     setError(null);
     try {
       const result = await api.runTask(request);
@@ -115,8 +92,6 @@ export function createDesktopShellTaskActions({
       if (!acceptsComposeIntent(intentGeneration)) throw err;
       setError(actionFailure("run the task", err));
       throw shownFailure(err);
-    } finally {
-      finishTaskRun();
     }
   }
 

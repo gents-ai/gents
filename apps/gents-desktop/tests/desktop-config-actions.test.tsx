@@ -26,8 +26,6 @@ describe("config action selection boundary", () => {
         api,
         mutateSnapshot: async <T,>(mutation: () => Promise<T>) => mutation(),
         setError: vi.fn(),
-        setSavingBehaviorConfig: vi.fn(),
-        setSavingConfig: vi.fn(),
         // These were formerly part of the factory API. Runtime sentinels prove
         // completion has no hidden path back into route selection.
         setSelectedAgentDid,

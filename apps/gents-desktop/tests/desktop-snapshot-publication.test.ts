@@ -48,8 +48,6 @@ function configActions(
     api,
     mutateSnapshot,
     setError: vi.fn(),
-    setSavingBehaviorConfig: vi.fn(),
-    setSavingConfig: vi.fn(),
     setSelectedAgentDid: vi.fn(),
     setSelectedBehaviorId: vi.fn(),
   });

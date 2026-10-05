@@ -19,8 +19,6 @@ function fixture(runTask: () => Promise<unknown>, runSchedule = runTask) {
     refreshSession: vi.fn(async () => null),
     refreshSnapshot: vi.fn(async () => undefined),
     setError: vi.fn(),
-    setRunningTask: vi.fn(),
-    setSavingConfig: vi.fn(),
     setSelectedSessionId: vi.fn(),
   };
   const actions = createDesktopShellTaskActions({
@@ -33,7 +31,6 @@ function fixture(runTask: () => Promise<unknown>, runSchedule = runTask) {
     api: { runTask, runSchedule },
     mutateSnapshot: async <T>(operation: () => Promise<T>) => operation(),
     captureComposeIntent: () => generation,
-    runningTaskCountRef: { current: 0 },
   } as unknown as Parameters<typeof createDesktopShellTaskActions>[0]);
   return {
     actions,
@@ -90,26 +87,6 @@ describe("task and schedule async intent ordering", () => {
 
     expect(f.setSelectedSessionId).not.toHaveBeenCalled();
     expect(f.refreshSession).not.toHaveBeenCalled();
-  });
-
-  it("keeps running state active until every overlapping run completes", async () => {
-    const task = deferred<{ requestId: string }>();
-    const schedule = deferred<{ requestId: string }>();
-    const f = fixture(
-      () => task.promise,
-      () => schedule.promise,
-    );
-    const taskRun = f.actions.onRunTask({ taskId: "task-a", args: {} });
-    const scheduleRun = f.actions.onRunSchedule({ scheduleId: "schedule-a" });
-    expect(f.setRunningTask).toHaveBeenLastCalledWith(true);
-
-    task.resolve({ requestId: "task-request" });
-    await taskRun;
-    expect(f.setRunningTask).not.toHaveBeenCalledWith(false);
-
-    schedule.resolve({ requestId: "schedule-request" });
-    await scheduleRun;
-    expect(f.setRunningTask).toHaveBeenLastCalledWith(false);
   });
 
   it("preserves an accepted mutation when its observation refresh fails", async () => {

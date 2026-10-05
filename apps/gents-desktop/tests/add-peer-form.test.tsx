@@ -16,7 +16,6 @@ const enrollmentRequest: EnrollmentRequestView = {
 
 function renderForm(overrides: Partial<AddPeerFormProps> = {}) {
   const props: AddPeerFormProps = {
-    addingPeer: false,
     disabled: false,
     localError: null,
     onRequestStatusEnrollment: vi.fn(async () => enrollmentRequest),

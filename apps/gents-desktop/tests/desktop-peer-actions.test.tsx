@@ -47,7 +47,6 @@ function usePeerRoute(
     refreshSnapshot: async () => {},
     selectedAgentDidRef,
     selectAgent: route.selectAgent,
-    setAddingPeer: vi.fn(),
     setError: vi.fn(),
     setStarting: vi.fn(),
     snapshot: null,

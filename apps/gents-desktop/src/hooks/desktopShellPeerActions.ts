@@ -13,7 +13,6 @@ type PeerActionParams = {
   ensureDesktopClientStarted: () => Promise<DesktopClientSnapshot>;
   mutateSnapshot: <T>(operation: () => Promise<T>) => Promise<T>;
   refreshSnapshot: () => Promise<void>;
-  setAddingPeer: Dispatch<SetStateAction<boolean>>;
   setError: Dispatch<SetStateAction<string | null>>;
   selectedAgentDidRef: MutableRefObject<string | null>;
   selectAgent: (agentDid: string | null) => void;
@@ -26,7 +25,6 @@ export function createDesktopShellPeerActions({
   ensureDesktopClientStarted,
   mutateSnapshot,
   refreshSnapshot,
-  setAddingPeer,
   setError,
   selectedAgentDidRef,
   selectAgent,
@@ -34,7 +32,6 @@ export function createDesktopShellPeerActions({
 }: PeerActionParams) {
   async function onInitLocalRuntime(label?: string | null) {
     const clientWasRunning = Boolean(snapshot?.client);
-    setAddingPeer(true);
     setStarting(true);
     setError(null);
     try {
@@ -64,7 +61,6 @@ export function createDesktopShellPeerActions({
       throw new Error(message);
     } finally {
       setStarting(false);
-      setAddingPeer(false);
     }
   }
 

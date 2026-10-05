@@ -19,8 +19,6 @@ describe("a failed action", () => {
       api: { saveSkillConfig } as unknown as DesktopApiAdapter,
       mutateSnapshot: async <T>(mutation: () => Promise<T>) => mutation(),
       setError,
-      setSavingBehaviorConfig: vi.fn(),
-      setSavingConfig: vi.fn(),
     });
     return { created, setError };
   };

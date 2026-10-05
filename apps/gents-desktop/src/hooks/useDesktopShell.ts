@@ -36,11 +36,6 @@ export function useDesktopShell({
   const selectedTrackedRequestIdRef = useRef<string | null>(null);
   const [sending, setSending] = useState(false);
   const submissionInFlight = useRef(false);
-  const [savingBehaviorConfig, setSavingBehaviorConfig] = useState(false);
-  const [savingConfig, setSavingConfig] = useState(false);
-  const [addingPeer, setAddingPeer] = useState(false);
-  const [runningTask, setRunningTask] = useState(false);
-  const runningTaskCountRef = useRef(0);
   const [error, setError] = useState<string | null>(null);
   // A failed action is reported once, as a toast, by the action itself:
   // it happened where the person clicked and is over. Only the client's own
@@ -229,7 +224,6 @@ export function useDesktopShell({
     refreshSnapshot,
     snapshot,
     ensureDesktopClientStarted,
-    setAddingPeer,
     setError: setActionError,
     selectedAgentDidRef,
     selectAgent,
@@ -270,8 +264,6 @@ export function useDesktopShell({
     api,
     mutateSnapshot,
     setError: setActionError,
-    setSavingBehaviorConfig,
-    setSavingConfig,
   });
 
   const {
@@ -324,10 +316,7 @@ export function useDesktopShell({
     mutateSnapshot,
     captureComposeIntent,
     refreshSnapshot,
-    runningTaskCountRef,
     setError: setActionError,
-    setRunningTask,
-    setSavingConfig,
   });
 
   function onDismissError() {
@@ -348,10 +337,6 @@ export function useDesktopShell({
     starting,
     stopping,
     sending,
-    savingBehaviorConfig,
-    savingConfig,
-    addingPeer,
-    runningTask,
     error,
     onDismissError,
     actionError,
