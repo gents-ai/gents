@@ -1,6 +1,6 @@
 use super::*;
 use crate::cli::{GraphScopeArgs, PackDriftArgs, PackInstallArgs};
-use crate::commands::pack::test_support::fixture_dir;
+use crate::commands::pack::test_support::{assets_pack_dir, fixture_dir};
 use crate::output_format::OutputFormat;
 use serde_json::json;
 
@@ -135,6 +135,208 @@ async fn a_busy_cache_lock_fails_removal_loudly() {
     remove_pkg(home.path(), "fixture/assets_fixture")
         .await
         .expect("the record was untouched by the failed attempt");
+}
+
+#[tokio::test]
+async fn same_name_assets_have_independent_removal_locks() {
+    let home = tempfile::tempdir().unwrap();
+    let mut roots = Vec::new();
+    for namespace in ["acme", "zeta"] {
+        let dir = assets_pack_dir(namespace, "tools", "1.0.0");
+        let installed = install(home.path(), dir.path().to_str().unwrap().to_owned())
+            .await
+            .unwrap();
+        roots.push(std::path::PathBuf::from(
+            installed["installed_assets"].as_str().unwrap(),
+        ));
+    }
+    let _lease = gents::file_lock::FileLock::shared(
+        super::super::cache::cache_lock(roots[1].parent().unwrap()).unwrap(),
+    )
+    .unwrap();
+
+    remove_pkg(home.path(), "acme/tools").await.unwrap();
+    assert!(!roots[0].exists());
+    assert!(roots[1].exists());
+    let error = remove_pkg(home.path(), "zeta/tools").await.unwrap_err();
+    assert!(format!("{error:#}").contains("pack cache is in use"));
+    assert!(gents::pack::read_home_install(home.path(), "zeta/tools")
+        .unwrap()
+        .is_some());
+}
+
+async fn install_unscoped_assets(home: &Path, package: String) -> HomePackInstall {
+    let installed = install(home, package).await.unwrap();
+    let root = Path::new(installed["installed_assets"].as_str().unwrap());
+    let mut record: HomePackInstall = serde_json::from_value(installed["record"].clone()).unwrap();
+    let (_, name) = super::super::split_namespace(&record.coordinate);
+    record.assets = format!(
+        "packs/{name}/{}",
+        gents::pack_archive::digest_hex(&record.digest).unwrap()
+    );
+    let recorded_root = home.join(&record.assets);
+    super::super::test_support::copy_tree(root, &recorded_root).unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+    gents::pack::write_home_install(home, &record).unwrap();
+    record
+}
+
+#[tokio::test]
+async fn recorded_unscoped_assets_use_their_original_lock_and_retention_rules() {
+    let home = tempfile::tempdir().unwrap();
+    let record = install_unscoped_assets(home.path(), assets_fixture_spec()).await;
+    let root = home.path().join(&record.assets);
+    let _lease = gents::file_lock::FileLock::shared(
+        super::super::cache::cache_lock(root.parent().unwrap()).unwrap(),
+    )
+    .unwrap();
+    let error = remove_pkg(home.path(), &record.coordinate)
+        .await
+        .unwrap_err();
+    assert!(format!("{error:#}").contains("pack cache is in use"));
+    assert!(root.exists());
+}
+
+#[tokio::test]
+async fn recorded_unscoped_runs_are_retained_without_relocating_them() {
+    let home = tempfile::tempdir().unwrap();
+    let record = install_unscoped_assets(home.path(), assets_fixture_spec()).await;
+    let root = home.path().join(&record.assets);
+    std::fs::create_dir(root.join("runs")).unwrap();
+    let removed = remove_pkg(home.path(), &record.coordinate).await.unwrap();
+    assert_eq!(
+        removed["removed"]["retained"][0]["reason"],
+        "holds run history"
+    );
+    assert!(root.join("runs").exists());
+}
+
+#[tokio::test]
+async fn recorded_unscoped_assets_are_released_after_verifying_their_contents() {
+    let home = tempfile::tempdir().unwrap();
+    let record = install_unscoped_assets(home.path(), assets_fixture_spec()).await;
+    remove_pkg(home.path(), &record.coordinate).await.unwrap();
+    assert!(!home.path().join(&record.assets).exists());
+}
+
+#[tokio::test]
+async fn removing_a_materialized_pack_preserves_a_digest_named_namespace() {
+    let home = tempfile::tempdir().unwrap();
+    let dir = (0..64)
+        .find_map(|version| {
+            let dir = assets_pack_dir("fixture", "materialized", &format!("1.0.{version}"));
+            let pack = super::super::test_support::local_pack_source(dir.path(), home.path());
+            let namespace = gents::pack_archive::digest_hex(pack.digest()).unwrap();
+            gents::pack::is_valid_pack_name(namespace).then_some(dir)
+        })
+        .expect("a pack digest beginning with a letter");
+    let record =
+        install_unscoped_assets(home.path(), dir.path().to_str().unwrap().to_owned()).await;
+    let namespace = gents::pack_archive::digest_hex(&record.digest).unwrap();
+    let other = assets_pack_dir(namespace, "tools", "1.0.0");
+    let installed = install(home.path(), other.path().to_str().unwrap().to_owned())
+        .await
+        .unwrap();
+    let root = Path::new(installed["installed_assets"].as_str().unwrap());
+    std::fs::create_dir(root.join("runs")).unwrap();
+    let _lease = gents::file_lock::FileLock::shared(
+        super::super::cache::cache_lock(root.parent().unwrap()).unwrap(),
+    )
+    .unwrap();
+
+    remove_pkg(home.path(), &record.coordinate).await.unwrap();
+    assert!(root.join("runs").is_dir());
+    assert!(root.join("manifest.json").is_file());
+    assert!(
+        gents::pack::read_home_install(home.path(), &format!("{namespace}/tools"))
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn releasing_an_unpacked_pack_preserves_recorded_runs_on_every_release() {
+    let home = tempfile::tempdir().unwrap();
+    let dir = assets_pack_dir("fixture", "unpacked", "1.0.0");
+    let record =
+        install_unscoped_assets(home.path(), dir.path().to_str().unwrap().to_owned()).await;
+    let root = home.path().join(&record.assets);
+    std::fs::create_dir(root.join("runs")).unwrap();
+    std::fs::write(root.join("runs/receipt.json"), "retained").unwrap();
+
+    let removed = remove_pkg(home.path(), &record.coordinate).await.unwrap();
+    assert_eq!(
+        removed["removed"]["retained"][0]["reason"],
+        "holds run history"
+    );
+    assert_eq!(removed["removed"]["archives"], json!([record.digest]));
+    let store = gents::pack_store::PackStore::new(home.path());
+    assert!(!store.contains(&record.digest).unwrap());
+    assert!(store.lookup("fixture", "unpacked", None).unwrap().is_none());
+    assert!(!store.release(&record.digest).unwrap());
+    assert_eq!(
+        std::fs::read_to_string(root.join("runs/receipt.json")).unwrap(),
+        "retained"
+    );
+    assert!(root.join("manifest.json").is_file());
+}
+
+#[tokio::test]
+async fn unscoped_receipts_cannot_release_another_namespace_or_modified_assets() {
+    let home = tempfile::tempdir().unwrap();
+    let record = install_unscoped_assets(home.path(), assets_fixture_spec()).await;
+    let mut forged = record.clone();
+    forged.coordinate = "other/assets_fixture".to_owned();
+    gents::pack::write_home_install(home.path(), &forged).unwrap();
+    let error = remove_pkg(home.path(), &forged.coordinate)
+        .await
+        .unwrap_err();
+    assert!(format!("{error:#}").contains("digest belongs to a different pack"));
+    assert!(
+        gents::pack::read_home_install(home.path(), &forged.coordinate)
+            .unwrap()
+            .is_some()
+    );
+
+    let root = home.path().join(&record.assets);
+    std::fs::write(root.join("README.md"), "changed").unwrap();
+    let error = remove_pkg(home.path(), &record.coordinate)
+        .await
+        .unwrap_err();
+    assert!(format!("{error:#}").contains("does not match"));
+    assert!(root.exists());
+}
+
+#[tokio::test]
+async fn forged_asset_paths_do_not_release_files_or_install_receipts() {
+    let home = tempfile::tempdir().unwrap();
+    install(home.path(), assets_fixture_spec()).await.unwrap();
+    let record = gents::pack::read_home_install(home.path(), "fixture/assets_fixture")
+        .unwrap()
+        .unwrap();
+    for assets in [
+        home.path()
+            .join(&record.assets)
+            .to_string_lossy()
+            .into_owned(),
+        record.assets.replace("/fixture/", "/other/"),
+        format!("../{}", record.assets),
+        "packs/store".to_owned(),
+    ] {
+        let mut forged = record.clone();
+        forged.assets = assets;
+        gents::pack::write_home_install(home.path(), &forged).unwrap();
+        let error = remove_pkg(home.path(), &record.coordinate)
+            .await
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("recorded asset path"));
+        assert!(home.path().join(&record.assets).exists());
+        assert!(
+            gents::pack::read_home_install(home.path(), &record.coordinate)
+                .unwrap()
+                .is_some()
+        );
+    }
 }
 
 /// A minimal `plugins`-kind pack directory: one plugin, `name`'s bytes.
