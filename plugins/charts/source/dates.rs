@@ -297,7 +297,8 @@ pub struct TimeTicks {
 
 fn default_pattern(unit: Unit, first: f64, last: f64) -> &'static str {
     let one_year = civil_from_days(split(first).0).0 == civil_from_days(split(last).0).0;
-    let multi_day = last - first > 1.5 * DAY as f64;
+    // Times alone are ambiguous once the range crosses midnight.
+    let multi_day = last - first > 1.5 * DAY as f64 || split(first).0 != split(last).0;
     match unit {
         Unit::Years(_) => "%Y",
         Unit::Months(_) => "%b %Y",
@@ -486,6 +487,25 @@ mod tests {
         let t = check_cover("2024-03-01T08:00:00Z", "2024-03-01T20:00:00Z", 6);
         assert!(t.labels[0].contains(':'));
         assert!(!t.labels[0].contains("Mar"));
+    }
+
+    #[test]
+    fn a_range_that_crosses_midnight_shows_the_date_with_the_clock() {
+        let t = ticks(
+            p("2024-05-01T00:00:00Z"),
+            p("2024-05-02T00:00:00Z"),
+            5,
+            None,
+        );
+        assert_eq!(t.labels.first().map(String::as_str), Some("May 01 00:00"));
+        assert_eq!(t.labels.last().map(String::as_str), Some("May 02 00:00"));
+        let same_day = ticks(
+            p("2024-05-01T08:00:00Z"),
+            p("2024-05-01T20:00:00Z"),
+            5,
+            None,
+        );
+        assert!(!same_day.labels[0].contains("May"), "{:?}", same_day.labels);
     }
 
     #[test]

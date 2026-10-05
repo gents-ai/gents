@@ -93,11 +93,6 @@ pub fn inside(r: &Rect, x: f64, y: f64, eps: f64) -> bool {
     x >= r.x - eps && x <= r.right() + eps && y >= r.y - eps && y <= r.bottom() + eps
 }
 
-/// A fill colour as (r, g, b).
-pub fn rgb(hex: &str) -> (u8, u8, u8) {
-    crate::palette::parse_hex(hex).unwrap_or_else(|| panic!("{hex} is not a colour"))
-}
-
 /// The points of a path made of `M` and `L` commands.
 pub fn path_points(d: &str) -> Vec<(f64, f64)> {
     d.split_whitespace()

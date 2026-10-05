@@ -5,7 +5,6 @@ use base64::Engine as _;
 use serde_json::{Value, json};
 
 use crate::raster;
-use crate::testkit::*;
 use crate::testutil::TempDir;
 
 fn run(json: &str) -> Value {

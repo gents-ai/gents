@@ -18,6 +18,8 @@ pub mod format;
 pub mod frame;
 #[cfg(test)]
 mod frame_tests;
+#[cfg(test)]
+mod fuzz_tests;
 pub mod graph;
 pub mod heatmap;
 pub mod hist;
@@ -36,6 +38,8 @@ mod pie_heat_tests;
 pub mod pipeline;
 #[cfg(test)]
 mod pipeline_tests;
+#[cfg(test)]
+mod proptests;
 pub mod raster;
 pub mod reduce;
 pub mod save;

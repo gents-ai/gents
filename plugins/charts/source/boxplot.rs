@@ -76,6 +76,12 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
             if ycols.is_empty() {
                 return fail("no column of numbers to summarise; name it in y");
             }
+            if ycols.len() > MAX_BOXES {
+                ctx.notes.add(format!(
+                    "there are {} value columns; only the first {MAX_BOXES} are drawn",
+                    ycols.len()
+                ));
+            }
             for c in ycols.into_iter().take(MAX_BOXES) {
                 let n = cols::numeric(t, c);
                 cols::report_numeric(&mut ctx.notes, &t.names[c], &n);
