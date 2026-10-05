@@ -285,9 +285,8 @@ async fn codex_shim_host_runtime_routes_cover_low_risk_paths() -> Result<()> {
         },
     )
     .await?;
-    let _: codex::FuzzyFileSearchSessionUpdateResponse =
-        read_typed_response(&mut ws, request_id(554)).await?;
-    let fuzzy_update = read_fuzzy_file_search_update(&mut ws).await?;
+    let fuzzy_update =
+        read_fuzzy_file_search_exchange(&mut ws, request_id(554), &session_id, "beta").await?;
     assert_eq!(fuzzy_update.session_id, session_id);
     assert_eq!(fuzzy_update.query, "beta");
     assert!(
@@ -297,8 +296,6 @@ async fn codex_shim_host_runtime_routes_cover_low_risk_paths() -> Result<()> {
             .any(|file| file.path == "nested/beta_alpha.md"),
         "fuzzy search session update did not include nested/beta_alpha.md: {fuzzy_update:?}"
     );
-    let fuzzy_completed = read_fuzzy_file_search_completed(&mut ws).await?;
-    assert_eq!(fuzzy_completed.session_id, session_id);
 
     send_client_request(
         &mut ws,
