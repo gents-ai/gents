@@ -18,7 +18,7 @@ const LAKE_BUILD_ATTEMPTS: usize = 3;
 
 const LOCK_FILE_NAME: &str = "gents-lean-contract.lock";
 
-static PROCESS_STDOUT_CACHE: OnceLock<String> = OnceLock::new();
+static PROCESS_STDOUT_CACHE: OnceLock<(PathBuf, String)> = OnceLock::new();
 
 static PROCESS_LOAD_MUTEX: Mutex<()> = Mutex::new(());
 
@@ -50,12 +50,17 @@ pub fn load_contract_stdout() -> Result<String> {
 
 fn load_contract_stdout_for(
     proofs_dir: &Path,
-    cache: &OnceLock<String>,
+    cache: &OnceLock<(PathBuf, String)>,
     flight: &Mutex<()>,
     build: &dyn Fn(&Path) -> Result<()>,
     generate: &dyn Fn(&Path) -> Result<String>,
 ) -> Result<String> {
-    if let Some(cached) = cache.get() {
+    let proofs_dir = canonicalize_proofs_dir(proofs_dir)?;
+    if let Some((root, cached)) = cache.get() {
+        anyhow::ensure!(
+            root == &proofs_dir,
+            "Lean contract cache belongs to another proofs directory"
+        );
         return Ok(cached.clone());
     }
 
@@ -63,15 +68,19 @@ fn load_contract_stdout_for(
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
 
-    if let Some(cached) = cache.get() {
+    if let Some((root, cached)) = cache.get() {
+        anyhow::ensure!(
+            root == &proofs_dir,
+            "Lean contract cache belongs to another proofs directory"
+        );
         return Ok(cached.clone());
     }
 
-    let stdout = with_proofs_dir_lock(proofs_dir, || {
-        build(proofs_dir)?;
-        generate(proofs_dir)
+    let stdout = with_proofs_dir_lock(&proofs_dir, || {
+        build(&proofs_dir)?;
+        generate(&proofs_dir)
     })?;
-    let _ = cache.set(stdout.clone());
+    let _ = cache.set((proofs_dir, stdout.clone()));
     Ok(stdout)
 }
 
@@ -359,9 +368,39 @@ fn acquire_exclusive_lock(lock_path: &Path) -> Result<File> {
     }
 }
 
+/// Cargo supplies the consuming package's manifest paths when running tests
+/// and binaries, independently of their target directory and caller cwd.
+/// Compiled helper paths cannot identify the selected source after artifact
+/// cloning. Direct execution must provide the same explicit runtime anchor.
+/// Repository metadata bounds discovery to the selected checkout.
 pub fn proofs_dir() -> Result<PathBuf> {
-    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let manifest_dir = std::env::var_os("CARGO_MANIFEST_DIR")
+        .map(PathBuf::from)
+        .context("missing runtime CARGO_MANIFEST_DIR for Lean contract source")?;
+    let manifest_path = std::env::var_os("CARGO_MANIFEST_PATH")
+        .map(PathBuf::from)
+        .context("missing runtime CARGO_MANIFEST_PATH for Lean contract source")?;
+    anyhow::ensure!(
+        manifest_dir.is_absolute() && manifest_path.is_absolute(),
+        "runtime Cargo manifest paths must be absolute"
+    );
+    let manifest_dir =
+        std::fs::canonicalize(&manifest_dir).context("invalid runtime CARGO_MANIFEST_DIR")?;
+    let manifest_path =
+        std::fs::canonicalize(&manifest_path).context("invalid runtime CARGO_MANIFEST_PATH")?;
+    anyhow::ensure!(
+        manifest_path.is_file()
+            && manifest_path
+                .file_name()
+                .is_some_and(|name| name == "Cargo.toml")
+            && manifest_path.parent() == Some(manifest_dir.as_path()),
+        "runtime Cargo manifest paths disagree"
+    );
 
+    let repository_root = manifest_dir.ancestors().find(|ancestor| {
+        let metadata = ancestor.join(".git");
+        metadata.is_file() || metadata.is_dir()
+    });
     let direct = manifest_dir.join("proofs");
     if direct.join("lakefile.lean").exists() {
         return Ok(direct);
@@ -372,13 +411,18 @@ pub fn proofs_dir() -> Result<PathBuf> {
         if candidate.join("lakefile.lean").exists() {
             return Ok(candidate);
         }
+        if repository_root == Some(ancestor) {
+            break;
+        }
     }
 
     let sibling = manifest_dir
         .parent()
         .map(|parent| parent.join("gents/proofs"));
     if let Some(candidate) = sibling {
-        if candidate.join("lakefile.lean").exists() {
+        if repository_root.is_none_or(|root| candidate.starts_with(root))
+            && candidate.join("lakefile.lean").exists()
+        {
             return Ok(candidate);
         }
     }
@@ -679,6 +723,190 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).expect("create temp dir");
         dir
+    }
+
+    #[test]
+    fn copied_helper_uses_runtime_manifest_source() {
+        const CHILD: &str = "GENTS_LEAN_CONTRACT_PROVENANCE_CHILD";
+        const EXPECTED: &str = "GENTS_LEAN_CONTRACT_PROVENANCE_EXPECTED";
+        if let Ok(mode) = std::env::var(CHILD) {
+            let expected = PathBuf::from(std::env::var_os(EXPECTED).unwrap());
+            if mode.starts_with("valid") {
+                let actual = proofs_dir().expect("runtime source anchor");
+                assert_eq!(actual, expected);
+                let stdout = load_contract_stdout_for(
+                    &actual,
+                    &PROCESS_STDOUT_CACHE,
+                    &PROCESS_LOAD_MUTEX,
+                    &|_| Ok(()),
+                    &|root| Ok(std::fs::read_to_string(root.join("source-marker"))?),
+                )
+                .unwrap();
+                assert_eq!(stdout, "copied workspace source");
+            } else {
+                let error = proofs_dir().expect_err("invalid anchor must fail closed");
+                let expected_error = if mode.starts_with("relative") {
+                    "runtime Cargo manifest paths must be absolute"
+                } else if mode == "missing nested proofs" || mode == "outside sibling" {
+                    "could not locate crates/gents/proofs"
+                } else {
+                    &mode
+                };
+                assert!(format!("{error:#}").contains(expected_error), "{error:#}");
+            }
+            return;
+        }
+
+        let selected = proofs_dir().expect("normal Cargo test supplies runtime manifest paths");
+        let fixture = unique_temp_dir("copied-provenance");
+        let package = fixture.join("checkout-b/crates/consumer");
+        let proofs = fixture.join("checkout-b/crates/gents/proofs");
+        let other = fixture.join("checkout-c");
+        let target = fixture.join("custom-target/debug/deps");
+        for dir in [&package, &proofs, &other, &target] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        for dir in [&package, &other] {
+            std::fs::write(dir.join("Cargo.toml"), "[package]\nname = \"fixture\"\n").unwrap();
+        }
+        std::fs::write(proofs.join("lakefile.lean"), "").unwrap();
+        std::fs::write(proofs.join("source-marker"), "copied workspace source").unwrap();
+        let outer = fixture.join("outer-checkout");
+        let outer_proofs = outer.join("crates/gents/proofs");
+        let nested_root = outer.join(".gents/workspaces/nested");
+        let nested_package = nested_root.join("crates/consumer");
+        let sibling_root = fixture.join("sibling-checkout");
+        let sibling_package = sibling_root.join("packages/consumer");
+        let sibling_proofs = sibling_root.join("packages/gents/proofs");
+        let direct_package = fixture.join("archive-direct/consumer");
+        let direct_proofs = direct_package.join("proofs");
+        let outside_root = fixture.join("outside-sibling-checkout");
+        for dir in [
+            &nested_package,
+            &sibling_package,
+            &direct_package,
+            &outside_root,
+        ] {
+            std::fs::create_dir_all(dir).unwrap();
+            std::fs::write(dir.join("Cargo.toml"), "[package]\nname = \"fixture\"\n").unwrap();
+        }
+        for root in [&outer, &nested_root, &outside_root] {
+            std::fs::write(root.join(".git"), "gitdir: fixture").unwrap();
+        }
+        std::fs::create_dir(sibling_root.join(".git")).unwrap();
+        for dir in [
+            &outer_proofs,
+            &sibling_proofs,
+            &direct_proofs,
+            &fixture.join("gents/proofs"),
+        ] {
+            std::fs::create_dir_all(dir).unwrap();
+            std::fs::write(dir.join("lakefile.lean"), "").unwrap();
+            std::fs::write(dir.join("source-marker"), "copied workspace source").unwrap();
+        }
+        let proofs = std::fs::canonicalize(proofs).unwrap();
+        assert_ne!(std::fs::canonicalize(selected).unwrap(), proofs);
+        let copied = target.join("copied-helper-tests");
+        std::fs::copy(std::env::current_exe().unwrap(), &copied).unwrap();
+
+        for mode in [
+            "valid",
+            "valid sibling",
+            "valid direct",
+            "missing nested proofs",
+            "outside sibling",
+            "missing runtime CARGO_MANIFEST_DIR",
+            "missing runtime CARGO_MANIFEST_PATH",
+            "invalid runtime CARGO_MANIFEST_DIR",
+            "invalid runtime CARGO_MANIFEST_PATH",
+            "relative directory",
+            "relative manifest",
+            "runtime Cargo manifest paths disagree",
+        ] {
+            let mut command = Command::new(&copied);
+            command
+                .args([
+                    "tests::copied_helper_uses_runtime_manifest_source",
+                    "--exact",
+                    "--nocapture",
+                ])
+                .current_dir(&other)
+                .env(CHILD, mode)
+                .env(EXPECTED, &proofs)
+                .env("CARGO_MANIFEST_DIR", &package)
+                .env("CARGO_MANIFEST_PATH", package.join("Cargo.toml"));
+            match mode {
+                "valid sibling" | "valid direct" | "missing nested proofs" | "outside sibling" => {
+                    let (anchor, expected) = match mode {
+                        "valid sibling" => (&sibling_package, &sibling_proofs),
+                        "valid direct" => (&direct_package, &direct_proofs),
+                        "missing nested proofs" => (&nested_package, &proofs),
+                        _ => (&outside_root, &proofs),
+                    };
+                    command
+                        .env("CARGO_MANIFEST_DIR", anchor)
+                        .env("CARGO_MANIFEST_PATH", anchor.join("Cargo.toml"))
+                        .env(EXPECTED, std::fs::canonicalize(expected).unwrap());
+                }
+                "missing runtime CARGO_MANIFEST_DIR" => {
+                    command.env_remove("CARGO_MANIFEST_DIR");
+                }
+                "missing runtime CARGO_MANIFEST_PATH" => {
+                    command.env_remove("CARGO_MANIFEST_PATH");
+                }
+                "invalid runtime CARGO_MANIFEST_PATH" => {
+                    command.env("CARGO_MANIFEST_PATH", fixture.join("absent/Cargo.toml"));
+                }
+                "relative directory" => {
+                    command.env("CARGO_MANIFEST_DIR", "checkout-b/crates/consumer");
+                }
+                "relative manifest" => {
+                    command.env(
+                        "CARGO_MANIFEST_PATH",
+                        "checkout-b/crates/consumer/Cargo.toml",
+                    );
+                }
+                "invalid runtime CARGO_MANIFEST_DIR" => {
+                    command.env("CARGO_MANIFEST_DIR", fixture.join("absent"));
+                }
+                "runtime Cargo manifest paths disagree" => {
+                    command.env("CARGO_MANIFEST_PATH", other.join("Cargo.toml"));
+                }
+                _ => {}
+            }
+            let output = command.output().unwrap();
+            assert!(
+                output.status.success(),
+                "{mode}: {}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        std::fs::remove_dir_all(fixture).unwrap();
+    }
+
+    #[test]
+    fn cached_contract_rejects_another_proofs_root() {
+        let first = unique_temp_dir("cache-source-a");
+        let second = unique_temp_dir("cache-source-b");
+        let cache = OnceLock::new();
+        let flight = Mutex::new(());
+        let payload = load_contract_stdout_for(&first, &cache, &flight, &|_| Ok(()), &|_| {
+            Ok("first source".into())
+        })
+        .unwrap();
+        assert_eq!(payload, "first source");
+        let error = load_contract_stdout_for(
+            &second,
+            &cache,
+            &flight,
+            &|_| panic!("another root must not build"),
+            &|_| panic!("another root must not generate"),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("another proofs directory"));
+        std::fs::remove_dir_all(first).unwrap();
+        std::fs::remove_dir_all(second).unwrap();
     }
 
     #[test]
