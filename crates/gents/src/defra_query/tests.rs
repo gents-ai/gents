@@ -654,6 +654,25 @@ async fn equal_collection_grants_read_only_the_bound_principals_acp_rows() {
         .await
         .unwrap();
     }
+    let mut ids = std::collections::HashMap::new();
+    for (did, label) in [(alice_did, "Alice-only"), (bob_did, "Bob-only")] {
+        let actor = ::identity::Did::new(did).unwrap();
+        let rows = crate::config_client::ConfigAccess::transact_local(
+            &node,
+            Some(actor),
+            "test.private_field_ids",
+            |txn| Box::pin(async { txn.execute("{PrivateRecord {_docID label}}").await }),
+        )
+        .await
+        .unwrap();
+        ids.insert(
+            label,
+            rows["data"]["PrivateRecord"][0]["_docID"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+        );
+    }
     for (did, label, hidden) in [
         (alice_did, "Alice-only", "Bob-only"),
         (bob_did, "Bob-only", "Alice-only"),
@@ -670,6 +689,15 @@ async fn equal_collection_grants_read_only_the_bound_principals_acp_rows() {
         let result: Value = serde_json::from_str(&Tool::call(&tool, find).await.unwrap()).unwrap();
         assert_eq!(result["returned_count"], 1);
         assert_eq!(result["results"][0]["label"], label);
+        for (target, permitted) in [(label, true), (hidden, false)] {
+            let request: QueryParams=serde_json::from_value(json!({"argv":["find"],"collection":"PrivateRecord","options":{"fields":["label"],"filter":{"_or":[{"label":{"_eq":label}},{"label":{"_eq":hidden}}]},"field_page":{"doc_id":ids[target],"field":"label"}}})).unwrap();
+            let read = Tool::call(&tool, request).await;
+            assert_eq!(read.is_ok(), permitted);
+            if permitted {
+                let value: Value = serde_json::from_str(&read.unwrap()).unwrap();
+                assert_eq!(value["field_page"]["text"], label);
+            }
+        }
         let search: QueryParams = serde_json::from_value(json!({"argv":["search"],"collection":"PrivateRecord","options":{"fields":["label"],"search_fields":["label"],"text":label,"limit":10}})).unwrap();
         let result: Value =
             serde_json::from_str(&Tool::call(&tool, search).await.unwrap()).unwrap();

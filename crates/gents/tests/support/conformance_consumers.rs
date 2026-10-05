@@ -217,6 +217,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "invocation_correlation_matches_lean",
         },
         ConformanceConsumer::RustTest {
+            id: "defra_query::field_page::tests::field_pages_match_lean",
+            package: "gents",
+            source_path: "crates/gents/src/defra_query/field_page.rs",
+            module_path: "defra_query::field_page::tests",
+            function: "field_pages_match_lean",
+        },
+        ConformanceConsumer::RustTest {
             id: "defra_write::tests::native_input_admission_matches_lean",
             package: "gents",
             source_path: "crates/gents/src/defra_write/tests.rs",

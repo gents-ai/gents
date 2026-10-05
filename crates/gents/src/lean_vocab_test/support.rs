@@ -138,6 +138,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) publish_if_cases: Vec<LeanPublishIfCase>,
     pub(crate) tool_policy_cases: Vec<LeanToolPolicyCase>,
     pub(crate) application_write_cases: Vec<serde_json::Value>,
+    pub(crate) field_read_cases: Vec<serde_json::Value>,
     pub(crate) write_input_cases: Vec<serde_json::Value>,
     pub(crate) invocation_correlation_cases: Vec<serde_json::Value>,
     pub(crate) goal_capability_resolution_cases: Vec<LeanGoalCapabilityResolutionCase>,
