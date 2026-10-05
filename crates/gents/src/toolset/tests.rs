@@ -1653,16 +1653,38 @@ async fn unrestricted_bash_runs_shell_command_strings() {
 #[cfg(unix)]
 #[tokio::test]
 async fn unrestricted_bash_reports_descendant_bounded_capture() {
-    let root = temp_root("gents-unrestricted-capture-drain");
+    use std::io::Write;
+    use std::os::unix::ffi::OsStrExt;
+
+    struct ReleaseGate(std::fs::File);
+    impl Drop for ReleaseGate {
+        fn drop(&mut self) {
+            let _ = self.0.write_all(b"\n");
+        }
+    }
+
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("release-gate");
+    let path = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+    // SAFETY: path is a live, NUL-terminated string in this private directory.
+    assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
+    let _release = ReleaseGate(
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(root.path().join("release-gate"))
+            .unwrap(),
+    );
     let tool = UnrestrictedBashTool::new(
-        ToolContext::new(root, false).unwrap(),
+        ToolContext::new(root.path().to_path_buf(), false).unwrap(),
         Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
     );
 
     let output = crate::llm::tool::Tool::call(
         &tool,
         BashArgs {
-            command: "printf ERR >&2; sleep 2 >/dev/null & exit 0".to_string(),
+            command: "exec 3< release-gate; printf ERR >&2; (read release <&3) >/dev/null & exit 0"
+                .to_string(),
             args: Vec::new(),
             cwd: None,
             timeout_secs: Some(DEFAULT_COMMAND_TIMEOUT_SECS),
