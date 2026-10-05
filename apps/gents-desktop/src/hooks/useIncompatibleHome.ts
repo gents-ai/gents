@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useMemo } from "react";
 import { useStore } from "zustand";
 
 import {
@@ -48,14 +48,15 @@ export function isIncompatibleHomeError(error: unknown): boolean {
 }
 
 /** Owns the one decision flow for a local home this version cannot open. */
-export function useIncompatibleHome({
+/** What the person can do about a home this version cannot open. Made
+    once; each reads the report from the client store when it runs. */
+export function createIncompatibleHomeOps({
   api,
   client,
   setError,
   startFresh,
-}: IncompatibleHomeOptions): IncompatibleHome {
-  const { report, busy, generation } = useStore(client, (state) => state.home);
-  const previewing = useRef<Promise<boolean> | null>(null);
+}: IncompatibleHomeOptions) {
+  let previewing: Promise<boolean> | null = null;
   const home = () => client.getState().home;
   const setHome = (patch: Partial<ClientState["home"]>) =>
     client.setState((state) => ({ home: { ...state.home, ...patch } }));
@@ -67,7 +68,7 @@ export function useIncompatibleHome({
     if (!isIncompatibleHomeError(error) || !api.resetManagedServer) {
       return Promise.resolve(false);
     }
-    if (previewing.current) return previewing.current;
+    if (previewing) return previewing;
     const resetManagedServer = api.resetManagedServer;
     const pending = (async () => {
       try {
@@ -79,10 +80,10 @@ export function useIncompatibleHome({
         );
         return false;
       } finally {
-        previewing.current = null;
+        previewing = null;
       }
     })();
-    previewing.current = pending;
+    previewing = pending;
     return pending;
   }
 
@@ -135,13 +136,19 @@ export function useIncompatibleHome({
   }
 
   return {
-    report,
-    busy,
-    generation,
     adopt,
     backUp: () => retire("archive"),
     remove: () => retire("delete"),
     keep,
     continueFresh,
   };
+}
+
+/** The incompatible home as screens read it: its state and its actions. */
+export function useIncompatibleHome(
+  client: ClientStore,
+  ops: ReturnType<typeof createIncompatibleHomeOps>,
+): IncompatibleHome {
+  const state = useStore(client, (s) => s.home);
+  return useMemo(() => ({ ...state, ...ops }), [state, ops]);
 }

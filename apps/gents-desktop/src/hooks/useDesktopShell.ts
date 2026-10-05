@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 
 import { setDesktopShellTimingConfigForTests } from "./desktopShellRuntime";
 import { createDesktopShellChatActions } from "./desktopShellChatActions";
@@ -78,9 +78,12 @@ export function useDesktopShell({
   // reads and the effects that refresh in the background, so a repeated
   // poll failure does not raise a toast every interval. Actions clear an
   // earlier error with null; a toast has nothing to clear.
-  const setActionError = (message: string | null) => {
-    if (message) reportFailure?.(message);
-  };
+  const setActionError = useCallback(
+    (message: string | null) => {
+      if (message) reportFailure?.(message);
+    },
+    [reportFailure],
+  );
   const {
     sessionStore,
     sessionLoad,

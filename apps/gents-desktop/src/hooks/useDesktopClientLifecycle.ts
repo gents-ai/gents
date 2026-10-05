@@ -19,7 +19,7 @@ import {
 } from "../lib/managedServerStartup";
 import { isMobileTauriShell, ownsAutomaticRecovery } from "../lib/shellPlatform";
 import { createSnapshotPublicationOwner } from "./desktopSnapshotPublication";
-import { useIncompatibleHome } from "./useIncompatibleHome";
+import { createIncompatibleHomeOps, useIncompatibleHome } from "./useIncompatibleHome";
 import type { SelectionStore } from "./selectionStore";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
@@ -68,23 +68,6 @@ export function useDesktopClientLifecycle({
   const startClientInFlight = useRef<Promise<DesktopClientSnapshot> | null>(null);
   const initializationInFlight = useRef<Promise<void> | null>(null);
   const snapshot = useStore(client, (state) => state.snapshot);
-  const snapshotPublicationRef = useRef<
-    ReturnType<typeof createSnapshotPublicationOwner> | undefined
-  >(undefined);
-  snapshotPublicationRef.current ??= createSnapshotPublicationOwner((next) => {
-    /* by key first, so a screen reading the fleet sees the same read. A
-       read that changed nothing keeps the snapshot it repeats, so no one
-       reading the client is notified either. */
-    const fleetBefore = fleet.getState();
-    applyFleetSnapshot(fleet, next);
-    const before = client.getState().snapshot;
-    const unchanged =
-      before !== null &&
-      fleet.getState() === fleetBefore &&
-      equal(withoutDeployments(before), withoutDeployments(next));
-    if (!unchanged) client.setState({ snapshot: next });
-    resolveStartupPhase(next);
-  });
   /* startup's state lives in the client store: functions read it there when
      they run, and screens select it */
   const { startupPhase, starting, stopping, managedServerWait } = useStore(
@@ -131,225 +114,275 @@ export function useDesktopClientLifecycle({
       current = false;
     };
   }, [api, managedServerFailed, startupDiagnosticsHint, snapshot]);
-  const incompatibleHome = useIncompatibleHome({
-    api,
-    client,
-    setError,
-    startFresh: () => initializeDesktop(),
-  });
 
-  function setStartupPhase(next: DesktopStartupPhase) {
-    client.setState({ startupPhase: next });
-  }
+  /* the lifecycle's functions, made once from inputs that keep their
+     identity for the app's life: each reads the stores and refs when it
+     runs, so none holds a stale copy and its identity never changes */
+  const [ops] = useState(() => {
+    const publication = createSnapshotPublicationOwner((next) => {
+      /* by key first, so a screen reading the fleet sees the same read. A
+       read that changed nothing keeps the snapshot it repeats, so no one
+       reading the client is notified either. */
+      const fleetBefore = fleet.getState();
+      applyFleetSnapshot(fleet, next);
+      const before = client.getState().snapshot;
+      const unchanged =
+        before !== null &&
+        fleet.getState() === fleetBefore &&
+        equal(withoutDeployments(before), withoutDeployments(next));
+      if (!unchanged) client.setState({ snapshot: next });
+      resolveStartupPhase(next);
+    });
+    const home = createIncompatibleHomeOps({
+      api,
+      client,
+      setError,
+      startFresh: () => initializeDesktop(),
+    });
+    function setStartupPhase(next: DesktopStartupPhase) {
+      client.setState({ startupPhase: next });
+    }
 
-  function resolveStartupPhase(next: DesktopClientSnapshot) {
-    const phase = projectStartupPhaseAfterSnapshot(
-      client.getState().startupPhase,
-      Boolean(next.client),
-      !clientAutostarts(next),
-    );
-    if (phase !== client.getState().startupPhase) setStartupPhase(phase);
-  }
+    function resolveStartupPhase(next: DesktopClientSnapshot) {
+      const phase = projectStartupPhaseAfterSnapshot(
+        client.getState().startupPhase,
+        Boolean(next.client),
+        !clientAutostarts(next),
+      );
+      if (phase !== client.getState().startupPhase) setStartupPhase(phase);
+    }
 
-  async function refreshSnapshot() {
-    const publish = snapshotPublicationRef.current!.begin();
-    try {
-      const next = await api.fetchDesktopSnapshot();
-      if (publish.publish(next)) {
-        setError(null);
+    async function refreshSnapshot() {
+      const publish = publication.begin();
+      try {
+        const next = await api.fetchDesktopSnapshot();
+        if (publish.publish(next)) {
+          setError(null);
+        }
+      } catch (error) {
+        if (!publish.isCurrent()) {
+          return;
+        }
+        setError(String(error));
+        if (client.getState().startupPhase === "loading-configuration") {
+          setStartupPhase("configuration-error");
+        } else if (client.getState().startupPhase === "starting-client") {
+          setStartupPhase("client-error");
+        }
       }
-    } catch (error) {
-      if (!publish.isCurrent()) {
+    }
+
+    async function mutateSnapshot<T>(operation: () => Promise<T>): Promise<T> {
+      const accepted = await operation();
+      // Mutation payloads can predate reads issued while they were pending.
+      // Observe committed state after acceptance; failed writes don't revoke reads.
+      await refreshSnapshot();
+      return accepted;
+    }
+
+    async function ensureDesktopClientStarted(): Promise<DesktopClientSnapshot> {
+      if (startClientInFlight.current) return startClientInFlight.current;
+      setStarting(true);
+      setError(null);
+      const pending = (async () => {
+        const isCurrent = publication.checkpoint();
+        try {
+          return await mutateSnapshot(() => api.startDesktopClient());
+        } catch (error) {
+          if (isCurrent() || !publication.snapshot?.client) {
+            setError(String(error));
+            if (client.getState().startupPhase === "starting-client") {
+              setStartupPhase("client-error");
+            }
+            await home.adopt(error);
+          }
+          throw error;
+        } finally {
+          startClientInFlight.current = null;
+          setStarting(false);
+        }
+      })();
+      startClientInFlight.current = pending;
+      return pending;
+    }
+
+    async function onStartClient() {
+      try {
+        await ensureDesktopClientStarted();
+      } catch {
+        // The shared owner already published the exact bridge error.
+      }
+    }
+
+    function initializeDesktop(): Promise<void> {
+      if (initializationInFlight.current) return initializationInFlight.current;
+      const pending = (async () => {
+        autostartAttempted.current = false;
+        if (supportsManagedServer && ownsAutomaticRecovery()) {
+          setStartupPhase("checking-managed-server");
+          const abort = new AbortController();
+          managedServerWaitAbort.current = abort;
+          setManagedServerFailure(null);
+          try {
+            localServerAvailable.current = await restoreManagedServer(api, {
+              onWait: setManagedServerWait,
+              signal: abort.signal,
+            });
+          } catch (error) {
+            // A legacy or broken ~/.gents must not block first-run setup or
+            // already-saved remote peers. Surface the error after the shell is up.
+            localServerAvailable.current = false;
+            setError(error instanceof Error ? error.message : String(error));
+            if (await home.adopt(error)) {
+              setStartupPhase("managed-server-error");
+              return;
+            }
+            if (error instanceof ManagedServerStartupError) {
+              setManagedServerFailure(error);
+              setStartupPhase("managed-server-error");
+              return;
+            }
+          }
+        }
+        setStartupPhase("loading-configuration");
+        await refreshSnapshot();
+      })().finally(() => {
+        if (initializationInFlight.current === pending) {
+          initializationInFlight.current = null;
+        }
+      });
+      initializationInFlight.current = pending;
+      return pending;
+    }
+
+    function onSkipManagedServerWait() {
+      if (initializationInFlight.current) {
+        managedServerWaitAbort.current?.abort();
         return;
       }
-      setError(String(error));
-      if (client.getState().startupPhase === "loading-configuration") {
-        setStartupPhase("configuration-error");
-      } else if (client.getState().startupPhase === "starting-client") {
-        setStartupPhase("client-error");
-      }
+      localServerAvailable.current = false;
+      setManagedServerFailure(null);
+      setError(null);
+      setStartupPhase("loading-configuration");
+      void refreshSnapshot();
     }
-  }
 
-  async function mutateSnapshot<T>(operation: () => Promise<T>): Promise<T> {
-    const accepted = await operation();
-    // Mutation payloads can predate reads issued while they were pending.
-    // Observe committed state after acceptance; failed writes don't revoke reads.
-    await refreshSnapshot();
-    return accepted;
-  }
-
-  async function ensureDesktopClientStarted(): Promise<DesktopClientSnapshot> {
-    if (startClientInFlight.current) return startClientInFlight.current;
-    setStarting(true);
-    setError(null);
-    const pending = (async () => {
-      const isCurrent = snapshotPublicationRef.current!.checkpoint();
+    async function onRestartManagedServer() {
+      const status = client.getState().managedServerFailure?.status;
+      if (
+        !status?.agentName ||
+        !status.effectiveToolCeiling ||
+        !api.restartManagedServer
+      )
+        return;
+      const restartManagedServer = api.restartManagedServer;
+      const agentName = status.agentName;
+      const authority = {
+        toolCeiling: status.effectiveToolCeiling,
+        toolRoot: status.effectiveToolRoot,
+      };
+      setStarting(true);
+      setError(null);
+      setStartupPhase("checking-managed-server");
       try {
-        return await mutateSnapshot(() => api.startDesktopClient());
+        await observeManagedServerOperation(
+          api,
+          () => restartManagedServer(agentName, authority),
+          setManagedServerWait,
+        );
+        await initializeDesktop();
       } catch (error) {
-        if (isCurrent() || !snapshotPublicationRef.current!.snapshot?.client) {
-          setError(String(error));
-          if (client.getState().startupPhase === "starting-client") {
-            setStartupPhase("client-error");
-          }
-          await incompatibleHome.adopt(error);
-        }
-        throw error;
+        setError(error instanceof Error ? error.message : String(error));
+        setStartupPhase("managed-server-error");
+        await home.adopt(error);
       } finally {
-        startClientInFlight.current = null;
         setStarting(false);
       }
-    })();
-    startClientInFlight.current = pending;
-    return pending;
-  }
-
-  async function onStartClient() {
-    try {
-      await ensureDesktopClientStarted();
-    } catch {
-      // The shared owner already published the exact bridge error.
     }
-  }
 
-  function initializeDesktop(): Promise<void> {
-    if (initializationInFlight.current) return initializationInFlight.current;
-    const pending = (async () => {
-      autostartAttempted.current = false;
-      if (supportsManagedServer && ownsAutomaticRecovery()) {
-        setStartupPhase("checking-managed-server");
-        const abort = new AbortController();
-        managedServerWaitAbort.current = abort;
-        setManagedServerFailure(null);
-        try {
-          localServerAvailable.current = await restoreManagedServer(api, {
-            onWait: setManagedServerWait,
-            signal: abort.signal,
-          });
-        } catch (error) {
-          // A legacy or broken ~/.gents must not block first-run setup or
-          // already-saved remote peers. Surface the error after the shell is up.
-          localServerAvailable.current = false;
-          setError(error instanceof Error ? error.message : String(error));
-          if (await incompatibleHome.adopt(error)) {
-            setStartupPhase("managed-server-error");
-            return;
-          }
-          if (error instanceof ManagedServerStartupError) {
-            setManagedServerFailure(error);
-            setStartupPhase("managed-server-error");
-            return;
+    async function onRetryStartup() {
+      await initializeDesktop();
+    }
+
+    async function restartDesktopClient(reason: string) {
+      if (autoRestartInFlight.current) return;
+      autoRestartInFlight.current = true;
+      const sessionId = store.getState().sessionId;
+      logShellEvent(
+        `restart begin reason="${reason}" sessionId=${sessionId ?? "none"}`,
+      );
+      setStopping(true);
+      setStarting(true);
+      setError(null);
+      const isCurrent = publication.checkpoint();
+      try {
+        let next: DesktopClientSnapshot | null = null;
+        for (
+          let attempt = 1;
+          attempt <= timingConfig().clientRestartMaxAttempts;
+          attempt += 1
+        ) {
+          try {
+            logShellEvent(`restart attempt=${attempt} phase=shutdown`);
+            await api.shutdownDesktopClient();
+            logShellEvent(`restart attempt=${attempt} phase=start`);
+            next = await api.startDesktopClient();
+            break;
+          } catch (error) {
+            logShellEvent(`restart attempt=${attempt} failed error=${String(error)}`);
+            if (attempt === timingConfig().clientRestartMaxAttempts) throw error;
+            await delay(timingConfig().clientRestartBackoffMs);
           }
         }
+        if (!next) throw new Error("desktop restart returned no snapshot");
+        await refreshSnapshot();
+        if (store.getState().sessionId === sessionId) {
+          if (sessionId) await refreshSession(sessionId);
+          else setSession(null);
+        }
+        logShellEvent(`restart complete reason="${reason}"`);
+      } catch (error) {
+        logShellEvent(`restart failed reason="${reason}" error=${String(error)}`);
+        if (isCurrent() || !publication.snapshot?.client) {
+          setError(`desktop client restart failed after ${reason}: ${String(error)}`);
+          await home.adopt(error);
+        }
+      } finally {
+        setStopping(false);
+        setStarting(false);
+        autoRestartInFlight.current = false;
       }
-      setStartupPhase("loading-configuration");
-      await refreshSnapshot();
-    })().finally(() => {
-      if (initializationInFlight.current === pending) {
-        initializationInFlight.current = null;
-      }
-    });
-    initializationInFlight.current = pending;
-    return pending;
-  }
-
-  function onSkipManagedServerWait() {
-    if (initializationInFlight.current) {
-      managedServerWaitAbort.current?.abort();
-      return;
     }
-    localServerAvailable.current = false;
-    setManagedServerFailure(null);
-    setError(null);
-    setStartupPhase("loading-configuration");
-    void refreshSnapshot();
-  }
 
-  async function onRestartManagedServer() {
-    const status = client.getState().managedServerFailure?.status;
-    if (!status?.agentName || !status.effectiveToolCeiling || !api.restartManagedServer)
-      return;
-    const restartManagedServer = api.restartManagedServer;
-    const agentName = status.agentName;
-    const authority = {
-      toolCeiling: status.effectiveToolCeiling,
-      toolRoot: status.effectiveToolRoot,
+    return {
+      publication,
+      home,
+      refreshSnapshot,
+      mutateSnapshot,
+      ensureDesktopClientStarted,
+      onStartClient,
+      initializeDesktop,
+      onSkipManagedServerWait,
+      onRestartManagedServer,
+      onRetryStartup,
+      restartDesktopClient,
     };
-    setStarting(true);
-    setError(null);
-    setStartupPhase("checking-managed-server");
-    try {
-      await observeManagedServerOperation(
-        api,
-        () => restartManagedServer(agentName, authority),
-        setManagedServerWait,
-      );
-      await initializeDesktop();
-    } catch (error) {
-      setError(error instanceof Error ? error.message : String(error));
-      setStartupPhase("managed-server-error");
-      await incompatibleHome.adopt(error);
-    } finally {
-      setStarting(false);
-    }
-  }
-
-  async function onRetryStartup() {
-    await initializeDesktop();
-  }
+  });
+  const {
+    refreshSnapshot,
+    mutateSnapshot,
+    ensureDesktopClientStarted,
+    onStartClient,
+    onSkipManagedServerWait,
+    onRestartManagedServer,
+    onRetryStartup,
+    restartDesktopClient,
+  } = ops;
+  const incompatibleHome = useIncompatibleHome(client, ops.home);
 
   useEffect(() => {
-    void initializeDesktop();
-  }, []);
-
-  async function restartDesktopClient(reason: string) {
-    if (autoRestartInFlight.current) return;
-    autoRestartInFlight.current = true;
-    const sessionId = store.getState().sessionId;
-    logShellEvent(`restart begin reason="${reason}" sessionId=${sessionId ?? "none"}`);
-    setStopping(true);
-    setStarting(true);
-    setError(null);
-    const isCurrent = snapshotPublicationRef.current!.checkpoint();
-    try {
-      let next: DesktopClientSnapshot | null = null;
-      for (
-        let attempt = 1;
-        attempt <= timingConfig().clientRestartMaxAttempts;
-        attempt += 1
-      ) {
-        try {
-          logShellEvent(`restart attempt=${attempt} phase=shutdown`);
-          await api.shutdownDesktopClient();
-          logShellEvent(`restart attempt=${attempt} phase=start`);
-          next = await api.startDesktopClient();
-          break;
-        } catch (error) {
-          logShellEvent(`restart attempt=${attempt} failed error=${String(error)}`);
-          if (attempt === timingConfig().clientRestartMaxAttempts) throw error;
-          await delay(timingConfig().clientRestartBackoffMs);
-        }
-      }
-      if (!next) throw new Error("desktop restart returned no snapshot");
-      await refreshSnapshot();
-      if (store.getState().sessionId === sessionId) {
-        if (sessionId) await refreshSession(sessionId);
-        else setSession(null);
-      }
-      logShellEvent(`restart complete reason="${reason}"`);
-    } catch (error) {
-      logShellEvent(`restart failed reason="${reason}" error=${String(error)}`);
-      if (isCurrent() || !snapshotPublicationRef.current!.snapshot?.client) {
-        setError(`desktop client restart failed after ${reason}: ${String(error)}`);
-        await incompatibleHome.adopt(error);
-      }
-    } finally {
-      setStopping(false);
-      setStarting(false);
-      autoRestartInFlight.current = false;
-    }
-  }
+    void ops.initializeDesktop();
+  }, [ops]);
 
   return {
     autostartAttempted,
