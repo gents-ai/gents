@@ -203,6 +203,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_payload_presentation_cases_use_native_reconstruction",
         },
         ConformanceConsumer::RustTest {
+            id: "canonical_execution_native_adapter::every_generated_native_execution_script_runs_to_completion",
+            package: "gents",
+            source_path: "crates/gents/src/lean_vocab_test/canonical_execution/native_adapter.rs",
+            module_path: "canonical_execution_native_adapter",
+            function: "every_generated_native_execution_script_runs_to_completion",
+        },
+        ConformanceConsumer::RustTest {
             id: "conformance::persona_request::generated_root_admission_cases_drive_production_root_policy",
             package: "gents",
             source_path: "crates/gents/tests/conformance/persona_request.rs",
