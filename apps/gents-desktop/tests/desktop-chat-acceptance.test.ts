@@ -8,13 +8,14 @@ import {
   createDesktopShellChatActions,
   releaseOwnedSubmissionWorkflow,
 } from "../src/hooks/desktopShellChatActions";
+import { createSelectionStore, selection } from "../src/hooks/selectionStore";
 
 function fixture(
   send: () => Promise<unknown>,
   blocked = false,
   retry: (requestId: string) => Promise<unknown> = async () => null,
 ) {
-  let intentGeneration = 0;
+  const store = createSelectionStore({ agentDid: "agent", sessionId: "session" });
   let workflow: ChatWorkflowState = { kind: "ready" };
   const effects = {
     setLocalWorkflow: vi.fn(
@@ -27,8 +28,6 @@ function fixture(
     setError: vi.fn(),
     setSending: vi.fn(),
     setOptimisticPendingTurn: vi.fn(),
-    setSelectedSessionId: vi.fn(),
-    setPendingMailboxCauseId: vi.fn(),
     setDraft: vi.fn(),
     refreshSession: vi.fn(async () => {
       throw new Error("observation unavailable");
@@ -40,17 +39,11 @@ function fixture(
   const actions = createDesktopShellChatActions({
     ...effects,
     submissionInFlight: { current: false },
-    acceptsComposeIntent: (captured: number) => captured === intentGeneration,
-    advanceComposeIntent: () => {
-      intentGeneration += 1;
-    },
-    captureComposeIntent: () => intentGeneration,
+    store,
     api: { sendChatMessage: send, retryRequest: retry },
     draft: "review this",
     selectedDeployment: { agentDid: "agent" },
     deployments: [],
-    selectedSessionId: "session",
-    pendingMailboxCauseId: null,
     behaviorReadiness: { kind: "ready", behaviorId: "coding" },
     shellProjection: {
       nonEmptyContentSendStatus: blocked
@@ -64,13 +57,11 @@ function fixture(
     retryShellProjection: {
       nonEmptyContentSendStatus: { kind: "ready" },
     },
-    newSessionAgentRef: { current: null },
   } as unknown as Parameters<typeof createDesktopShellChatActions>[0]);
   return {
     actions,
-    advanceComposeIntent: () => {
-      intentGeneration += 1;
-    },
+    store,
+    advanceComposeIntent: () => selection.advanceIntent(store),
     getWorkflow: () => workflow,
     ...effects,
   };
@@ -231,10 +222,10 @@ describe("canonical chat submission acceptance", () => {
     pending.resolve(accepted);
 
     await expect(submitted).resolves.toEqual(accepted);
-    expect(f.setSelectedSessionId).not.toHaveBeenCalled();
+    expect(f.store.getState().sessionId).toBe("session");
     expect(f.setOptimisticPendingTurn).not.toHaveBeenCalled();
     expect(f.getWorkflow()).toEqual({ kind: "ready" });
-    expect(f.setPendingMailboxCauseId).not.toHaveBeenCalled();
+    expect(f.store.getState().mailboxRoute).toBeNull();
     expect(f.setError).not.toHaveBeenCalled();
     expect(f.setSending).toHaveBeenLastCalledWith(false);
   });
@@ -287,7 +278,7 @@ describe("canonical chat submission acceptance", () => {
     pending.resolve({ sessionId: "origin-session", requestId: "retry-request" });
 
     await retried;
-    expect(f.setSelectedSessionId).not.toHaveBeenCalled();
+    expect(f.store.getState().sessionId).toBe("session");
     expect(f.getWorkflow()).toEqual({ kind: "ready" });
     expect(f.setError).not.toHaveBeenCalled();
     expect(f.setSending).toHaveBeenLastCalledWith(false);
@@ -306,7 +297,7 @@ describe("canonical chat submission acceptance", () => {
     pending.reject(new Error("old retry failed"));
 
     await retried;
-    expect(f.setSelectedSessionId).not.toHaveBeenCalled();
+    expect(f.store.getState().sessionId).toBe("session");
     expect(f.getWorkflow()).toEqual({ kind: "ready" });
     expect(f.setError).not.toHaveBeenCalled();
     expect(f.setSending).toHaveBeenLastCalledWith(false);

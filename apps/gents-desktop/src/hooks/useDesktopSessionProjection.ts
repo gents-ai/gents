@@ -21,11 +21,12 @@ import {
   mergeSessionTipSnapshot,
 } from "./desktopTimelinePaging";
 import type { SessionLoadState } from "../lib/loadingStatus";
+import type { SelectionStore } from "./selectionStore";
 
 type SessionProjectionOptions = {
   api: DesktopApiAdapter;
-  selectedAgentDidRef: MutableRefObject<string | null>;
-  selectedSessionIdRef: MutableRefObject<string | null>;
+  /** the selection, read when a read lands */
+  store: SelectionStore;
   selectedTrackedRequestIdRef: MutableRefObject<string | null>;
   setError: (error: string | null) => void;
 };
@@ -35,8 +36,7 @@ const MAX_HIDDEN_PAGE_HOPS = 8;
 /** Own the bounded React page/live overlay and linearize every async commit. */
 export function useDesktopSessionProjection({
   api,
-  selectedAgentDidRef,
-  selectedSessionIdRef,
+  store,
   selectedTrackedRequestIdRef,
   setError,
 }: SessionProjectionOptions) {
@@ -80,7 +80,7 @@ export function useDesktopSessionProjection({
       return null;
     }
     const agentDid =
-      agentDidOverride === undefined ? selectedAgentDidRef.current : agentDidOverride;
+      agentDidOverride === undefined ? store.getState().agentDid : agentDidOverride;
     setSessionLoad((previous) => ({
       phase: "loading",
       sessionId: nextSessionId,
@@ -100,8 +100,8 @@ export function useDesktopSessionProjection({
       );
       const stillCurrent =
         acceptsAsyncResult(refreshSeq.current, currentRefresh) &&
-        selectedSessionIdRef.current === nextSessionId &&
-        (!agentDid || selectedAgentDidRef.current === agentDid) &&
+        store.getState().sessionId === nextSessionId &&
+        (!agentDid || store.getState().agentDid === agentDid) &&
         (!next || next.sessionId === nextSessionId);
       if (!stillCurrent) return null;
       setSession((current) => (next ? mergeSessionTipSnapshot(current, next) : null));
@@ -135,7 +135,7 @@ export function useDesktopSessionProjection({
     const projected = sessionRef.current;
     const agentDid =
       projected?.sessionId === nextSessionId
-        ? (projected.agentDid ?? selectedAgentDidRef.current)
+        ? (projected.agentDid ?? store.getState().agentDid)
         : null;
     try {
       setError(null);
@@ -155,7 +155,7 @@ export function useDesktopSessionProjection({
     if (!request) return false;
     try {
       const delta = await api.fetchSessionLiveDelta(request);
-      if (!delta || selectedSessionIdRef.current !== current.sessionId) return false;
+      if (!delta || store.getState().sessionId !== current.sessionId) return false;
       const latest = sessionRef.current;
       if (!latest || latest.sessionId !== current.sessionId) return true;
       const next = applySessionLiveDelta(latest, delta);
@@ -176,11 +176,11 @@ export function useDesktopSessionProjection({
         if (!current || !current.timelinePage?.hasOlder || !cursor) return false;
         const older = await api.fetchSessionSnapshot(
           current.sessionId,
-          current.agentDid ?? selectedAgentDidRef.current,
+          current.agentDid ?? store.getState().agentDid,
           selectedTrackedRequestIdRef.current,
           { limit: SESSION_TIMELINE_PAGE_SIZE, beforeItemKey: cursor },
         );
-        if (!older || selectedSessionIdRef.current !== current.sessionId) return false;
+        if (!older || store.getState().sessionId !== current.sessionId) return false;
         const previousItemCount = sessionRef.current?.timelineItems.length ?? 0;
         setSession((latest) => mergeOlderSessionTimelinePage(latest, older));
         const next = sessionRef.current;

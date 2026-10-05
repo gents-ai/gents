@@ -2,6 +2,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useDesktopClientLifecycle } from "../src/hooks/useDesktopClientLifecycle";
+import { createSelectionStore } from "../src/hooks/selectionStore";
 
 const ownership = vi.hoisted(() => ({ main: true }));
 vi.mock("../src/lib/shellPlatform", () => ({
@@ -43,7 +44,7 @@ describe("desktop client restart selection ordering", () => {
           api,
           supportsManagedServer: true,
           refreshSession: vi.fn(async () => null),
-          selectedSessionIdRef: { current: null },
+          store: createSelectionStore(),
           setError: vi.fn(),
           setSession: vi.fn(),
         } as unknown as Parameters<typeof useDesktopClientLifecycle>[0]),
@@ -61,7 +62,7 @@ describe("desktop client restart selection ordering", () => {
       bootstrap: { clientStateExists: true, savedPeers: [] },
       client: {},
     };
-    const selectedSessionIdRef = { current: null as string | null };
+    const store = createSelectionStore();
     const api = {
       fetchDesktopSnapshot: vi
         .fn()
@@ -74,7 +75,7 @@ describe("desktop client restart selection ordering", () => {
         api,
         supportsManagedServer: false,
         refreshSession: vi.fn(async () => null),
-        selectedSessionIdRef,
+        store,
         setError: vi.fn(),
         setSession: vi.fn(),
       } as unknown as Parameters<typeof useDesktopClientLifecycle>[0]),
@@ -120,7 +121,7 @@ describe("desktop client restart selection ordering", () => {
           api,
           supportsManagedServer: false,
           refreshSession: vi.fn(async () => null),
-          selectedSessionIdRef: { current: null },
+          store: createSelectionStore(),
           setError: vi.fn(),
           setSession: vi.fn(),
         } as unknown as Parameters<typeof useDesktopClientLifecycle>[0]),
@@ -169,7 +170,7 @@ describe("desktop client restart selection ordering", () => {
         api,
         supportsManagedServer: false,
         refreshSession: vi.fn(async () => null),
-        selectedSessionIdRef: { current: null },
+        store: createSelectionStore(),
         setError,
         setSession: vi.fn(),
       } as unknown as Parameters<typeof useDesktopClientLifecycle>[0]),
@@ -207,7 +208,7 @@ describe("desktop client restart selection ordering", () => {
         api,
         supportsManagedServer: false,
         refreshSession: vi.fn(async () => null),
-        selectedSessionIdRef: { current: null },
+        store: createSelectionStore(),
         setError,
         setSession: vi.fn(),
       } as unknown as Parameters<typeof useDesktopClientLifecycle>[0]),
@@ -229,7 +230,7 @@ describe("desktop client restart selection ordering", () => {
 
   it("does not clear a session selected while a restart from new-compose is pending", async () => {
     const restarted = deferred<Record<string, unknown>>();
-    const selectedSessionIdRef = { current: null as string | null };
+    const store = createSelectionStore();
     const setSession = vi.fn();
     const api = {
       fetchDesktopSnapshot: vi.fn(async () => ({
@@ -244,7 +245,7 @@ describe("desktop client restart selection ordering", () => {
         api,
         supportsManagedServer: false,
         refreshSession: vi.fn(async () => null),
-        selectedSessionIdRef,
+        store,
         setError: vi.fn(),
         setSession,
       } as unknown as Parameters<typeof useDesktopClientLifecycle>[0]),
@@ -257,7 +258,7 @@ describe("desktop client restart selection ordering", () => {
       restart = result.current.restartDesktopClient("test");
     });
     await waitFor(() => expect(api.startDesktopClient).toHaveBeenCalled());
-    selectedSessionIdRef.current = "newly-selected-session";
+    store.setState({ sessionId: "newly-selected-session" });
     restarted.resolve({
       bootstrap: { clientStateExists: true, savedPeers: [] },
       client: null,
@@ -286,7 +287,7 @@ describe("desktop client restart selection ordering", () => {
         api,
         supportsManagedServer: false,
         refreshSession: vi.fn(async () => null),
-        selectedSessionIdRef: { current: null },
+        store: createSelectionStore(),
         setError: vi.fn(),
         setSession: vi.fn(),
       } as unknown as Parameters<typeof useDesktopClientLifecycle>[0]),

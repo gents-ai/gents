@@ -12,6 +12,7 @@ import {
   logShellEvent,
   timingConfig,
 } from "./desktopShellRuntime";
+import type { SelectionStore } from "./selectionStore";
 
 type DesktopProjectionEffectsArgs = {
   clientAvailable: boolean;
@@ -21,7 +22,8 @@ type DesktopProjectionEffectsArgs = {
   refreshSnapshot: () => Promise<void>;
   selectedAgentDid: string | null;
   selectedSessionId: string | null;
-  selectedSessionIdRef: MutableRefObject<string | null>;
+  /** the selection, read when an observed result lands */
+  store: SelectionStore;
   selectedTrackedRequestId: string | null;
   selectedTrackedRequestIdRef: MutableRefObject<string | null>;
   setError: (error: string | null) => void;
@@ -40,7 +42,7 @@ export function useDesktopProjectionEffects({
   refreshSnapshot,
   selectedAgentDid,
   selectedSessionId,
-  selectedSessionIdRef,
+  store,
   selectedTrackedRequestId,
   selectedTrackedRequestIdRef,
   setError,
@@ -64,7 +66,7 @@ export function useDesktopProjectionEffects({
       setError(message);
     };
     const controller = createDesktopProjectionController({
-      currentSessionId: () => selectedSessionIdRef.current,
+      currentSessionId: () => store.getState().sessionId,
       refreshSnapshot,
       refreshSession,
       refreshSessionLiveDelta,
@@ -76,7 +78,7 @@ export function useDesktopProjectionEffects({
         if (disposed) return;
         const scope = desktopUpdateRefreshScope(
           event.reason,
-          selectedSessionIdRef.current,
+          store.getState().sessionId,
           selectedTrackedRequestIdRef.current,
         );
         await controller.request(scope);
@@ -138,5 +140,6 @@ export function useDesktopProjectionEffects({
     selectedTrackedRequestId,
     selectedTrackedRequestIdRef,
     setError,
+    store,
   ]);
 }

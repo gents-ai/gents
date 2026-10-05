@@ -19,40 +19,13 @@ export function useShell(
   const shellRef = useRef(d);
   shellRef.current = d;
 
-  /* the desktop reads a session through its selected node, so a session
-     that lives on another node selects that node first */
-  const routeNodeDid =
-    routeSessionId &&
-    d.deployments.find((deployment) =>
-      deployment.sessions.some((session) => session.sessionId === routeSessionId),
-    )?.agentDid;
-  const selectedAgentDid = d.selectedAgentDid ?? d.deployments[0]?.agentDid ?? null;
+  /* the route says which session to show; one owner follows it */
   useEffect(() => {
-    const shell = shellRef.current;
-    if (routeSessionId === undefined) return;
-    if (routeSessionId === null) {
-      // A mailbox item opened into a new session already holds it, with the
-      // item as the next message's cause.
-      if (shell.selectedSessionId === null && shell.pendingMailboxCauseId) return;
-      shell.onStartNewSession();
-      return;
-    }
-    // Selecting a node clears its session; this runs again once the node has
-    // settled and selects the route's session against it.
-    if (routeNodeDid && routeNodeDid !== selectedAgentDid) {
-      shell.setSelectedAgentDid(routeNodeDid);
-      return;
-    }
-    // Session selection is behavior-aware. The route must use the same owner
-    // as every other session selection so reopening an older configurator
-    // chat also restores that session's behavior before consistency checks run.
-    // Unless the shell already holds this session: then the route is only
-    // catching up with a selection made a moment ago, such as a mailbox item
-    // that opened its session, and selecting it again would reset what was
-    // set up for it, such as the item the next message answers.
-    if (shell.selectedSessionId === routeSessionId) return;
-    shell.onSelectSession(routeSessionId);
-  }, [routeSessionId, routeNodeDid, selectedAgentDid]);
+    if (routeSessionId !== undefined) shellRef.current.followRoute(routeSessionId);
+  }, [routeSessionId]);
+  useEffect(() => {
+    if (routeSessionId) shellRef.current.followRoute(routeSessionId, true);
+  }, [routeSessionId, d.deployments]);
 
   const configApi = useMemo(
     () => ({
@@ -120,9 +93,9 @@ export function useShell(
       deployments,
       selectedDeployment,
       selectedAgentDid: d.selectedAgentDid ?? selectedDeployment?.agentDid ?? null,
-      selectAgent: d.setSelectedAgentDid,
-      selectSession: d.onSelectSession,
-      selectBehavior: d.setSelectedBehaviorId,
+      selectAgent: d.selectAgent,
+      selectSession: d.selectSession,
+      selectBehavior: d.selectBehavior,
       selectedBehaviorId: d.behaviorReadiness.behaviorId,
       selectedSessionId: d.selectedSessionId,
       selectedSession: d.session,

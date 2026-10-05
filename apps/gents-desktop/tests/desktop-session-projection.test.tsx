@@ -7,6 +7,7 @@ import type {
   SessionLiveDeltaView,
 } from "@source-inc/gents-desktop-client";
 import { useDesktopSessionProjection } from "../src/hooks/useDesktopSessionProjection";
+import { createSelectionStore } from "../src/hooks/selectionStore";
 
 function session(
   keys: string[],
@@ -53,13 +54,12 @@ function session(
 
 function renderProjection(
   api: DesktopApiAdapter,
-  selectedSessionIdRef: { current: string | null } = { current: "session-1" },
+  store = createSelectionStore({ agentDid: "did:key:test", sessionId: "session-1" }),
 ) {
   return renderHook(() =>
     useDesktopSessionProjection({
       api,
-      selectedAgentDidRef: { current: "did:key:test" },
-      selectedSessionIdRef,
+      store,
       selectedTrackedRequestIdRef: { current: "request-1" },
       setError: vi.fn(),
     }),
@@ -167,20 +167,23 @@ describe("useDesktopSessionProjection", () => {
       .mockReturnValueOnce(pending)
       .mockResolvedValueOnce(other)
       .mockResolvedValueOnce(terminal);
-    const selected = { current: "session-1" };
+    const store = createSelectionStore({
+      agentDid: "did:key:test",
+      sessionId: "session-1",
+    });
     const { result } = renderProjection(
       { fetchSessionSnapshot } as unknown as DesktopApiAdapter,
-      selected,
+      store,
     );
     let first!: Promise<DesktopSessionSnapshot | null>;
     act(() => {
       first = result.current.refreshSession("session-1");
     });
-    selected.current = "session-2";
+    store.setState({ sessionId: "session-2" });
     await act(async () => {
       await result.current.refreshSession("session-2");
     });
-    selected.current = "session-1";
+    store.setState({ sessionId: "session-1" });
     await act(async () => {
       await result.current.refreshSession("session-1");
     });
@@ -356,17 +359,20 @@ describe("useDesktopSessionProjection", () => {
       if (sessionId === "session-1") return delayed;
       return Promise.resolve(other);
     });
-    const selectedSessionIdRef = { current: "session-1" };
+    const store = createSelectionStore({
+      agentDid: "did:key:test",
+      sessionId: "session-1",
+    });
     const { result } = renderProjection(
       { fetchSessionSnapshot } as unknown as DesktopApiAdapter,
-      selectedSessionIdRef,
+      store,
     );
 
     let first: Promise<DesktopSessionSnapshot | null>;
     await act(async () => {
       first = result.current.refreshSession("session-1");
     });
-    selectedSessionIdRef.current = "session-2";
+    store.setState({ sessionId: "session-2" });
     await act(async () => {
       await result.current.refreshSession("session-2");
     });

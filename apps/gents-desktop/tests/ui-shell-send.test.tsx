@@ -2,6 +2,7 @@ import { act, renderHook } from "@testing-library/react";
 import { useRef, useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { createDesktopShellChatActions } from "../src/hooks/desktopShellChatActions";
+import { createSelectionStore } from "../src/hooks/selectionStore";
 
 const desktopShell = vi.hoisted(() => ({
   deployments: [
@@ -28,13 +29,13 @@ const desktopShell = vi.hoisted(() => ({
   sessionLoad: null,
   sessionLoadingStatus: null,
   startupPhase: "ready",
-  setSelectedAgentDid: vi.fn(),
-  setSelectedBehaviorId: vi.fn(),
-  setSelectedSessionId: vi.fn(),
+  selectAgent: vi.fn(),
+  selectBehavior: vi.fn(),
+  selectSession: vi.fn(),
   refreshSession: vi.fn(async () => null),
   refreshSnapshot: vi.fn(async () => undefined),
-  onStartNewSession: vi.fn(),
-  onSelectSession: vi.fn(),
+  startNewSession: vi.fn(),
+  followRoute: vi.fn(),
   onDismissError: vi.fn(),
   onRetryStartup: vi.fn(),
   onDismissMailboxItem: vi.fn(),
@@ -62,14 +63,11 @@ vi.mock("../src/hooks/useDesktopShell", () => ({
       api,
       selectedDeployment: desktopShell.deployments[0],
       submissionInFlight,
+      store: createSelectionStore({ agentDid: "did:key:agent" }),
       setSending,
-      captureComposeIntent: () => 0,
-      acceptsComposeIntent: () => true,
       setLocalWorkflow: vi.fn(),
       setOptimisticPendingTurn: vi.fn(),
-      setPendingMailboxCauseId: vi.fn(),
       setError: vi.fn(),
-      newSessionAgentRef: { current: null },
       shellProjection: { nonEmptyContentSendStatus: { kind: "ready" } },
       retryShellProjection: { nonEmptyContentSendStatus: { kind: "ready" } },
     } as unknown as Parameters<typeof createDesktopShellChatActions>[0]);
@@ -150,7 +148,7 @@ describe("kit shell chat submission", () => {
 
     expect(result.current.sending).toBe(false);
     expect(desktopShell.submitContent).toHaveBeenCalledWith("review this", "coding");
-    expect(desktopShell.setSelectedBehaviorId).not.toHaveBeenCalled();
+    expect(desktopShell.selectBehavior).not.toHaveBeenCalled();
     expect(desktopShell.refreshSession).not.toHaveBeenCalled();
     expect(desktopShell.refreshSnapshot).not.toHaveBeenCalled();
   });

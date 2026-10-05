@@ -1,14 +1,14 @@
 import { act, renderHook } from "@testing-library/react";
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import type {
   DesktopApiAdapter,
   DesktopClientSnapshot,
-  DesktopSessionSnapshot,
 } from "@source-inc/gents-desktop-client";
 import { createDesktopShellPeerActions } from "../src/hooks/desktopShellPeerActions";
-import { useDesktopMailboxRoute } from "../src/hooks/useDesktopMailboxRoute";
+import { createDesktopShellSelectionActions } from "../src/hooks/desktopShellSelectionActions";
+import { createSelectionStore, useSelection } from "../src/hooks/selectionStore";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -22,36 +22,39 @@ function usePeerRoute(
   api: DesktopApiAdapter,
   ensureDesktopClientStarted = async () => ({ client: {} }) as DesktopClientSnapshot,
 ) {
-  const [agent, setAgent] = useState<string | null>("agent-a");
-  const [behavior, setBehavior] = useState<string | null>("behavior-a");
-  const [sessionId, setSessionId] = useState<string | null>("session-a");
-  const [, setSession] = useState<DesktopSessionSnapshot | null>(null);
-  const selectedAgentDidRef = useRef(agent);
-  selectedAgentDidRef.current = agent;
-  const route = useDesktopMailboxRoute({
-    api,
-    refreshSnapshot: async () => {},
-    selectedAgentDid: agent,
-    selectedBehaviorId: behavior,
-    selectedSessionId: sessionId,
-    setError: vi.fn(),
-    setSelectedAgentDid: setAgent,
-    setSelectedBehaviorId: setBehavior,
-    setSelectedSessionId: setSessionId,
-    setSession,
+  const [store] = useState(() =>
+    createSelectionStore({
+      agentDid: "agent-a",
+      behaviorId: "behavior-a",
+      sessionId: "session-a",
+    }),
+  );
+  const current = useSelection(store);
+  const route = createDesktopShellSelectionActions({
+    store,
+    deployments: () => [],
+    setSession: () => {},
+    setLocalWorkflow: () => {},
+    setError: () => {},
   });
   const actions = createDesktopShellPeerActions({
     api,
     ensureDesktopClientStarted,
     mutateSnapshot: async <T,>(operation: () => Promise<T>) => operation(),
     refreshSnapshot: async () => {},
-    selectedAgentDidRef,
+    store,
     selectAgent: route.selectAgent,
     setError: vi.fn(),
     setStarting: vi.fn(),
     snapshot: null,
   });
-  return { actions, agent, behavior, route, sessionId };
+  return {
+    actions,
+    agent: current.agentDid,
+    behavior: current.behaviorId,
+    route,
+    sessionId: current.sessionId,
+  };
 }
 
 describe("peer action route ownership", () => {

@@ -1,7 +1,6 @@
 import type { Dispatch, FormEvent, MutableRefObject, SetStateAction } from "react";
 import {
   selectedBehaviorReadinessDecision,
-  selectedBehaviorIdForDeployment,
   type ChatSendResult,
 } from "@source-inc/gents-desktop-client";
 
@@ -17,16 +16,15 @@ import type {
   DesktopSessionSnapshot,
 } from "@source-inc/gents-desktop-client";
 import { actionFailure, shownFailure } from "./desktopShellRuntime";
+import { selection, type SelectionStore } from "./selectionStore";
 
 type ChatActionParams = {
   submissionInFlight: MutableRefObject<boolean>;
-  acceptsComposeIntent: (capturedGeneration: number) => boolean;
-  advanceComposeIntent: () => void;
-  captureComposeIntent: () => number;
+  /** the selection, read when an action runs */
+  store: SelectionStore;
   api: DesktopApiAdapter;
   behaviorReadiness: BehaviorReadinessDecision;
   draft: string;
-  newSessionAgentRef: MutableRefObject<string | null>;
   refreshSession: (
     nextSessionId: string | null,
   ) => Promise<DesktopSessionSnapshot | null>;
@@ -37,17 +35,11 @@ type ChatActionParams = {
   adoptChatFolder?: (sessionId: string) => void;
   selectedDeployment: DeploymentView | null;
   deployments: DeploymentView[];
-  selectedSessionId: string | null;
-  pendingMailboxCauseId: string | null;
   setDraft: Dispatch<SetStateAction<string>>;
   setError: Dispatch<SetStateAction<string | null>>;
   setLocalWorkflow: Dispatch<SetStateAction<ChatWorkflowState>>;
   setOptimisticPendingTurn: Dispatch<SetStateAction<OptimisticPendingTurn | null>>;
-  setSelectedBehaviorId: Dispatch<SetStateAction<string | null>>;
-  setSelectedSessionId: Dispatch<SetStateAction<string | null>>;
   setSending: Dispatch<SetStateAction<boolean>>;
-  setPendingMailboxCauseId: Dispatch<SetStateAction<string | null>>;
-  setSession: Dispatch<SetStateAction<DesktopSessionSnapshot | null>>;
   shellProjection: ChatShellProjection;
   retryShellProjection: ChatShellProjection;
 };
@@ -61,30 +53,21 @@ export function releaseOwnedSubmissionWorkflow(
 
 export function createDesktopShellChatActions({
   submissionInFlight,
+  store,
   api,
   behaviorReadiness,
-  acceptsComposeIntent,
-  advanceComposeIntent,
-  captureComposeIntent,
   draft,
   chatFolder = null,
   adoptChatFolder,
-  newSessionAgentRef,
   refreshSession,
   refreshSnapshot,
   selectedDeployment,
   deployments,
-  selectedSessionId,
-  pendingMailboxCauseId,
   setDraft,
   setError,
   setLocalWorkflow,
   setOptimisticPendingTurn,
-  setSelectedBehaviorId,
-  setSelectedSessionId,
   setSending,
-  setPendingMailboxCauseId,
-  setSession,
   shellProjection,
   retryShellProjection,
 }: ChatActionParams) {
@@ -114,7 +97,8 @@ export function createDesktopShellChatActions({
     // Synchronous admission implements startSubmit before React renders sending.
     // Every send and retry entry point shares this owner.
     submissionInFlight.current = true;
-    const intentGeneration = captureComposeIntent();
+    const intentGeneration = selection.captureIntent(store);
+    const { sessionId: selectedSessionId, mailboxRoute } = store.getState();
     const ownedWorkflow: ChatWorkflowState = {
       kind: "submittingRequest",
       agentDid: deployment.agentDid,
@@ -129,14 +113,12 @@ export function createDesktopShellChatActions({
         behaviorId: admission.behaviorId,
         sessionId: selectedSessionId,
         content,
-        causedBySourceDocId: pendingMailboxCauseId,
+        causedBySourceDocId: mailboxRoute?.itemId ?? null,
         cwd: chatFolder,
       });
       adoptChatFolder?.(result.sessionId);
-      if (!acceptsComposeIntent(intentGeneration)) return result;
-      setPendingMailboxCauseId(null);
-      newSessionAgentRef.current = null;
-      setSelectedSessionId(result.sessionId);
+      if (!selection.acceptsIntent(store, intentGeneration)) return result;
+      selection.adoptSession(store, result.sessionId);
       setOptimisticPendingTurn({
         sessionId: result.sessionId,
         requestId: result.requestId,
@@ -153,7 +135,7 @@ export function createDesktopShellChatActions({
       });
       return result;
     } catch (err) {
-      if (!acceptsComposeIntent(intentGeneration)) return null;
+      if (!selection.acceptsIntent(store, intentGeneration)) return null;
       setLocalWorkflow({ kind: "ready" });
       setError(actionFailure("send the message", err));
       return null;
@@ -185,19 +167,19 @@ export function createDesktopShellChatActions({
       return;
     }
     submissionInFlight.current = true;
-    const intentGeneration = captureComposeIntent();
+    const intentGeneration = selection.captureIntent(store);
     const ownedWorkflow: ChatWorkflowState = {
       kind: "submittingRequest",
       agentDid: selectedDeployment.agentDid,
-      sessionId: selectedSessionId,
+      sessionId: store.getState().sessionId,
     };
     setLocalWorkflow(ownedWorkflow);
     setSending(true);
     setError(null);
     try {
       const result = await api.retryRequest(requestId, selectedDeployment.agentDid);
-      if (!acceptsComposeIntent(intentGeneration)) return;
-      setSelectedSessionId(result.sessionId);
+      if (!selection.acceptsIntent(store, intentGeneration)) return;
+      selection.settleSession(store, result.sessionId);
       setLocalWorkflow({
         kind: "awaitingObservation",
         agentDid: selectedDeployment.agentDid,
@@ -205,7 +187,7 @@ export function createDesktopShellChatActions({
         requestId: result.requestId,
       });
     } catch (err) {
-      if (!acceptsComposeIntent(intentGeneration)) return;
+      if (!selection.acceptsIntent(store, intentGeneration)) return;
       setLocalWorkflow({ kind: "ready" });
       setError(actionFailure("retry the message", err));
     } finally {
@@ -240,45 +222,10 @@ export function createDesktopShellChatActions({
     }
   }
 
-  function onSelectSession(sessionId: string) {
-    advanceComposeIntent();
-    setPendingMailboxCauseId(null);
-    const sessionSummary = selectedDeployment?.sessions.find(
-      (item) => item.sessionId === sessionId,
-    );
-    if (sessionSummary?.behaviorId) {
-      setSelectedBehaviorId(sessionSummary.behaviorId);
-    }
-    newSessionAgentRef.current = null;
-    if (sessionSummary?.sessionId !== sessionId) {
-      setSession(null);
-    }
-    setSelectedSessionId(sessionId);
-  }
-
-  function onStartNewSession(behaviorId?: string | null) {
-    const deployment = selectedDeployment ?? deployments[0] ?? null;
-    if (!deployment) {
-      return;
-    }
-    advanceComposeIntent();
-    setPendingMailboxCauseId(null);
-    setSelectedBehaviorId(
-      selectedBehaviorIdForDeployment(deployment, behaviorId ?? null),
-    );
-    newSessionAgentRef.current = deployment.agentDid;
-    setSelectedSessionId(null);
-    setSession(null);
-    setLocalWorkflow({ kind: "ready" });
-    setError(null);
-  }
-
   return {
     submitContent,
     onRenameSessionTitle,
     onRetryMessage,
-    onSelectSession,
     onSendMessage,
-    onStartNewSession,
   };
 }

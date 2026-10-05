@@ -1,13 +1,11 @@
-import { act, renderHook } from "@testing-library/react";
-import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import type {
   DesktopApiAdapter,
-  DesktopSessionSnapshot,
   MailboxItemView,
 } from "@source-inc/gents-desktop-client";
-import { useDesktopMailboxRoute } from "../src/hooks/useDesktopMailboxRoute";
+import { createDesktopShellMailboxActions } from "../src/hooks/desktopShellMailboxActions";
+import { createSelectionStore } from "../src/hooks/selectionStore";
 
 const item = {
   itemId: "item-1",
@@ -18,23 +16,16 @@ const item = {
   sessionId: "session-1",
 } as MailboxItemView;
 
-function useRoute(api: DesktopApiAdapter) {
-  const [agent, setAgent] = useState<string | null>(null);
-  const [behavior, setBehavior] = useState<string | null>(null);
-  const [session, setSessionId] = useState<string | null>(null);
-  const [, setSession] = useState<DesktopSessionSnapshot | null>(null);
-  return useDesktopMailboxRoute({
+function mailbox(api: DesktopApiAdapter) {
+  const store = createSelectionStore();
+  const actions = createDesktopShellMailboxActions({
     api,
+    store,
     refreshSnapshot: async () => {},
-    selectedAgentDid: agent,
-    selectedBehaviorId: behavior,
-    selectedSessionId: session,
     setError: () => {},
-    setSelectedAgentDid: setAgent,
-    setSelectedBehaviorId: setBehavior,
-    setSelectedSessionId: setSessionId,
-    setSession,
+    setSession: () => {},
   });
+  return { store, actions };
 }
 
 describe("answering a mailbox question", () => {
@@ -44,15 +35,11 @@ describe("answering a mailbox question", () => {
       startMailboxRequest: vi.fn().mockResolvedValue(item),
       sendChatMessage,
     } as unknown as DesktopApiAdapter;
-    const { result } = renderHook(() => useRoute(api));
-    await act(async () => {
-      await result.current.onOpenMailboxItem(item.itemId);
-    });
-    expect(result.current.pendingMailboxCauseId).toBe("item-1");
+    const { store, actions } = mailbox(api);
+    await actions.onOpenMailboxItem(item.itemId);
+    expect(store.getState().mailboxRoute?.itemId).toBe("item-1");
     const answer = { option_ids: ["yes"], free_text: null };
-    await act(async () => {
-      await result.current.onAnswerMailboxQuestion(item, answer);
-    });
+    await actions.onAnswerMailboxQuestion(item, answer);
     expect(sendChatMessage).toHaveBeenCalledWith({
       agentDid: "did:agent",
       behaviorId: "engineer",
@@ -61,6 +48,6 @@ describe("answering a mailbox question", () => {
       causedBySourceDocId: "item-1",
       answer,
     });
-    expect(result.current.pendingMailboxCauseId).toBeNull();
+    expect(store.getState().mailboxRoute).toBeNull();
   });
 });

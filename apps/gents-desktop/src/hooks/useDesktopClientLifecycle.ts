@@ -1,11 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type MutableRefObject,
-  type SetStateAction,
-} from "react";
+import { useCallback, useEffect, useRef, useState, type SetStateAction } from "react";
 
 import type {
   DesktopApiAdapter,
@@ -28,6 +21,7 @@ import {
 import { isMobileTauriShell, ownsAutomaticRecovery } from "../lib/shellPlatform";
 import { createSnapshotPublicationOwner } from "./desktopSnapshotPublication";
 import { useIncompatibleHome } from "./useIncompatibleHome";
+import type { SelectionStore } from "./selectionStore";
 
 export type { DesktopStartupPhase } from "../lib/loadingStatus";
 
@@ -35,7 +29,8 @@ type ClientLifecycleOptions = {
   api: DesktopApiAdapter;
   supportsManagedServer: boolean;
   refreshSession: (sessionId: string | null) => Promise<DesktopSessionSnapshot | null>;
-  selectedSessionIdRef: MutableRefObject<string | null>;
+  /** the selection, read when a restart finishes */
+  store: SelectionStore;
   setError: (error: string | null) => void;
   setSession: (next: SetStateAction<DesktopSessionSnapshot | null>) => void;
 };
@@ -45,7 +40,7 @@ export function useDesktopClientLifecycle({
   api,
   supportsManagedServer,
   refreshSession,
-  selectedSessionIdRef,
+  store,
   setError,
   setSession,
 }: ClientLifecycleOptions) {
@@ -286,7 +281,7 @@ export function useDesktopClientLifecycle({
   async function restartDesktopClient(reason: string) {
     if (autoRestartInFlight.current) return;
     autoRestartInFlight.current = true;
-    const sessionId = selectedSessionIdRef.current;
+    const sessionId = store.getState().sessionId;
     logShellEvent(`restart begin reason="${reason}" sessionId=${sessionId ?? "none"}`);
     setStopping(true);
     setStarting(true);
@@ -313,7 +308,7 @@ export function useDesktopClientLifecycle({
       }
       if (!next) throw new Error("desktop restart returned no snapshot");
       await refreshSnapshot();
-      if (selectedSessionIdRef.current === sessionId) {
+      if (store.getState().sessionId === sessionId) {
         if (sessionId) await refreshSession(sessionId);
         else setSession(null);
       }

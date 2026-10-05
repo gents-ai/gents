@@ -1,4 +1,4 @@
-import type { Dispatch, MutableRefObject, SetStateAction } from "react";
+import type { Dispatch, SetStateAction } from "react";
 
 import { formatPeerConnectionError } from "@source-inc/gents-desktop-fleet";
 import type {
@@ -6,6 +6,7 @@ import type {
   DesktopClientSnapshot,
 } from "@source-inc/gents-desktop-client";
 import { shownFailure } from "./desktopShellRuntime";
+import type { SelectionStore } from "./selectionStore";
 
 type PeerActionParams = {
   api: DesktopApiAdapter;
@@ -15,7 +16,8 @@ type PeerActionParams = {
   mutateSnapshot: <T>(operation: () => Promise<T>) => Promise<T>;
   refreshSnapshot: () => Promise<void>;
   setError: Dispatch<SetStateAction<string | null>>;
-  selectedAgentDidRef: MutableRefObject<string | null>;
+  /** the selection, read when an action lands */
+  store: SelectionStore;
   selectAgent: (agentDid: string | null) => void;
   setStarting: Dispatch<SetStateAction<boolean>>;
 };
@@ -27,7 +29,7 @@ export function createDesktopShellPeerActions({
   mutateSnapshot,
   refreshSnapshot,
   setError,
-  selectedAgentDidRef,
+  store,
   selectAgent,
   setStarting,
 }: PeerActionParams) {
@@ -96,7 +98,7 @@ export function createDesktopShellPeerActions({
     setError(null);
     try {
       const next = await mutateSnapshot(() => api.removePeer(peerId));
-      if (agentDid && selectedAgentDidRef.current === agentDid) {
+      if (agentDid && store.getState().agentDid === agentDid) {
         selectAgent(null);
       }
       return next;

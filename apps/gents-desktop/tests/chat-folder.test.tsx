@@ -6,6 +6,7 @@ import {
 } from "../src/hooks/useChatFolders";
 import { createDesktopShellChatActions } from "../src/hooks/desktopShellChatActions";
 import { folderLabel } from "../src/ui/screens/ChatFolderPicker";
+import { createSelectionStore } from "../src/hooks/selectionStore";
 
 describe("chat folders", () => {
   it("keeps a pick per chat and clears it with null", () => {
@@ -58,24 +59,18 @@ describe("sending with a chat folder", () => {
     }));
     const adoptChatFolder = vi.fn();
     const actions = createDesktopShellChatActions({
+      store: createSelectionStore({ agentDid: "agent" }),
       setLocalWorkflow: vi.fn(),
       setError: vi.fn(),
       setSending: vi.fn(),
       setOptimisticPendingTurn: vi.fn(),
-      setSelectedSessionId: vi.fn(),
-      setPendingMailboxCauseId: vi.fn(),
       setDraft: vi.fn(),
       submissionInFlight: { current: false },
-      acceptsComposeIntent: () => true,
-      captureComposeIntent: () => 0,
-      newSessionAgentRef: { current: null },
       api: { sendChatMessage },
       chatFolder: "/work/notes",
       adoptChatFolder,
       selectedDeployment: { agentDid: "agent" },
       deployments: [],
-      selectedSessionId: null,
-      pendingMailboxCauseId: null,
       behaviorReadiness: { kind: "ready", behaviorId: "coding" },
       shellProjection: { nonEmptyContentSendStatus: { kind: "ready" } },
     } as never);

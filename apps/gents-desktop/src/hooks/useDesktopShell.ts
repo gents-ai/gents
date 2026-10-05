@@ -7,7 +7,9 @@ import { useDesktopShellEffects } from "./desktopShellEffects";
 import { useChatFolders } from "./useChatFolders";
 import { useDesktopClientLifecycle } from "./useDesktopClientLifecycle";
 import { useDesktopChatProjectionState } from "./useDesktopChatProjectionState";
-import { useDesktopMailboxRoute } from "./useDesktopMailboxRoute";
+import { createDesktopShellMailboxActions } from "./desktopShellMailboxActions";
+import { createDesktopShellSelectionActions } from "./desktopShellSelectionActions";
+import { createSelectionStore, selection, useSelection } from "./selectionStore";
 import { useDesktopSessionProjection } from "./useDesktopSessionProjection";
 import { createDesktopShellPeerActions } from "./desktopShellPeerActions";
 import { createDesktopShellTaskActions } from "./desktopShellTaskActions";
@@ -31,8 +33,16 @@ export function useDesktopShell({
   listenToUpdates,
   supportsManagedServer = false,
 }: DesktopShellBridge) {
-  const selectedSessionIdRef = useRef<string | null>(null);
-  const selectedAgentDidRef = useRef<string | null>(null);
+  /* what the person is looking at: one store, read by actions when they run */
+  const [store] = useState(() => createSelectionStore());
+  const current = useSelection(store);
+  const selectedAgentDid = current.agentDid;
+  const selectedSessionId = current.sessionId;
+  const selectedBehaviorId = current.behaviorId;
+  const pendingMailboxCauseId = current.mailboxRoute?.itemId ?? null;
+  const captureComposeIntent = () => selection.captureIntent(store);
+  const acceptsComposeIntent = (captured: number) =>
+    selection.acceptsIntent(store, captured);
   const selectedTrackedRequestIdRef = useRef<string | null>(null);
   const [sending, setSending] = useState(false);
   const submissionInFlight = useRef(false);
@@ -53,8 +63,7 @@ export function useDesktopShell({
     loadOlderSessionTimeline,
   } = useDesktopSessionProjection({
     api,
-    selectedAgentDidRef,
-    selectedSessionIdRef,
+    store,
     selectedTrackedRequestIdRef,
     setError,
   });
@@ -86,39 +95,18 @@ export function useDesktopShell({
     api,
     supportsManagedServer,
     refreshSession,
-    selectedSessionIdRef,
+    store,
     setError,
     setSession,
   });
-  const [selectedAgentDid, setSelectedAgentDid] = useState<string | null>(null);
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
-  const [selectedBehaviorId, setSelectedBehaviorId] = useState<string | null>(null);
-  const {
-    newSessionAgentRef,
-    advanceComposeIntent,
-    captureComposeIntent,
-    acceptsComposeIntent,
-    pendingMailboxCauseId,
-    setPendingMailboxCauseId,
-    clearPendingMailboxCause,
-    onOpenMailboxItem,
-    onDismissMailboxItem,
-    onAnswerMailboxQuestion,
-    selectAgent,
-    selectSession,
-    selectBehavior,
-  } = useDesktopMailboxRoute({
-    api,
-    refreshSnapshot,
-    selectedAgentDid,
-    selectedBehaviorId,
-    selectedSessionId,
-    setError: setActionError,
-    setSelectedAgentDid,
-    setSelectedBehaviorId,
-    setSelectedSessionId,
-    setSession,
-  });
+  const { onOpenMailboxItem, onDismissMailboxItem, onAnswerMailboxQuestion } =
+    createDesktopShellMailboxActions({
+      api,
+      store,
+      refreshSnapshot,
+      setError: setActionError,
+      setSession,
+    });
   const deployments = snapshot?.client?.deployments ?? [];
   const selectedDeployment =
     deployments.find((deployment) => deployment.agentDid === selectedAgentDid) ?? null;
@@ -174,9 +162,15 @@ export function useDesktopShell({
       sessionLoad,
     ],
   );
-  selectedAgentDidRef.current = selectedAgentDid;
-  selectedSessionIdRef.current = selectedSessionId;
   selectedTrackedRequestIdRef.current = selectedTrackedRequestId;
+  const { selectAgent, selectBehavior, selectSession, startNewSession, followRoute } =
+    createDesktopShellSelectionActions({
+      store,
+      deployments: () => deployments,
+      setSession,
+      setLocalWorkflow,
+      setError: setActionError,
+    });
 
   useDesktopShellEffects({
     api,
@@ -188,7 +182,7 @@ export function useDesktopShell({
     localWorkflow,
     clientAutostarts,
     listenToUpdates,
-    newSessionAgentRef,
+    composingFor: current.composingFor,
     onStartClient,
     refreshSession,
     refreshSessionLiveDelta,
@@ -199,14 +193,13 @@ export function useDesktopShell({
     selectedBehaviorId,
     selectedDeployment,
     selectedSessionId,
-    selectedSessionIdRef,
+    store,
     selectedTrackedRequestIdRef,
     selectedTrackedRequestId,
     sending,
     setLocalWorkflow,
     setError,
-    setSelectedAgentDid: selectAgent,
-    setSelectedBehaviorId,
+    selectAgent,
     snapshot,
     starting,
     stopping,
@@ -225,7 +218,7 @@ export function useDesktopShell({
     snapshot,
     ensureDesktopClientStarted,
     setError: setActionError,
-    selectedAgentDidRef,
+    store,
     selectAgent,
     setStarting,
   });
@@ -266,42 +259,27 @@ export function useDesktopShell({
     setError: setActionError,
   });
 
-  const {
-    submitContent,
-    onRenameSessionTitle,
-    onRetryMessage,
-    onSelectSession,
-    onSendMessage,
-    onStartNewSession,
-  } = createDesktopShellChatActions({
-    acceptsComposeIntent,
-    submissionInFlight,
-    advanceComposeIntent,
-    api,
-    behaviorReadiness,
-    captureComposeIntent,
-    chatFolder,
-    adoptChatFolder,
-    draft,
-    newSessionAgentRef,
-    refreshSession,
-    refreshSnapshot,
-    selectedDeployment,
-    deployments,
-    selectedSessionId,
-    pendingMailboxCauseId,
-    setDraft,
-    setError: setActionError,
-    setLocalWorkflow,
-    setOptimisticPendingTurn,
-    setSelectedBehaviorId,
-    setSelectedSessionId,
-    setSending,
-    setPendingMailboxCauseId,
-    setSession,
-    shellProjection,
-    retryShellProjection,
-  });
+  const { submitContent, onRenameSessionTitle, onRetryMessage, onSendMessage } =
+    createDesktopShellChatActions({
+      submissionInFlight,
+      store,
+      api,
+      behaviorReadiness,
+      chatFolder,
+      adoptChatFolder,
+      draft,
+      refreshSession,
+      refreshSnapshot,
+      selectedDeployment,
+      deployments,
+      setDraft,
+      setError: setActionError,
+      setLocalWorkflow,
+      setOptimisticPendingTurn,
+      setSending,
+      shellProjection,
+      retryShellProjection,
+    });
 
   const {
     onRunSchedule,
@@ -375,18 +353,18 @@ export function useDesktopShell({
     sendStatus: shellProjection.sendStatus,
     nonEmptyContentSendStatus: shellProjection.nonEmptyContentSendStatus,
     retryStatus: retryShellProjection.nonEmptyContentSendStatus,
-    setSelectedAgentDid: selectAgent,
-    setSelectedSessionId: selectSession,
-    setSelectedBehaviorId: selectBehavior,
+    selectAgent,
+    selectSession,
+    selectBehavior,
+    startNewSession,
+    followRoute,
     setDraft,
     chatFolder,
     setChatFolder,
-    clearPendingMailboxCause,
+    clearPendingMailboxCause: () => selection.releaseMailboxRoute(store),
     onOpenMailboxItem,
     onDismissMailboxItem,
     onAnswerMailboxQuestion,
-    onSelectSession,
-    onStartNewSession,
     refreshSession,
     retrySessionHydration,
     loadOlderSessionTimeline,

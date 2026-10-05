@@ -16,6 +16,7 @@ import {
   shouldAutoRestartP2P,
   timingConfig,
 } from "./desktopShellRuntime";
+import { selection, type SelectionStore } from "./selectionStore";
 import { useDesktopProjectionEffects } from "./useDesktopProjectionEffects";
 
 type DesktopShellEffectsArgs = {
@@ -28,7 +29,8 @@ type DesktopShellEffectsArgs = {
   localWorkflow: ChatWorkflowState;
   clientAutostarts: (snapshot: DesktopClientSnapshot) => boolean;
   listenToUpdates: DesktopClientUpdatedListenerFactory;
-  newSessionAgentRef: MutableRefObject<string | null>;
+  /** the node a new session is being composed for, whose behavior is the person's */
+  composingFor: string | null;
   refreshSession: (sessionId: string | null) => Promise<DesktopSessionSnapshot | null>;
   refreshSessionLiveDelta: () => Promise<boolean>;
   refreshSnapshot: () => Promise<void>;
@@ -38,14 +40,14 @@ type DesktopShellEffectsArgs = {
   selectedBehaviorId: string | null;
   selectedDeployment: DeploymentView | null;
   selectedSessionId: string | null;
-  selectedSessionIdRef: MutableRefObject<string | null>;
+  /** the selection, read when an observed result lands */
+  store: SelectionStore;
   selectedTrackedRequestIdRef: MutableRefObject<string | null>;
   selectedTrackedRequestId: string | null;
   sending: boolean;
   setLocalWorkflow: (workflow: ChatWorkflowState) => void;
   setError: (error: string | null) => void;
-  setSelectedAgentDid: (agentDid: string | null) => void;
-  setSelectedBehaviorId: (behaviorId: string | null) => void;
+  selectAgent: (agentDid: string | null) => void;
   snapshot: DesktopClientSnapshot | null;
   starting: boolean;
   stopping: boolean;
@@ -62,7 +64,7 @@ export function useDesktopShellEffects({
   localWorkflow,
   clientAutostarts,
   listenToUpdates,
-  newSessionAgentRef,
+  composingFor,
   refreshSession,
   refreshSessionLiveDelta,
   refreshSnapshot,
@@ -72,24 +74,19 @@ export function useDesktopShellEffects({
   selectedBehaviorId,
   selectedDeployment,
   selectedSessionId,
-  selectedSessionIdRef,
+  store,
   selectedTrackedRequestIdRef,
   selectedTrackedRequestId,
   sending,
   setLocalWorkflow,
   setError,
-  setSelectedAgentDid,
-  setSelectedBehaviorId,
+  selectAgent,
   snapshot,
   starting,
   stopping,
   onStartClient,
 }: DesktopShellEffectsArgs) {
   const clientAvailable = Boolean(snapshot?.client);
-
-  useEffect(() => {
-    selectedSessionIdRef.current = selectedSessionId;
-  }, [selectedSessionId, selectedSessionIdRef]);
 
   useEffect(() => {
     if (
@@ -175,7 +172,7 @@ export function useDesktopShellEffects({
     refreshSnapshot,
     selectedAgentDid,
     selectedSessionId,
-    selectedSessionIdRef,
+    store,
     selectedTrackedRequestId,
     selectedTrackedRequestIdRef,
     setError,
@@ -186,9 +183,9 @@ export function useDesktopShellEffects({
     // existing principal selection while bounded observations catch up; only
     // initialize an empty selection through the route owner.
     if (!selectedAgentDid && deployments.length) {
-      setSelectedAgentDid(deployments[0].agentDid);
+      selectAgent(deployments[0].agentDid);
     }
-  }, [deployments, selectedAgentDid, setSelectedAgentDid]);
+  }, [deployments, selectedAgentDid, selectAgent]);
 
   useEffect(() => {
     if (!clientAvailable) {
@@ -217,14 +214,14 @@ export function useDesktopShellEffects({
 
   useEffect(() => {
     if (!selectedDeployment) {
-      setSelectedBehaviorId(null);
+      selection.settleBehavior(store, null);
       return;
     }
 
-    // A mailbox tap installs an exact compose route. Preserve it while the
-    // independently replicated behavior/session rows catch up; explicit user
-    // navigation clears the mailbox route at the setter boundary.
-    if (newSessionAgentRef.current === selectedDeployment.agentDid) {
+    // A mailbox tap or the new-session screen chose this behavior. Preserve
+    // it while the independently replicated behavior and session rows catch
+    // up; explicit navigation lets go of it in the selection store.
+    if (composingFor === selectedDeployment.agentDid) {
       return;
     }
 
@@ -233,21 +230,14 @@ export function useDesktopShellEffects({
       selectedBehaviorId,
     );
 
-    if (selectedBehaviorId !== effectiveBehaviorId) {
-      setSelectedBehaviorId(effectiveBehaviorId);
-    }
+    selection.settleBehavior(store, effectiveBehaviorId);
 
     // A snapshot may reconcile behavior availability, never user session
     // selection. Null is an intentional fresh composer, not a request to open
     // the first matching session. A missing selected row stays selected while
     // hydration/error presentation handles its availability (ClientShell's
     // snapshot_preserves_selection contract).
-  }, [
-    newSessionAgentRef,
-    selectedBehaviorId,
-    selectedDeployment,
-    setSelectedBehaviorId,
-  ]);
+  }, [composingFor, selectedBehaviorId, selectedDeployment, store]);
 
   useEffect(() => {
     if (localWorkflow.kind === "submittingRequest" && !sending) {

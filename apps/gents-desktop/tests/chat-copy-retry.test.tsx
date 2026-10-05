@@ -13,12 +13,7 @@ import { projectChatShell } from "@source-inc/gents-desktop-chat";
 import { copyText } from "@source-inc/gents-desktop-ui";
 import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
 import { deployment } from "./config-panel-wiring/fixtures";
-
-const currentIntent = {
-  acceptsComposeIntent: (captured: number) => captured === 0,
-  advanceComposeIntent: vi.fn(),
-  captureComposeIntent: () => 0,
-};
+import { createSelectionStore } from "../src/hooks/selectionStore";
 
 const readyBehaviorReadiness = {
   kind: "ready",
@@ -341,28 +336,21 @@ describe("error card retry", () => {
     expect(shellProjection.nonEmptyContentSendStatus).toEqual({ kind: "ready" });
 
     const actions = createDesktopShellChatActions({
+      store: createSelectionStore({ agentDid: deployment.agentDid, sessionId: "s1" }),
       submissionInFlight: { current: false },
-      ...currentIntent,
       api,
       draft: "",
       behaviorReadiness: readyBehaviorReadiness,
-      newSessionAgentRef: { current: null },
       refreshSession: vi.fn(),
       refreshSnapshot: vi.fn(),
       selectedDeployment: deployment,
       deployments: [deployment],
-      selectedSessionId: "s1",
-      pendingMailboxCauseId: null,
       session,
       setDraft: vi.fn(),
       setError: vi.fn(),
       setLocalWorkflow: vi.fn(),
       setOptimisticPendingTurn: vi.fn(),
-      setSelectedBehaviorId: vi.fn(),
-      setSelectedSessionId: vi.fn(),
       setSending: vi.fn(),
-      setPendingMailboxCauseId: vi.fn(),
-      setSession: vi.fn(),
       shellProjection,
       retryShellProjection: shellProjection,
     });
@@ -406,29 +394,22 @@ describe("error card retry", () => {
     });
     const common = {
       submissionInFlight: { current: false },
-      ...currentIntent,
       api: { retryRequest } as unknown as DesktopApiAdapter,
       draft: "",
-      newSessionAgentRef: { current: null },
       refreshSession: vi.fn(),
       refreshSnapshot: vi.fn(),
       selectedDeployment: deployment,
       deployments: [deployment],
-      selectedSessionId: "s1",
-      pendingMailboxCauseId: null,
       session,
       setDraft: vi.fn(),
       setError,
       setLocalWorkflow: vi.fn(),
       setOptimisticPendingTurn: vi.fn(),
-      setSelectedBehaviorId: vi.fn(),
-      setSelectedSessionId: vi.fn(),
       setSending: vi.fn(),
-      setPendingMailboxCauseId: vi.fn(),
-      setSession: vi.fn(),
     };
 
     const blocked = createDesktopShellChatActions({
+      store: createSelectionStore({ agentDid: deployment.agentDid, sessionId: "s1" }),
       ...common,
       behaviorReadiness: readyBehaviorReadiness,
       shellProjection: composerProjection,
@@ -444,6 +425,7 @@ describe("error card retry", () => {
 
     setError.mockClear();
     const readyRetry = createDesktopShellChatActions({
+      store: createSelectionStore({ agentDid: deployment.agentDid, sessionId: "s1" }),
       ...common,
       behaviorReadiness: unavailableBehaviorReadiness,
       shellProjection: blockedRetryProjection,
@@ -479,27 +461,20 @@ describe("error card retry", () => {
     });
 
     const actions = createDesktopShellChatActions({
-      ...currentIntent,
+      store: createSelectionStore({ agentDid: deployment.agentDid, sessionId: "s1" }),
       api: { sendChatMessage } as unknown as DesktopApiAdapter,
       submissionInFlight: { current: false },
       behaviorReadiness: readyBehaviorReadiness,
       draft: "check the upgrade",
-      newSessionAgentRef: { current: null },
       refreshSession: vi.fn(),
       refreshSnapshot: vi.fn(),
       selectedDeployment: deployment,
       deployments: [deployment],
-      selectedSessionId: "s1",
-      pendingMailboxCauseId: null,
       setDraft,
       setError: vi.fn(),
       setLocalWorkflow: vi.fn(),
       setOptimisticPendingTurn,
-      setSelectedBehaviorId: vi.fn(),
-      setSelectedSessionId: vi.fn(),
       setSending: vi.fn(),
-      setPendingMailboxCauseId: vi.fn(),
-      setSession: vi.fn(),
       shellProjection,
       retryShellProjection: shellProjection,
     });
