@@ -1,6 +1,6 @@
 /* Adapts useDesktopShell to the prototype Shell shape so copied screens
    keep calling shell.api / applyConfig / saveBehaviorConfig. */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 
 import type { DesktopClientSnapshot } from "@source-inc/gents-desktop-client";
 
@@ -97,8 +97,6 @@ export function useShell(
     [api, d],
   );
 
-  const [behaviorColors] = useState<Record<string, number>>({});
-
   return useMemo(() => {
     const deployments = d.deployments;
     const selectedDeployment = d.selectedDeployment ?? deployments[0] ?? null;
@@ -163,9 +161,6 @@ export function useShell(
       saveBehaviorConfig: d.onSaveBehaviorConfig,
       deleteBehaviorConfig: d.onDeleteBehaviorConfig,
       behaviorDescriptions,
-      saveBehaviorDescription: async () => {},
-      behaviorColors,
-      saveBehaviorColor: async () => {},
       removePeer: d.onRemovePeer,
       renamePeer: d.onRenamePeer,
       applyConfig,
@@ -183,7 +178,7 @@ export function useShell(
         ? d.onRestartManagedServer
         : undefined,
     };
-  }, [api, applyConfig, behaviorColors, d, sendMessage]);
+  }, [api, applyConfig, d, sendMessage]);
 }
 
 export type Shell = ReturnType<typeof useShell>;
