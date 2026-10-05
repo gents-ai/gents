@@ -342,7 +342,10 @@ pub(crate) async fn validate_desired_state_plan(
                 continue;
             }
             let key = (document.collection, id.to_owned());
-            let replacement = if candidate.contains_key(&key) {
+            let replacement = if let Some(current) = candidate.get(&key) {
+                if document.collection == Collection::AgentPrincipal {
+                    validate_principal_replacement(current, &document.update)?;
+                }
                 &document.update
             } else {
                 &document.add
@@ -1162,6 +1165,20 @@ async fn ensure_expectations_hold(
     }
 }
 
+fn validate_principal_replacement(current: &Value, candidate: &Value) -> Result<()> {
+    if let Some(default) = current.get("default_behavior_id").and_then(Value::as_str) {
+        anyhow::ensure!(
+            candidate
+                .get("default_behavior_id")
+                .and_then(Value::as_str)
+                .is_some(),
+            "AgentPrincipal replacement would clear default_behavior_id {default:?}; \
+             include the current default or another enabled behavior in the replacement"
+        );
+    }
+    Ok(())
+}
+
 /// All writes remain in the caller's transaction. Reference checks run after
 /// staged writes so valid cyclic configurations do not depend on write order.
 /// Digest expectations are checked first, in the same transaction; a mismatch
@@ -1185,7 +1202,10 @@ pub async fn apply_desired_state_plan(
             .as_ref()
             .is_none_or(|(_, current)| current != &document.update);
         let name = document.collection.graphql_type();
-        let (mutation, input) = if let Some((doc_id, _)) = existing {
+        let (mutation, input) = if let Some((doc_id, current)) = existing {
+            if document.collection == Collection::AgentPrincipal {
+                validate_principal_replacement(&current, &document.update)?;
+            }
             let mut update = document.update.clone();
             if document.collection == Collection::ChainKeyBinding {
                 crate::document_config::preserve_chain_key_binding_update_fields(&mut update)?;

@@ -357,6 +357,23 @@ def defaultBehaviorPublishable (reg : Registry) (scope : String) : Option String
     | .ok behavior => behavior.enabled
     | .error _ => false
 
+/-- Bootstrap may publish a principal before selecting its first behavior.
+Once configured, clearing that selection prevents runtime readiness on the next
+start. Full replacements must name a default explicitly; omission is not a patch.
+Reference validity remains with `defaultBehaviorPublishable`. -/
+def defaultBehaviorReplacementAllowed (current candidate : Option String) : Bool :=
+  current.isNone || candidate.isSome
+
+theorem configured_default_cannot_be_cleared (current : String) :
+    defaultBehaviorReplacementAllowed (some current) none = false := by rfl
+
+theorem bootstrap_default_may_be_omitted :
+    defaultBehaviorReplacementAllowed none none = true := by rfl
+
+theorem explicit_default_replacement_allowed (current : Option String) (candidate : String) :
+    defaultBehaviorReplacementAllowed current (some candidate) = true := by
+  simp [defaultBehaviorReplacementAllowed]
+
 theorem disabled_default_not_publishable (reg : Registry) (scope id : String)
     (behavior : Behavior) (hb : reg.behaviors scope id = some ⟨scope, behavior⟩)
     (he : behavior.enabled = false) :

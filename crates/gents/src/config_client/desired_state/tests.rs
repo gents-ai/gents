@@ -419,6 +419,99 @@ fn cyclic_configuration(owner: &str) -> Vec<DesiredStateApplyDocument> {
 }
 
 #[tokio::test]
+async fn generated_default_replacements_preserve_runtime_startup_selection() -> Result<()> {
+    let snapshot = crate::lean_vocab_test::lean_contract_snapshot();
+    let cases = snapshot.configuration_scope_cases["default_replacement"]
+        .as_array()
+        .expect("Lean default replacement cases");
+    assert_eq!(cases.len(), 6);
+    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    register_config_schemas(&node).await?;
+    let access = ConfigAccess::Local(node.clone());
+    for (index, case) in cases.iter().enumerate() {
+        let owner = format!("did:key:default-replacement-{index}");
+        let principal = |default: &Value, name: &str| {
+            config(
+                Collection::AgentPrincipal,
+                json!({"agent_did":owner,"default_behavior_id":default,"display_name":name}),
+            )
+        };
+        let mut documents = vec![
+            document(backend(&owner, "backend")),
+            config(
+                Collection::InferenceProfile,
+                json!({"agent_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}),
+            ),
+            principal(&case["current"], "Original"),
+        ];
+        for behavior in ["coding", "review"] {
+            documents.push(config(
+                Collection::AgentBehavior,
+                json!({"agent_did":owner,"behavior_id":behavior,"inference_profile_id":"profile"}),
+            ));
+        }
+        apply(&access, documents).await?;
+        let mut requested = json!({"agent_principal": {
+            "agent_did":owner,"display_name":"Changed"
+        }});
+        if !case["candidate"].is_null() {
+            requested["agent_principal"]["default_behavior_id"] = case["candidate"].clone();
+        }
+        let pack: crate::document_config::PackConfig = serde_json::from_value(requested)?;
+        let mut replacement = DesiredStateApplyPlan::from_pack_config(&pack)?
+            .documents()
+            .first()
+            .expect("pack principal")
+            .clone();
+        replacement.add["default_behavior_id"] = json!("coding");
+        let plan = DesiredStateApplyPlan::new(vec![replacement])?;
+        let before = access
+            .transact("test.default.before", |txn| {
+                let owner = &owner;
+                Box::pin(
+                    async move { read_record(txn, Collection::AgentPrincipal, owner, owner).await },
+                )
+            })
+            .await?;
+        let preview = access
+            .transact("test.default.preview", |txn| {
+                let plan = &plan;
+                Box::pin(async move { validate_desired_state_plan(txn, plan).await })
+            })
+            .await;
+        let published = access
+            .transact("test.default.publish", |txn| {
+                let plan = &plan;
+                Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+            })
+            .await;
+        let allowed = case["allowed"].as_bool().expect("modeled verdict");
+        assert_eq!(preview.is_ok(), allowed, "preview: {case}: {preview:?}");
+        assert_eq!(published.is_ok(), allowed, "publish: {case}: {published:?}");
+        let after = access
+            .transact("test.default.after", |txn| {
+                let owner = &owner;
+                Box::pin(
+                    async move { read_record(txn, Collection::AgentPrincipal, owner, owner).await },
+                )
+            })
+            .await?;
+        if allowed {
+            let (_, after) = after.expect("published principal");
+            assert_eq!(after["default_behavior_id"], case["candidate"]);
+            assert_eq!(after["display_name"], "Changed");
+        } else {
+            assert_eq!(after, before, "refused replacement changed the principal");
+            let message = format!("{:#}", published.unwrap_err());
+            assert!(message.contains("default_behavior_id"), "{message}");
+            assert!(message.contains("coding"), "{message}");
+        }
+    }
+    node.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Result<()> {
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     register_config_schemas(&node).await?;

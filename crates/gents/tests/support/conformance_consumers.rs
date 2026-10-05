@@ -224,6 +224,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "guarded_publication_matches_lean_publish_if_cases",
         },
         ConformanceConsumer::RustTest {
+            id: "config_client::desired_state::tests::generated_default_replacements_preserve_runtime_startup_selection",
+            package: "gents",
+            source_path: "crates/gents/src/config_client/desired_state/tests.rs",
+            module_path: "config_client::desired_state::tests",
+            function: "generated_default_replacements_preserve_runtime_startup_selection",
+        },
+        ConformanceConsumer::RustTest {
             id: "agent::runtime::tests::behavior_resolution::explicit_behavior_resolution_matches_lean_binding_cases",
             package: "gents",
             source_path: "crates/gents/src/agent/runtime/tests/behavior_resolution.rs",
