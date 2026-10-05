@@ -2,8 +2,7 @@
    sidebar's recents, each with its own default: `selected` is the node the
    shell has selected (what every screen does today), `working` the node
    this machine runs, `all` every paired node, or a chosen set. Agents
-   narrow within those nodes. Encoded on the URL's query so a scoped list
-   can be linked. */
+   narrow within those nodes. */
 import type {
   DeploymentView,
   MailboxItemView,
@@ -27,15 +26,19 @@ export const defaultScope = (view: ScopedView): Scope => ({
 export type ScopeContext = {
   nodes: readonly DeploymentView[];
   selectedNodeDid: NodeDid | null;
+  /** the home's agent DID, which marks the working node */
+  homeDid: string | null | undefined;
 };
 
-/* the context every screen has: the shell's nodes and its selection */
+/* the context every screen has: the shell's nodes, its selection and its home */
 export const scopeContextOf = (shell: {
   deployments: readonly DeploymentView[];
   selectedAgentDid: string | null;
+  snapshot: { bootstrap: { initAgentDid?: string | null } } | null;
 }): ScopeContext => ({
   nodes: shell.deployments,
   selectedNodeDid: shell.selectedAgentDid,
+  homeDid: shell.snapshot?.bootstrap.initAgentDid,
 });
 
 /* the nodes a scope names, in the snapshot's order */
@@ -44,7 +47,7 @@ export function nodesInScope(scope: Scope, ctx: ScopeContext): DeploymentView[] 
   if (scope.nodes === "all") return [...nodes];
   if (scope.nodes === "working" || scope.nodes === "selected") {
     /* with no node of its own the client works on whatever it selected */
-    const w = scope.nodes === "working" ? workingNode(nodes) : null;
+    const w = scope.nodes === "working" ? workingNode(nodes, ctx.homeDid) : null;
     if (w) return [w];
     /* a fresh client has no nodes at all yet */
     const first = nodes[0];

@@ -80,6 +80,8 @@ export function useDivider({
     setPos(x);
   }, []);
   const spring = useMemo(() => createSpring({ get: () => posRef.current, set }), [set]);
+  /* a settle in flight would set state and close the dock after unmount */
+  useEffect(() => () => spring.stop(), [spring]);
   const heading = useRef<number | null>(null);
   const settle = useCallback(
     (to: number, velocity = 0, then?: () => void) => {

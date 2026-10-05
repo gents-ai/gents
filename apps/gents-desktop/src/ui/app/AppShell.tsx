@@ -41,11 +41,7 @@ import { PaneBarSlotContext } from "./PaneBar";
 import { dockScope, useDockFor } from "./workspace";
 import { useDivider } from "@/lib/divider";
 import { ROOMY_WINDOW, useMediaQuery } from "@/lib/media";
-import {
-  headerIsWindowBar,
-  isWindowsTauriShell,
-  trafficLightsInWebview,
-} from "../../lib/shellPlatform";
+import { headerIsWindowBar, isWindowsTauriShell } from "../../lib/shellPlatform";
 import { AgentAvatar } from "@/screens/AgentAvatar";
 import { AgentHoverCard } from "@/screens/HoverCards";
 import type {
@@ -256,17 +252,6 @@ export function AppShell({
   /* the pane bar's slot: screens fill it through a portal */
   const [paneBar, setPaneBar] = useState<HTMLElement | null>(null);
   const shellEl = useRef<HTMLDivElement>(null);
-  /* the mark takes the bar's corner unless the lights do; followed when
-     fullscreen toggles, through the root's attributes */
-  const [lights, setLights] = useState(() => trafficLightsInWebview());
-  useEffect(() => {
-    const mo = new MutationObserver(() => setLights(trafficLightsInWebview()));
-    mo.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ["data-shell", "data-window-fullscreen"],
-    });
-    return () => mo.disconnect();
-  }, []);
   /* the shell's width, so every column is a length the divider can drive.
      Observed on the shell itself: the window's resize event fires before the
      frame's width variable has caught up, so it would measure the old width */
@@ -328,10 +313,6 @@ export function AppShell({
       jumpClosed();
     }
   }, [route.name, dock, jumpClosed, closeDock]);
-  const markInBar = wide && !lights;
-  useEffect(() => {
-    document.documentElement.dataset.windowLights = lights ? "inline" : "native";
-  }, [lights]);
   const onNav = (mode: NavMode) => {
     saveNavPreference(mode);
     setNav(mode);
@@ -414,9 +395,8 @@ export function AppShell({
         }}
       >
         {/* The window bar: the shell's own strip across the top, on the same
-            tracks as the row below. On macOS the traffic lights sit in its
-            rail region and on Windows the caption buttons end it; a press on
-            it drags the window. The pane region is the slot a screen fills
+            tracks as the row below. On Windows the caption buttons end it; a
+            press on it drags the window. The pane region is the slot a screen fills
             (the session's back arrow, title, marks, meter and menu), the dock
             region carries the dock's tabs. Below md it is the app's header:
             the menu and the mark, then the slot. */}
@@ -431,7 +411,7 @@ export function AppShell({
               className="flex items-center justify-center"
               data-tauri-drag-region={windowBar ? "" : undefined}
             >
-              {markInBar && mark}
+              {mark}
             </div>
           )}
           <div
@@ -566,7 +546,7 @@ export function AppShell({
           className={cn("app-rail col-start-1 row-start-2 min-h-0", !wide && "hidden")}
         >
           <RailFlyout
-            mark={markInBar ? null : mark}
+            mark={wide ? null : mark}
             route={route}
             agentName={agentName}
             agentDid={agentDid}
@@ -584,7 +564,7 @@ export function AppShell({
           >
             <nav className="flex h-full flex-col items-center gap-2 pt-3">
               {/* the rail's mark row keeps its 8px below, which the panel's offset counts */}
-              {!markInBar && <div className="mb-2">{mark}</div>}
+              {!wide && <div className="mb-2">{mark}</div>}
 
               {/* the working node: its avatar opens its configuration; a card on
                   hover. With no node on this machine the slot says so and goes

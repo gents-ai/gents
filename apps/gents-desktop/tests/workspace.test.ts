@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { dockScope, workspace } from "@/app/workspace";
+import { dockScope, restoreWorkspace, workspace } from "@/app/workspace";
 import {
   clearSurfaces,
   getSurface,
@@ -99,6 +99,13 @@ describe("each session's dock", () => {
     expect(workspace.dock("session:new").tabs).toEqual([]);
   });
 
+  it("can forget the dock a created session adopted, as it can any visited one", () => {
+    workspace.openSurface("session:new", "trace");
+    workspace.adoptNewSessionDock("created");
+    for (let i = 0; i < 200; i += 1) workspace.visit(`session:${i}`);
+    expect(workspace.dock("session:created").tabs).toEqual([]);
+  });
+
   it("remembers the tabs across runs but not that the dock was open", () => {
     const saved = new Map<string, string>();
     vi.stubGlobal("localStorage", {
@@ -124,6 +131,49 @@ describe("each session's dock", () => {
     workspace.openSurface("session:199", "trace");
     workspace.visit("session:another");
     expect(workspace.dock("session:199").tabs).toEqual(["trace"]);
+  });
+});
+
+describe("restoring the docks from storage", () => {
+  it("keeps what is well formed, closed", () => {
+    expect(
+      restoreWorkspace({
+        docks: { [A]: { open: true, tabs: ["trace", "workers"], active: "workers" } },
+        visited: [A],
+      }),
+    ).toEqual({
+      docks: { [A]: { open: false, tabs: ["trace", "workers"], active: "workers" } },
+      visited: [A],
+    });
+  });
+
+  it("drops a scope whose dock is not one and tabs that are not ids", () => {
+    expect(
+      restoreWorkspace({
+        docks: {
+          [A]: { tabs: ["trace", 7, null, "trace", "workers"], active: "missing" },
+          "session:b": { tabs: "trace" },
+          "session:c": null,
+          "session:d": ["trace"],
+        },
+        visited: [A, 3, A, "session:b"],
+      }),
+    ).toEqual({
+      docks: { [A]: { open: false, tabs: ["trace", "workers"], active: "trace" } },
+      visited: [A, "session:b"],
+    });
+  });
+
+  it("starts empty from anything else", () => {
+    for (const persisted of [
+      undefined,
+      null,
+      "docks",
+      [],
+      { docks: [], visited: {} },
+    ]) {
+      expect(restoreWorkspace(persisted)).toEqual({ docks: {}, visited: [] });
+    }
   });
 });
 

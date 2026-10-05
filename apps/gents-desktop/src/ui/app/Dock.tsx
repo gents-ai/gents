@@ -13,6 +13,10 @@ import { dockView } from "./dock-scope";
 import type { Placement } from "./surfaces";
 import { dockScopeOf, useDockFor } from "./workspace";
 
+/* the window bar's tabs and the dock's card are drawn apart, and joined by these */
+const DOCK_PANEL_ID = "dock-panel";
+const dockTabId = (surface: string) => `dock-tab-${surface}`;
+
 export function Dock({
   sessionId,
   routeName,
@@ -66,7 +70,9 @@ export function Dock({
   return (
     <aside
       data-testid="dock"
-      aria-label={active.title}
+      id={DOCK_PANEL_ID}
+      role="tabpanel"
+      aria-labelledby={dockTabId(active.id)}
       className="flex h-full min-h-0 flex-col rounded-2xl border border-border/60 bg-background"
     >
       <div className="min-h-0 flex-1">
@@ -102,6 +108,7 @@ export function DockTabs({
      order is written when it is let go. The strip's tabs share one width, so
      a neighbour steps by that width plus the gap. */
   const strip = useRef<HTMLDivElement>(null);
+  const tabEls = useRef(new Map<string, HTMLButtonElement>());
   /* geometry is taken at the press, before any tab has moved */
   const press = useRef<{
     id: string;
@@ -117,8 +124,10 @@ export function DockTabs({
   } | null>(null);
   const onPress = (e: React.PointerEvent<HTMLElement>, id: string) => {
     if (e.button !== 0) return;
-    /* no text selection rides along with a tab drag (WebKit) */
+    /* no text selection rides along with a tab drag (WebKit); that also
+       withholds the press's focus, so the tab takes it here */
     e.preventDefault();
+    tabEls.current.get(id)?.focus({ preventScroll: true });
     getSelection()?.removeAllRanges();
     document.documentElement.dataset.dragging = "tab";
     const lefts = [
@@ -157,6 +166,39 @@ export function DockTabs({
     return 0;
   };
   const view = dockView(dock, routeName, "dock");
+  /* the tablist's keys (APG tabs, automatic activation): arrows, Home and
+     End move between tabs and show the one reached; Delete closes the tab,
+     and focus follows to the one showing next */
+  const refocus = useRef(false);
+  useLayoutEffect(() => {
+    if (!refocus.current) return;
+    refocus.current = false;
+    if (view.active) tabEls.current.get(view.active.id)?.focus();
+  });
+  const onTabKey = (e: React.KeyboardEvent<HTMLElement>, index: number) => {
+    const n = view.tabs.length;
+    if (e.key === "Delete") {
+      e.preventDefault();
+      refocus.current = true;
+      closeTab(view.tabs[index]!.id);
+      return;
+    }
+    const to =
+      e.key === "ArrowRight"
+        ? (index + 1) % n
+        : e.key === "ArrowLeft"
+          ? (index - 1 + n) % n
+          : e.key === "Home"
+            ? 0
+            : e.key === "End"
+              ? n - 1
+              : null;
+    if (to === null) return;
+    e.preventDefault();
+    const next = view.tabs[to]!;
+    activate(next.id);
+    tabEls.current.get(next.id)?.focus();
+  };
   /* the session tab's natural width, so it can grow into place from nothing
      and the tabs beside it slide over rather than jump */
   const sessionTab = useRef<HTMLButtonElement>(null);
@@ -208,6 +250,7 @@ export function DockTabs({
           return (
             <div
               key={s.id}
+              role="presentation"
               data-tab={s.id}
               onPointerDown={(e) => onPress(e, s.id)}
               onPointerMove={onMove}
@@ -234,9 +277,18 @@ export function DockTabs({
               )}
             >
               <button
+                ref={(el) => {
+                  if (el) tabEls.current.set(s.id, el);
+                  else tabEls.current.delete(s.id);
+                }}
                 type="button"
                 role="tab"
+                id={dockTabId(s.id)}
                 aria-selected={active}
+                aria-controls={active ? DOCK_PANEL_ID : undefined}
+                aria-keyshortcuts="Delete"
+                tabIndex={active ? 0 : -1}
+                onKeyDown={(e) => onTabKey(e, index)}
                 onClick={() => activate(s.id)}
                 className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5"
               >
@@ -253,10 +305,14 @@ export function DockTabs({
                   );
                 })()}
               </button>
-              {/* the close is always there for the tab showing, on hover for the rest */}
+              {/* the close is always there for the tab showing, on hover for
+                  the rest. A tablist holds only tabs, so it is the pointer's
+                  way to close; the keyboard's is Delete on the tab. */}
               <button
                 type="button"
-                aria-label={`Close ${s.title}`}
+                aria-hidden
+                tabIndex={-1}
+                title={`Close ${s.title}`}
                 /* the tab captures the pointer for dragging, which would
                      redirect this button's click to the tab */
                 onPointerDown={(e) => e.stopPropagation()}
@@ -264,7 +320,7 @@ export function DockTabs({
                 className={cn(
                   "ml-1 grid size-5 shrink-0 cursor-pointer place-items-center rounded-md hover:bg-background",
                   !active &&
-                    "opacity-0 group-hover/tab:opacity-100 focus-visible:opacity-100",
+                    "opacity-0 group-focus-within/tab:opacity-100 group-hover/tab:opacity-100",
                 )}
               >
                 <X className="size-3.5" />

@@ -18,15 +18,15 @@ export const nodeOfSession = (session: SessionSummary): NodeDid => session.agent
    Since the runtime became a user service the desktop pairs with it by
    enrollment, so its record says "enrollment" like any remote peer, and
    only the home's agent DID (bootstrap.initAgentDid) tells them apart;
-   isLocalAgent owns that test. The app registers the DID once per render,
-   before any screen asks, so callers that only hold the nodes can ask. */
-let homeDid: string | null = null;
-export const setHomeDid = (did: string | null | undefined) => {
-  homeDid = did ?? null;
-};
-export const isWorkingNode = (node: DeploymentView) => isLocalAgent(node, homeDid);
-export const workingNode = (nodes: readonly DeploymentView[]): DeploymentView | null =>
-  nodes.find(isWorkingNode) ?? null;
+   isLocalAgent owns that test. */
+export const isWorkingNode = (
+  node: DeploymentView,
+  homeDid: string | null | undefined,
+) => isLocalAgent(node, homeDid);
+export const workingNode = (
+  nodes: readonly DeploymentView[],
+  homeDid: string | null | undefined,
+): DeploymentView | null => nodes.find((n) => isWorkingNode(n, homeDid)) ?? null;
 
 /* Lineage across nodes. A worker names the request that spawned it; its
    parent is the session whose latest request that is, on whatever node

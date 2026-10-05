@@ -35,6 +35,7 @@ export function WorkersSurface({ sessionId }: SurfaceContext) {
                 <span className="truncate">{w.title ?? "Untitled"}</span>
                 <NodeBehaviorStack
                   nodes={shell.deployments}
+                  homeDid={shell.snapshot?.bootstrap.initAgentDid}
                   nodeDid={nodeOfSession(w)}
                   behaviorId={w.behaviorId}
                   deployment={shell.selectedDeployment}

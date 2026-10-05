@@ -8,7 +8,7 @@
    after a short rest, closes when the pointer leaves; keyboard focus
    inside keeps it open. */
 import { createContext } from "react";
-import { useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ChevronRight, Inbox, Lock, Plus, ScrollText, Waypoints } from "lucide-react";
 import type { DeploymentView, SessionSummary } from "@source-inc/gents-desktop-client";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
@@ -304,6 +304,12 @@ export function RailFlyout({
     if (timer.current) window.clearTimeout(timer.current);
     timer.current = window.setTimeout(() => setOpen(next), ms);
   };
+  useEffect(
+    () => () => {
+      if (timer.current) window.clearTimeout(timer.current);
+    },
+    [],
+  );
   if (mode === "collapsed") return <>{children}</>;
   /* the mark row: the nav's top padding, the 28px mark and its 8px gap, so the
      panel's first row lands where the rail's avatar sits */

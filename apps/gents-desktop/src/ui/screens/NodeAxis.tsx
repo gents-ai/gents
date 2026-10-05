@@ -20,17 +20,20 @@ import { AgentAvatar } from "./AgentAvatar";
 
 export function NodeAxis({
   nodes,
+  homeDid,
   counts,
   value,
   onChange,
 }: {
   nodes: readonly DeploymentView[];
+  /** the home's agent DID, which marks the working node */
+  homeDid: string | null | undefined;
   counts: Record<string, number>;
   value: string[];
   onChange: (next: string[]) => void;
 }) {
   if (nodes.length < 2) return null;
-  const working = workingNode(nodes);
+  const working = workingNode(nodes, homeDid);
   const nameOf = (n: DeploymentView) => n.agentPrincipal.displayName ?? n.label;
   const picked = nodes.filter((n) => value.includes(nodeDidOf(n)));
   /* open to all: the first few nodes stand in, the local one leading */

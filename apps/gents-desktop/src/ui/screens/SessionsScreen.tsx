@@ -183,6 +183,7 @@ export function SessionsScreen({
           <div className="ml-auto flex min-w-0 items-center gap-2">
             <NodeAxis
               nodes={shell.deployments}
+              homeDid={shell.snapshot?.bootstrap.initAgentDid}
               counts={nodeCounts}
               value={nodeIds}
               onChange={(next) => {
@@ -365,6 +366,7 @@ export function SessionsScreen({
                   </p>
                   <NodeBehaviorStack
                     nodes={shell.deployments}
+                    homeDid={shell.snapshot?.bootstrap.initAgentDid}
                     nodeDid={nodeOfSession(row.session)}
                     behaviorId={row.session.behaviorId}
                     deployment={deployment}

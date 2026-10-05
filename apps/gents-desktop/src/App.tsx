@@ -38,7 +38,7 @@ import { Shortcuts } from "./ui/screens/Shortcuts";
 import { SetupScreen } from "./ui/screens/setup/SetupScreen";
 import { useShell, type ShellBridge } from "./ui/hooks/useShell";
 import { ShellProvider } from "./ui/app/ShellContext";
-import { setHomeDid, workingNode } from "./ui/lib/nodes";
+import { workingNode } from "./ui/lib/nodes";
 import {
   defaultScope,
   mailboxInScope,
@@ -107,8 +107,10 @@ function AppHost({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
     bridge,
     route.name === "session" ? route.sessionId : undefined,
   );
-  setHomeDid(shell.snapshot?.bootstrap.initAgentDid);
-  const working = workingNode(shell.deployments);
+  const working = workingNode(
+    shell.deployments,
+    shell.snapshot?.bootstrap.initAgentDid,
+  );
   /* a failed action is over by the time it is reported: one toast where the
      person is, then forgotten. The banner is for the client's own state. */
   useEffect(() => {
