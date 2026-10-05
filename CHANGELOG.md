@@ -624,6 +624,12 @@ source consistency checks, not a separate runtime compatibility version.
 
 ### Fixed
 
+- A stock Grok pager started without `--agent` no longer fails session/new
+  with "unknown, disabled, or unauthorized Gents behavior: grok-build-plan".
+  Grok's built-in profiles (`grok-build` and `grok-build-*`, sent from the
+  selected model's agent type) select the connection's default behavior, or
+  keep the behavior a connection is already bound to. Other names, including
+  Grok's `explore` or `plan`, still need a same-named enabled behavior.
 - Config errors identify nested field paths, misplaced fields and missing document
   selections, with executable help or discovery calls shared by single and batch
   operations. Trigger ownership errors no longer recommend the removed plan

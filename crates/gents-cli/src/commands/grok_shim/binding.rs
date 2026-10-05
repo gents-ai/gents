@@ -53,9 +53,16 @@ impl BehaviorConnection {
         } else {
             None
         };
-        let profile = profile.map(|name| match name {
-            "default" | "grok-build" => self.inputs.behavior_id.as_str(),
-            name => name,
+        let profile = profile.and_then(|name| match name {
+            "default" => Some(self.inputs.behavior_id.as_str()),
+            name if is_grok_builtin_profile(name) => {
+                tracing::info!(
+                    profile = name,
+                    "ignoring Grok built-in agent profile; the connection keeps its default or bound selection"
+                );
+                None
+            }
+            name => Some(name),
         });
         let mut binding = self.binding.lock().await;
         anyhow::ensure!(!binding.closed, "connection already disconnected");
@@ -107,6 +114,15 @@ impl BehaviorConnection {
         // and disconnect must not wait for inference or outbound delivery.
         Ok(Some(service))
     }
+}
+
+/// Grok reserves the `grok-build` agent-profile namespace for its built-in
+/// agents. Without `--agent`, stock Grok 1.0.46 sends the selected catalog
+/// model's `agent_type` as `agentProfile` (`grok-build-plan` for every xAI
+/// model, `grok-build-ask-user` under `--no-plan`). These names select no
+/// Gents behavior, so behavior ids inside the namespace cannot be selected.
+fn is_grok_builtin_profile(name: &str) -> bool {
+    name == "grok-build" || name.starts_with("grok-build-")
 }
 
 impl AcpDelegate for BehaviorConnection {

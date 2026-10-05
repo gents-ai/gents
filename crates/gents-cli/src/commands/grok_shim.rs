@@ -485,6 +485,21 @@ mod tests {
             .await;
             assert!(denied.get("error").is_some(), "{denied}");
         }
+        for name in ["grok-buildx", "explore", "plan", "codex"] {
+            let denied = send(
+                &selected,
+                json!({"jsonrpc":"2.0","id":2,"method":"session/new",
+                "params":{"_meta":{"sessionId":"bad-session","agentProfile":name}}}),
+            )
+            .await;
+            let message = denied["error"]["message"].as_str().unwrap_or_default();
+            assert!(
+                message.ends_with(&format!(
+                    "unknown, disabled, or unauthorized Gents behavior: {name}"
+                )),
+                "{denied}"
+            );
+        }
         let reviewer = send(
             &selected,
             json!({"jsonrpc":"2.0","id":3,"method":"session/new",
@@ -531,6 +546,60 @@ mod tests {
                 assert_eq!(sessions[0]["sessionId"], expected);
             }
         }
+        let builtins = [
+            "grok-build",
+            "grok-build-plan",
+            "grok-build-ask-user",
+            "grok-build-future",
+        ];
+        for (client_id, builtin) in (10..).zip(builtins) {
+            let fresh = factory(client_id, &registration).unwrap();
+            let created = send(
+                &fresh,
+                json!({"jsonrpc":"2.0","id":9,"method":"session/new",
+                "params":{"_meta":{"sessionId":format!("fresh-{builtin}"),"agentProfile":builtin}}}),
+            )
+            .await;
+            assert!(created.get("error").is_none(), "{builtin}: {created}");
+            assert_eq!(
+                created["result"]["models"]["currentModelId"], "GLM-5.3-NVFP4",
+                "{builtin}"
+            );
+            fresh.on_disconnect().await;
+            let kept = send(
+                &selected,
+                json!({"jsonrpc":"2.0","id":9,"method":"session/new",
+                "params":{"_meta":{"sessionId":format!("bound-{builtin}"),"agentProfile":builtin}}}),
+            )
+            .await;
+            assert!(kept.get("error").is_none(), "{builtin}: {kept}");
+            assert_eq!(
+                kept["result"]["models"]["currentModelId"], "review-model",
+                "{builtin}"
+            );
+        }
+        seed_test_behavior_configuration(
+            node.as_ref(),
+            did,
+            "explore",
+            &inputs.behavior_id,
+            "explore-model",
+            true,
+        )
+        .await;
+        let explore = factory(20, &registration).unwrap();
+        let explored = send(
+            &explore,
+            json!({"jsonrpc":"2.0","id":9,"method":"session/new",
+            "params":{"_meta":{"sessionId":"explore-history","agentProfile":"explore"}}}),
+        )
+        .await;
+        assert!(explored.get("error").is_none(), "{explored}");
+        assert_eq!(
+            explored["result"]["models"]["currentModelId"],
+            "explore-model"
+        );
+        explore.on_disconnect().await;
         let switched = send(
             &selected,
             json!({"jsonrpc":"2.0","id":5,"method":"session/new",
@@ -563,6 +632,34 @@ mod tests {
         assert!(closed.get("error").is_some());
         default.on_disconnect().await;
         fresh.on_disconnect().await;
+        // Desired state refuses a principal default that names a disabled
+        // behavior, so the default moves to `reviewer`. A built-in profile
+        // still falls back to the connection's frozen `inputs.behavior_id`.
+        seed_test_behavior_configuration(
+            node.as_ref(),
+            did,
+            &inputs.behavior_id,
+            "reviewer",
+            "GLM-5.3-NVFP4",
+            false,
+        )
+        .await;
+        let disabled_default = factory(21, &registration).unwrap();
+        let denied = send(
+            &disabled_default,
+            json!({"jsonrpc":"2.0","id":10,"method":"session/new",
+            "params":{"_meta":{"sessionId":"disabled-default","agentProfile":"grok-build-plan"}}}),
+        )
+        .await;
+        assert_eq!(
+            denied["error"]["message"],
+            format!(
+                "unknown, disabled, or unauthorized Gents behavior: {}",
+                inputs.behavior_id
+            ),
+            "{denied}"
+        );
+        disabled_default.on_disconnect().await;
     }
 
     /// Invoke the exact production factory with the given registration, then
