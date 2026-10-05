@@ -58,7 +58,9 @@ describe("enabling a behavior", () => {
       .setup()
       .click(screen.getAllByRole("switch", { name: "Ops is disabled" })[0]!);
     await waitFor(() =>
-      expect(toast).toHaveBeenCalledWith(`Couldn’t save the configuration: ${refusal}`),
+      expect(toast).toHaveBeenCalledWith(`Couldn’t turn it on: ${refusal}`),
     );
+    /* the action reports it; the switch's own catch does not again (#2043) */
+    expect(toast).toHaveBeenCalledTimes(1);
   });
 });

@@ -492,9 +492,13 @@ export function TriggersPanel({
                 enabled={{
                   checked: t.config.enabled !== false,
                   onChange: (enabled) =>
-                    changeConfig("saveTriggerConfig", {
-                      document: { ...t.config, enabled },
-                    }),
+                    changeConfig(
+                      "saveTriggerConfig",
+                      {
+                        document: { ...t.config, enabled },
+                      },
+                      `turn it ${enabled ? "on" : "off"}`,
+                    ),
                 }}
                 onDuplicate={async () => {
                   const trigger_id = newId("trig");

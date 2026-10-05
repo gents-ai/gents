@@ -286,12 +286,16 @@ async function saveEnabled(
   b: BehaviorView,
   next: boolean,
 ) {
-  await changeConfig("patchConfigComponents", {
-    agentDid: deployment.agentDid,
-    patches: [
-      { collection: "AgentBehavior", id: b.behaviorId, changes: { enabled: next } },
-    ],
-  });
+  await changeConfig(
+    "patchConfigComponents",
+    {
+      agentDid: deployment.agentDid,
+      patches: [
+        { collection: "AgentBehavior", id: b.behaviorId, changes: { enabled: next } },
+      ],
+    },
+    `turn it ${next ? "on" : "off"}`,
+  );
 }
 
 /* One apply enables the behavior and names it the default: publication

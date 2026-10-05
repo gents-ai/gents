@@ -63,6 +63,7 @@ import { Plus } from "lucide-react";
 import { ProviderLogo } from "../ProviderLogo";
 import { RenameDialog } from "../AgentsScreen";
 import { useApp } from "@/app/AppContext";
+import { toastFailure } from "@/lib/failure";
 
 export function backendSave(
   agentDid: string,
@@ -895,22 +896,22 @@ export function BackendEditor({
                   size="sm"
                   variant="quiet"
                   onClick={() =>
-                    changeConfig("patchConfigComponents", {
-                      agentDid: deployment.agentDid,
-                      patches: [
-                        {
-                          collection: "InferenceBackend",
-                          id: backend.backendId,
-                          changes: { auth: { kind: "unauthenticated" } },
-                        },
-                      ],
-                    })
+                    changeConfig(
+                      "patchConfigComponents",
+                      {
+                        agentDid: deployment.agentDid,
+                        patches: [
+                          {
+                            collection: "InferenceBackend",
+                            id: backend.backendId,
+                            changes: { auth: { kind: "unauthenticated" } },
+                          },
+                        ],
+                      },
+                      "clear the stored key",
+                    )
                       .then(() => toast("Stored key cleared"))
-                      .catch((error) =>
-                        toast(
-                          `Clear failed: ${error instanceof Error ? error.message : String(error)}`,
-                        ),
-                      )
+                      .catch((error) => toastFailure("clear the stored key", error))
                   }
                 >
                   Clear stored key
@@ -1237,16 +1238,20 @@ export function InferencePanel({
                   enabled={{
                     checked: b.enabled !== false,
                     onChange: (enabled) =>
-                      changeConfig("patchConfigComponents", {
-                        agentDid: deployment.agentDid,
-                        patches: [
-                          {
-                            collection: "InferenceBackend",
-                            id: b.backendId,
-                            changes: { enabled },
-                          },
-                        ],
-                      }),
+                      changeConfig(
+                        "patchConfigComponents",
+                        {
+                          agentDid: deployment.agentDid,
+                          patches: [
+                            {
+                              collection: "InferenceBackend",
+                              id: b.backendId,
+                              changes: { enabled },
+                            },
+                          ],
+                        },
+                        `turn it ${enabled ? "on" : "off"}`,
+                      ),
                   }}
                   /* an added account's backend goes with Remove account */
                   onDelete={

@@ -502,9 +502,13 @@ export function TasksPanel({
                 enabled={{
                   checked: t.enabled !== false,
                   onChange: (enabled) =>
-                    changeConfig("saveTaskConfig", {
-                      document: { ...taskDocument(deployment, t), enabled },
-                    }),
+                    changeConfig(
+                      "saveTaskConfig",
+                      {
+                        document: { ...taskDocument(deployment, t), enabled },
+                      },
+                      `turn it ${enabled ? "on" : "off"}`,
+                    ),
                 }}
                 onDuplicate={async () => {
                   const task_id = newId("task");

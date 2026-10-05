@@ -53,12 +53,15 @@ export function createDesktopShellConfigActions({
 }: ConfigActionParams) {
   /**
    * A configuration change: the bridge's write, then a fresh read once it
-   * lands, and one report naming what failed. The caller still sees the
-   * failure, to keep what the person typed.
+   * lands, and one report naming what failed: the change's own name, or
+   * what the person did when the screen knows it better (a switch turned
+   * on writes a patch). The caller still sees the failure, to keep what
+   * the person typed.
    */
   async function changeConfig<K extends ConfigChange>(
     change: K,
     request: ConfigRequest<K>,
+    label: string = CHANGES[change],
   ): Promise<DesktopClientSnapshot> {
     const write = api[change] as (
       request: ConfigRequest<K>,
@@ -67,7 +70,7 @@ export function createDesktopShellConfigActions({
     try {
       return await mutateSnapshot(() => write(request));
     } catch (error) {
-      setError(actionFailure(CHANGES[change], error));
+      setError(actionFailure(label, error));
       throw shownFailure(error);
     }
   }

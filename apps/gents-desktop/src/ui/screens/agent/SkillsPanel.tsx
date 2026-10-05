@@ -223,9 +223,13 @@ export function SkillsPanel({
             enabled={{
               checked: s.enabled !== false,
               onChange: (enabled) =>
-                changeConfig("saveSkillConfig", {
-                  document: { ...skillDocument(deployment, s), enabled },
-                }),
+                changeConfig(
+                  "saveSkillConfig",
+                  {
+                    document: { ...skillDocument(deployment, s), enabled },
+                  },
+                  `turn it ${enabled ? "on" : "off"}`,
+                ),
             }}
             onDuplicate={async () => {
               const skill_id = newId("skill");
