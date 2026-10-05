@@ -54,6 +54,7 @@ mod one_shot;
 mod provider_idle;
 mod repeated_tool_failure;
 mod request_assembly;
+mod schema_argument_repair;
 mod tool_dispatch;
 mod turn_threading;
 
@@ -134,6 +135,11 @@ where
 {
     try_stream! {
         let provider_profile = config.provider_input_counter.profile();
+        let routing_affinity = crate::provider_input::routing_affinity::RoutingAffinity::start(
+            provider_profile == crate::provider_input::ProviderInputProfile::ChatGptCodexResponses,
+            hook.is_some(),
+            match hook.as_ref() { Some(hook) => hook.session_id().await, None => None },
+        );
         let mut replay = config.replay.clone();
         // A recovered durable checkpoint is one exact provider projection even
         // though rig's loop API carries its final message separately as the
@@ -201,6 +207,7 @@ where
             current_turn += 1;
 
             let turn_index = current_turn - 1;
+            let preparation_started = std::time::Instant::now();
             let (mut request, turn_context_decision) = build_budgeted_request(
                 &model,
                 &mut history,
@@ -213,6 +220,16 @@ where
                 &mut active_reduction_keys,
             )
             .await?;
+            tracing::info!(
+                target: "gents::agent::loop_stream",
+                request_doc_id = replay.request_doc_id.as_deref().unwrap_or_default(),
+                turn = turn_index,
+                history_count = history.len(),
+                new_message_count = new_messages.len(),
+                context_window = config.context_window,
+                elapsed_ms = preparation_started.elapsed().as_millis() as u64,
+                "prepared provider request before completion dispatch"
+            );
             let compaction_reason = turn_context_decision.reason;
             let pre_compaction_input_tokens =
                 turn_context_decision.pre_compaction_input_tokens;
@@ -266,7 +283,7 @@ where
             // from the transcript, so it rides in the trace.
             let mut build_path = AssemblyBuildPath::Budgeted;
             'attempts: loop {
-                let (mut stream, activity, mut audit_receiver) = loop {
+                let (mut stream, activity, mut audit_receiver, advertised_tools) = loop {
                     let prepared_dispatch = prepare_dispatch_attempt(
                         &request,
                         &config,
@@ -318,8 +335,9 @@ where
 
                     let activity =
                         crate::rendered_request::scope::attempt_activity(turn_index, attempt);
+                    let advertised_tools = dispatch_request.tools.clone();
                     match within_provider_idle(
-                        model.stream(dispatch_request),
+                        crate::provider_input::routing_affinity::scope(routing_affinity.clone(), model.stream(dispatch_request)),
                         config.provider_idle_timeout,
                         activity.as_deref(),
                         true,
@@ -327,7 +345,7 @@ where
                     .await
                     .and_then(|result| result.map_err(ProviderAttemptFailure::Completion))
                     {
-                        Ok(stream) => break (stream, activity, audit_receiver),
+                        Ok(stream) => break (stream, activity, audit_receiver, advertised_tools),
                         Err(failure) => {
                             let (classified, error_text) = failure.classify();
                             match retry.on_pre_stream_failure(
@@ -446,7 +464,7 @@ where
             loop {
                 let item = loop {
                     let next_item = within_provider_idle(
-                        stream.next(),
+                        crate::provider_input::routing_affinity::scope(routing_affinity.clone(), stream.next()),
                         config.provider_idle_timeout,
                         activity.as_deref(),
                         !saw_stream_item,
@@ -671,7 +689,27 @@ where
                         accumulator.push_provider_reasoning_delta(provider_profile, id.clone(), &reasoning);
                         yield LoopStreamItem::Item(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::ReasoningDelta { id, reasoning }));
                     }
-                    StreamedAssistantContent::ToolCall { tool_call, internal_call_id } => {
+                    StreamedAssistantContent::ToolCall { mut tool_call, internal_call_id } => {
+                        if let Some(definition) = advertised_tools.iter().find(|tool| tool.name == tool_call.function.name) {
+                            let paths = schema_argument_repair::repair_arguments(
+                                &definition.parameters,
+                                &mut tool_call.function.arguments,
+                            );
+                            if !paths.is_empty() {
+                                let recorded_paths = paths.iter().take(16)
+                                    .map(|path| path.chars().take(160).collect::<String>())
+                                    .collect::<Vec<_>>();
+                                tracing::info!(
+                                    tool = %tool_call.function.name,
+                                    tool_call_id = %internal_call_id,
+                                    turn = turn_index,
+                                    attempt,
+                                    repair_count = paths.len(),
+                                    repair_paths = ?recorded_paths,
+                                    "decoded stringified JSON containers using the advertised tool schema"
+                                );
+                            }
+                        }
                         accumulator.push_tool_call(rig_compat::from_rig_tool_call(&tool_call));
                         yield LoopStreamItem::Item(MultiTurnStreamItem::StreamAssistantItem(
                             StreamedAssistantContent::ToolCall {

@@ -358,7 +358,8 @@ async fn cancellation_after_embedded_begin_reports_and_completes_rollback() {
                 let (rollback_on_drop, handle) = tokio::spawn(super::begin_embedded_owned(
                     runner,
                     None,
-                    write_guard,
+                    false,
+                    Some(write_guard),
                     rollback_scheduled,
                     move |handle| async move {
                         *lock(&registered) = Some(handle);
@@ -886,36 +887,118 @@ resources:
         .await
         .unwrap();
 
-    let visible = ConfigAccess::transact_local(
+    fn count_rows<'txn, 'node>(
+        txn: &'txn ConfigApplyTxn<'node>,
+    ) -> futures::future::BoxFuture<'txn, Result<usize>> {
+        Box::pin(async move {
+            Ok(
+                txn.execute("{ IdentityFact { value } }").await?["data"]["IdentityFact"]
+                    .as_array()
+                    .map_or(0, Vec::len),
+            )
+        })
+    }
+    for read_only in [false, true] {
+        for (identity, expected) in [(Some(identity::Did::new(READER).unwrap()), 1), (None, 0)] {
+            let visible = if read_only {
+                ConfigAccess::transact_local_readonly(
+                    &node,
+                    identity,
+                    "test.identity_readonly_query",
+                    count_rows,
+                )
+                .await
+            } else {
+                ConfigAccess::transact_local(&node, identity, "test.identity_query", count_rows)
+                    .await
+            }
+            .unwrap();
+            assert_eq!(visible, expected, "read_only={read_only}");
+        }
+    }
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn readonly_transaction_preserves_snapshot_and_rejects_native_mutation() {
+    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    ConfigAccess::Local(Arc::clone(&node))
+        .add_schema("type ReadSnapshotProbe { value: String }")
+        .await
+        .unwrap();
+    ConfigAccess::write_local(
         &node,
-        Some(identity::Did::new(READER).unwrap()),
-        "test.identity_reader_query",
+        "test.readonly_seed",
+        r#"mutation { create_ReadSnapshotProbe(input: {value: "before"}) { _docID } }"#,
+    )
+    .await
+    .unwrap();
+    let entered = Arc::new(Notify::new());
+    let resume = Arc::new(Notify::new());
+    let reading_node = Arc::clone(&node);
+    let reading_entered = Arc::clone(&entered);
+    let reading_resume = Arc::clone(&resume);
+    let reader = tokio::spawn(async move {
+        ConfigAccess::transact_local_readonly(
+            &reading_node,
+            None,
+            "test.readonly_snapshot",
+            |txn| {
+                let entered = Arc::clone(&reading_entered);
+                let resume = Arc::clone(&reading_resume);
+                Box::pin(async move {
+                    let first = txn.execute("{ ReadSnapshotProbe { value } }").await?;
+                    entered.notify_one();
+                    resume.notified().await;
+                    let second = txn.execute("{ ReadSnapshotProbe { value } }").await?;
+                    Ok((first, second))
+                })
+            },
+        )
+        .await
+    });
+    tokio::time::timeout(Duration::from_secs(10), entered.notified())
+        .await
+        .unwrap();
+    ConfigAccess::write_local(
+        &node,
+        "test.readonly_concurrent_update",
+        r#"mutation { update_ReadSnapshotProbe(input: {value: "after"}) { _docID } }"#,
+    )
+    .await
+    .unwrap();
+    resume.notify_one();
+    let (first, second) = tokio::time::timeout(Duration::from_secs(10), reader)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(first["data"]["ReadSnapshotProbe"][0]["value"], "before");
+    assert_eq!(second["data"]["ReadSnapshotProbe"][0]["value"], "before");
+    let error = ConfigAccess::transact_local_readonly(
+        &node,
+        None,
+        "test.readonly_mutation_rejected",
         |txn| {
             Box::pin(async move {
-                Ok(
-                    txn.execute("{ IdentityFact { value } }").await?["data"]["IdentityFact"]
-                        .as_array()
-                        .map_or(0, Vec::len),
-                )
+                txn.execute(r#"mutation { update_ReadSnapshotProbe(input: {value: "forbidden"}) { _docID } }"#)
+                    .await
             })
         },
     )
     .await
-    .unwrap();
-    let anonymous =
-        ConfigAccess::transact_local(&node, None, "test.identity_anonymous_query", |txn| {
-            Box::pin(async move {
-                Ok(
-                    txn.execute("{ IdentityFact { value } }").await?["data"]["IdentityFact"]
-                        .as_array()
-                        .map_or(0, Vec::len),
-                )
-            })
+    .unwrap_err();
+    assert!(
+        format!("{error:#}").contains("cannot execute mutation in read-only transaction"),
+        "mutation must reach DefraDB's native read-only transaction guard: {error:#}"
+    );
+    let after =
+        ConfigAccess::transact_local_readonly(&node, None, "test.readonly_new_snapshot", |txn| {
+            Box::pin(async move { txn.execute("{ ReadSnapshotProbe { value } }").await })
         })
         .await
         .unwrap();
-    assert_eq!(visible, 1);
-    assert_eq!(anonymous, 0);
+    assert_eq!(after["data"]["ReadSnapshotProbe"][0]["value"], "after");
     node.shutdown().await;
 }
 

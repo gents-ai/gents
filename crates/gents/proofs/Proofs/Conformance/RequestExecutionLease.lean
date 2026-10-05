@@ -404,6 +404,7 @@ def outcomeName : Outcome → String
 
 def boundaryName : Boundary → String
   | .mutationWriteGate => "mutation_write_gate"
+  | .validatedTransaction => "validated_transaction"
   | .observingReplica => "observing_replica"
 
 def decisionName : ProducerDecision → String
@@ -541,5 +542,64 @@ def providerEofCasesJson : String :=
   jsonArray (providerEofCases.map (fun c =>
     "{\"saw_explicit_final\":" ++ boolJson c.sawExplicitFinal ++
       ",\"expected_failure\":" ++ boolJson c.expectedFailure ++ "}"))
+
+
+structure ObservedLeaseCase where
+  name : String
+  pre : World Generation
+  action : Action Generation
+  intervening : List (Action Generation)
+  deriving DecidableEq, Repr
+
+def observedLeaseCases : List ObservedLeaseCase :=
+  [ ⟨"renewal_admission_after_expiry_is_rejected",
+      processing 101 20 20 20, .renew .validatedTransaction 101 20, []⟩
+  , ⟨"admitted_renewal_can_commit_after_clock_expiry_without_storage_conflict",
+      processing 101 20 20 15, .renew .validatedTransaction 101 20, [.advanceTime 25]⟩
+  , ⟨"recovery_invalidates_admitted_renewal",
+      processing 101 20 20 15, .renew .validatedTransaction 101 20,
+      [.advanceTime 25, .recoverExpiredAndFail .mutationWriteGate 101 202]⟩
+  , ⟨"renewal_invalidates_admitted_publication",
+      processing 101 20 20 15,
+      .authorizeProducerDecision .mutationWriteGate 101 .acceptAndPublish,
+      [.renew .validatedTransaction 101 20]⟩
+  , ⟨"finalization_invalidates_admitted_renewal",
+      processing 101 20 20 15, .renew .validatedTransaction 101 20,
+      [.finalize .mutationWriteGate 101 .completed]⟩
+  , ⟨"revocation_invalidates_admitted_renewal",
+      processing 101 20 20 15, .renew .validatedTransaction 101 20,
+      [.policyRevoke .mutationWriteGate 101 202 .dead]⟩
+  , ⟨"drop_invalidates_admitted_renewal",
+      processing 101 20 20 15, .renew .validatedTransaction 101 20,
+      [.drop .mutationWriteGate 101]⟩
+  , ⟨"competing_deadline_cas_invalidates_admitted_renewal",
+      processing 101 20 20 15, .renew .validatedTransaction 101 20,
+      [.renew .validatedTransaction 101 20]⟩
+  ]
+
+def observedLeaseExpected (testCase : ObservedLeaseCase) : Option (World Generation) := do
+  let observation ← observeTransaction? testCase.pre testCase.action
+  let current ← replay? testCase.pre testCase.intervening
+  commitObservedTransaction? current observation
+
+/-- This counterexample records the existing native admission/commit gap rather
+than hiding it behind a bounded-latency assumption. -/
+theorem clock_passage_is_not_storage_conflict :
+    (observedLeaseCases[1]? >>= observedLeaseExpected) =
+      some (processing 101 20 35 25) := by
+  native_decide
+
+theorem recovery_rejects_previously_admitted_renewal :
+    (observedLeaseCases[2]? >>= observedLeaseExpected) = none := by
+  native_decide
+
+def observedLeaseCaseJson (testCase : ObservedLeaseCase) : String :=
+  "{" ++ "\"name\":" ++ jsonString testCase.name ++
+    ",\"pre\":" ++ worldJson testCase.pre ++
+    ",\"action\":" ++ actionJson testCase.action ++
+    ",\"intervening\":" ++ jsonArray (testCase.intervening.map actionJson) ++
+    ",\"expected\":" ++ optionalWorldJson (observedLeaseExpected testCase) ++ "}"
+
+def observedLeaseCasesJson : String := jsonArray (observedLeaseCases.map observedLeaseCaseJson)
 
 end Conformance.RequestExecutionLeaseContracts

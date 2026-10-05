@@ -52,3 +52,10 @@ fn generated_provider_eof_cases_fence_production_policy() {
         );
     }
 }
+
+#[test]
+fn generated_request_execution_observed_contract_decodes_current_inventory() {
+    let cases = crate::lean_vocab_test::lean_request_execution_lease_observed_cases();
+    assert_eq!(cases.len(), 8);
+    assert!(cases.iter().all(|case| !case.name.is_empty()));
+}

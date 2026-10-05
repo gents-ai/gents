@@ -182,7 +182,6 @@ export function AppShell({
   syncHealth,
   error,
   onDismissError,
-  onReconnect,
   onOpenDbExplorer,
   children,
 }: {
@@ -199,7 +198,6 @@ export function AppShell({
   /** a shell error, shown as a banner over the canvas until dismissed */
   error?: string | null;
   onDismissError?: () => void;
-  onReconnect?: () => Promise<void>;
   /** developer option: opens the runtime's DB explorer window */
   onOpenDbExplorer?: (() => void) | null;
   children: ReactNode;
@@ -426,9 +424,6 @@ export function AppShell({
             >
               <CircleAlert className="size-4 shrink-0 text-destructive" />
               <p className="min-w-0 flex-1 truncate text-sm">{error}</p>
-              <Button size="sm" variant="outline" onClick={() => void onReconnect?.()}>
-                Reconnect
-              </Button>
               <Button
                 size="icon-xs"
                 variant="quiet"

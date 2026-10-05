@@ -928,8 +928,10 @@ pub(crate) async fn stream_messages_at<S: BearerSource>(
         .method("POST")
         .uri(uri)
         .header("content-type", "application/json")
-        .header("anthropic-version", ANTHROPIC_VERSION)
-        .header("anthropic-beta", OAUTH_BETA);
+        .header("anthropic-version", ANTHROPIC_VERSION);
+    if bearer.is_oauth() {
+        builder = builder.header("anthropic-beta", OAUTH_BETA);
+    }
     if fixture.is_none() {
         let token = bearer.current_bearer().await.map_err(|error| {
             CompletionError::ProviderError(format!("Claude Messages bearer: {error}"))
@@ -942,7 +944,8 @@ pub(crate) async fn stream_messages_at<S: BearerSource>(
         builder = builder.header("authorization", authorization);
         tracing::info!(
             model = %model,
-            "live Claude Messages HTTP send (this process bills the Claude subscription)"
+            oauth = bearer.is_oauth(),
+            "live Claude Messages HTTP send"
         );
     }
     let http_request = builder.body(Bytes::from(body_bytes)).map_err(|error| {

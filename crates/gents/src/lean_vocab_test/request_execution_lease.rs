@@ -16,6 +16,7 @@ pub(crate) enum LeanRequestExecutionOutcome {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum LeanRequestExecutionBoundary {
     MutationWriteGate,
+    ValidatedTransaction,
     ObservingReplica,
 }
 
@@ -172,6 +173,16 @@ pub(crate) struct LeanRequestExecutionLeaseCase {
     pub(crate) name: String,
     pub(crate) pre: LeanRequestExecutionWorld,
     pub(crate) action: LeanRequestExecutionAction,
+    pub(crate) expected: Option<LeanRequestExecutionWorld>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanRequestExecutionObservedCase {
+    pub(crate) name: String,
+    pub(crate) pre: LeanRequestExecutionWorld,
+    pub(crate) action: LeanRequestExecutionAction,
+    pub(crate) intervening: Vec<LeanRequestExecutionAction>,
     pub(crate) expected: Option<LeanRequestExecutionWorld>,
 }
 

@@ -68,11 +68,11 @@ clap = { version = "4", features = ["derive", "env"] }
 # Branch-head reclamation must commit and head queries must avoid reclaimed
 # tombstone history (defradb.rs#1858, #1861, #1876–#1878; gents#2103).
 # The Regolith range bound also prevents scans from walking beyond their prefix.
-acp = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "2149b59c34621fdb4523414aea7e9005ad8607be" }
-crypto = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "2149b59c34621fdb4523414aea7e9005ad8607be" }
-defra-core = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "2149b59c34621fdb4523414aea7e9005ad8607be" }
-db = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "2149b59c34621fdb4523414aea7e9005ad8607be", default-features = false, features = ["native"] }
-document = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "2149b59c34621fdb4523414aea7e9005ad8607be" }
+acp = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "7a9acfeff27875817dc8fb5278d9a26080e96ff3" }
+crypto = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "7a9acfeff27875817dc8fb5278d9a26080e96ff3" }
+defra-core = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "7a9acfeff27875817dc8fb5278d9a26080e96ff3" }
+db = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "7a9acfeff27875817dc8fb5278d9a26080e96ff3", default-features = false, features = ["native"] }
+document = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "7a9acfeff27875817dc8fb5278d9a26080e96ff3" }
 gents-protocol = { path = "crates/gents-protocol" }
 gents-loop = { path = "crates/gents-loop" }
 gents-chatgpt-login = { path = "crates/gents-chatgpt-login" }
@@ -85,12 +85,12 @@ gents-desktop-bridge = { path = "crates/gents-desktop-bridge" }
 gents-lean-contract = { path = "crates/gents-lean-contract" }
 # Keep DefraDB defaults off: Gents selects Iroh P2P and Lens execution without
 # SourceHub ACP or the legacy libp2p transport (defradb.rs#1431-#1435).
-defra-node = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "2149b59c34621fdb4523414aea7e9005ad8607be", default-features = false }
-defra-p2p-adapter = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "2149b59c34621fdb4523414aea7e9005ad8607be", default-features = false }
+defra-node = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "7a9acfeff27875817dc8fb5278d9a26080e96ff3", default-features = false }
+defra-p2p-adapter = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "7a9acfeff27875817dc8fb5278d9a26080e96ff3", default-features = false }
 dirs = "5"
-events = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "2149b59c34621fdb4523414aea7e9005ad8607be" }
+events = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "7a9acfeff27875817dc8fb5278d9a26080e96ff3" }
 hostname = "0.4"
-identity = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "2149b59c34621fdb4523414aea7e9005ad8607be" }
+identity = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "7a9acfeff27875817dc8fb5278d9a26080e96ff3" }
 # Must stay version-aligned with the iroh used by the defradb.rs `p2p` crate;
 # the CLI uses it to inspect the default relay set at startup (#588).
 iroh = "1"
@@ -103,10 +103,10 @@ minijinja = { version = "2", default-features = false, features = ["builtins", "
 opentelemetry = { version = "0.31", default-features = false, features = ["trace"] }
 opentelemetry-otlp = { version = "0.31.1", default-features = false, features = ["trace", "http-proto", "reqwest-client"] }
 opentelemetry_sdk = { version = "0.31", default-features = false, features = ["trace"] }
-p2p = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "2149b59c34621fdb4523414aea7e9005ad8607be" }
-query = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "2149b59c34621fdb4523414aea7e9005ad8607be" }
-schema = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "2149b59c34621fdb4523414aea7e9005ad8607be" }
-storage = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "2149b59c34621fdb4523414aea7e9005ad8607be" }
+p2p = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "7a9acfeff27875817dc8fb5278d9a26080e96ff3" }
+query = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "7a9acfeff27875817dc8fb5278d9a26080e96ff3" }
+schema = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "7a9acfeff27875817dc8fb5278d9a26080e96ff3" }
+storage = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "7a9acfeff27875817dc8fb5278d9a26080e96ff3" }
 rand = "0.9"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rig-core = "0.35.0"
@@ -171,27 +171,16 @@ split-debuginfo = "off"
 incremental = false
 
 [patch.crates-io]
-# rig-core fork: upstream rig's OpenAI provider drops reasoning from vLLM-style
-# servers. The Responses streaming decoder only handles OpenAI's hosted
-# `response.reasoning_summary_text.delta`; vLLM streams the raw chain-of-thought
-# as `response.reasoning_text.delta`, which rig has no variant for (also a
-# `reasoning` vs `reasoning_content` mismatch on Chat Completions). Without the
-# fork our Responses-API reasoning capture is silently empty.
-#
-# The rev carries one more commit than the fork branch above: reqwest as an
-# optional dependency, so rig-core builds for wasm32-wasip1 with
-# default-features = false, which is what `gents-loop` needs to compile as a
-# sealed guest. It is sourcenetwork/rig#3, opened against
-# `vllm-reasoning-compat` (this same line of work), and this pin moves to
-# sourcenetwork/rig once it lands there.
-#
-# A `[patch."https://github.com/sourcenetwork/rig"]` table layered on top of
-# this same entry was tried first and does not apply: Cargo patches are
-# resolved against the source a dependency's manifest names directly
-# (crates-io here), not against the source an earlier patch substituted, so a
-# patch of a patch is silently unused (verified in an isolated two-crate
-# repro).
-rig-core = { git = "https://github.com/vertexclique/rig", rev = "36a4c7fa5dcc450659d88556f3b4ba2be8b6a079" }
+# Keep Iroh's shared transport types on the same source as the path-retry fix.
+iroh = { git = "https://github.com/jackzampolin/iroh", rev = "bd3405911703981a3fb5edc957a383b6c9cc4764" }
+iroh-base = { git = "https://github.com/jackzampolin/iroh", rev = "bd3405911703981a3fb5edc957a383b6c9cc4764" }
+iroh-dns = { git = "https://github.com/jackzampolin/iroh", rev = "bd3405911703981a3fb5edc957a383b6c9cc4764" }
+iroh-relay = { git = "https://github.com/jackzampolin/iroh", rev = "bd3405911703981a3fb5edc957a383b6c9cc4764" }
+# Preserve vLLM reasoning and optional reqwest for sealed guests (sourcenetwork/rig#3).
+# This pin also preserves prompt_cache_key through the typed Responses serializer.
+# Cargo patches the dependency's original crates.io source, not a git source
+# introduced by another patch entry.
+rig-core = { git = "https://github.com/jackzampolin/rig", rev = "7e44b7a9ce081fa1b54a4012c1691ebe04ca1845" }
 # noq 1.1.1 includes the stale-path and duplicate-Draining fixes, and
 # n0-computer/noq#723 has been closed. Keep the two endpoint Drop paths from
 # aborting the process when an earlier driver panic poisons their mutex.

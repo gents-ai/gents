@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 import { setDesktopShellTimingConfigForTests } from "./desktopShellRuntime";
 import { createDesktopShellChatActions } from "./desktopShellChatActions";
@@ -39,7 +39,6 @@ export function useDesktopShell({
   const [savingBehaviorConfig, setSavingBehaviorConfig] = useState(false);
   const [savingConfig, setSavingConfig] = useState(false);
   const [addingPeer, setAddingPeer] = useState(false);
-  const [repairingP2P, setRepairingP2P] = useState(false);
   const [runningTask, setRunningTask] = useState(false);
   const runningTaskCountRef = useRef(0);
   const [error, setError] = useState<string | null>(null);
@@ -218,7 +217,6 @@ export function useDesktopShell({
     onInitLocalRuntime,
     onRemovePeer,
     onRenamePeer,
-    onRepairP2P,
   } = createDesktopShellPeerActions({
     api,
     mutateSnapshot,
@@ -227,31 +225,10 @@ export function useDesktopShell({
     ensureDesktopClientStarted,
     setAddingPeer,
     setError,
-    setRepairingP2P,
     selectedAgentDidRef,
     selectAgent,
     setStarting,
   });
-  const foregroundRepairRef = useRef(onRepairP2P);
-  const foregroundRepairEnabledRef = useRef(Boolean(snapshot?.client));
-  foregroundRepairRef.current = onRepairP2P;
-  foregroundRepairEnabledRef.current = Boolean(snapshot?.client);
-
-  useEffect(() => {
-    function repairAfterForeground() {
-      if (
-        document.visibilityState === "visible" &&
-        foregroundRepairEnabledRef.current
-      ) {
-        void foregroundRepairRef.current().catch(() => {});
-      }
-    }
-
-    document.addEventListener("visibilitychange", repairAfterForeground);
-    return () =>
-      document.removeEventListener("visibilitychange", repairAfterForeground);
-  }, []);
-
   const { chatFolder, setChatFolder, adoptChatFolder } =
     useChatFolders(selectedSessionId);
 
@@ -365,7 +342,6 @@ export function useDesktopShell({
     savingBehaviorConfig,
     savingConfig,
     addingPeer,
-    repairingP2P,
     runningTask,
     error,
     onDismissError,
@@ -424,7 +400,6 @@ export function useDesktopShell({
     onFetchPeerStatus,
     onRequestStatusEnrollment,
     onInitLocalRuntime,
-    onRepairP2P,
     onSendMessage,
     onRetryMessage,
     onRenameSessionTitle,

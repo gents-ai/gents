@@ -176,11 +176,11 @@ impl Tool for AgentMessageTool {
         });
         properties["interrupt"] = serde_json::json!({
             "type": "boolean",
-            "description": "Stop the session's current turn first, so the message starts a new turn instead of steering the current one. Allowed only for sessions this conversation started."
+            "description": "Stop the session's current turn first, then queue the message for a new turn. Allowed only for sessions this conversation started."
         });
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Send a message to an agent session you can reach. An idle session starts a new turn; a busy one receives it as steering for its current turn unless interrupt is set. Returns request_id, delivery (request or steering) and tool_call_id immediately; the result arrives later as a message in this conversation."
+            description: "Send a message to an agent session you can reach. An idle session starts a new turn; a busy one queues it as a new request after the current request finishes unless interrupt is set. Returns request_id, delivery (request or steering) and tool_call_id immediately; the result arrives later as a message in this conversation."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",

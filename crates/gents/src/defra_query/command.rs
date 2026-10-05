@@ -49,7 +49,7 @@ pub fn query_help(command: Option<&str>) -> Result<&'static str> {
     match command {
         None => Ok("query reads documents. argv: [fields], [find], [count], [search], [explain], [help,COMMAND]. Supply collection. fields discovers names/types; find returns a bounded page; count aggregates all matching rows; search ranks keywords with BM25. Configuration uses config; schema definitions use schema."),
         Some("fields") => Ok("{argv:[\"fields\"],collection:\"Shipment\"}. Returns available field names and types; no options."),
-        Some("find") => Ok("{argv:[\"find\"],collection:\"Shipment\",options:{fields:[\"reference\",\"status\"],filter:{status:{_eq:\"queued\"}},order:[{priority:\"ASC\"}],offset:0,limit:20}}. Fields are required. Default limit 50, maximum 1000; offset ≤100000. Orders use ASC/DESC; _docID is appended as a tie-breaker. Pagination observes the current datastore, not a retained snapshot. Filters use native DefraDB operators: _eq,_neq,_gt,_lt,_geq,_leq,_in,_nin,_like; compose with _and,_or,_not. Use search for BM25 keywords. Relationship selections and vector search are not exposed here."),
+        Some("find") => Ok("{argv:[\"find\"],collection:\"Shipment\",options:{fields:[\"reference\",\"status\"],filter:{status:{_eq:\"queued\"}},order:[{priority:\"ASC\"}],offset:0,limit:20}}. Fields are required. Default limit 50, maximum 1000; offset ≤100000. Orders use ASC/DESC; _docID is appended as a tie-breaker. Pagination observes the current datastore, not a retained snapshot. Filters use native DefraDB operators: _eq,_neq,_gt,_lt,_geq,_leq,_in,_nin,_like; compose with _and,_or,_not. Use search for BM25 keywords. Recover a truncated string with options.field_page:{doc_id,field,offset_bytes:0}. Later pages require expected_hash from value_hash; offsets are UTF-8 byte boundaries. Changed values require restarting at zero. Empty values and offset at end return a complete empty page. Field must remain in fields; existing filters and authorization apply. Relationship selections and vector search are not exposed here."),
         Some("search") => Ok("{argv:[\"search\"],collection:\"Reports\",options:{fields:[\"duty\"],search_fields:[\"duty\"],text:\"crew duty\",limit:5}}. Returns native BM25 _score, highest first; zero-score rows may follow matches. search_fields are String fields; fields selects returned values. Default limit 10, maximum 1000. Optional filter uses native operators; optional order uses find’s typed field-order tie-breakers. _docID breaks remaining ties. Configure fulltext indexes through schema help indexes fulltext; no embeddings needed."),
         Some("explain") => Ok("{argv:[\"explain\"],collection:\"Shipment\",options:{fields:[\"reference\"],filter:{status:{_eq:\"queued\"}},limit:20,mode:\"simple\"}}. Uses the same fields/filter/order/offset/limit and scope as find. Default simple inspects the native plan without executing the query. Set mode:execute only when the user requests measured execution; this runs the bounded read and returns native execution metrics. Execution metrics describe native work, not a matching-row total; use count for that. No mutations. Index observations are native plan facts; recommendations for other workloads are inferences."),
         Some("count") => Ok("{argv:[\"count\"],collection:\"Shipment\",options:{filter:{status:{_eq:\"queued\"}}}}. Returns total_count from DefraDB COUNT over every matching row; no fields/limit/offset/order."),
@@ -149,7 +149,7 @@ pub async fn execute_command(
     let allowed: &[&str] = match command {
         "fields" => &[],
         "count" => &["filter"],
-        "find" => &["fields", "filter", "limit", "offset", "order"],
+        "find" => &["fields", "filter", "limit", "offset", "order", "field_page"],
         "search" => &[
             "fields",
             "filter",
@@ -189,7 +189,7 @@ pub async fn execute_command(
         .map(|v| serde_json::from_value(v.clone()))
         .transpose()
         .context("limit must be an unsigned integer")?;
-    let params = DefraQueryParams {
+    let mut params = DefraQueryParams {
         collection: collection.into(),
         fields,
         filter: args.options.get("filter").cloned(),
@@ -198,6 +198,30 @@ pub async fn execute_command(
     build_query(&params, scope)?;
     if let Some(filter) = params.filter.as_ref() {
         super::native_filter::validate_filter(access, collection, filter).await?;
+    }
+    let field_page: Option<super::field_page::FieldPage> = args
+        .options
+        .get("field_page")
+        .map(|value| serde_json::from_value(value.clone()))
+        .transpose()
+        .context("invalid field_page")?;
+    let selected_fields = params.fields.clone();
+    if let Some(page) = &field_page {
+        page.validate(&selected_fields)?;
+        ensure!(
+            !args.options.contains_key("offset") && !args.options.contains_key("order"),
+            "field_page cannot combine with row offset/order"
+        );
+        let exact = json!({"_docID":{"_eq":page.doc_id}});
+        params.filter = Some(match params.filter.take().filter(|v| !v.is_null()) {
+            Some(filter) => json!({"_and":[filter, exact]}),
+            None => exact,
+        });
+        params.fields = vec![page.field.clone(), "_docID".into()];
+        params.fields.dedup();
+        params.limit = Some(1);
+    } else if command == "find" && !params.fields.iter().any(|field| field == "_docID") {
+        params.fields.push("_docID".into());
     }
     let query = if command == "count" {
         let filter = params
@@ -281,10 +305,35 @@ pub async fn execute_command(
     }
     let mut rows = response["data"][collection].clone();
     ensure!(rows.is_array(), "DefraDB returned no collection result");
+    if let Some(page) = field_page {
+        let rows = rows.as_array().unwrap();
+        ensure!(
+            rows.len() == 1,
+            "field_page document is unavailable under the resolved query filters and authorization"
+        );
+        return Ok(
+            json!({"collection":collection,"field_page":page.read(&rows[0], &selected_fields)?}),
+        );
+    }
+    let recovery = if command == "find" {
+        super::field_page::recovery_metadata(&rows)
+    } else {
+        Vec::new()
+    };
+    if command == "find" && !selected_fields.iter().any(|field| field == "_docID") {
+        for row in rows.as_array_mut().unwrap() {
+            if let Some(object) = row.as_object_mut() {
+                object.remove("_docID");
+            }
+        }
+    }
     let returned_count = rows.as_array().unwrap().len();
     let total_bytes = serde_json::to_vec(&rows)?.len();
     let truncated = super::truncate_field_strings(&mut rows);
     let mut result = json!({"results":rows,"returned_count":returned_count,"collection":collection,"truncated":truncated,"total_bytes":total_bytes});
+    if !recovery.is_empty() {
+        result["field_recovery"] = json!(recovery);
+    }
     if command == "search" {
         result["ranking"] = json!("bm25");
     }

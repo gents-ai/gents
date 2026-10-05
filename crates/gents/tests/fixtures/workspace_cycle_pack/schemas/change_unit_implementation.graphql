@@ -1,0 +1,9 @@
+type ChangeUnitImplementation {
+  implementation_id: String @index(unique: true) @immutable
+  work_unit_id: String @index @immutable
+  workspace_id: String @immutable
+  status: String @immutable
+  changed_files: String @immutable
+  tests_run: String @immutable
+  summary: String @immutable
+}

@@ -1,0 +1,21 @@
+type ChangeUnitResult {
+  result_id: String @index(unique: true) @immutable
+  work_unit_id: String @index @immutable
+  handoff_id: String @index @immutable
+  reply_session_id: String @index @immutable
+  attempt: Int @immutable
+  failed_request_id: String @immutable
+  failure_stage: String @immutable
+  failure_reason: String @immutable
+  closure_id: String @immutable
+  implementation_id: String @immutable
+  review_id: String @immutable
+  workspace_id: String @immutable
+  status: String @immutable
+  writer_receipt_id: String @immutable
+  writer_seal_hash: String @immutable
+  integrator_receipt_id: String @immutable
+  integrator_seal_hash: String @immutable
+  head_sha: String @immutable
+  summary: String @immutable
+}

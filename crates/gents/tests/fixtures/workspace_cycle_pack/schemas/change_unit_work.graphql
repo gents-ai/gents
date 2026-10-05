@@ -1,0 +1,14 @@
+type ChangeUnitWork {
+  work_unit_id: String @index(unique: true) @immutable
+  handoff_id: String @index @immutable
+  reply_session_id: String @index @immutable
+  attempt: Int @immutable
+  repository_id: String @immutable
+  base_sha: String @immutable
+  branch: String @immutable
+  title: String @immutable
+  instructions: String @immutable
+  owned_files: String @immutable
+  status: String @index @immutable
+  caused_by_correlation: String @index @immutable
+}

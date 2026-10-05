@@ -61,6 +61,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) workspace_path_capability_cases: Vec<serde_json::Value>,
     pub(crate) workspace_path_alias_cases: Vec<serde_json::Value>,
     pub(crate) logical_output_obligation_cases: Vec<serde_json::Value>,
+    pub(crate) schema_argument_repair_cases: Vec<serde_json::Value>,
     pub(crate) invalid_tool_progress_cases: Vec<serde_json::Value>,
     pub(crate) repeated_tool_failure_cases: Vec<serde_json::Value>,
     /// `Conformance.ToolTimeouts`: host-ceiling resolution of Tools timeouts.
@@ -75,6 +76,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) process_transition_cases: Vec<LeanLifecycleTransitionCase>,
     pub(crate) provider_eof_cases: Vec<LeanProviderEofCase>,
     pub(crate) request_execution_lease_cases: Vec<LeanRequestExecutionLeaseCase>,
+    pub(crate) request_execution_lease_observed_cases: Vec<LeanRequestExecutionObservedCase>,
     pub(crate) request_execution_lease_trace_cases: Vec<LeanRequestExecutionLeaseTraceCase>,
     pub(crate) inference_registry_cases: Vec<serde_json::Value>,
     pub(crate) trigger_dispatch_case_count: usize,
@@ -95,6 +97,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) budget_rehydration_cases: Vec<LeanBudgetRehydrationCase>,
     pub(crate) goal_decision_cases: Vec<LeanGoalDecisionCase>,
     pub(crate) goal_readiness_gate_cases: Vec<LeanGoalReadinessGateCase>,
+    pub(crate) goal_claimed_readiness_cases: Vec<serde_json::Value>,
     pub(crate) goal_transition_cases: Vec<LeanGoalTransitionCase>,
     pub(crate) goal_create_cases: Vec<LeanGoalCreateCase>,
     pub(crate) task_goal_publication_cases: Vec<LeanTaskGoalPublicationCase>,
@@ -138,6 +141,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) publish_if_cases: Vec<LeanPublishIfCase>,
     pub(crate) tool_policy_cases: Vec<LeanToolPolicyCase>,
     pub(crate) application_write_cases: Vec<serde_json::Value>,
+    pub(crate) field_read_cases: Vec<serde_json::Value>,
     pub(crate) write_input_cases: Vec<serde_json::Value>,
     pub(crate) invocation_correlation_cases: Vec<serde_json::Value>,
     pub(crate) goal_capability_resolution_cases: Vec<LeanGoalCapabilityResolutionCase>,
@@ -165,6 +169,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) completion_retry_cases: Vec<LeanCompletionRetryCase>,
     pub(crate) mcp_health_cases: Vec<LeanMcpHealthCase>,
     pub(crate) backend_health_cases: Vec<LeanBackendHealthCase>,
+    pub(crate) backend_probe_schedule_cases: Vec<LeanBackendProbeScheduleCase>,
     pub(crate) boundaries: Vec<LeanBoundary>,
     pub(crate) deviations: Vec<LeanDeviation>,
     pub(crate) command_policy_cases: Vec<LeanCommandPolicyCase>,
@@ -219,6 +224,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) prompt_assembly_sanitize_cases: Vec<LeanPromptAssemblySanitizeCase>,
     pub(crate) prompt_assembly_assistant_order_cases: Vec<LeanPromptAssemblyAssistantOrderCase>,
     pub(crate) prompt_assembly_mode_sanitize_cases: Vec<LeanPromptAssemblyModeSanitizeCase>,
+    pub(crate) routing_affinity_cases: Vec<serde_json::Value>,
     pub(crate) current_input_cases: Vec<LeanCurrentInputCase>,
     pub(crate) prompt_assembly_layer_cases: Vec<LeanPromptAssemblyLayerCase>,
     pub(crate) prompt_assembly_repair_cases: Vec<LeanPromptAssemblyRepairCase>,
@@ -231,6 +237,8 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) prompt_assembly_claude_thinking_stream_cases:
         Vec<LeanPromptAssemblyClaudeThinkingStreamCase>,
     pub(crate) prompt_assembly_claude_wire_start_cases: Vec<LeanPromptAssemblyClaudeWireStartCase>,
+    pub(crate) prompt_assembly_responses_storage_cases: Vec<LeanPromptAssemblyResponsesStorageCase>,
+    pub(crate) prompt_assembly_responses_effort_cases: Vec<LeanPromptAssemblyResponsesEffortCase>,
     pub(crate) prompt_assembly_claude_replay_cases: Vec<LeanPromptAssemblyClaudeReplayCase>,
     pub(crate) prompt_assembly_claude_checkpoint_cases: Vec<LeanPromptAssemblyClaudeCheckpointCase>,
     pub(crate) prompt_assembly_reasoning_suffix_cases: Vec<LeanPromptAssemblyReasoningSuffixCase>,
@@ -1297,6 +1305,11 @@ pub(crate) fn lean_request_execution_lease_cases() -> &'static [LeanRequestExecu
     &lean_contract_snapshot().request_execution_lease_cases
 }
 
+pub(crate) fn lean_request_execution_lease_observed_cases(
+) -> &'static [LeanRequestExecutionObservedCase] {
+    &lean_contract_snapshot().request_execution_lease_observed_cases
+}
+
 pub(crate) fn lean_request_execution_lease_trace_cases(
 ) -> &'static [LeanRequestExecutionLeaseTraceCase] {
     &lean_contract_snapshot().request_execution_lease_trace_cases
@@ -1845,6 +1858,16 @@ pub(crate) fn lean_prompt_assembly_claude_wire_start_cases(
     &lean_contract_snapshot().prompt_assembly_claude_wire_start_cases
 }
 
+pub(crate) fn lean_prompt_assembly_responses_storage_cases(
+) -> &'static [LeanPromptAssemblyResponsesStorageCase] {
+    &lean_contract_snapshot().prompt_assembly_responses_storage_cases
+}
+
+pub(crate) fn lean_prompt_assembly_responses_effort_cases(
+) -> &'static [LeanPromptAssemblyResponsesEffortCase] {
+    &lean_contract_snapshot().prompt_assembly_responses_effort_cases
+}
+
 pub(crate) fn lean_prompt_assembly_claude_replay_cases(
 ) -> &'static [LeanPromptAssemblyClaudeReplayCase] {
     &lean_contract_snapshot().prompt_assembly_claude_replay_cases
@@ -1960,6 +1983,10 @@ pub(crate) fn lean_mcp_health_cases() -> &'static [LeanMcpHealthCase] {
 
 pub(crate) fn lean_backend_health_cases() -> &'static [LeanBackendHealthCase] {
     &lean_contract_snapshot().backend_health_cases
+}
+
+pub(crate) fn lean_backend_probe_schedule_cases() -> &'static [LeanBackendProbeScheduleCase] {
+    &lean_contract_snapshot().backend_probe_schedule_cases
 }
 
 pub(crate) fn lean_command_policy_cases() -> &'static [LeanCommandPolicyCase] {

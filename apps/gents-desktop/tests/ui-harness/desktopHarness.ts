@@ -1092,16 +1092,6 @@ export function createDesktopUiHarness(
       enrollmentRequests = [request];
       return request;
     },
-    async repairP2P() {
-      p2pStatus = "healthy";
-      syncHealth = {
-        ...syncHealth,
-        state: "healthy",
-        connectedPeerCount: 1,
-        lastError: null,
-      };
-      return snapshot();
-    },
     async fetchSessionSnapshot(_sessionId, _agentDid, _requestId, timelinePage) {
       const sessionId = _sessionId;
       const session = sessions.get(sessionId);
@@ -2185,16 +2175,18 @@ export function createDesktopUiHarness(
       const selection =
         request.providerKind === "ClaudeCliSubscription"
           ? { provider: "anthropic" as const, authMethod: "claude_oauth" as const }
-          : request.providerKind === "XaiGrokOAuth"
-            ? { provider: "grok" as const, authMethod: "grok_oauth" as const }
-            : request.providerKind === "ChatGptCodex"
-              ? { provider: "openai" as const, authMethod: "chat_gpt_oauth" as const }
-              : request.providerKind === "OpenRouter"
-                ? { provider: "openrouter" as const, authMethod: "api_key" as const }
-                : {
-                    provider: "local" as const,
-                    authMethod: "optional_api_key" as const,
-                  };
+          : request.providerKind === "AnthropicApiKey"
+            ? { provider: "anthropic" as const, authMethod: "api_key" as const }
+            : request.providerKind === "XaiGrokOAuth"
+              ? { provider: "grok" as const, authMethod: "grok_oauth" as const }
+              : request.providerKind === "ChatGptCodex"
+                ? { provider: "openai" as const, authMethod: "chat_gpt_oauth" as const }
+                : request.providerKind === "OpenRouter"
+                  ? { provider: "openrouter" as const, authMethod: "api_key" as const }
+                  : {
+                      provider: "local" as const,
+                      authMethod: "optional_api_key" as const,
+                    };
       return adapter.getInferenceModelRecommendation({
         ...selection,
         modelName: request.modelName,

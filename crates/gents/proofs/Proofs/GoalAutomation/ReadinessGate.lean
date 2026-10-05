@@ -115,11 +115,6 @@ def gate (observation : Observation) (settled : Bool) (cause : Cause) (i : Input
     | .unavailable => .behaviorUnavailable
   else .decided base
 
-/-- A claim that already advanced the sequence publishes its child only to a
-ready behavior; otherwise the claim stays durable and a later scan retries. -/
-def mayMaterializeClaimed (observation : Observation) (settled : Bool) : Bool :=
-  observe observation settled == .ready
-
 def maxInfrastructureRetries : Nat := 2
 
 /-- Persisted `infrastructure_retry_count` after GoalSource applies a gated
@@ -136,6 +131,94 @@ existing decision would publish reach it: active Goals pause, and a pending
 budget wrap-up is abandoned rather than retried. -/
 def resolveUnavailable (state : State) : Option State :=
   if state.status = .active then step? state .pause else step? state .wrapupAbandoned
+
+
+inductive ClaimedDecision where
+  | materialize
+  | awaitReadiness
+  | stop
+  | inactive
+  deriving DecidableEq, Repr
+
+/-- A claimed continuation has already charged its retry and advanced its
+sequence. Readiness may stop its existing Goal, but cannot replay either effect.
+A completed wrap-up and an existing child have no pending publication to stop. -/
+def claimedGate (observation : Observation) (settled childExists : Bool)
+    (state : State) : ClaimedDecision :=
+  if childExists || state.wrapupCompleted ||
+      !(state.status == .active ||
+        (state.status == .budgetLimited && state.wrapupRequested)) then .inactive
+  else match observe observation settled with
+    | .ready => .materialize
+    | .waiting => .awaitReadiness
+    | .unavailable => .stop
+
+/-- These are the existing durable claim fields, not another Goal lifecycle.
+`lastFailure` reconstructs an infrastructure retry prompt after a crash or a
+transient readiness wait. A readiness stop preserves it; explicit operator
+resume retains its separate contract of starting a fresh continuation epoch.
+The canonical behavior-readiness row owns the unavailability reason. -/
+structure ClaimedRecovery where
+  goal : State
+  retries : Nat
+  lastFailure : Option String
+  sequence : Nat
+  parent : Option String
+  deriving DecidableEq, Repr
+
+def claimedStep (observation : Observation) (settled childExists : Bool)
+    (before : ClaimedRecovery) : Option ClaimedRecovery :=
+  if claimedGate observation settled childExists before.goal = .stop then
+    (resolveUnavailable before.goal).map fun goal => { before with goal }
+  else some before
+
+theorem claimed_wait_preserves_recovery
+    (observation : Observation) (settled childExists : Bool) (before : ClaimedRecovery)
+    (h : claimedGate observation settled childExists before.goal = .awaitReadiness) :
+    claimedStep observation settled childExists before = some before := by
+  simp [claimedStep, h]
+
+theorem claimed_stop_preserves_provenance
+    (observation : Observation) (settled childExists : Bool) (before after : ClaimedRecovery)
+    (h : claimedStep observation settled childExists before = some after) :
+    after.retries = before.retries ∧ after.lastFailure = before.lastFailure ∧
+      after.sequence = before.sequence ∧ after.parent = before.parent := by
+  unfold claimedStep at h
+  split at h
+  · cases hs : resolveUnavailable before.goal with
+    | none => simp [hs] at h
+    | some goal => simp [hs] at h; cases h; simp
+  · cases h; simp
+
+theorem claimed_child_is_inactive
+    (observation : Observation) (settled : Bool) (state : State) :
+    claimedGate observation settled true state = .inactive := by
+  simp [claimedGate]
+
+theorem completed_wrapup_is_inactive
+    (observation : Observation) (settled childExists : Bool) (state : State)
+    (h : state.wrapupCompleted = true) :
+    claimedGate observation settled childExists state = .inactive := by
+  simp [claimedGate, h]
+
+theorem claimed_stop_requires_settled_unavailability
+    (observation : Observation) (settled childExists : Bool) (state : State)
+    (h : claimedGate observation settled childExists state = .stop) :
+    observe observation settled = .unavailable := by
+  unfold claimedGate at h
+  split at h
+  · cases h
+  · cases ho : observe observation settled <;> simp_all
+
+
+theorem claimed_stop_has_legal_goal_transition
+    (observation : Observation) (settled childExists : Bool) (state : State)
+    (h : claimedGate observation settled childExists state = .stop) :
+    (resolveUnavailable state).isSome := by
+  rcases state with ⟨status, blocked, requested, completed⟩
+  cases childExists <;> cases status <;> cases requested <;> cases completed <;>
+    simp_all [claimedGate, resolveUnavailable, Goals.step?]
+
 
 theorem decide_retry_within_budget
     (status : Status) (terminal : RequestTerminal)
@@ -219,12 +302,6 @@ theorem stale_readiness_never_reissues_a_rejection
   cases hp : publishes decision
   · rfl
   · simp [gate, observe, Observation.newerThanTerminal, hbase, hp] at h
-
-theorem claimed_materialization_requires_ready
-    (observation : Observation) (settled : Bool)
-    (h : mayMaterializeClaimed observation settled = true) :
-    observe observation settled = .ready := by
-  simpa [mayMaterializeClaimed] using h
 
 /-- While the behavior is not ready, the retry budget is untouched. -/
 theorem unready_behavior_preserves_retry_budget

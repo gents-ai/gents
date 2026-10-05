@@ -199,48 +199,157 @@ pub(super) async fn read_interrupt_response_and_completed_turn(
     }
 }
 
-pub(super) async fn read_fuzzy_file_search_update(
+pub(super) async fn read_fuzzy_file_search_exchange(
     ws: &mut ShimWebSocket,
+    expected_id: codex::RequestId,
+    session_id: &str,
+    query: &str,
 ) -> Result<codex::FuzzyFileSearchSessionUpdatedNotification> {
-    loop {
-        match read_jsonrpc(ws).await? {
+    let mut exchange = FuzzySearchExchange::default();
+    tokio::time::timeout(Duration::from_secs(60), async {
+        loop {
+            exchange.observe(read_jsonrpc(ws).await?, &expected_id, session_id, query)?;
+            if exchange.response && exchange.completed && exchange.update.is_some() {
+                return Ok(exchange.update.take().unwrap());
+            }
+        }
+    })
+    .await
+    .with_context(|| {
+        format!(
+            "fuzzy search exchange did not finish: response={}, update={}, completed={}",
+            exchange.response,
+            exchange.update.is_some(),
+            exchange.completed
+        )
+    })?
+}
+
+#[derive(Default)]
+struct FuzzySearchExchange {
+    response: bool,
+    update: Option<codex::FuzzyFileSearchSessionUpdatedNotification>,
+    completed: bool,
+}
+
+impl FuzzySearchExchange {
+    fn observe(
+        &mut self,
+        message: codex::JSONRPCMessage,
+        expected_id: &codex::RequestId,
+        session_id: &str,
+        query: &str,
+    ) -> Result<()> {
+        match message {
+            codex::JSONRPCMessage::Response(response) if &response.id == expected_id => {
+                let _: codex::FuzzyFileSearchSessionUpdateResponse =
+                    serde_json::from_value(response.result)?;
+                self.response = true;
+            }
             codex::JSONRPCMessage::Notification(notification) => {
-                if let codex::ServerNotification::FuzzyFileSearchSessionUpdated(update) =
-                    server_notification_from_jsonrpc(notification)?
-                {
-                    return Ok(update);
+                match server_notification_from_jsonrpc(notification)? {
+                    codex::ServerNotification::FuzzyFileSearchSessionUpdated(update)
+                        if update.session_id == session_id && update.query == query =>
+                    {
+                        self.update = Some(update);
+                    }
+                    codex::ServerNotification::FuzzyFileSearchSessionCompleted(completed)
+                        if completed.session_id == session_id =>
+                    {
+                        self.completed = true;
+                    }
+                    _ => {}
                 }
             }
             codex::JSONRPCMessage::Error(error) => {
                 bail!("Codex shim emitted JSON-RPC error: {}", error.error.message);
             }
-            codex::JSONRPCMessage::Request(request) => {
-                bail!("Codex shim sent unexpected server request: {request:?}");
-            }
-            codex::JSONRPCMessage::Response(_) => {}
+            other => bail!("unexpected fuzzy search exchange message: {other:?}"),
         }
+        Ok(())
     }
 }
 
-pub(super) async fn read_fuzzy_file_search_completed(
-    ws: &mut ShimWebSocket,
-) -> Result<codex::FuzzyFileSearchSessionCompletedNotification> {
-    loop {
-        match read_jsonrpc(ws).await? {
-            codex::JSONRPCMessage::Notification(notification) => {
-                if let codex::ServerNotification::FuzzyFileSearchSessionCompleted(completed) =
-                    server_notification_from_jsonrpc(notification)?
-                {
-                    return Ok(completed);
+#[tokio::test]
+async fn fuzzy_search_exchange_keeps_notifications_before_the_response() {
+    let expected = codex::FuzzyFileSearchSessionUpdatedNotification {
+        session_id: "search".into(),
+        query: "beta".into(),
+        files: vec![codex::FuzzyFileSearchResult {
+            root: "/fixture".into(),
+            path: "nested/beta.md".into(),
+            match_type: codex::FuzzyFileSearchMatchType::File,
+            file_name: "beta.md".into(),
+            score: 42,
+            indices: Some(vec![0, 1, 2, 3]),
+        }],
+    };
+    let messages = [
+        json!({"id": 554, "result": {}}),
+        json!({"method": "fuzzyFileSearch/sessionUpdated", "params": expected}),
+        json!({"method": "fuzzyFileSearch/sessionCompleted", "params": {
+            "sessionId": "search"
+        }}),
+    ];
+    for order in [
+        [0, 1, 2],
+        [1, 0, 2],
+        [1, 2, 0],
+        [0, 2, 1],
+        [2, 0, 1],
+        [2, 1, 0],
+    ] {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let messages = messages.clone();
+            let server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+                for index in order {
+                    ws.send(WsMessage::Text(messages[index].to_string().into()))
+                        .await
+                        .unwrap();
                 }
-            }
-            codex::JSONRPCMessage::Error(error) => {
-                bail!("Codex shim emitted JSON-RPC error: {}", error.error.message);
-            }
-            codex::JSONRPCMessage::Request(request) => {
-                bail!("Codex shim sent unexpected server request: {request:?}");
-            }
-            codex::JSONRPCMessage::Response(_) => {}
-        }
+                ws.close(None).await.unwrap();
+            }));
+            let (mut ws, _) = connect_async(format!("ws://{address}")).await.unwrap();
+            let update =
+                read_fuzzy_file_search_exchange(&mut ws, request_id(554), "search", "beta")
+                    .await
+                    .unwrap();
+            assert_eq!(update, expected, "order {order:?}");
+            server.await.unwrap();
+        })
+        .await
+        .unwrap_or_else(|_| panic!("fuzzy search exchange stalled for order {order:?}"));
     }
+}
+
+#[test]
+fn fuzzy_search_exchange_ignores_other_sessions_and_queries() {
+    let mut exchange = FuzzySearchExchange::default();
+    for message in [
+        json!({"method": "fuzzyFileSearch/sessionUpdated", "params": {
+            "sessionId": "other", "query": "beta", "files": []
+        }}),
+        json!({"method": "fuzzyFileSearch/sessionUpdated", "params": {
+            "sessionId": "search", "query": "older", "files": []
+        }}),
+        json!({"method": "fuzzyFileSearch/sessionCompleted", "params": {
+            "sessionId": "other"
+        }}),
+    ] {
+        exchange
+            .observe(
+                serde_json::from_value(message).unwrap(),
+                &request_id(554),
+                "search",
+                "beta",
+            )
+            .unwrap();
+    }
+    assert!(!exchange.response);
+    assert!(exchange.update.is_none());
+    assert!(!exchange.completed);
 }

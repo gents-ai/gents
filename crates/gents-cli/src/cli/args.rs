@@ -2197,12 +2197,16 @@ pub(crate) enum BackendPresetArg {
     ChatGptCodex,
     #[value(name = "xai-oauth")]
     XaiGrokOAuth,
+    #[value(name = "xai")]
+    XaiApiKey,
     #[value(
         name = "claude-cli-subscription",
         alias = "claude-subscription",
         alias = "claude-cli"
     )]
     ClaudeCliSubscription,
+    #[value(name = "anthropic")]
+    Anthropic,
     #[value(name = "ollama")]
     Ollama,
     #[value(name = "vllm")]
@@ -2219,7 +2223,9 @@ impl BackendPresetArg {
             Self::OpenRouter => "openrouter",
             Self::ChatGptCodex => "chatgpt-codex",
             Self::XaiGrokOAuth => "xai-oauth",
+            Self::XaiApiKey => "xai",
             Self::ClaudeCliSubscription => "claude-cli-subscription",
+            Self::Anthropic => "anthropic",
             Self::Ollama => "ollama",
             Self::Vllm => "vllm",
             Self::LlamaCpp => "llama-cpp",
@@ -2232,8 +2238,10 @@ impl BackendPresetArg {
             Self::ChatGptCodex => BackendProviderKind::ChatGptCodex,
             Self::XaiGrokOAuth => BackendProviderKind::XaiGrokOAuth,
             Self::ClaudeCliSubscription => BackendProviderKind::ClaudeCliSubscription,
+            Self::Anthropic => BackendProviderKind::AnthropicApiKey,
             Self::GenericOpenAiCompatible
             | Self::OpenAi
+            | Self::XaiApiKey
             | Self::Ollama
             | Self::Vllm
             | Self::LlamaCpp => BackendProviderKind::OpenAiCompatible,
@@ -2247,9 +2255,11 @@ impl BackendPresetArg {
             Self::OpenRouter => Some("https://openrouter.ai/api/v1"),
             Self::ChatGptCodex => Some(gents::chatgpt_codex::default_backend_endpoint()),
             Self::XaiGrokOAuth => Some(gents::xai_grok_oauth::default_backend_endpoint()),
+            Self::XaiApiKey => Some(gents::inference_setup::XAI_API_ENDPOINT),
             Self::ClaudeCliSubscription => {
                 Some(gents::claude_subscription::default_backend_endpoint())
             }
+            Self::Anthropic => Some(gents::claude_subscription::ANTHROPIC_API_ENDPOINT),
             Self::Ollama => Some(crate::DEFAULT_OLLAMA_ENDPOINT),
             Self::Vllm => Some("http://127.0.0.1:8000/v1"),
             Self::LlamaCpp => Some("http://127.0.0.1:8080/v1"),
@@ -2267,7 +2277,12 @@ impl BackendPresetArg {
             Self::ChatGptCodex => Some(crate::DEFAULT_CHATGPT_CODEX_MODEL_NAME),
             Self::XaiGrokOAuth => Some(crate::DEFAULT_XAI_GROK_OAUTH_MODEL_NAME),
             Self::ClaudeCliSubscription => Some(gents::claude_subscription::default_model_name()),
-            Self::GenericOpenAiCompatible | Self::OpenAi | Self::OpenRouter | Self::Vllm => None,
+            Self::GenericOpenAiCompatible
+            | Self::OpenAi
+            | Self::OpenRouter
+            | Self::Anthropic
+            | Self::XaiApiKey
+            | Self::Vllm => None,
         }
     }
 
@@ -2275,6 +2290,8 @@ impl BackendPresetArg {
         match self {
             Self::OpenAi => Some("OPENAI_API_KEY"),
             Self::OpenRouter => Some("OPENROUTER_API_KEY"),
+            Self::Anthropic => Some("ANTHROPIC_API_KEY"),
+            Self::XaiApiKey => Some("XAI_API_KEY"),
             Self::GenericOpenAiCompatible
             | Self::ChatGptCodex
             | Self::XaiGrokOAuth
@@ -2287,12 +2304,13 @@ impl BackendPresetArg {
 
     pub(crate) fn default_openai_wire_api(self) -> Option<OpenAiWireApi> {
         match self {
-            Self::OpenAi => Some(OpenAiWireApi::Responses),
+            Self::OpenAi | Self::XaiApiKey => Some(OpenAiWireApi::Responses),
             Self::GenericOpenAiCompatible
             | Self::OpenRouter
             | Self::ChatGptCodex
             | Self::XaiGrokOAuth
             | Self::ClaudeCliSubscription
+            | Self::Anthropic
             | Self::Ollama
             | Self::Vllm
             | Self::LlamaCpp => None,
@@ -4113,6 +4131,11 @@ pub(crate) struct EvalTrialArgs {
     pub(crate) trial_index: Option<u32>,
     #[arg(long)]
     pub(crate) json: bool,
+    #[arg(
+        long,
+        help = "Read original request content and lineage from the finished trial's retained home (maximum 1000 requests)"
+    )]
+    pub(crate) requests: bool,
     #[command(flatten)]
     pub(crate) scope: EvalScopeArgs,
 }

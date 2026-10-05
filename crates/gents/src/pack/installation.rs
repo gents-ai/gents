@@ -34,6 +34,11 @@ use crate::graphql::escape_graphql_string;
 use crate::Collection;
 
 mod dependencies;
+mod documents;
+pub use documents::{
+    document_pack_schema_paths, install_prepared_document_pack, prepare_document_pack_install,
+    PreparedDocumentPackInstall,
+};
 mod graph;
 
 pub(crate) use graph::{observe_graph_install_in_txn, record_graph_install_in_txn};

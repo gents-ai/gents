@@ -689,6 +689,7 @@ mod tests {
             Some(&transcript_page.store),
             Some(&transcript_page.canonical_dependencies),
             Some(&context_store),
+            None,
             true,
             true,
         )

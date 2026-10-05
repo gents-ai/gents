@@ -21,6 +21,7 @@ pub async fn desktop_session_snapshot(
     timeline_before_item_key: Option<String>,
     state: State<'_, DesktopAppState>,
 ) -> Result<Option<DesktopSessionSnapshot>, BridgeError> {
+    let started = std::time::Instant::now();
     let Some(core) = current_core(&state) else {
         return Ok(None);
     };
@@ -40,6 +41,7 @@ pub async fn desktop_session_snapshot(
         )
     });
 
+    let hydrate_started = std::time::Instant::now();
     if let Some(agent_did) = agent_did.as_deref() {
         // Its transcript reads as empty here and a hydration request would be
         // refused, so the local header alone answers without any remote read.
@@ -52,6 +54,7 @@ pub async fn desktop_session_snapshot(
                 Some(agent_did),
                 &session_id,
                 request_id.as_deref(),
+                None,
                 None,
                 None,
                 None,
@@ -73,6 +76,8 @@ pub async fn desktop_session_snapshot(
             );
         }
     }
+    let hydrate_start_ms = hydrate_started.elapsed().as_millis() as u64;
+    let refresh_started = std::time::Instant::now();
     if let (Some(agent_did), Some(request_id)) = (agent_did.as_deref(), request_id.as_deref()) {
         if let Err(error) = core.refresh_local_request(agent_did, request_id).await {
             tracing::warn!(
@@ -84,6 +89,8 @@ pub async fn desktop_session_snapshot(
             );
         }
     }
+    let request_refresh_ms = refresh_started.elapsed().as_millis() as u64;
+    let transcript_started = std::time::Instant::now();
     let principal_scope = agent_did
         .as_deref()
         .and_then(|agent_did| core.transcript_principal_scope(agent_did));
@@ -132,58 +139,100 @@ pub async fn desktop_session_snapshot(
             }
         }
     };
-    let (transcript_page, context_store) = if timeline_before_item_key.is_none() {
-        let context_read = async {
-            let request = {
-                let store = core.store().snapshot();
-                store
-                    .requests
-                    .iter()
-                    .find(|row| {
-                        Some(row.request_id.as_str()) == request_id.as_deref()
-                            && row.session_id.as_deref() == Some(session_id.as_str())
-                            && row.agent_did.as_deref() == agent_did.as_deref()
-                            && row.requester_did.as_deref() == requester_scope.as_deref()
-                    })
-                    .cloned()
-            };
-            let Some(request) = request else {
-                return Ok(None);
-            };
-            match operator_access.as_ref() {
-                Some(access) => {
-                    gents_desktop_core::client::load_session_tip_store_on(access, &request)
-                        .await
-                        .map(Some)
-                }
-                None => gents_desktop_core::client::load_session_tip_store(core.node(), &request)
+    let ownership_read = async {
+        let requests = {
+            let store = core.store().snapshot();
+            store
+                .requests
+                .iter()
+                .filter(|row| {
+                    row.doc_id.is_some()
+                        && row.session_id.as_deref() == Some(session_id.as_str())
+                        && row.agent_did.as_deref() == agent_did.as_deref()
+                        && row.requester_did.as_deref() == requester_scope.as_deref()
+                })
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        match operator_access.as_ref() {
+            Some(access) => {
+                gents_desktop_core::client::load_request_prompt_ownership_on(access, &requests)
                     .await
-                    .map(Some),
             }
-        };
-        let (page, context) = tokio::join!(page_read, context_read);
-        let page = page.map_err(|error| BridgeError::untyped(error.to_string()))?;
-        let context = match context {
-            Ok(store) => store,
-            Err(error) => {
-                tracing::warn!(
-                    target: "gents_desktop::chat",
-                    session_id,
-                    error = %error,
-                    "session tip query failed; returning the bounded transcript without live ownership evidence"
-                );
-                None
+            None => {
+                gents_desktop_core::client::load_request_prompt_ownership(core.node(), &requests)
+                    .await
             }
-        };
-        (page, context)
-    } else {
-        (
-            page_read
-                .await
-                .map_err(|error| BridgeError::untyped(error.to_string()))?,
-            None,
-        )
+        }
     };
+    let page_and_tip = async {
+        let result = if timeline_before_item_key.is_none() {
+            let context_read = async {
+                let request = {
+                    let store = core.store().snapshot();
+                    store
+                        .requests
+                        .iter()
+                        .find(|row| {
+                            Some(row.request_id.as_str()) == request_id.as_deref()
+                                && row.session_id.as_deref() == Some(session_id.as_str())
+                                && row.agent_did.as_deref() == agent_did.as_deref()
+                                && row.requester_did.as_deref() == requester_scope.as_deref()
+                        })
+                        .cloned()
+                };
+                let Some(request) = request else {
+                    return Ok(None);
+                };
+                match operator_access.as_ref() {
+                    Some(access) => {
+                        gents_desktop_core::client::load_session_tip_store_on(access, &request)
+                            .await
+                            .map(Some)
+                    }
+                    None => {
+                        gents_desktop_core::client::load_session_tip_store(core.node(), &request)
+                            .await
+                            .map(Some)
+                    }
+                }
+            };
+            let (page, context) = tokio::join!(page_read, context_read);
+            let page = page.map_err(|error| BridgeError::untyped(error.to_string()))?;
+            let context = match context {
+                Ok(store) => store,
+                Err(error) => {
+                    tracing::warn!(
+                        target: "gents_desktop::chat",
+                        session_id,
+                        error = %error,
+                        "session tip query failed; returning the bounded transcript without live ownership evidence"
+                    );
+                    None
+                }
+            };
+            (page, context)
+        } else {
+            (
+                page_read
+                    .await
+                    .map_err(|error| BridgeError::untyped(error.to_string()))?,
+                None,
+            )
+        };
+        Ok::<_, BridgeError>(result)
+    };
+    let (page_and_tip, ownership) = tokio::join!(page_and_tip, ownership_read);
+    let (transcript_page, context_store) = page_and_tip?;
+    let prompt_ownership = match ownership {
+        Ok(facts) => Some(facts),
+        Err(error) => {
+            tracing::warn!(session_id, error = %error, "request prompt ownership unavailable; suppressing unproven pending inputs");
+            None
+        }
+    };
+    let transcript_page_tip_ms = transcript_started.elapsed().as_millis() as u64;
+    let projection_started = std::time::Instant::now();
     let context_store = context_store.map(|tip| transcript_page.store.merge_snapshot(tip));
     let mut snapshot = build_session_snapshot_for_agent_with_transcript(
         core.as_ref(),
@@ -193,6 +242,7 @@ pub async fn desktop_session_snapshot(
         Some(&transcript_page.store),
         Some(&transcript_page.canonical_dependencies),
         context_store.as_ref(),
+        prompt_ownership.as_ref(),
         false,
         timeline_before_item_key.is_none(),
     )
@@ -205,6 +255,20 @@ pub async fn desktop_session_snapshot(
             Some(&transcript_page),
         )
         .map_err(BridgeError::untyped)?;
+    }
+    let projection_ms = projection_started.elapsed().as_millis() as u64;
+    let elapsed = started.elapsed();
+    if elapsed > std::time::Duration::from_secs(1) {
+        tracing::info!(
+            target: "gents_desktop::chat",
+            session_id,
+            hydrate_start_ms,
+            request_refresh_ms,
+            transcript_page_tip_ms,
+            projection_ms,
+            elapsed_ms = elapsed.as_millis() as u64,
+            "loaded slow desktop session snapshot"
+        );
     }
     Ok(snapshot)
 }

@@ -134,7 +134,7 @@ export type SessionLoadingLayer =
   "localDatabase" | "p2p" | "sessionSync" | "sync" | "runtime" | "inference";
 
 export type SessionLoadingAction =
-  "retryLocal" | "retryHydration" | "reconnect" | "configureInference";
+  "retryLocal" | "retryHydration" | "configureInference";
 
 export type SessionLoadingStatus = {
   layer: SessionLoadingLayer;
@@ -174,6 +174,18 @@ export function projectSessionLoadingStatus({
     (!selectedAgentDid ||
       !sessionLoad.agentDid ||
       sessionLoad.agentDid === selectedAgentDid);
+
+  if (loadMatches && sessionLoad.phase === "loading" && sessionLoad.error) {
+    return {
+      layer: "localDatabase",
+      phase: "loading",
+      title: "Retrying conversation update",
+      detail: sessionMatches
+        ? "The last update failed. Displayed messages may be out of date."
+        : "The last read failed. Retrying this conversation.",
+      action: null,
+    };
+  }
 
   if (loadMatches && sessionLoad.phase === "loading" && !sessionMatches) {
     return {
@@ -264,7 +276,7 @@ export function projectSessionLoadingStatus({
       title: "Waiting for session history",
       detail:
         "No local messages were found yet. Waiting for the enrolled agent’s session projection.",
-      action: operationalState ? "reconnect" : "retryLocal",
+      action: operationalState ? null : "retryLocal",
     };
   }
 

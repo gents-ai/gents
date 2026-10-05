@@ -95,6 +95,7 @@ pub(crate) fn supersede_pending_mutation(
     format!(
         r#"mutation {{
             update_AgentRequest(
+                docID: "{physical_doc_id}",
                 filter: {{
                     _docID: {{ _eq: "{}" }},
                     agent_did: {{ _eq: "{}" }},
@@ -116,6 +117,7 @@ pub(crate) fn supersede_pending_mutation(
         escape_graphql_string(survivor_doc_id),
         escape_graphql_string(reason),
         escape_graphql_string(&chrono::Utc::now().to_rfc3339()),
+        physical_doc_id = escape_graphql_string(doc_id),
     )
 }
 

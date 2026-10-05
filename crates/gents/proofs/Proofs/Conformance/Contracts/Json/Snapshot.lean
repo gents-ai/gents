@@ -3,6 +3,7 @@ import Proofs.Conformance.GraphWorkspaceLineage
 import Proofs.Conformance.OperatorBaseFreeze
 import Proofs.Conformance.LogicalOutputObligation
 import Proofs.Conformance.InvalidToolProgress
+import Proofs.Conformance.SchemaArgumentRepair
 import Proofs.Conformance.RepeatedToolFailure
 import Proofs.Conformance.ToolTimeouts
 import Proofs.Conformance.PluginResources
@@ -28,6 +29,7 @@ import Proofs.Conformance.Contracts.Json.Workspace
 import Proofs.Conformance.Contracts.Json.Callback
 import Proofs.Conformance.Contracts.Json.SelfConfig
 import Proofs.Conformance.Contracts.Json.Goal
+import Proofs.Conformance.GoalClaimedReadiness
 import Proofs.Conformance.Contracts.Json.SessionHydration
 import Proofs.Conformance.Contracts.Json.PairingReconcile
 import Proofs.Conformance.Contracts.Json.Enrollment
@@ -121,6 +123,8 @@ def snapshotJson : String :=
       ++ Conformance.RequestExecutionLeaseContracts.providerEofCasesJson ++ ","
     ++ "\"request_execution_lease_cases\":"
       ++ Conformance.RequestExecutionLeaseContracts.leaseCasesJson ++ ","
+    ++ "\"request_execution_lease_observed_cases\":"
+      ++ Conformance.RequestExecutionLeaseContracts.observedLeaseCasesJson ++ ","
     ++ "\"request_execution_lease_trace_cases\":"
       ++ Conformance.RequestExecutionLeaseContracts.leaseTraceCasesJson ++ ","
     ++ "\"canonical_execution_gate_cases\":"
@@ -155,6 +159,8 @@ def snapshotJson : String :=
       ++ goalDecisionCasesJson ++ ","
     ++ "\"goal_readiness_gate_cases\":"
       ++ goalReadinessGateCasesJson ++ ","
+    ++ "\"goal_claimed_readiness_cases\":"
+      ++ Conformance.GoalClaimedReadiness.casesJson ++ ","
     ++ "\"goal_transition_cases\":"
       ++ goalTransitionCasesJson ++ ","
     ++ "\"goal_create_cases\":" ++ goalCreateCasesJson ++ ","
@@ -228,6 +234,7 @@ def snapshotJson : String :=
     ++ "\"tool_policy_cases\":"
       ++ toolPolicyCasesJson ++ ","
     ++ "\"application_write_cases\":" ++ applicationWriteCasesJson ++ ","
+    ++ "\"field_read_cases\":" ++ fieldReadCasesJson ++ ","
     ++ "\"write_input_cases\":" ++ writeInputCasesJson ++ ","
     ++ "\"invocation_correlation_cases\":" ++ invocationCorrelationCasesJson ++ ","
     ++ "\"goal_capability_resolution_cases\":"
@@ -362,6 +369,8 @@ def snapshotJson : String :=
       ++ Conformance.MailboxReplyContracts.casesJson ++ ","
     ++ "\"mailbox_handoff_cases\":"
       ++ Conformance.MailboxHandoffContracts.casesJson ++ ","
+    ++ "\"schema_argument_repair_cases\":"
+      ++ Conformance.SchemaArgumentRepair.casesJson ++ ","
     ++ "\"invalid_tool_progress_cases\":"
       ++ Conformance.InvalidToolProgressContracts.casesJson ++ ","
     ++ "\"repeated_tool_failure_cases\":"
@@ -409,6 +418,11 @@ def snapshotJson : String :=
       (CanonicalOutput.Execution.AuxiliaryCases.cases.map auxiliaryOutputCaseJson) ++ ","
     ++ "\"prompt_assembly_claude_wire_start_cases\":" ++
       promptAssemblyClaudeWireStartCasesJson ++ ","
+    ++ "\"routing_affinity_cases\":" ++ routingAffinityCasesJson ++ ","
+    ++ "\"prompt_assembly_responses_storage_cases\":" ++
+      promptAssemblyResponsesStorageCasesJson ++ ","
+    ++ "\"prompt_assembly_responses_effort_cases\":" ++
+      promptAssemblyResponsesEffortCasesJson ++ ","
     ++ "\"current_input_cases\":" ++ currentInputCasesJson ++ ","
     ++ "\"prompt_assembly_sanitize_cases\":"
       ++ promptAssemblySanitizeCasesJson ++ ","
@@ -490,6 +504,9 @@ def snapshotJson : String :=
     ++ "\"backend_health_cases\":"
       ++ jsonArray
         (Proofs.BackendHealth.transitionCases.map backendHealthCaseJson) ++ ","
+    ++ "\"backend_probe_schedule_cases\":"
+      ++ jsonArray
+        (Proofs.BackendHealth.scheduleCases.map backendProbeScheduleCaseJson) ++ ","
     ++ "\"follow_up_hooks\":"
       ++ followUpHooksJson ++ ","
     ++ "\"trigger_delivery\":" ++ Conformance.TriggerDelivery.casesJson ++ ","

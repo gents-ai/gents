@@ -131,7 +131,7 @@ impl RequestLifecycle {
             let mutation = format!(
                 r#"mutation {{
                     update_AgentRequest(
-                        filter: {{
+                        docID: "{escaped_doc_id}", filter: {{
                             _docID: {{ _eq: "{escaped_doc_id}" }},
                             agent_did: {{ _eq: "{escaped_agent_did}" }},
                             requester_did: {{ _neq: null }},

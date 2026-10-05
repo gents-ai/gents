@@ -70,4 +70,32 @@ describe("harness backends keep the bridge's contract", () => {
     );
     expect(screen.getByRole("textbox", { name: "Tags" })).toBeInTheDocument();
   });
+
+  it("shows an Anthropic key backend as an API-key backend", async () => {
+    const harness = createDesktopUiHarness();
+    const api = harness.adapter;
+    /* applied, not saved: the harness save path reports any env var as a
+       stored key, while its apply path matches the bridge */
+    await api.applyConfigComponents({
+      document: {
+        agent_principal: { agent_did: "did:key:z6MkBombadilAgent" },
+        inference_backends: [
+          {
+            ...backendDocument("anthropic-key"),
+            provider_kind: "AnthropicApiKey",
+            endpoint: "https://api.anthropic.com/v1",
+            auth: { kind: "environment", variable: "ANTHROPIC_API_KEY" },
+          } as InferenceBackend,
+        ],
+      },
+    });
+    const deployment = (await api.fetchDesktopSnapshot()).client!.deployments[0]!;
+    const shell = {
+      api,
+      applyConfig: (run: (bridge: typeof api) => Promise<unknown>) => run(api),
+    } as unknown as Shell;
+    render(<InferencePanel shell={shell} deployment={deployment} />);
+    const meta = screen.getByText(/Anthropic API key · key from ANTHROPIC_API_KEY/);
+    expect(meta.textContent).not.toMatch(/signed in/);
+  });
 });

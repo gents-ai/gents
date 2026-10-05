@@ -762,6 +762,12 @@ fn config_documents<T: serde::de::DeserializeOwned>(
         .with_context(|| format!("directory snapshot missing {name}"))?;
     let mut documents = BTreeMap::new();
     for value in source {
+        // parse_config_projection warns and drops this backend's dependents.
+        if collection == crate::collection::Collection::InferenceBackend
+            && crate::backend_registry::unknown_provider_kind(value).is_some()
+        {
+            continue;
+        }
         // Backend observations share storage with config but never enter its
         // strict serde shape. Select desired fields using the canonical owner.
         let mut document = value
@@ -834,12 +840,26 @@ fn parse_config_projection(
     let executions =
         config_documents::<InferenceExecution>(response, Collection::InferenceExecution)?;
     let mut observations = BTreeMap::new();
+    let mut unknown_backends = BTreeSet::new();
     for value in rows::<serde_json::Value>(response, "InferenceBackend")? {
         let owner = value
             .get("agent_did")
             .and_then(serde_json::Value::as_str)
             .context("backend observation owner missing")?
             .to_string();
+        if let Some(provider_kind) = crate::backend_registry::unknown_provider_kind(&value) {
+            let backend_id = value
+                .get("backend_id")
+                .and_then(serde_json::Value::as_str)
+                .context("backend ID missing")?;
+            tracing::warn!(
+                backend_id,
+                provider_kind,
+                "skipping backend of a provider kind this build does not know"
+            );
+            unknown_backends.insert((owner, backend_id.to_string()));
+            continue;
+        }
         let observed: InferenceBackendObservation = serde_json::from_value(value)?;
         anyhow::ensure!(
             observations
@@ -867,6 +887,9 @@ fn parse_config_projection(
                 continue;
             }
             let profile = scoped_config(&profiles, owner, &behavior.inference_profile_id)?;
+            if unknown_backends.contains(&(owner.clone(), profile.backend_id.clone())) {
+                continue;
+            }
             scoped_config(&backends, owner, &profile.backend_id)?;
             let context = behavior
                 .context_id
@@ -939,7 +962,9 @@ fn parse_config_projection(
         }
         let mut profile_pairs = Vec::new();
         for ((profile_owner, id), profile) in &profiles {
-            if profile_owner != owner {
+            if profile_owner != owner
+                || unknown_backends.contains(&(owner.clone(), profile.backend_id.clone()))
+            {
                 continue;
             }
             let backend = scoped_config(&backends, owner, &profile.backend_id)?;
@@ -975,7 +1000,7 @@ fn parse_config_projection(
                     selected[0].reasoning_efforts.as_ref(),
                 ) {
                     anyhow::ensure!(
-                        supported.contains(&effort),
+                        crate::config::admits_reasoning_effort(backend, effort, supported),
                         "profile {id:?} selects an unadvertised effort"
                     );
                 }
@@ -1569,6 +1594,72 @@ mod tests {
     /// through a real node, aligned with `available_profiles`, and stays
     /// write-free on the settled re-tick (the float-display byte-stability
     /// this fences).
+    #[tokio::test]
+    async fn graphql_tick_skips_behaviors_on_an_unknown_provider_kind() -> Result<()> {
+        let node = Arc::new(EmbeddedNode::builder().build().await?);
+        crate::ensure_runtime_schemas(&node).await?;
+        let seed = r#"mutation {
+            create_AgentPrincipal(input: {
+                agent_did: "did:key:mixed", display_name: "Mixed",
+                enabled: true, created_at: "2026-07-23T00:00:00Z"
+            }) { _docID }
+            create_AgentBehavior(input: {
+                behavior_id: "known", agent_did: "did:key:mixed",
+                inference_profile_id: "known-profile", enabled: true
+            }) { _docID }
+            create_InferenceProfile(input: {
+                profile_id: "known-profile", agent_did: "did:key:mixed",
+                backend_id: "openai", model_name: "gpt-5"
+            }) { _docID }
+            create_InferenceBackend(input: {
+                backend_id: "openai", agent_did: "did:key:mixed", name: "OpenAI",
+                provider_kind: "OpenAiCompatible", endpoint: "http://localhost:8000",
+                auth: { kind: "unauthenticated" }, enabled: true
+            }) { _docID }
+            create_AgentBehavior(input: {
+                behavior_id: "future", agent_did: "did:key:mixed",
+                inference_profile_id: "future-profile", enabled: true
+            }) { _docID }
+            create_InferenceProfile(input: {
+                profile_id: "future-profile", agent_did: "did:key:mixed",
+                backend_id: "future", model_name: "future-model"
+            }) { _docID }
+            create_InferenceBackend(input: {
+                backend_id: "future", agent_did: "did:key:mixed", name: "Future",
+                provider_kind: "FutureProviderKind", endpoint: "https://example.invalid/v1",
+                auth: { kind: "unauthenticated" }, enabled: true
+            }) { _docID }
+        }"#;
+        let response = node.execute(seed).await;
+        ensure_no_errors(&response, "seed mixed provider kinds")?;
+
+        let snapshot = GraphqlDirectoryStore::new(node.clone(), None)
+            .load_source_snapshot()
+            .await?;
+        let behaviors = snapshot
+            .behaviors
+            .get("did:key:mixed")
+            .expect("principal behaviors")
+            .iter()
+            .map(|info| info.behavior_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(behaviors, ["known"]);
+        let profiles = &snapshot.options["did:key:mixed"].available_profiles;
+        assert!(
+            profiles
+                .iter()
+                .all(|entry| !entry.starts_with("future-profile|")),
+            "{profiles:?}"
+        );
+        assert!(
+            profiles
+                .iter()
+                .any(|entry| entry.starts_with("known-profile|")),
+            "{profiles:?}"
+        );
+        Ok(())
+    }
+
     #[tokio::test]
     async fn graphql_tick_converges_runtime_less_principal_and_retracts_on_removal() -> Result<()> {
         let tempdir = tempfile::tempdir()?;

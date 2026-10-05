@@ -7,7 +7,7 @@ use defra_node::EmbeddedNode;
 use gents_protocol::output::reconstruction::{reconstruct_message, ObservedSegment};
 use gents_protocol::output::{
     MessageBlock, MessagePublication, MessageRole, OutputOutcome, PayloadPresentation, PayloadRef,
-    PresentedPayload, SourceClose, TranscriptMessage,
+    PresentedPayload, ReasoningPart, SourceClose, TranscriptMessage,
 };
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
@@ -19,8 +19,8 @@ use crate::lean_vocab_test::{
     LeanCanonicalExecutionObservation, LeanCanonicalExecutionOperation, LeanCanonicalExecutionSeed,
     LeanCanonicalMessage, LeanCanonicalSegment, LeanCanonicalSource, LeanCanonicalToolAdmission,
     LeanCanonicalWriter, LeanMessageBlock, LeanMessagePublication, LeanMessageRole, LeanOutcome,
-    LeanPayloadKind, LeanPayloadSpec, LeanPresentation, LeanPresentationPart, LeanRequestPurpose,
-    LeanResultPart, LeanTerminalSelection,
+    LeanPayloadKind, LeanPayloadSpec, LeanPresentation, LeanPresentationPart, LeanReasoningPart,
+    LeanRequestPurpose, LeanResultPart, LeanTerminalSelection,
 };
 
 const FIXTURE_EPOCH_SECONDS: i64 = 1_700_000_000;
@@ -78,6 +78,152 @@ fn native_sequence(value: u64) -> Result<u32> {
         .context("native sequence exceeds u32")
 }
 
+fn owner_error_is(error: &anyhow::Error, message: &str) -> bool {
+    error.chain().any(|cause| cause.to_string() == message)
+}
+
+/// Auxiliary publication attempts must reach the publication owner with their
+/// original source. Transcript reconstruction already refuses that provenance,
+/// so decode the candidate's payload through the sealed-stream owner instead.
+fn auxiliary_publication_candidate(
+    records: &[ObservedSegment<'_>],
+    header: &TranscriptMessage,
+) -> Result<gents_protocol::message::Message> {
+    use gents_protocol::message::{
+        AssistantContent, Message, Reasoning, ReasoningContent, Text, ToolCall, ToolFunction,
+    };
+    use gents_protocol::output::reconstruction::{
+        reconstruct_presented_payload, reconstruct_stream,
+    };
+
+    anyhow::ensure!(
+        header.role == MessageRole::Assistant,
+        "auxiliary publication candidate is not an assistant message"
+    );
+    let stream = |reference: &PayloadRef| -> Result<String> {
+        Ok(reconstruct_stream(records, &[], &[], reference)?.text)
+    };
+    let content = header
+        .blocks
+        .iter()
+        .map(|block| -> Result<AssistantContent> {
+            Ok(match block {
+                MessageBlock::Text { text } => AssistantContent::Text(Text {
+                    text: reconstruct_presented_payload(records, &[], &[], text)?,
+                }),
+                MessageBlock::Reasoning { id, parts } => AssistantContent::Reasoning(Reasoning {
+                    id: id.clone(),
+                    content: parts
+                        .iter()
+                        .map(|part| -> Result<ReasoningContent> {
+                            Ok(match part {
+                                ReasoningPart::Text { text, signature } => ReasoningContent::Text {
+                                    text: stream(text)?,
+                                    signature: signature.clone(),
+                                },
+                                ReasoningPart::Encrypted { data } => {
+                                    ReasoningContent::Encrypted(stream(data)?)
+                                }
+                                ReasoningPart::Redacted { data } => ReasoningContent::Redacted {
+                                    data: stream(data)?,
+                                },
+                                ReasoningPart::Summary { text } => {
+                                    ReasoningContent::Summary(stream(text)?)
+                                }
+                            })
+                        })
+                        .collect::<Result<Vec<_>>>()?,
+                }),
+                MessageBlock::ToolCall {
+                    id,
+                    call_id,
+                    name,
+                    arguments,
+                    signature,
+                    additional_params,
+                    ..
+                } => AssistantContent::ToolCall(ToolCall {
+                    id: id.clone(),
+                    call_id: call_id.clone(),
+                    function: ToolFunction {
+                        name: name.clone(),
+                        arguments: serde_json::from_str(&stream(arguments)?)?,
+                    },
+                    signature: signature.clone(),
+                    additional_params: additional_params.clone(),
+                }),
+                MessageBlock::ToolResult { .. } | MessageBlock::Media(_) => {
+                    anyhow::bail!("unsupported auxiliary publication candidate block")
+                }
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Message::Assistant {
+        id: header.native_id.clone(),
+        content,
+    })
+}
+
+async fn create_signed_fixture_request(
+    node: &EmbeddedNode,
+    identity: &dyn AgentIdentity,
+    spec: crate::lifecycle::RequestSpec,
+) -> Result<crate::watcher::AgentRequest> {
+    let create = crate::lifecycle::build_signed_request(
+        spec,
+        crate::lifecycle::RequestSigner::Identity(identity),
+    )
+    .await?;
+    let response = crate::config_client::ConfigAccess::write_local_response(
+        node,
+        "test.native_execution.create_signed_request",
+        &create
+            .graphql_mutation_selecting(crate::watcher::AGENT_REQUEST_FIELDS)
+            .map_err(anyhow::Error::msg)?,
+    )
+    .await?;
+    crate::watcher::agent_request_from_mutation_response(&response, "create_AgentRequest")?
+        .context("native request create omitted its physical identity")
+}
+
+async fn claim_fixture_request(
+    node: Arc<EmbeddedNode>,
+    principal: &str,
+    request: crate::watcher::AgentRequest,
+    duration: u64,
+    generation: String,
+    now: DateTime<Utc>,
+    processing: bool,
+) -> Result<()> {
+    let request_doc_id = request.doc_id.clone();
+    let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_agent_did(
+        node.clone(),
+        "general",
+        principal,
+        request,
+        duration,
+    );
+    lifecycle.set_execution_lease_duration(std::time::Duration::from_secs(duration));
+    let durable_claim = lifecycle
+        .claim_pending_durable_with_inputs(|| now, || (now, generation.clone()))
+        .await?;
+    anyhow::ensure!(
+        durable_claim.was_claimed(),
+        "signed request was not claimable"
+    );
+    drop(lifecycle);
+    if processing {
+        crate::lifecycle::RequestLifecycle::begin_owned_execution_durable_with_clock(
+            &node,
+            &request_doc_id,
+            &generation,
+            || now,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
 pub(crate) struct NativeCanonicalExecutionAdapter;
 
 pub(crate) struct NativeCanonicalExecution {
@@ -91,6 +237,7 @@ pub(crate) struct NativeCanonicalExecution {
     next_sequence: u64,
     session_id: String,
     principal: String,
+    title_parent: Option<(u64, String)>,
     segments: Vec<LeanCanonicalSegment>,
     messages: Vec<LeanCanonicalMessage<LeanPayloadSpec>>,
     tool_state: Option<String>,
@@ -816,6 +963,35 @@ impl NativeCanonicalExecution {
                             payload: payload_ref(&text.output)?,
                         }
                     }
+                    MessageBlock::Reasoning { id, parts } => LeanMessageBlock::Reasoning {
+                        id: id.clone(),
+                        parts: parts
+                            .iter()
+                            .map(|part| -> Result<LeanReasoningPart<LeanPayloadSpec>> {
+                                Ok(match part {
+                                    ReasoningPart::Text { text, signature } => {
+                                        LeanReasoningPart::Text {
+                                            payload: payload_ref(text)?,
+                                            signature: signature.clone(),
+                                        }
+                                    }
+                                    ReasoningPart::Encrypted { data } => {
+                                        LeanReasoningPart::Encrypted {
+                                            payload: payload_ref(data)?,
+                                        }
+                                    }
+                                    ReasoningPart::Redacted { data } => {
+                                        LeanReasoningPart::Redacted {
+                                            payload: payload_ref(data)?,
+                                        }
+                                    }
+                                    ReasoningPart::Summary { text } => LeanReasoningPart::Summary {
+                                        payload: payload_ref(text)?,
+                                    },
+                                })
+                            })
+                            .collect::<Result<Vec<_>>>()?,
+                    },
                     MessageBlock::ToolCall {
                         tool_call_doc_id,
                         id,
@@ -940,9 +1116,9 @@ impl NativeCanonicalExecution {
         let response = self
             .node
             .execute(&format!(
-                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {} lifecycle_state terminal_output }} }}"#,
+                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {} terminal_output }} }}"#,
                 crate::graphql::escape_graphql_string(&self.request_doc_id),
-                crate::watcher::AGENT_REQUEST_FIELDS,
+                crate::request_admission::SIGNED_REQUEST_FIELDS,
             ))
             .await;
         anyhow::ensure!(
@@ -952,6 +1128,32 @@ impl NativeCanonicalExecution {
         );
         let row: AgentRequestRow = crate::graphql::first_row(&response, "AgentRequest")?
             .context("native request disappeared")?;
+        if let Some((_, parent_doc_id)) = &self.title_parent {
+            let parent = crate::graphql::escape_graphql_string(parent_doc_id);
+            let response = crate::graphql::graphql_with_transaction_retry(
+                &self.node,
+                &format!(r#"{{
+                    AgentRequest(filter: {{ _docID: {{ _eq: "{parent}" }} }}, limit: 1) {{ {} }}
+                    AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{parent}" }} }}) {{ _docID }}
+                    AgentMessage(filter: {{ request_doc_id: {{ _eq: "{parent}" }} }}) {{ _docID }}
+                }}"#, crate::request_admission::SIGNED_REQUEST_FIELDS),
+                "test.native_execution.title_parent",
+            ).await?;
+            let parent: AgentRequestRow = crate::graphql::first_row(&response, "AgentRequest")?
+                .context("title parent disappeared")?;
+            crate::request_admission::verify_historical_title_receipt(&row, &parent)?;
+            anyhow::ensure!(
+                parent.lifecycle_state == Some(RequestLifecycleState::Completed),
+                "title execution changed its terminal parent"
+            );
+            let data = response.data.context("title parent query omitted data")?;
+            for collection in ["AgentOutputSegment", "AgentMessage"] {
+                anyhow::ensure!(
+                    data[collection].as_array().is_some_and(Vec::is_empty),
+                    "title execution wrote output under its parent request"
+                );
+            }
+        }
         let terminal_selection = match row.terminal_output.as_ref() {
             None => None,
             Some(gents_protocol::output::TerminalOutput::NoMessage) => {
@@ -1106,10 +1308,6 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
     ) -> ExecutionFuture<'a, Result<Self::Native>> {
         Box::pin(async move {
             anyhow::ensure!(
-                seed.purpose == LeanRequestPurpose::Normal,
-                "native title-audit request initialization is not implemented"
-            );
-            anyhow::ensure!(
                 seed.segments.is_empty() && seed.messages.is_empty(),
                 "seeded durable output is not implemented by the native adapter"
             );
@@ -1122,10 +1320,12 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                 "nonzero sequence without seeded durable facts is not implemented"
             );
             anyhow::ensure!(
-                seed.lease.request == RequestLifecycleState::Processing
-                    && seed.lease.lease.status
-                        == crate::lean_vocab_test::LeanRequestExecutionLeaseStatus::Active,
-                "native fixture only supports an active processing request"
+                matches!(
+                    seed.lease.request,
+                    RequestLifecycleState::Claimed | RequestLifecycleState::Processing
+                ) && seed.lease.lease.status
+                    == crate::lean_vocab_test::LeanRequestExecutionLeaseStatus::Active,
+                "native fixture only supports an active claimed or processing request"
             );
             let generation = seed
                 .lease
@@ -1150,7 +1350,35 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                 "native fixture does not support this seeded lease history"
             );
             let seed_creation_time = fixture_time(seed.lease.now)?;
-            let request_id = format!("lean-request-{}", seed.request_id);
+            let title_binding = match seed.purpose {
+                LeanRequestPurpose::Normal => {
+                    anyhow::ensure!(
+                        seed.title_binding.is_none(),
+                        "normal seed has title binding"
+                    );
+                    None
+                }
+                LeanRequestPurpose::TitleAudit => {
+                    let binding = seed
+                        .title_binding
+                        .as_ref()
+                        .context("title seed has no binding")?;
+                    anyhow::ensure!(
+                        binding.authenticated
+                            && binding.physical_request == seed.request_id
+                            && binding.agent == seed.principal
+                            && binding.session == seed.session_id
+                            && binding.parent_physical != binding.physical_request
+                            && binding.parent_logical != binding.logical_request,
+                        "modeled title binding does not name its exact request/session/principal"
+                    );
+                    Some(binding)
+                }
+            };
+            let request_id = format!(
+                "lean-request-{}",
+                title_binding.map_or(seed.request_id, |binding| binding.logical_request)
+            );
             let initial_session_id = format!("lean-session-{}", seed.session_id);
             let key_dir = tempfile::tempdir().context("native fixture identity directory")?;
             let identity: Arc<dyn AgentIdentity> = Arc::new(crate::KeyIdentity::load_or_create(
@@ -1161,45 +1389,91 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
             let node = Arc::new(EmbeddedNode::builder().build().await?);
             crate::ensure_runtime_schemas(&node).await?;
             crate::test_support::install_test_behavior(&node, &principal, "general").await;
-            let (request_doc_id, session_id) = {
-                let create = crate::lifecycle::build_signed_request(
+            let request_identity = |logical_id: String| crate::lifecycle::RequestIdentity {
+                requester_did: None,
+                request_id: logical_id,
+                agent_did: principal.clone(),
+                behavior_id: "general".to_owned(),
+                session_id: initial_session_id.clone(),
+                content: "lean native execution".to_owned(),
+                execution_origin: crate::lifecycle::ExecutionOrigin::Interactive,
+                created_at: seed_creation_time.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            };
+            let parent = if let Some(binding) = title_binding {
+                let parent = create_signed_fixture_request(
+                    &node,
+                    identity.as_ref(),
                     crate::lifecycle::RequestSpec::new(
                         gents_protocol::request_admission::RequestPurpose::Normal,
-                        crate::lifecycle::RequestIdentity {
-                            requester_did: None,
-                            request_id: request_id.clone(),
-                            agent_did: principal.clone(),
-                            behavior_id: "general".to_owned(),
-                            session_id: initial_session_id.clone(),
-                            content: "lean native execution".to_owned(),
-                            execution_origin: crate::lifecycle::ExecutionOrigin::Interactive,
-                            created_at: seed_creation_time
-                                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-                        },
+                        request_identity(format!("lean-request-{}", binding.parent_logical)),
                         gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
                             &principal,
                         ),
                     ),
-                    crate::lifecycle::RequestSigner::Identity(identity.as_ref()),
                 )
                 .await?;
-                let response = node
-                    .execute(&create.graphql_mutation().map_err(anyhow::Error::msg)?)
-                    .await;
+                let verified = crate::request_admission::verify_fresh_local_self_request(
+                    &node,
+                    identity.as_ref(),
+                    &parent,
+                    "general",
+                )
+                .await
+                .map_err(anyhow::Error::from)?;
+                let generation = "native-title-parent";
+                claim_fixture_request(
+                    node.clone(),
+                    &principal,
+                    verified,
+                    duration,
+                    generation.to_owned(),
+                    seed_creation_time,
+                    true,
+                )
+                .await?;
                 anyhow::ensure!(
-                    !response.has_errors(),
-                    "initialize native request: {:?}",
-                    response.errors
+                    matches!(
+                        crate::lifecycle::terminalize_owned_at(
+                            &node,
+                            &parent.doc_id,
+                            generation,
+                            crate::lifecycle::RequestTerminalOutcome::Completed,
+                            gents_protocol::output::TerminalOutput::NoMessage,
+                            seed_creation_time,
+                        )
+                        .await?,
+                        crate::lifecycle::TerminalizeResult::Won
+                    ),
+                    "native title parent did not terminalize"
                 );
-                let request_doc_id =
-                    crate::graphql::single_mutation_document(&response, "create_AgentRequest")?
-                        .and_then(|row| row.get("_docID"))
-                        .and_then(serde_json::Value::as_str)
-                        .filter(|id| !id.trim().is_empty())
-                        .context("native request create omitted its physical identity")?
-                        .to_owned();
-                (request_doc_id, initial_session_id)
+                Some(parent)
+            } else {
+                None
             };
+            let spec = match &parent {
+                None => crate::lifecycle::RequestSpec::new(
+                    gents_protocol::request_admission::RequestPurpose::Normal,
+                    request_identity(request_id.clone()),
+                    gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&principal),
+                ),
+                Some(parent) => crate::lifecycle::RequestSpec {
+                    subagent: Some(crate::lifecycle::ParentLink {
+                        parent_request_id: parent.request_id.clone(),
+                        parent_request_doc_id: parent.doc_id.clone(),
+                        ..Default::default()
+                    }),
+                    ..crate::lifecycle::RequestSpec::new(
+                        gents_protocol::request_admission::RequestPurpose::TitleAudit,
+                        request_identity(request_id.clone()),
+                        gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_local_control(
+                            &principal, &parent.request_id,
+                        ),
+                    )
+                },
+            };
+            let queued = create_signed_fixture_request(&node, identity.as_ref(), spec).await?;
+            let request_doc_id = queued.doc_id.clone();
+            let session_id = initial_session_id;
             let fixture_epoch_seconds = FIXTURE_EPOCH_SECONDS;
             let now = fixture_time_at(fixture_epoch_seconds, seed.lease.now)?;
             let expiry = fixture_time_at(fixture_epoch_seconds, seed.lease.effective_expiry)?;
@@ -1216,40 +1490,35 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                 "native signed request was not pending"
             );
             let queued: crate::watcher::AgentRequest = row.try_into()?;
-            let verified = crate::request_admission::verify_fresh_local_self_request(
-                &node,
-                identity.as_ref(),
-                &queued,
-                "general",
-            )
-            .await
+            let verified = match seed.purpose {
+                LeanRequestPurpose::Normal => {
+                    crate::request_admission::verify_fresh_local_self_request(
+                        &node,
+                        identity.as_ref(),
+                        &queued,
+                        "general",
+                    )
+                    .await
+                }
+                LeanRequestPurpose::TitleAudit => {
+                    crate::request_admission::AgentRequestAdmissionVerifier::new(
+                        node.clone(),
+                        identity.clone(),
+                        crate::agent::p2p_reconcile::enrollment_authority_channel().1,
+                    )
+                    .verify_fresh_at(&queued, "general", now)
+                    .await
+                }
+            }
             .map_err(anyhow::Error::from)?;
-            let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_agent_did(
+            claim_fixture_request(
                 node.clone(),
-                "general",
                 &principal,
                 verified,
                 duration,
-            );
-            lifecycle.set_execution_lease_duration(std::time::Duration::from_secs(duration));
-            let claimed_at = now;
-            let claim_generation = symbolic_generation(generation);
-            let durable_claim = lifecycle
-                .claim_pending_durable_with_inputs(|| now, || (claimed_at, claim_generation))
-                .await?;
-            anyhow::ensure!(
-                durable_claim.was_claimed(),
-                "native signed request was not claimable"
-            );
-            // The durable claim owner performed its exact CAS, mailbox claim,
-            // and session projection. Do not install a process-local renewal
-            // task or execution lease on this fixture-only lifecycle wrapper.
-            drop(lifecycle);
-            crate::lifecycle::RequestLifecycle::begin_owned_execution_durable_with_clock(
-                &node,
-                &request_doc_id,
-                &symbolic_generation(generation),
-                || now,
+                symbolic_generation(generation),
+                now,
+                seed.lease.request == RequestLifecycleState::Processing,
             )
             .await?;
             let claimed = node.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {} lifecycle_state }} }}"#, crate::graphql::escape_graphql_string(&request_doc_id), crate::watcher::AGENT_REQUEST_FIELDS)).await;
@@ -1261,13 +1530,27 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
             let claimed = crate::graphql::first_row::<AgentRequestRow>(&claimed, "AgentRequest")?
                 .context("native owned request disappeared")?;
             anyhow::ensure!(
-                claimed.lifecycle_state == Some(RequestLifecycleState::Processing)
+                claimed.lifecycle_state == Some(seed.lease.request)
                     && claimed.execution_generation.as_deref()
                         == Some(symbolic_generation(generation).as_str())
                     && claimed.execution_lease_expires_at.as_deref()
                         == Some(expiry.to_rfc3339().as_str()),
                 "native claim/begin did not preserve modeled execution authority"
             );
+            if let Some(parent) = &parent {
+                anyhow::ensure!(
+                    claimed.purpose
+                        == Some(gents_protocol::request_admission::RequestPurpose::TitleAudit)
+                        && claimed.caused_by_parent_request_id.as_deref()
+                            == Some(parent.request_id.as_str())
+                        && claimed.caused_by_parent_request_doc_id.as_deref()
+                            == Some(parent.doc_id.as_str())
+                        && claimed.caused_by_parent_tool_call_id.is_none()
+                        && claimed.caused_by_parent_tool_call_doc_id.is_none()
+                        && request_doc_id != parent.doc_id,
+                    "signed title lost its exact parent-only provenance"
+                );
+            }
             let scoped_session = node.execute(&format!(
                 r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{}" }}, agent_did: {{ _eq: "{}" }}, requester_did: {{ _eq: "{}" }} }}, limit: 2) {{ session_id agent_did requester_did behavior_id created_at observation }} }}"#,
                 crate::graphql::escape_graphql_string(&session_id),
@@ -1293,10 +1576,17 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         .observation
                         .as_ref()
                         .and_then(|observation| observation.latest_request.as_ref())
-                        .is_some_and(|head| head.request_doc_id == request_doc_id
-                            && head.request_id == request_id
-                            && head.lifecycle_state == RequestLifecycleState::Claimed),
-                "real claim did not project the signed request into its exact session"
+                        .is_some_and(|head| match &parent {
+                            None =>
+                                head.request_doc_id == request_doc_id
+                                    && head.request_id == request_id
+                                    && head.lifecycle_state == RequestLifecycleState::Claimed,
+                            Some(parent) =>
+                                head.request_doc_id == parent.doc_id
+                                    && head.request_id == parent.request_id
+                                    && head.lifecycle_state == RequestLifecycleState::Completed,
+                        }),
+                "claim changed the expected normal request's exact session projection"
             );
             Ok(NativeCanonicalExecution {
                 node,
@@ -1309,6 +1599,9 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                 next_sequence: seed.next_sequence,
                 session_id,
                 principal,
+                title_parent: title_binding
+                    .zip(parent.as_ref())
+                    .map(|(binding, parent)| (binding.parent_physical, parent.doc_id.clone())),
                 segments: Vec::new(),
                 messages: Vec::new(),
                 tool_state: None,
@@ -1331,9 +1624,12 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
         Box::pin(async move {
             native.query_document = query_document;
             match operation {
-                LeanCanonicalExecutionOperation::RetractBeforeRetry { .. } => {
-                    anyhow::bail!("native retract-before-retry operation is not implemented")
-                }
+                LeanCanonicalExecutionOperation::RetractBeforeRetry {
+                    now,
+                    generation,
+                    record,
+                    ..
+                } => native.close_auxiliary(*now, *generation, record).await,
                 LeanCanonicalExecutionOperation::RenewLease {
                     now,
                     generation,
@@ -1378,7 +1674,8 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         Err(error)
                             if error
                                 .downcast_ref::<crate::streaming::canonical::ProviderAppendRejection>()
-                                .is_some() =>
+                                .is_some()
+                                || owner_error_is(&error, "output source does not match its request purpose") =>
                         {
                             return native.observe(false).await;
                         }
@@ -1598,7 +1895,8 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         Err(error)
                             if error
                                 .downcast_ref::<crate::lifecycle::ToolAccountingRejection>()
-                                .is_some() =>
+                                .is_some()
+                                || owner_error_is(&error, "title source has no unique closure") =>
                         {
                             return native.observe(false).await;
                         }
@@ -1773,7 +2071,10 @@ impl NativeCanonicalExecution {
                 outcome: OutputOutcome::Partial,
                 ..
             }) => crate::streaming::canonical::ProviderAttemptClose::Partial,
-            _ => anyhow::bail!("auxiliary close must carry a Complete or Partial closure"),
+            Some(SourceClose::Retracted) => {
+                crate::streaming::canonical::ProviderAttemptClose::Retracted
+            }
+            _ => anyhow::bail!("auxiliary close must carry a closure"),
         };
         let result = crate::streaming::canonical::close_provider_attempt_at(
             &self.node,
@@ -1796,7 +2097,11 @@ impl NativeCanonicalExecution {
                     .is_some()
                     || error
                         .downcast_ref::<gents_protocol::output::ReconstructionError>()
-                        .is_some() =>
+                        .is_some()
+                    || owner_error_is(
+                        &error,
+                        "output source does not match its request purpose",
+                    ) =>
             {
                 return self.observe(false).await;
             }
@@ -1869,13 +2174,20 @@ impl NativeCanonicalExecution {
                                 arguments.close_doc_id = physical_close.to_owned();
                             }
                         }
-                        // The bounded adapter currently cannot decode these
-                        // modeled shapes, but identity remapping itself is not
-                        // a policy gate. Canonical owner validation below owns
-                        // whether any such block is legal for Partial output.
-                        MessageBlock::Reasoning { .. }
-                        | MessageBlock::ToolResult { .. }
-                        | MessageBlock::Media(_) => {}
+                        MessageBlock::Reasoning { parts, .. } => {
+                            for part in parts {
+                                let reference = match part {
+                                    ReasoningPart::Text { text, .. }
+                                    | ReasoningPart::Summary { text } => text,
+                                    ReasoningPart::Encrypted { data }
+                                    | ReasoningPart::Redacted { data } => data,
+                                };
+                                if reference.close_doc_id == symbolic_close {
+                                    reference.close_doc_id = physical_close.to_owned();
+                                }
+                            }
+                        }
+                        MessageBlock::ToolResult { .. } | MessageBlock::Media(_) => {}
                     }
                 }
                 Ok(message)
@@ -2029,7 +2341,11 @@ impl NativeCanonicalExecution {
             .zip(&protocol_segments)
             .map(|(doc_id, segment)| ObservedSegment { doc_id, segment })
             .collect::<Vec<_>>();
-        let expected = reconstruct_message(&observed, &[], &[], &header)?;
+        let expected = if sealed.source.is_auxiliary_audit() {
+            auxiliary_publication_candidate(&observed, &header)?
+        } else {
+            reconstruct_message(&observed, &[], &[], &header)?
+        };
         let encoded = Arc::new(crate::streaming::native_encoding::encode_native_message(
             &expected,
         )?);
@@ -2088,7 +2404,11 @@ impl NativeCanonicalExecution {
             Err(error)
                 if error
                     .downcast_ref::<crate::streaming::canonical::ProviderReplayRejection>()
-                    .is_some() =>
+                    .is_some()
+                    || owner_error_is(
+                        &error,
+                        "provider publication does not bind its request generation",
+                    ) =>
             {
                 return self.observe(false).await;
             }
@@ -2240,6 +2560,38 @@ impl NativeCanonicalExecution {
                     LeanMessageBlock::Text { payload: value } => MessageBlock::Text {
                         text: payload(value)?,
                     },
+                    LeanMessageBlock::Reasoning { id, parts } => MessageBlock::Reasoning {
+                        id: id.clone(),
+                        parts: parts
+                            .iter()
+                            .map(|part| -> Result<ReasoningPart> {
+                                Ok(match part {
+                                    LeanReasoningPart::Text {
+                                        payload: value,
+                                        signature,
+                                    } => ReasoningPart::Text {
+                                        text: payload(value)?.output,
+                                        signature: signature.clone(),
+                                    },
+                                    LeanReasoningPart::Encrypted { payload: value } => {
+                                        ReasoningPart::Encrypted {
+                                            data: payload(value)?.output,
+                                        }
+                                    }
+                                    LeanReasoningPart::Redacted { payload: value } => {
+                                        ReasoningPart::Redacted {
+                                            data: payload(value)?.output,
+                                        }
+                                    }
+                                    LeanReasoningPart::Summary { payload: value } => {
+                                        ReasoningPart::Summary {
+                                            text: payload(value)?.output,
+                                        }
+                                    }
+                                })
+                            })
+                            .collect::<Result<Vec<_>>>()?,
+                    },
                     LeanMessageBlock::ToolCall {
                         doc_id,
                         id,
@@ -2340,7 +2692,15 @@ impl NativeCanonicalExecution {
             ),
             _ => anyhow::bail!("append output currently supports provider sources only"),
         };
-        anyhow::ensure!(record.coordinate.request > 0, "symbolic request is blank");
+        let request_doc_id = if record.coordinate.request == self.request_id {
+            &self.request_doc_id
+        } else {
+            self.title_parent
+                .as_ref()
+                .filter(|(symbolic, _)| *symbolic == record.coordinate.request)
+                .map(|(_, physical)| physical)
+                .context("provider coordinate names an unmapped physical request")?
+        };
         anyhow::ensure!(
             matches!(&record.writer, LeanCanonicalWriter::Request { generation: writer } if *writer == generation),
             "append output writer generation conflicts with operation"
@@ -2408,7 +2768,7 @@ impl NativeCanonicalExecution {
             agent_did: self.principal.clone(),
             requester_did: Some(self.principal.clone()),
             session_id: self.session_id.clone(),
-            request_doc_id: self.request_doc_id.clone(),
+            request_doc_id: request_doc_id.clone(),
             source: gents_protocol::output::OutputSource::ProviderTurn {
                 scope: gents_protocol::rendered_request::CaptureScope {
                     kind: capture_kind,
@@ -2577,6 +2937,43 @@ async fn every_generated_native_execution_script_runs_to_completion() {
     );
 }
 
+#[test]
+fn generated_title_execution_inventory_keeps_external_premises_explicit() {
+    use crate::lean_vocab_test::LeanCanonicalExecutionCase;
+    let mut native = 0;
+    let mut gaps = Vec::new();
+    for case in &crate::lean_vocab_test::lean_contract_snapshot().canonical_execution_gate_cases {
+        match case {
+            LeanCanonicalExecutionCase::NativeExecution { name, seed, .. }
+                if name.starts_with("title_") || name == "normal_request_rejects_title_source" =>
+            {
+                native += 1;
+                assert_eq!(
+                    seed.title_binding.is_some(),
+                    seed.purpose == LeanRequestPurpose::TitleAudit
+                );
+            }
+            LeanCanonicalExecutionCase::ModelExecution {
+                name, native_gap, ..
+            } if name.starts_with("title_") => {
+                assert!(!native_gap.trim().is_empty(), "{name}");
+                gaps.push(name.as_str());
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(native, 11);
+    assert_eq!(
+        gaps,
+        [
+            "title_recovery_accepts_closed_partial_before_future_dated_raw",
+            "title_closed_extent_allows_terminal_after_late_raw",
+            "title_terminal_replay_ignores_late_raw",
+            "title_rejects_publication_and_tool_dispatch",
+        ]
+    );
+}
+
 /// Native representation negative controls outside Lean's valid Time domain:
 /// a missing durable deadline fails in the append owner, while malformed input
 /// is rejected by DefraDB's DateTime scalar before it can become a durable row.
@@ -2706,11 +3103,9 @@ async fn generated_tool_append_rejects_invalid_durable_deadline_without_writing(
 /// In-process, fixture-time gate experiment: this binds a generated lease-ordering
 /// trace to the real transaction owner, not to host clock jumps or OS suspension.
 #[tokio::test]
-async fn generated_renewal_holds_write_gate_until_stale_recovery_loses() {
+async fn generated_renewal_commits_while_ordinary_write_gate_is_held() {
     use crate::config_client::ConfigApplyTxn;
     use crate::lifecycle::{RecoveryResult, RecoverySelectionChoice, RenewalAttemptOutcome};
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use tokio::sync::Notify;
 
     let case = crate::lean_vocab_test::lean_contract_snapshot()
         .canonical_execution_gate_cases
@@ -2813,12 +3208,9 @@ async fn generated_renewal_holds_write_gate_until_stale_recovery_loses() {
         Some(physical_generation.as_str())
     );
 
-    let reached = Arc::new(Notify::new());
-    let release = Arc::new(Notify::new());
-    let mut renewal = Box::pin(ConfigApplyTxn::with_successful_mutation_pause_at(
-        1,
-        Arc::clone(&reached),
-        Arc::clone(&release),
+    let holder = ConfigApplyTxn::begin_local(&node, None).await.unwrap();
+    let renewed = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
         crate::lifecycle::renew_execution_lease_once_at(
             &node,
             &request_doc_id,
@@ -2826,66 +3218,25 @@ async fn generated_renewal_holds_write_gate_until_stale_recovery_loses() {
             native.fixture_time(*expected_deadline).unwrap(),
             native.fixture_time(*renewal_now).unwrap(),
         ),
-    ));
-    tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        tokio::select! {
-            biased;
-            completed = &mut renewal => panic!("renewal completed before its held mutation: {completed:?}"),
-            _ = reached.notified() => {}
-        }
-    })
+    )
     .await
-    .expect("renewal must reach the held write gate");
-
-    let queued = Arc::new(Notify::new());
-    let acquired = Arc::new(AtomicBool::new(false));
-    let mut recovery = Box::pin(ConfigApplyTxn::with_write_gate_observation(
-        Arc::clone(&queued),
-        Arc::clone(&acquired),
-        crate::lifecycle::recover_expired_generation_with_facts(
-            &node,
-            &stale,
-            &physical_generation,
-            stale_expiry,
-            physical_fresh_generation,
-            native.fixture_time(*recovery_now).unwrap(),
-            Some(choice),
-            Some(target),
-        ),
-    ));
-    tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        tokio::select! {
-            biased;
-            completed = &mut recovery => panic!("stale recovery completed before queuing: {completed:?}"),
-            _ = queued.notified() => {}
-        }
-    })
-    .await
-    .expect("stale recovery must queue at the held write gate");
-    assert!(
-        !acquired.load(Ordering::Acquire),
-        "stale recovery must not acquire the gate before renewal commits"
-    );
-
-    release.notify_one();
-    let (renewed, fired) = tokio::time::timeout(std::time::Duration::from_secs(10), renewal)
-        .await
-        .expect("held renewal must finish after release");
-    assert!(
-        fired,
-        "renewal must pause after its real successful mutation"
-    );
-    assert_eq!(renewed.unwrap(), RenewalAttemptOutcome::Committed);
+    .expect("renewal must commit while another ordinary transaction holds the gate")
+    .unwrap();
+    assert_eq!(renewed, RenewalAttemptOutcome::Committed);
     assert_eq!(native.observe(true).await.unwrap(), *expected_after_renewal);
-
-    let recovered = tokio::time::timeout(std::time::Duration::from_secs(10), recovery)
-        .await
-        .expect("queued stale recovery must finish after renewal")
-        .unwrap();
-    assert!(
-        acquired.load(Ordering::Acquire),
-        "recovery must acquire the gate after renewal releases it"
-    );
+    holder.commit().await.unwrap();
+    let recovered = crate::lifecycle::recover_expired_generation_with_facts(
+        &node,
+        &stale,
+        &physical_generation,
+        stale_expiry,
+        physical_fresh_generation,
+        native.fixture_time(*recovery_now).unwrap(),
+        Some(choice),
+        Some(target),
+    )
+    .await
+    .unwrap();
     assert_eq!(recovered, RecoveryResult::Lost);
     assert_eq!(
         native.observe(false).await.unwrap(),

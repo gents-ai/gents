@@ -22,9 +22,49 @@ pub(super) async fn inference_profile_set(args: InferenceProfileSetArgs) -> Resu
     )
 }
 
+/// Why the profile's reasoning effort will not be sent, if it will not.
+/// Every lookup failure yields `None`: a warning never fails `show`.
+pub(super) async fn profile_effort_warning(
+    access: &crate::config_writes::ConfigAccess,
+    agent_did: &str,
+    row: &serde_json::Value,
+) -> Option<String> {
+    let mut row = row.clone();
+    row.as_object_mut()?.remove("_docID");
+    let profile: InferenceProfile = serde_json::from_value(row).ok()?;
+    profile.reasoning_effort?;
+    let backend = super::crud::load_one(
+        access,
+        super::crud::BACKEND_SPEC,
+        agent_did,
+        &profile.backend_id,
+    )
+    .await
+    .ok()?;
+    let backend = gents::document_config::InferenceBackend::from_value(&backend).ok()?;
+    let observation =
+        crate::shared::load_backend_observation(access, agent_did, &profile.backend_id)
+            .await
+            .ok();
+    gents::config::unsent_reasoning_effort(&backend, &profile, observation.as_ref())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn profile_show_warns_when_an_xai_effort_will_not_be_sent() {
+        let owner = "did:key:owner";
+        let access = crate::shared::test_support::seed_unsent_xai_effort(owner).await;
+        let row =
+            super::super::crud::load_one(&access, super::super::crud::PROFILE_SPEC, owner, "grok")
+                .await
+                .unwrap();
+        let warning = profile_effort_warning(&access, owner, &row)
+            .await
+            .expect("warning");
+        assert!(warning.contains("profile grok"), "{warning}");
+    }
     #[test]
     fn canonical_model_effort_and_policy_links_are_preserved() {
         let profile=decode_profile(br#"{"agent_did":"owner","profile_id":"chosen","backend_id":"provider","model_name":"exact-model","reasoning_effort":"high","sampling_id":"sampling","execution_id":"execution"}"#).unwrap();

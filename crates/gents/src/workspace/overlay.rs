@@ -39,6 +39,8 @@ pub(crate) fn process_operator_tool_root() -> Option<PathBuf> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct IsolatedWorkspaceRecord {
     pub workspace_id: String,
+    pub work_unit_id: Option<String>,
+    pub caused_by_invocation_id: Option<String>,
     pub owner_agent_did: String,
     pub writer_principal: String,
     pub integrator_principal: String,
@@ -667,6 +669,8 @@ pub(super) async fn persist_workspace_binding_docs(
 #[derive(Deserialize)]
 struct IsolatedWorkspaceRow {
     workspace_id: Option<String>,
+    work_unit_id: Option<String>,
+    caused_by_invocation_id: Option<String>,
     owner_agent_did: Option<String>,
     writer_principal: Option<String>,
     integrator_principal: Option<String>,
@@ -693,6 +697,8 @@ pub(crate) fn isolated_workspace_record_query(workspace_id: &str, agent_did: &st
                 limit: 2
             ) {{
                 workspace_id
+                work_unit_id
+                caused_by_invocation_id
                 owner_agent_did
                 writer_principal
                 integrator_principal
@@ -738,6 +744,8 @@ fn decode_isolated_workspace_record(row: IsolatedWorkspaceRow) -> Result<Isolate
         .to_string();
     Ok(IsolatedWorkspaceRecord {
         workspace_id,
+        work_unit_id: row.work_unit_id,
+        caused_by_invocation_id: row.caused_by_invocation_id,
         owner_agent_did,
         writer_principal,
         integrator_principal,

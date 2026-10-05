@@ -107,7 +107,6 @@ export function createDesktopApiAdapter(
       invokeDesktop<EnrollmentRequestView>("desktop_peer_enroll_status", {
         request: { serverAddress },
       }),
-    repairP2P: () => invokeDesktop<DesktopClientSnapshot>("desktop_p2p_repair"),
     listWorkspace: (subpath) =>
       invokeDesktop<WorkspaceListingView>("desktop_workspace_list", {
         subpath: subpath ?? null,

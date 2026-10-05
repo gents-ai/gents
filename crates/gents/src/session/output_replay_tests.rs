@@ -1062,6 +1062,113 @@ struct FaultingRequests<'a> {
     fault: Option<RequestFault>,
 }
 
+struct CountingRequests<'a> {
+    node: &'a EmbeddedNode,
+    rows: std::sync::atomic::AtomicUsize,
+    commits: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl ReplayRequestReader for CountingRequests<'_> {
+    async fn request_rows(&self, query: &str) -> anyhow::Result<serde_json::Value> {
+        self.rows.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.node.request_rows(query).await
+    }
+
+    async fn request_commits(
+        &self,
+        id: &str,
+    ) -> anyhow::Result<Vec<crate::graphql::CompositeCommit>> {
+        self.commits
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.node.request_commits(id).await
+    }
+}
+
+#[tokio::test]
+async fn replay_resolution_reads_shared_request_once_and_keeps_every_physical_candidate() {
+    let mut fixture = signed_fixture().await;
+    fixture
+        .insert_capture(RenderedRequestSource::ClaudeCliSubscription)
+        .await
+        .unwrap();
+    let mut duplicate = fixture.header.clone();
+    duplicate.sequence += 1;
+    duplicate.message_key.push_str("-physical-duplicate");
+    let access = crate::config_client::ConfigAccess::Local(fixture.node.clone());
+    access
+        .transact("test.replay.duplicate_header", |txn| {
+            let duplicate = duplicate.clone();
+            Box::pin(async move {
+                txn.execute_with_variables(
+                    CREATE_AGENT_MESSAGE_MUTATION,
+                    &transcript_message_create_variables(&duplicate)?,
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap();
+    fixture.boundary = capture_source_boundary(
+        &fixture.node,
+        SESSION_ID,
+        AGENT_DID,
+        None,
+        &fixture.request_doc_id,
+        &fixture.request_commit_cid,
+    )
+    .await
+    .unwrap();
+    let requests = CountingRequests {
+        node: &fixture.node,
+        rows: std::sync::atomic::AtomicUsize::new(0),
+        commits: std::sync::atomic::AtomicUsize::new(0),
+    };
+    for resolution in 1..=2 {
+        let candidates = super::output::load_canonical_assistant_candidates_with(
+            &fixture.node,
+            &requests,
+            fixture.scope(),
+            &fixture.boundary,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(candidates.len(), 2);
+        assert_ne!(candidates[0].header_doc_id, candidates[1].header_doc_id);
+        assert!(candidates.iter().all(|candidate| candidate.has_capture()));
+        assert_eq!(
+            requests.rows.load(std::sync::atomic::Ordering::Relaxed),
+            resolution
+        );
+        assert_eq!(
+            requests.commits.load(std::sync::atomic::Ordering::Relaxed),
+            resolution
+        );
+    }
+
+    let candidate = fixture.candidates().await.unwrap().remove(0);
+    let tag = ReplayTag {
+        request_doc_id: candidate.request_doc_id.clone(),
+        source: OutputSource::ProviderTurn {
+            scope: candidate.coordinate.scope,
+            turn_index: candidate.coordinate.turn_index,
+            attempt: candidate.coordinate.attempt,
+        },
+    };
+    let selected = super::output::load_canonical_assistant_candidates_with(
+        &fixture.node,
+        &requests,
+        fixture.scope(),
+        &fixture.boundary,
+        Some(std::slice::from_ref(&tag)),
+    )
+    .await
+    .unwrap();
+    assert_eq!(selected.len(), 2, "selection preserves physical twins");
+    assert_ne!(selected[0].header_doc_id, selected[1].header_doc_id);
+}
+
 #[async_trait::async_trait]
 impl ReplayRequestReader for FaultingRequests<'_> {
     async fn request_rows(&self, query: &str) -> anyhow::Result<serde_json::Value> {
@@ -1095,6 +1202,7 @@ async fn load_with_fault(
     scope: CanonicalReplayScope<'_>,
     boundary: &SourceBoundary,
     fault: Option<RequestFault>,
+    selected_tags: Option<&[ReplayTag]>,
 ) -> anyhow::Result<Vec<super::output::CanonicalAssistantCandidate>> {
     let requests = FaultingRequests {
         node: &fixture.node,
@@ -1106,6 +1214,7 @@ async fn load_with_fault(
         &requests,
         scope,
         boundary,
+        selected_tags,
     )
     .await
 }
@@ -1166,23 +1275,80 @@ async fn historical_request_store_faults_propagate_instead_of_dropping_reasoning
         request_commit_cid: &current_commit_cid,
         ..fixture.scope()
     };
-    let verified = load_with_fault(&fixture, scope, &boundary, None)
+    let verified = load_with_fault(&fixture, scope, &boundary, None, None)
         .await
         .unwrap();
     assert_eq!(verified.len(), 1);
     assert_eq!(verified[0].request_doc_id, fixture.request_doc_id);
     assert!(verified[0].has_capture(), "the healthy turn replays");
 
+    let candidate = &verified[0];
+    let selected_tag = ReplayTag {
+        request_doc_id: candidate.request_doc_id.clone(),
+        source: OutputSource::ProviderTurn {
+            scope: candidate.coordinate.scope,
+            turn_index: candidate.coordinate.turn_index,
+            attempt: candidate.coordinate.attempt,
+        },
+    };
+    let OutputSource::ProviderTurn {
+        scope: tag_scope,
+        turn_index,
+        attempt,
+    } = &selected_tag.source
+    else {
+        unreachable!("selected replay tags are provider-owned")
+    };
+    let unselected_tag = ReplayTag {
+        request_doc_id: selected_tag.request_doc_id.clone(),
+        source: OutputSource::ProviderTurn {
+            scope: tag_scope.clone(),
+            turn_index: *turn_index,
+            attempt: *attempt + 1,
+        },
+    };
     assert!(
-        load_with_fault(&fixture, scope, &boundary, Some(RequestFault::Missing))
-            .await
-            .unwrap()
-            .is_empty(),
+        load_with_fault(
+            &fixture,
+            scope,
+            &boundary,
+            Some(RequestFault::RowsReadFails),
+            Some(std::slice::from_ref(&unselected_tag)),
+        )
+        .await
+        .unwrap()
+        .is_empty(),
+        "an unselected historical request needs no physical witness"
+    );
+    assert!(
+        load_with_fault(
+            &fixture,
+            scope,
+            &boundary,
+            Some(RequestFault::RowsReadFails),
+            Some(std::slice::from_ref(&selected_tag)),
+        )
+        .await
+        .is_err(),
+        "selected evidence still validates its physical request"
+    );
+
+    assert!(
+        load_with_fault(
+            &fixture,
+            scope,
+            &boundary,
+            Some(RequestFault::Missing),
+            None
+        )
+        .await
+        .unwrap()
+        .is_empty(),
         "a verifiably missing request drops only its turn"
     );
 
     for fault in [RequestFault::RowsReadFails, RequestFault::CommitsReadFails] {
-        let error = load_with_fault(&fixture, scope, &boundary, Some(fault))
+        let error = load_with_fault(&fixture, scope, &boundary, Some(fault), None)
             .await
             .err()
             .unwrap_or_else(|| panic!("{fault:?} must fail the lookup"));

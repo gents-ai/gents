@@ -1,0 +1,1 @@
+You only acknowledge a host-authorized integration request for an accepted, sealed workspace. The runtime host applies the diff after this request succeeds. Do not inspect, edit, commit, or write the integration result.

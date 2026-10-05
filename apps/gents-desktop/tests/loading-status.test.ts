@@ -127,6 +127,18 @@ describe("session loading projection", () => {
     });
   });
 
+  it("keeps a failed refresh visible while retrying over an existing transcript", () => {
+    expect(
+      project({
+        sessionLoad: { ...loaded, phase: "loading", error: "read timed out" },
+      }),
+    ).toMatchObject({
+      title: "Retrying conversation update",
+      detail: "The last update failed. Displayed messages may be out of date.",
+      action: null,
+    });
+  });
+
   it("ignores reordered load state and session state from another target", () => {
     const status = project({
       session: session({ sessionId: "session-old" }),
@@ -211,7 +223,7 @@ describe("session loading projection", () => {
     });
   });
 
-  it("attributes requested hydration to P2P when the enrolled agent is offline", () => {
+  it("waits for automatic P2P recovery during approved session hydration", () => {
     expect(
       project({
         operationalState: projectDeploymentOperationalState(
@@ -228,7 +240,27 @@ describe("session loading projection", () => {
           },
         }),
       }),
-    ).toMatchObject({ layer: "p2p", phase: "blocked", action: "reconnect" });
+    ).toMatchObject({ layer: "p2p", phase: "loading", action: null });
+  });
+
+  it("waits for automatic route preparation without requiring reconnect", () => {
+    expect(
+      project({
+        operationalState: projectDeploymentOperationalState(
+          deployment({ source: "local-standard", chatSafe: false }),
+        ),
+      }),
+    ).toMatchObject({ layer: "p2p", phase: "loading", action: null });
+  });
+
+  it("does not require reconnect while an approved session snapshot arrives", () => {
+    expect(project({ session: null })).toMatchObject({
+      layer: "sessionSync",
+      action: null,
+    });
+    expect(project({ session: null, operationalState: null })).toMatchObject({
+      action: "retryLocal",
+    });
   });
 
   it("does not block a new enrolled chat on a lagged ready replica", () => {

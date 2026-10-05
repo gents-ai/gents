@@ -491,17 +491,20 @@ const syncProjectorPath = join(
   "packages/gents-desktop-client/src/operationalState.ts",
 );
 const syncProjector = readFileSync(syncProjectorPath, "utf8");
+const syncStateMembers = syncProjector
+  .match(/export\s+type\s+SyncHealthStateName\s*=([^;]+);/)?.[1]
+  .split("|")
+  .map((member) => member.trim())
+  .filter(Boolean);
 if (
-  !syncProjector.includes(
-    [
-      "export type SyncHealthStateName =",
-      '  | "healthy"',
-      '  | "syncing"',
-      '  | "offline"',
-      '  | "failed"',
-      '  | "incompatible";',
-    ].join("\n"),
-  ) ||
+  JSON.stringify(syncStateMembers) !==
+    JSON.stringify([
+      '"healthy"',
+      '"syncing"',
+      '"offline"',
+      '"failed"',
+      '"incompatible"',
+    ]) ||
   !syncProjector.includes("export function projectSyncOperationalStatus(")
 ) {
   failures.push(

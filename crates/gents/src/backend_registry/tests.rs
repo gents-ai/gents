@@ -278,6 +278,37 @@ fn inference_backend_validation_reports_every_violation() {
 }
 
 #[test]
+fn anthropic_api_key_takes_keys_on_the_fixed_endpoint_only() {
+    let endpoint = crate::claude_subscription::ANTHROPIC_API_ENDPOINT;
+    let mut backend = base_backend();
+    backend.provider_kind = BackendProviderKind::AnthropicApiKey;
+    backend.endpoint = endpoint.into();
+    for auth in [
+        BackendAuth::ApiKey {
+            key: "placeholder-key".into(),
+        },
+        BackendAuth::Environment {
+            variable: "ANTHROPIC_API_KEY".into(),
+        },
+        BackendAuth::Unauthenticated,
+    ] {
+        backend.auth = auth;
+        backend.validate().unwrap();
+    }
+    backend.auth = BackendAuth::PrincipalOAuth;
+    assert!(backend.validate().is_err());
+
+    backend.auth = BackendAuth::Environment {
+        variable: "ANTHROPIC_API_KEY".into(),
+    };
+    backend.endpoint = format!("{endpoint}/");
+    backend.validate().unwrap();
+    backend.endpoint = "https://proxy.example.invalid/v1".into();
+    let error = backend.validate().unwrap_err().to_string();
+    assert!(error.contains(endpoint), "{error}");
+}
+
+#[test]
 fn inference_backend_validation_requires_provider_compatible_auth() {
     let mut backend = base_backend();
     backend.auth = BackendAuth::PrincipalOAuth;
@@ -445,6 +476,51 @@ async fn duplicate_backend_owner_keys_fail_without_overwriting_documents() -> Re
     for row in data["InferenceBackend"].as_array().unwrap() {
         assert!(row["probe_status"].is_null());
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn backend_lists_skip_an_unknown_provider_kind_and_lookups_stay_strict() -> Result<()> {
+    let node = std::sync::Arc::new(EmbeddedNode::builder().build().await?);
+    crate::ensure_runtime_schemas(&node).await?;
+    let owner = base_backend().agent_did;
+    crate::ensure_agent_principal(&node, &owner).await?;
+    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    crate::config_client::write_inference_backend_document(&access, &base_backend()).await?;
+    let mut future = serde_json::to_value(base_backend())?;
+    future["backend_id"] = "future".into();
+    future["provider_kind"] = "FutureProviderKind".into();
+    future["endpoint"] = "https://example.invalid/v1".into();
+    future["enabled"] = true.into();
+    access
+        .write(
+            "test.backend.future_kind",
+            &format!(
+                "mutation {{ create_InferenceBackend(input: {}) {{ _docID }} }}",
+                gents_protocol::graphql::graphql_input_literal(&future)?
+            ),
+        )
+        .await?;
+
+    let ids = |backends: Vec<InferenceBackend>| {
+        backends
+            .into_iter()
+            .map(|backend| backend.backend_id)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(ids(list_all_backends(&node).await?), ["reviewers"]);
+    assert_eq!(ids(list_enabled_backends(&node).await?), ["reviewers"]);
+    assert_eq!(
+        ids(list_enabled_backends_for_agent(&node, &owner).await?),
+        ["reviewers"]
+    );
+    let error = lookup_backend(&node, &owner, "future")
+        .await
+        .expect_err("a single lookup stays strict");
+    assert!(
+        format!("{error:#}").contains("FutureProviderKind"),
+        "{error:#}"
+    );
     Ok(())
 }
 

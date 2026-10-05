@@ -32,7 +32,10 @@ mod agent_scope;
 mod document_patches;
 mod session_tip;
 mod session_transcript;
-pub use session_tip::{load_session_tip_store, load_session_tip_store_on};
+pub use session_tip::{
+    load_request_prompt_ownership, load_request_prompt_ownership_on, load_session_tip_store,
+    load_session_tip_store_on, RequestPromptFact, RequestPromptOwnership,
+};
 mod snapshot_loaders;
 
 pub use agent_scope::load_agent_scoped_snapshot;
@@ -216,18 +219,6 @@ where
     let data = response
         .data
         .with_context(|| format!("query for {root} returned no data"))?;
-    parse_query_rows(&data, root)
-}
-
-pub(super) async fn load_rows_from_access<T>(
-    access: &gents::config_client::ConfigAccess,
-    root: &str,
-    query: &str,
-) -> Result<Vec<T>>
-where
-    T: DeserializeOwned,
-{
-    let data = execute_access_graphql_query(access, query, &format!("query for {root}")).await?;
     parse_query_rows(&data, root)
 }
 

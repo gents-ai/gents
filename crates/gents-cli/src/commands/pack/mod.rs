@@ -25,7 +25,9 @@ use gents::pack_resolve::{resolve_named, ResolveOptions, ResolvedFrom};
 use serde_json::json;
 use std::collections::BTreeMap;
 
-use cache::{asset_cache_root_for, lock_exclusive, release_cache_root, CacheRelease};
+#[cfg(test)]
+use cache::lock_exclusive;
+use cache::CacheRelease;
 
 pub(crate) fn parse_inference_slot_bindings(
     values: &[String],
@@ -230,6 +232,19 @@ pub(crate) mod test_support {
     /// path spec resolves.
     pub(crate) fn fixture_pack_source(name: &str, home: &Path) -> super::PackSource {
         local_pack_source(&fixture_dir(name), home)
+    }
+
+    pub(crate) fn assets_pack_dir(namespace: &str, name: &str, version: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        copy_tree(&fixture_dir("assets_fixture"), dir.path()).unwrap();
+        let path = dir.path().join("manifest.json");
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        manifest["namespace"] = namespace.into();
+        manifest["name"] = name.into();
+        manifest["version"] = version.into();
+        std::fs::write(path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        dir
     }
 }
 
@@ -438,7 +453,7 @@ impl SubjectPack {
 /// other spec is a pack name, even when a directory of that name is in the
 /// working directory: it resolves as `gents pack install` resolves one
 /// (local, installed, store, then registry) and materializes into
-/// `<home>/packs/<name>/<digest>`.
+/// `<home>/packs/.materialized/<namespace>/<name>/<digest>`.
 pub(crate) async fn resolve_subject_pack(
     home: &std::path::Path,
     spec: &str,
@@ -504,7 +519,12 @@ fn names_a_directory(spec: &str) -> bool {
 }
 
 fn asset_cache_root(home: &std::path::Path, pack: &PackSource) -> Result<std::path::PathBuf> {
-    cache::asset_cache_root_for(home, &pack.manifest().name, pack.digest())
+    cache::asset_cache_root_for(
+        home,
+        &pack.manifest().metadata.namespace,
+        &pack.manifest().name,
+        pack.digest(),
+    )
 }
 
 /// Thin caller over [`gents::plugin::install::install_pack_plugins`]; the
@@ -676,74 +696,6 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                     .await
                     .into_iter()
                     .collect::<Result<Vec<_>>>()?;
-            for dependency in &dependencies {
-                anyhow::ensure!(
-                    dependency.manifest().metadata.kind == PackKind::Graph,
-                    "only graph dependencies are currently installable"
-                );
-            }
-            for slot in requested.keys() {
-                let declared_by_root = pack
-                    .manifest()
-                    .metadata
-                    .inference_slots
-                    .iter()
-                    .any(|declared| declared.name.as_str() == slot.as_str());
-                let declared_by_dependency = dependencies.iter().any(|dependency| {
-                    dependency
-                        .manifest()
-                        .metadata
-                        .inference_slots
-                        .iter()
-                        .any(|declared| declared.name.as_str() == slot.as_str())
-                });
-                anyhow::ensure!(
-                    declared_by_root || declared_by_dependency,
-                    "pack {} and its dependencies have no inference slot {slot:?}",
-                    pack.manifest().name
-                );
-            }
-            let root_requested = requested
-                .iter()
-                .filter(|(slot, _)| {
-                    pack.manifest()
-                        .metadata
-                        .inference_slots
-                        .iter()
-                        .any(|declared| declared.name.as_str() == slot.as_str())
-                })
-                .map(|(slot, profile)| (slot.clone(), profile.clone()))
-                .collect();
-            let inference = gents::pack::preview_pack_inference_bindings(
-                &access,
-                pack.manifest(),
-                &owner,
-                &root_requested,
-            )
-            .await?;
-            let mut dependency_inference = BTreeMap::new();
-            for dependency in &dependencies {
-                let dependency_requested = requested
-                    .iter()
-                    .filter(|(slot, _)| {
-                        dependency
-                            .manifest()
-                            .metadata
-                            .inference_slots
-                            .iter()
-                            .any(|declared| declared.name.as_str() == slot.as_str())
-                    })
-                    .map(|(slot, profile)| (slot.clone(), profile.clone()))
-                    .collect();
-                let preview = gents::pack::preview_pack_inference_bindings(
-                    &access,
-                    dependency.manifest(),
-                    &owner,
-                    &dependency_requested,
-                )
-                .await?;
-                dependency_inference.insert(dependency.manifest().name.clone(), preview);
-            }
             let temp = tempfile::tempdir()?;
             materialize(&pack, temp.path())?;
             let (mut authored, mut report) = crate::desired_state::load_manifest_root(temp.path());
@@ -762,11 +714,22 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                 &owner,
                 args.force_rebind_concrete_did,
             )?;
-            let desired = gents::pack::bind_pack_install_config(
+            let prepared = gents::pack::prepare_document_pack_install(
+                &access,
+                &owner,
                 pack.manifest(),
                 &authored,
-                &inference.bindings,
-            )?;
+                &requested,
+                &dependencies
+                    .iter()
+                    .map(PackSource::archive)
+                    .collect::<Vec<_>>(),
+                &|name| std::env::var(name).ok(),
+            )
+            .await?;
+            let desired = prepared.config;
+            let inference = prepared.inference;
+            let dependency_inference = prepared.dependency_inference;
             let origin_tag = gents::pack::pack_origin_tag(&pack.manifest().name)?;
             if args.preview {
                 return crate::print_json(&json!({

@@ -10,8 +10,6 @@ function renderComposer(
     interruptVisible?: boolean;
     turnState?: string | null;
     onConfigureInference?: () => void;
-    onReconnect?: () => void;
-    reconnecting?: boolean;
   } = {},
 ) {
   return render(
@@ -28,8 +26,6 @@ function renderComposer(
       turnState={overrides.turnState ?? null}
       onDraftChange={vi.fn()}
       onConfigureInference={overrides.onConfigureInference}
-      onReconnect={overrides.onReconnect}
-      reconnecting={overrides.reconnecting}
       onInterruptClick={vi.fn()}
       onSend={vi.fn()}
     />,
@@ -116,47 +112,21 @@ describe("ChatComposer chrome", () => {
     expect(onConfigureInference).toHaveBeenCalledOnce();
   });
 
-  it("offers a distinct connection recovery action", () => {
-    const onReconnect = vi.fn();
-    const { rerender } = renderComposer({
+  it("shows connection waiting without a manual reconnect button", () => {
+    renderComposer({
       activityStatus: {
         kind: "waiting",
         label: "Waiting for the agent runtime…",
-        detail: "The agent stopped reporting readiness",
+        detail: "The secure connection is recovering automatically.",
         animated: true,
       },
-      onReconnect,
     });
-
-    screen.getByTestId("composer-reconnect").click();
-    expect(onReconnect).toHaveBeenCalledOnce();
-
-    rerender(
-      <ChatComposer
-        activeRequestId={null}
-        activityStatus={{
-          kind: "waiting",
-          label: "Reconnecting…",
-          detail: "Restoring the secure agent connection.",
-          animated: true,
-        }}
-        approxSerializedBytes={0}
-        behaviorLabel="default"
-        canSend={false}
-        draft=""
-        interruptVisible={false}
-        rowCount={0}
-        sending={false}
-        turnState={null}
-        onDraftChange={vi.fn()}
-        onReconnect={onReconnect}
-        reconnecting
-        onInterruptClick={vi.fn()}
-        onSend={vi.fn()}
-      />,
+    expect(screen.getByTestId("composer-status")).toHaveTextContent(
+      "Waiting for the agent runtime…",
     );
-    expect(screen.getByTestId("composer-reconnect")).toBeDisabled();
-    expect(screen.getByTestId("composer-reconnect")).toHaveTextContent("Reconnecting…");
+    expect(
+      screen.queryByRole("button", { name: /reconnect/i }),
+    ).not.toBeInTheDocument();
   });
 
   it("no longer renders store internals or permanent behavior chrome", () => {

@@ -123,7 +123,7 @@ pub fn chatgpt_codex_client_version() -> String {
 // the advertised client version, so an old default silently hides newer model
 // families (#982). Keep this at a current codex CLI release;
 // GENTS_CHATGPT_CODEX_CLIENT_VERSION overrides it at runtime.
-const CHATGPT_CODEX_CLIENT_VERSION: &str = "0.157.0";
+const CHATGPT_CODEX_CLIENT_VERSION: &str = "0.160.0";
 const CHATGPT_CODEX_CLIENT_VERSION_ENV: &str = "GENTS_CHATGPT_CODEX_CLIENT_VERSION";
 
 /// [`crate::oauth_http::OAuthHttpPolicy`] policy for the ChatGPT Codex
@@ -140,14 +140,51 @@ impl crate::oauth_http::OAuthHttpPolicy for ChatGptCodexPolicy {
     const REJECTION_STATUSES: &'static [u16] = &[401, 403];
 
     fn patch_request_body(&self, req: Request<Bytes>) -> Request<Bytes> {
-        let (parts, body) = req.into_parts();
+        let (mut parts, body) = req.into_parts();
         let mut body = body;
         if parts.uri.path().ends_with("/responses") {
+            for name in ["session_id", "x-client-request-id", "x-codex-turn-state"] {
+                parts.headers.remove(name);
+            }
+            if let Some(affinity) = gents_loop::provider_input::routing_affinity::current() {
+                if let Ok(session) = HeaderValue::from_str(affinity.session()) {
+                    parts.headers.insert("session_id", session.clone());
+                    parts.headers.insert("x-client-request-id", session);
+                }
+                if let Some(mut token) = affinity
+                    .token()
+                    .and_then(|token| HeaderValue::from_str(token).ok())
+                {
+                    token.set_sensitive(true);
+                    parts.headers.insert("x-codex-turn-state", token);
+                }
+            }
             if let Some(patched) = patch_instructions_body(&body) {
                 body = patched;
             }
+            let call = crate::admission::current_call_join();
+            let affinity = gents_loop::provider_input::routing_affinity::current();
+            tracing::info!(
+                call_id = call.as_ref().map(|call| call.call_id.as_str()),
+                call_seq = call.as_ref().map(|call| call.call_seq),
+                affinity_scope_present = affinity.is_some(),
+                session_header_present = parts.headers.contains_key("session_id"),
+                client_request_header_present = parts.headers.contains_key("x-client-request-id"),
+                turn_state_header_present = parts.headers.contains_key("x-codex-turn-state"),
+                "Codex cache routing request"
+            );
         }
         Request::from_parts(parts, body)
+    }
+
+    /// The Codex client's streaming completion API dispatches `/responses`.
+    /// Other endpoints use buffered sends, which check the URI before capture.
+    fn patch_streaming(
+        &self,
+        response: rig::http_client::StreamingResponse,
+    ) -> rig::http_client::StreamingResponse {
+        retain_turn_state(response.headers());
+        response
     }
 
     fn send_via<T, U>(
@@ -165,6 +202,9 @@ impl crate::oauth_http::OAuthHttpPolicy for ChatGptCodexPolicy {
             let request_body = req.body().clone();
             let response = HttpClientExt::send::<Bytes, Bytes>(&inner, req).await?;
 
+            if is_responses_request {
+                retain_turn_state(response.headers());
+            }
             let status = response.status();
             let headers = response.headers().clone();
             let response_body = response.into_body().await?;
@@ -184,6 +224,33 @@ impl crate::oauth_http::OAuthHttpPolicy for ChatGptCodexPolicy {
                 .body(body)
                 .map_err(http_client::Error::Protocol)
         }
+    }
+}
+
+fn retain_turn_state(headers: &HeaderMap) {
+    let affinity = gents_loop::provider_input::routing_affinity::current();
+    let returned = headers
+        .get("x-codex-turn-state")
+        .and_then(|header| header.to_str().ok());
+    let retained = affinity.as_ref().and_then(|affinity| affinity.token());
+    let call = crate::admission::current_call_join();
+    // Opaque routing tokens may carry provider state. Record presence and
+    // equality only; body comparisons use the existing rendered captures.
+    tracing::info!(
+        call_id = call.as_ref().map(|call| call.call_id.as_str()),
+        call_seq = call.as_ref().map(|call| call.call_seq),
+        provider_request_id = headers
+            .get("x-request-id")
+            .and_then(|value| value.to_str().ok()),
+        affinity_scope_present = affinity.is_some(),
+        turn_state_header_present = headers.contains_key("x-codex-turn-state"),
+        turn_state_header_valid = returned.is_some(),
+        retained_turn_state_present = retained.is_some(),
+        returned_turn_state_matches = retained.zip(returned).map(|(a, b)| a == b),
+        "Codex cache routing response"
+    );
+    if let Some(affinity) = affinity {
+        affinity.observe(returned);
     }
 }
 
@@ -348,6 +415,99 @@ mod tests {
 
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    #[tokio::test]
+    async fn routing_affinity_matches_lean_owner() {
+        use crate::oauth_http::OAuthHttpPolicy;
+        use gents_loop::provider_input::routing_affinity::{scope, RoutingAffinity};
+        for case in &crate::lean_vocab_test::lean_contract_snapshot().routing_affinity_cases {
+            let state = RoutingAffinity::start(
+                case["codex"].as_bool().unwrap(),
+                case["main"].as_bool().unwrap(),
+                case["session"].as_str().map(str::to_owned),
+            );
+            scope(state.clone(), async {
+                for response in case["responses"].as_array().unwrap() {
+                    let mut headers = HeaderMap::new();
+                    if let Some(token) = response.as_str() {
+                        headers.insert("x-codex-turn-state", HeaderValue::from_str(token).unwrap());
+                    }
+                    retain_turn_state(&headers);
+                }
+                let req = Request::builder()
+                    .uri("https://chatgpt.com/backend-api/codex/responses")
+                    .header("session_id", "stale-session")
+                    .header("x-client-request-id", "stale-session")
+                    .header("x-codex-turn-state", "stale-token")
+                    .body(Bytes::from_static(b"{}"))
+                    .unwrap();
+                let req = ChatGptCodexPolicy.patch_request_body(req);
+                assert_eq!(
+                    req.headers()
+                        .get("session_id")
+                        .and_then(|h| h.to_str().ok()),
+                    case["expected_session"].as_str(),
+                    "{case}"
+                );
+                assert_eq!(
+                    req.headers()
+                        .get("x-client-request-id")
+                        .and_then(|h| h.to_str().ok()),
+                    case["expected_session"].as_str(),
+                    "{case}"
+                );
+                assert_eq!(
+                    req.headers()
+                        .get("x-codex-turn-state")
+                        .and_then(|h| h.to_str().ok()),
+                    case["expected_token"].as_str(),
+                    "{case}"
+                );
+            })
+            .await;
+        }
+    }
+
+    #[tokio::test]
+    async fn routing_affinity_isolates_concurrent_executions_without_capture() {
+        use gents_loop::provider_input::routing_affinity::{current, scope, RoutingAffinity};
+        let first = RoutingAffinity::start(true, true, Some("same-session".into())).unwrap();
+        let second = RoutingAffinity::start(true, true, Some("same-session".into())).unwrap();
+        let run = |state: Arc<RoutingAffinity>, token: &'static str| async move {
+            scope(Some(state.clone()), async move {
+                assert!(crate::rendered_request::scope::current_scope().is_none());
+                let mut headers = HeaderMap::new();
+                headers.insert("x-codex-turn-state", HeaderValue::from_static(token));
+                retain_turn_state(&headers);
+                tokio::task::yield_now().await;
+                scope(None, async {
+                    assert!(current().is_none());
+                    retain_turn_state(&headers);
+                })
+                .await;
+                assert_eq!(current().unwrap().token(), Some(token));
+                use crate::oauth_http::OAuthHttpPolicy;
+                let other = Request::builder()
+                    .uri("https://api.x.ai/v1/responses")
+                    .header("x-custom", "unchanged")
+                    .body(Bytes::from_static(b"{}"))
+                    .unwrap();
+                let original_headers = other.headers().clone();
+                let other = crate::xai_grok_oauth::XaiGrokOAuthPolicy.patch_request_body(other);
+                assert_eq!(other.headers(), &original_headers);
+
+                let mut later = HeaderMap::new();
+                later.insert("x-codex-turn-state", HeaderValue::from_static("later"));
+                retain_turn_state(&later);
+                assert_eq!(state.token(), Some(token));
+            })
+            .await;
+        };
+        tokio::join!(run(first, "first"), run(second, "second"));
+        assert!(current().is_none());
+        let next = RoutingAffinity::start(true, true, Some("same-session".into())).unwrap();
+        assert_eq!(next.token(), None);
+    }
+
     struct CountingBearer {
         token: String,
         calls: AtomicUsize,
@@ -401,6 +561,7 @@ mod tests {
                 }
                 let body: LazyBody<U> = Box::pin(async { Ok(U::from(Bytes::new())) });
                 Response::builder()
+                    .header("x-codex-turn-state", "buffered-first")
                     .status(status)
                     .body(body)
                     .map_err(http_client::Error::Protocol)
@@ -426,10 +587,88 @@ mod tests {
         where
             T: Into<Bytes>,
         {
-            std::future::ready(Err(http_client::Error::InvalidStatusCode(
-                "501".parse().expect("valid status"),
-            )))
+            let status = self.status;
+            async move {
+                if status >= 400 {
+                    return Err(http_client::Error::InvalidStatusCode(
+                        status.to_string().parse().unwrap(),
+                    ));
+                }
+                let body: rig::http_client::sse::BoxedStream = Box::pin(futures::stream::empty());
+                Response::builder()
+                    .status(status)
+                    .header("x-codex-turn-state", "streaming-first")
+                    .body(body)
+                    .map_err(http_client::Error::Protocol)
+            }
         }
+    }
+
+    #[tokio::test]
+    async fn codex_affinity_transport_captures_first_response_and_reuses_it_on_followup() {
+        use crate::oauth_http::OAuthHttpPolicy;
+        use gents_loop::provider_input::routing_affinity::{scope, RoutingAffinity};
+        let client = ChatGptCodexHttpClient::with_inner(
+            CountingBearer::new("test-bearer"),
+            StatusInjectingClient { status: 200 },
+        );
+        let state = RoutingAffinity::start(true, true, Some("session".into())).unwrap();
+        scope(Some(state.clone()), async {
+            let request = || {
+                Request::builder()
+                    .uri("https://chatgpt.com/backend-api/codex/responses")
+                    .body(Bytes::from_static(b"{}"))
+                    .unwrap()
+            };
+            let initial = client.prepare_for_test(request()).await.unwrap();
+            assert_eq!(initial.headers()["session_id"], "session");
+            assert!(!initial.headers().contains_key("x-codex-turn-state"));
+            HttpClientExt::send::<Bytes, Bytes>(&client, request())
+                .await
+                .unwrap();
+            assert_eq!(state.token(), Some("buffered-first"));
+            let body: rig::http_client::sse::BoxedStream = Box::pin(futures::stream::empty());
+            let response = Response::builder()
+                .header("x-codex-turn-state", "streaming-later")
+                .body(body)
+                .unwrap();
+            ChatGptCodexPolicy.patch_streaming(response);
+            let followup = client.prepare_for_test(request()).await.unwrap();
+            assert_eq!(followup.headers()["x-codex-turn-state"], "buffered-first");
+            assert!(followup.headers()["x-codex-turn-state"].is_sensitive());
+            assert_eq!(followup.headers()["x-client-request-id"], "session");
+        })
+        .await;
+        let fresh = RoutingAffinity::start(true, true, Some("session".into())).unwrap();
+        scope(Some(fresh.clone()), async {
+            let request = Request::builder()
+                .uri("https://chatgpt.com/backend-api/codex/responses")
+                .body(Bytes::from_static(b"{}"))
+                .unwrap();
+            assert_eq!(fresh.token(), None);
+            HttpClientExt::send_streaming(&client, request.clone())
+                .await
+                .unwrap();
+            assert_eq!(fresh.token(), Some("streaming-first"));
+            let resend = client.prepare_for_test(request.clone()).await.unwrap();
+            assert_eq!(resend.headers()["x-codex-turn-state"], "streaming-first");
+            HttpClientExt::send_streaming(&client, request)
+                .await
+                .unwrap();
+            assert_eq!(fresh.token(), Some("streaming-first"));
+        })
+        .await;
+        let unscoped = client
+            .prepare_for_test(
+                Request::builder()
+                    .uri("https://chatgpt.com/backend-api/codex/responses")
+                    .body(Bytes::from_static(b"{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(!unscoped.headers().contains_key("session_id"));
+        assert!(!unscoped.headers().contains_key("x-codex-turn-state"));
     }
 
     fn status_error(status: &str) -> http_client::Error {
@@ -492,6 +731,7 @@ mod tests {
         // Codex rejects still present, and a strict tool.
         let assembled = serde_json::json!({
             "model": "gpt-5-codex",
+            "prompt_cache_key": "session",
             "input": [
                 {"role": "system", "content": [{"type": "input_text", "text": "you are gents"}]},
                 {"role": "user", "content": [{"type": "input_text", "text": "hi"}]},
@@ -525,6 +765,7 @@ mod tests {
         let seen = seen.lock().expect("seen");
         assert_eq!(seen.len(), 1, "exactly one row for one completion body");
         let captured = &seen[0].request_json;
+        assert_eq!(captured["prompt_cache_key"], "session");
 
         assert_eq!(
             captured["instructions"], "you are gents",
@@ -786,16 +1027,17 @@ mod tests {
     }
 
     #[test]
-    fn default_client_version_unlocks_gpt_6_catalog() {
+    fn default_client_version_supports_gpt_6_1_sol_catalog() {
         let parse = |version: &str| -> Vec<u32> {
             version
                 .split('.')
                 .map(|part| part.parse().unwrap())
                 .collect()
         };
-        assert_eq!(CHATGPT_CODEX_CLIENT_VERSION, "0.157.0");
-        // Upstream models.json: gpt-6-sol and gpt-6-luna require 0.155.0.
-        assert!(parse(CHATGPT_CODEX_CLIENT_VERSION) >= parse("0.155.0"));
+        assert_eq!(CHATGPT_CODEX_CLIENT_VERSION, "0.160.0");
+        // Codex rust-v0.160.0, a956835d020762cb2b570053af06f643a11c0ecc:
+        // models-manager/models.json gates gpt-6.1-sol at 0.153.0.
+        assert!(parse(CHATGPT_CODEX_CLIENT_VERSION) >= parse("0.153.0"));
     }
 
     #[test]

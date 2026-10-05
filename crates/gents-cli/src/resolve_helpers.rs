@@ -34,7 +34,7 @@ pub(crate) fn resolve_backend_config_with_preset(
 
     let endpoint = resolve_backend_endpoint(explicit_endpoint, preset, mode)?;
     let provider_kind = resolve_backend_provider_kind(explicit_provider_kind, preset)?;
-    let openai_wire_api = if provider_kind == BackendProviderKind::ClaudeCliSubscription {
+    let openai_wire_api = if provider_kind.uses_messages_wire() {
         // Claude is not an OpenAI-wire provider. Never persist a sticky wire
         // value when migrating an existing OpenAiCompatible backend.
         None
@@ -173,6 +173,51 @@ mod tests {
         assert_eq!(resolved.openai_wire_api, Some(OpenAiWireApi::Responses));
     }
 
+    fn xai_preset() -> BackendPresetArg {
+        <BackendPresetArg as clap::ValueEnum>::from_str("xai", false).expect("xai preset")
+    }
+
+    #[test]
+    fn xai_preset_resolves_the_xai_responses_backend() {
+        let resolved = resolve_backend_config_with_preset(
+            Some(xai_preset()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            BackendResolutionMode::ConfigWrite,
+        )
+        .expect("resolve xai preset");
+
+        assert_eq!(resolved.endpoint, "https://api.x.ai/v1");
+        assert_eq!(
+            resolved.provider_kind,
+            BackendProviderKind::OpenAiCompatible
+        );
+        assert_eq!(resolved.openai_wire_api, Some(OpenAiWireApi::Responses));
+        assert_eq!(resolved.api_key_env_var.as_deref(), Some("XAI_API_KEY"));
+    }
+
+    #[test]
+    fn explicit_wire_api_overrides_xai_preset() {
+        let resolved = resolve_backend_config_with_preset(
+            Some(xai_preset()),
+            None,
+            None,
+            Some(OpenAiWireApiArg::ChatCompletions),
+            None,
+            None,
+            BackendResolutionMode::ConfigWrite,
+        )
+        .expect("resolve xai preset");
+
+        assert_eq!(
+            resolved.openai_wire_api,
+            Some(OpenAiWireApi::ChatCompletions)
+        );
+    }
+
     #[test]
     fn generic_openai_compatible_omits_wire_api_by_default() {
         let resolved = resolve_backend_config_with_preset(
@@ -228,6 +273,31 @@ mod tests {
         assert_eq!(
             resolved.openai_wire_api, None,
             "Claude migration must not persist sticky openai_wire_api"
+        );
+    }
+
+    #[test]
+    fn anthropic_preset_resolves_a_key_backend() {
+        let resolved = resolve_backend_config_with_preset(
+            Some(BackendPresetArg::Anthropic),
+            None,
+            None,
+            Some(OpenAiWireApiArg::ChatCompletions),
+            None,
+            None,
+            BackendResolutionMode::ConfigWrite,
+        )
+        .expect("resolve anthropic preset");
+
+        assert_eq!(resolved.provider_kind, BackendProviderKind::AnthropicApiKey);
+        assert_eq!(
+            resolved.endpoint,
+            gents::claude_subscription::ANTHROPIC_API_ENDPOINT
+        );
+        assert_eq!(resolved.openai_wire_api, None);
+        assert_eq!(
+            resolved.api_key_env_var.as_deref(),
+            Some("ANTHROPIC_API_KEY")
         );
     }
 }

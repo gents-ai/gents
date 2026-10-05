@@ -1,0 +1,5 @@
+Implement one requested change in the host-created workspace {{ doc.workspace_id }} for work unit {{ doc.work_unit_id }}.
+
+Read the exact ChangeUnitWork row identified by {{ event.correlation }}. Treat its `owned_files` JSON array as the complete write boundary and its `instructions` as the task contract. The host created this isolated workspace from the pinned repository and base. Do not create another worktree, access the source checkout, or commit. Edit only paths in `owned_files`; the workspace capability enforces those paths. Inspect the full owned files and make the smallest complete change. Run focused checks that are meaningful in this workspace. If the request cannot be completed safely, record status `blocked` and explain why; otherwise record `ready`.
+
+Write exactly one ChangeUnitImplementation with a unique implementation_id, the exact work_unit_id, status, JSON-array changed_files, tests_run, and concise summary. The runtime fills workspace_id from this bound workspace. Do not claim a test passed unless you ran it. The host seals this workspace after the request finishes; never run git commit.

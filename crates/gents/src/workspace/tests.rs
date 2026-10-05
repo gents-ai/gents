@@ -991,6 +991,8 @@ fn seal_drift_fails_closed() {
 
     let mut workspace = super::IsolatedWorkspaceRecord {
         workspace_id: "ws-drift".into(),
+        work_unit_id: None,
+        caused_by_invocation_id: None,
         owner_agent_did: "did:key:zWorkspaceOwner".into(),
         writer_principal: "did:key:zWriter".into(),
         integrator_principal: "did:key:zIntegrator".into(),

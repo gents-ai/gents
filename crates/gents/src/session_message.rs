@@ -45,8 +45,7 @@ pub(crate) struct AgentMessageArgs {
     pub message: Option<String>,
     #[serde(default)]
     pub task: Option<TaskBody>,
-    /// Stop the session's current turn first; the message then arrives as a
-    /// new request rather than steering.
+    /// Request interruption of the current turn before queueing the message.
     #[serde(default)]
     pub interrupt: bool,
 }

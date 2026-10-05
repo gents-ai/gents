@@ -1,0 +1,71 @@
+{
+  "assets": [
+    "README.md",
+    "pack_config.json",
+    "agent_behaviors/change_unit_integrator/system_prompt.md",
+    "agent_behaviors/change_unit_record/system_prompt.md",
+    "agent_behaviors/change_unit_rejected/system_prompt.md",
+    "agent_behaviors/change_unit_reviewer/system_prompt.md",
+    "agent_behaviors/change_unit_writer/system_prompt.md",
+    "schemas/change_unit_closure.graphql",
+    "schemas/change_unit_implementation.graphql",
+    "schemas/change_unit_result.graphql",
+    "schemas/change_unit_review.graphql",
+    "schemas/change_unit_work.graphql",
+    "tasks/change_unit_integrate_task/prompt.md",
+    "tasks/change_unit_record_task/prompt.md",
+    "tasks/change_unit_rejected_task/prompt.md",
+    "tasks/change_unit_review_task/prompt.md",
+    "tasks/change_unit_writer_task/prompt.md",
+    "tests/install.json",
+    "tests/content.json",
+    "tests/workspace_callback.json"
+  ],
+  "authors": [
+    "gents-ai contributors"
+  ],
+  "config": "pack_config.json",
+  "dependencies": [],
+  "description": "One exact-path repository change in a sealed workspace, independently reviewed against its writer receipt, and integrated by the host only after acceptance.",
+  "inference_slots": [
+    {
+      "behaviors": [
+        "change-unit-writer"
+      ],
+      "description": "Implement one bounded change in the isolated writer workspace.",
+      "name": "writer"
+    },
+    {
+      "behaviors": [
+        "change-unit-reviewer"
+      ],
+      "description": "Independently review and accept or reject the exact sealed receipt.",
+      "name": "reviewer"
+    },
+    {
+      "behaviors": [
+        "change-unit-integrator",
+        "change-unit-record",
+        "change-unit-rejected"
+      ],
+      "description": "Acknowledge host integration and record terminal unit outcomes.",
+      "name": "integrator"
+    }
+  ],
+  "kind": "documents",
+  "manifest_version": 1,
+  "name": "change_unit",
+  "namespace": "gents",
+  "tags": [
+    "workspace",
+    "review"
+  ],
+  "version": "1.0.2",
+  "schemas": [
+    "schemas/change_unit_closure.graphql",
+    "schemas/change_unit_implementation.graphql",
+    "schemas/change_unit_result.graphql",
+    "schemas/change_unit_review.graphql",
+    "schemas/change_unit_work.graphql"
+  ]
+}

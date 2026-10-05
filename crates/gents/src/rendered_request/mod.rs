@@ -150,6 +150,97 @@ mod tests {
 
     struct MissingBase;
 
+    struct CountingBase {
+        reads: std::sync::atomic::AtomicUsize,
+        commits: std::sync::atomic::AtomicUsize,
+        cid: std::sync::Mutex<String>,
+    }
+
+    #[async_trait::async_trait]
+    impl CaptureBaseReader for CountingBase {
+        async fn execute_capture_query(&self, _query: &str) -> Result<Value> {
+            self.reads
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let value =
+                serde_json::json!({"model":"m", "stream":false, "padding":"x".repeat(4096)});
+            let encoded = encoding::encode_container(
+                &encoding::encode_full(&value)?,
+                &encoding::encode_full(&serde_json::json!({}))?,
+            )?;
+            Ok(serde_json::json!({"data":{"RenderedRequest":[{
+                "capture_version":CAPTURE_VERSION, "agent_did":"did:test", "requester_did":"",
+                "session_id":"session", "source":"openai_responses", "capture_scope":"inference.1",
+                "request_json":encoded
+            }]}}))
+        }
+
+        async fn capture_field_commit(
+            &self,
+            _doc_id: &str,
+            _field: &str,
+        ) -> Result<Option<commits::RequestJsonCommit>> {
+            self.commits
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(Some(commits::RequestJsonCommit {
+                cid: self.cid.lock().unwrap().clone(),
+                height: 1,
+            }))
+        }
+    }
+
+    #[tokio::test]
+    async fn replay_batch_reuses_witnessed_bases_without_skipping_witness_checks() {
+        let reader = CountingBase {
+            reads: std::sync::atomic::AtomicUsize::new(0),
+            commits: std::sync::atomic::AtomicUsize::new(0),
+            cid: std::sync::Mutex::new("base-commit".into()),
+        };
+        let stored = delta_capture();
+        let mut cache = CaptureBaseCache::new();
+        for _ in 0..32 {
+            let decoded = decode_capture_json_from_cached(
+                &reader,
+                CAPTURE_VERSION,
+                &stored,
+                CapturePayloadKind::RequestBody,
+                &mut cache,
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                decoded,
+                serde_json::json!({"model":"m", "stream":true, "padding":"x".repeat(4096)})
+            );
+        }
+        assert_eq!(reader.reads.load(std::sync::atomic::Ordering::Relaxed), 1);
+        assert_eq!(reader.commits.load(std::sync::atomic::Ordering::Relaxed), 1);
+        for changed in [
+            stored.replace("base-commit", "foreign-commit"),
+            stored.replace("session", "foreign-session"),
+        ] {
+            assert!(decode_capture_json_from_cached(
+                &reader,
+                CAPTURE_VERSION,
+                &changed,
+                CapturePayloadKind::RequestBody,
+                &mut cache
+            )
+            .await
+            .is_err());
+        }
+        *reader.cid.lock().unwrap() = "edited-base-commit".into();
+        assert!(decode_capture_json_from(
+            &reader,
+            CAPTURE_VERSION,
+            &stored,
+            CapturePayloadKind::RequestBody
+        )
+        .await
+        .is_err());
+        assert_eq!(reader.reads.load(std::sync::atomic::Ordering::Relaxed), 2);
+        assert_eq!(reader.commits.load(std::sync::atomic::Ordering::Relaxed), 2);
+    }
+
     #[async_trait::async_trait]
     impl CaptureBaseReader for MissingBase {
         async fn execute_capture_query(&self, _query: &str) -> Result<Value> {
@@ -323,7 +414,12 @@ impl CaptureBaseReader for crate::config_client::ConfigAccess {
 #[async_trait::async_trait]
 impl CaptureBaseReader for defra_node::EmbeddedNode {
     async fn execute_capture_query(&self, query: &str) -> Result<Value> {
-        let response = self.execute(query).await;
+        let response = crate::graphql::graphql_with_transaction_retry(
+            self,
+            query,
+            "reading rendered-request delta base",
+        )
+        .await?;
         crate::graphql::ensure_no_errors(&response, "reading rendered-request delta base")?;
         Ok(serde_json::json!({"data": response.data}))
     }
@@ -338,6 +434,13 @@ impl CaptureBaseReader for defra_node::EmbeddedNode {
 }
 
 type CaptureBaseCache = std::collections::BTreeMap<String, (Value, String)>;
+
+/// Witnessed positive base observations for one replay resolution. Discard
+/// between resolutions: a later read must observe edited or replicated bases.
+#[derive(Default)]
+pub(crate) struct CaptureReadCache {
+    bases: CaptureBaseCache,
+}
 
 async fn decode_capture_json_from_cached<R: CaptureBaseReader + Sync>(
     reader: &R,
@@ -532,4 +635,14 @@ pub async fn decode_capture_json_embedded(
     kind: CapturePayloadKind,
 ) -> Result<Value> {
     decode_capture_json_from(node, capture_version, stored, kind).await
+}
+
+pub(crate) async fn decode_capture_json_embedded_cached(
+    node: &defra_node::EmbeddedNode,
+    capture_version: u32,
+    stored: &str,
+    kind: CapturePayloadKind,
+    cache: &mut CaptureReadCache,
+) -> Result<Value> {
+    decode_capture_json_from_cached(node, capture_version, stored, kind, &mut cache.bases).await
 }

@@ -97,7 +97,7 @@ function syncHealth(overrides: Partial<SyncHealthView> = {}): SyncHealthView {
 }
 
 describe("deployment operational state", () => {
-  it("projects one shared offline blocker and recovery action", () => {
+  it("projects one shared offline wait while recovery runs automatically", () => {
     const state = projectDeploymentOperationalState(
       deployment({ dialSucceeded: false }),
     );
@@ -106,9 +106,9 @@ describe("deployment operational state", () => {
     expect(state.summary).toBe(state.transport);
     expect(state.transport).toMatchObject({
       layer: "p2p",
-      kind: "blocked",
+      kind: "waiting",
       shortLabel: "Not connected",
-      action: "reconnect",
+      action: null,
     });
   });
 

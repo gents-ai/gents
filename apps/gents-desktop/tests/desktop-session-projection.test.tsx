@@ -67,6 +67,85 @@ function renderProjection(
 }
 
 describe("useDesktopSessionProjection", () => {
+  it("keeps rendered replies while a database refresh stalls and then fails", async () => {
+    const page = {
+      totalItems: 1,
+      pageItems: 1,
+      hasOlder: false,
+      hasNewer: false,
+      oldestItemKey: "k1",
+      newestItemKey: "k1",
+    };
+    const saved = session(["k1"], page);
+    saved.timelineItems = [
+      {
+        kind: "assistantMessage",
+        itemKey: "k1",
+        sequence: 1,
+        content: "Saved agent reply",
+        reasoning: null,
+        timestamp: null,
+        reconstruction: { state: "ready" },
+      },
+    ];
+    let reject!: (reason: Error) => void;
+    const stalled = new Promise<DesktopSessionSnapshot>((_, fail) => {
+      reject = fail;
+    });
+    const fetchSessionSnapshot = vi
+      .fn()
+      .mockResolvedValueOnce(saved)
+      .mockReturnValueOnce(stalled);
+    const { result } = renderProjection({
+      fetchSessionSnapshot,
+    } as unknown as DesktopApiAdapter);
+    await act(async () => {
+      await result.current.refreshSession("session-1");
+    });
+    let refresh!: Promise<DesktopSessionSnapshot | null>;
+    act(() => {
+      refresh = result.current.refreshSession("session-1");
+    });
+    expect(result.current.session?.timelineItems).toEqual(saved.timelineItems);
+    expect(result.current.sessionLoad.phase).toBe("loading");
+    await act(async () => {
+      reject(new Error("database read timed out"));
+      await refresh;
+    });
+    expect(result.current.session?.timelineItems).toEqual(saved.timelineItems);
+    expect(result.current.sessionLoad.phase).toBe("failed");
+    expect(result.current.sessionLoad.error).toContain("database read timed out");
+  });
+
+  it("retains a read failure during retry and clears it only when the read succeeds", async () => {
+    let resolve!: (value: null) => void;
+    const retry = new Promise<null>((done) => {
+      resolve = done;
+    });
+    const { result } = renderProjection({
+      fetchSessionSnapshot: vi
+        .fn()
+        .mockRejectedValueOnce(new Error("read timed out"))
+        .mockReturnValueOnce(retry),
+    } as unknown as DesktopApiAdapter);
+    await act(async () => {
+      await result.current.refreshSession("session-1");
+    });
+    let refresh!: Promise<DesktopSessionSnapshot | null>;
+    act(() => {
+      refresh = result.current.refreshSession("session-1");
+    });
+    expect(result.current.sessionLoad).toMatchObject({
+      phase: "loading",
+      error: "Error: read timed out",
+    });
+    await act(async () => {
+      resolve(null);
+      await refresh;
+    });
+    expect(result.current.sessionLoad).toMatchObject({ phase: "loaded", error: null });
+  });
+
   it("rejects an old snapshot after navigating away and back to the same session", async () => {
     const page = {
       totalItems: 1,

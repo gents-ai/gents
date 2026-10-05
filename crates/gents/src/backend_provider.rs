@@ -46,6 +46,7 @@ fn provider_display_name(kind: BackendProviderKind) -> &'static str {
         BackendProviderKind::ChatGptCodex => "ChatGPT Codex",
         BackendProviderKind::XaiGrokOAuth => "Grok / xAI OAuth",
         BackendProviderKind::ClaudeCliSubscription => "Claude CLI subscription",
+        BackendProviderKind::AnthropicApiKey => "Anthropic API key",
     }
 }
 
@@ -55,7 +56,7 @@ const XAI_GROK_MODEL_DISCOVERY_PATH: &str = "/models-v2";
 /// Claude subscription catalog base. The backend document's endpoint is the
 /// `claude-cli://subscription` placeholder; an `http(s)://` endpoint (tests)
 /// overrides this.
-const CLAUDE_MODELS_BASE: &str = "https://api.anthropic.com/v1";
+const CLAUDE_MODELS_BASE: &str = crate::claude_subscription::ANTHROPIC_API_ENDPOINT;
 
 fn claude_models_base(endpoint: &str) -> String {
     if endpoint.starts_with("http://") || endpoint.starts_with("https://") {
@@ -117,8 +118,11 @@ impl OpenAiModelRecord {
     }
 
     /// Preserve provider-advertised limits without inferring them from model IDs.
-    fn into_advertised(self, kind: BackendProviderKind) -> Option<AdvertisedModel> {
-        let reasoning_efforts = if kind == BackendProviderKind::ClaudeCliSubscription {
+    /// `xai_api`: an `OpenAiCompatible` backend at the xAI API endpoint, whose
+    /// `/v1/models` advertises `capabilities.reasoning_effort` exactly for the
+    /// models that accept an effort (absent means none) and `context_length`.
+    fn into_advertised(self, kind: BackendProviderKind, xai_api: bool) -> Option<AdvertisedModel> {
+        let reasoning_efforts = if kind.uses_messages_wire() {
             self.capabilities.as_ref().map(|caps| {
                 ["low", "medium", "high", "xhigh", "max"]
                     .into_iter()
@@ -126,6 +130,17 @@ impl OpenAiModelRecord {
                     .filter_map(|effort| crate::config::ReasoningEffort::parse(effort).ok())
                     .collect()
             })
+        } else if xai_api {
+            Some(
+                self.capabilities
+                    .as_ref()
+                    .and_then(|caps| caps["reasoning_effort"].as_array())
+                    .into_iter()
+                    .flatten()
+                    .filter_map(serde_json::Value::as_str)
+                    .filter_map(|effort| crate::config::ReasoningEffort::parse(effort).ok())
+                    .collect(),
+            )
         } else {
             None
         };
@@ -135,18 +150,18 @@ impl OpenAiModelRecord {
                 BackendProviderKind::XaiGrokOAuth | BackendProviderKind::OpenRouter
             ) {
                 self.name.clone()
-            } else if kind == BackendProviderKind::ClaudeCliSubscription {
+            } else if kind.uses_messages_wire() {
                 self.display_name.clone()
             } else {
                 None
             },
             if kind == BackendProviderKind::XaiGrokOAuth {
                 self.context_window
-            } else if kind == BackendProviderKind::OpenRouter {
+            } else if kind == BackendProviderKind::OpenRouter || xai_api {
                 self.context_length
             } else if kind == BackendProviderKind::OpenAiCompatible {
                 self.max_model_len
-            } else if kind == BackendProviderKind::ClaudeCliSubscription {
+            } else if kind.uses_messages_wire() {
                 self.max_input_tokens
             } else {
                 None
@@ -157,7 +172,7 @@ impl OpenAiModelRecord {
                 .as_ref()
                 .and_then(|provider| provider.max_completion_tokens)
                 .filter(|value| *value > 0)
-        } else if kind == BackendProviderKind::ClaudeCliSubscription {
+        } else if kind.uses_messages_wire() {
             self.max_tokens.filter(|value| *value > 0)
         } else {
             None
@@ -247,6 +262,8 @@ pub async fn discover_models(
     api_key: Option<&str>,
     oauth_credential: Option<&crate::oauth_credential::OAuthCredential>,
 ) -> Result<Vec<AdvertisedModel>> {
+    let xai_api = kind == BackendProviderKind::OpenAiCompatible
+        && crate::inference_setup::is_xai_api_endpoint(endpoint);
     let endpoint = match kind {
         BackendProviderKind::ChatGptCodex => crate::chatgpt_codex::normalize_endpoint(endpoint),
         BackendProviderKind::XaiGrokOAuth => crate::xai_grok_oauth::normalize_endpoint(endpoint),
@@ -324,6 +341,16 @@ pub async fn discover_models(
                 )
                 .header("anthropic-beta", crate::claude_messages::OAUTH_BETA)
                 .query(&[("limit", "100")]);
+        } else if kind == BackendProviderKind::AnthropicApiKey {
+            if let Some(api_key) = api_key {
+                request = request.bearer_auth(api_key);
+            }
+            request = request
+                .header(
+                    "anthropic-version",
+                    crate::claude_messages::ANTHROPIC_VERSION,
+                )
+                .query(&[("limit", "100")]);
         } else if let Some(api_key) = api_key {
             request = request.bearer_auth(api_key);
         }
@@ -380,7 +407,7 @@ pub async fn discover_models(
         let openai_models = models
             .data
             .into_iter()
-            .filter_map(|model| model.into_advertised(kind));
+            .filter_map(|model| model.into_advertised(kind, xai_api));
         let chatgpt_codex_models = models
             .models
             .into_iter()
@@ -432,7 +459,7 @@ mod tests {
         }))
         .unwrap();
         let advertised = router
-            .into_advertised(BackendProviderKind::OpenRouter)
+            .into_advertised(BackendProviderKind::OpenRouter, false)
             .unwrap();
         assert_eq!(advertised.context_window, Some(128000));
         assert_eq!(advertised.max_output_tokens, Some(4096));
@@ -442,11 +469,58 @@ mod tests {
         .unwrap();
         assert_eq!(
             local
-                .into_advertised(BackendProviderKind::OpenAiCompatible)
+                .into_advertised(BackendProviderKind::OpenAiCompatible, false)
                 .unwrap()
                 .context_window,
             Some(1048576)
         );
+    }
+
+    #[test]
+    fn xai_api_catalog_records_effort_lists_and_context_length() {
+        use crate::config::ReasoningEffort::{High, Low, Medium, None as Off, XHigh};
+        let record = |value| serde_json::from_value::<OpenAiModelRecord>(value).unwrap();
+        let grok_4_3 = || {
+            record(serde_json::json!({
+                "id":"grok-4.3", "object":"model", "context_length":1000000,
+                "capabilities":{"reasoning_effort":["none","low","medium","high","xhigh"],
+                    "default_reasoning_effort":"low"}
+            }))
+        };
+        let grok_4_5 = record(serde_json::json!({
+            "id":"grok-4.5", "object":"model", "context_length":2000000,
+            "capabilities":{"reasoning_effort":["low","medium","high","xhigh"],
+                "default_reasoning_effort":"high"}
+        }));
+        let grok_4_20 = record(serde_json::json!({
+            "id":"grok-4.20-0309-reasoning", "object":"model", "context_length":2000000
+        }));
+        let xai = |record: OpenAiModelRecord| {
+            record
+                .into_advertised(BackendProviderKind::OpenAiCompatible, true)
+                .unwrap()
+        };
+        let advertised = xai(grok_4_3());
+        assert_eq!(
+            advertised.reasoning_efforts,
+            Some(vec![Off, Low, Medium, High, XHigh])
+        );
+        assert_eq!(advertised.context_window, Some(1000000));
+        let advertised = xai(grok_4_5);
+        assert_eq!(
+            advertised.reasoning_efforts,
+            Some(vec![Low, Medium, High, XHigh])
+        );
+        assert_eq!(advertised.context_window, Some(2000000));
+        let advertised = xai(grok_4_20);
+        assert_eq!(advertised.reasoning_efforts, Some(vec![]));
+        assert_eq!(advertised.context_window, Some(2000000));
+
+        let other = grok_4_3()
+            .into_advertised(BackendProviderKind::OpenAiCompatible, false)
+            .unwrap();
+        assert_eq!(other.reasoning_efforts, None);
+        assert_eq!(other.context_window, None);
     }
 
     #[test]
@@ -691,7 +765,9 @@ mod tests {
     #[tokio::test]
     async fn discover_models_sends_chatgpt_codex_version_header_and_query_param() {
         let (endpoint, requests) =
-            spawn_model_discovery_server(r#"{"models":[{"slug":"gpt-5.5"}]}"#).await;
+            spawn_model_discovery_server(
+                r#"{"models":[{"slug":"gpt-6.1-sol","display_name":"GPT-6.1 Sol","context_window":272000,"max_context_window":872000,"supported_reasoning_levels":[{"effort":"low"},{"effort":"medium"},{"effort":"high"},{"effort":"xhigh"},{"effort":"max"},{"effort":"ultra"}]}]}"#,
+            ).await;
         let credential = crate::oauth_credential::OAuthCredential {
             doc_id: None,
             credential_id: "chatgpt-codex:did:key:zAgent".to_string(),
@@ -718,7 +794,22 @@ mod tests {
         .await
         .expect("ChatGPT Codex model discovery should succeed");
 
-        assert_eq!(model_names(&models), vec!["gpt-5.5"]);
+        assert_eq!(model_names(&models), vec!["gpt-6.1-sol"]);
+        assert_eq!(models[0].context_window, Some(272000));
+        assert_eq!(models[0].max_context_window, Some(872000));
+        assert_eq!(
+            models[0].reasoning_efforts.as_deref(),
+            Some(
+                &[
+                    crate::config::ReasoningEffort::Low,
+                    crate::config::ReasoningEffort::Medium,
+                    crate::config::ReasoningEffort::High,
+                    crate::config::ReasoningEffort::XHigh,
+                    crate::config::ReasoningEffort::Max,
+                    crate::config::ReasoningEffort::Ultra,
+                ][..]
+            )
+        );
         let requests = requests.lock().expect("requests lock");
         let request = requests.first().expect("captured request");
         let version = crate::chatgpt_codex::chatgpt_codex_client_version();
@@ -818,6 +909,59 @@ mod tests {
         ] {
             assert!(request.contains(header), "{header} missing from {request}");
         }
+    }
+
+    #[tokio::test]
+    async fn discover_models_reads_anthropic_key_models_without_oauth_beta() {
+        let (endpoint, requests) = spawn_model_discovery_server(
+            r#"{"data":[{"id":"claude-fable-5-1","display_name":"Claude Fable 5.1","max_input_tokens":1000000,"max_tokens":128000,"capabilities":{"effort":{"supported":true,"low":{"supported":true},"high":{"supported":true},"xhigh":{"supported":true}}},"type":"model"},{"id":"claude-opus-5","type":"model"},{"id":"claude-sonnet-5","type":"model"}],"has_more":false}"#,
+        )
+        .await;
+
+        let models = discover_models(
+            &Client::new(),
+            BackendProviderKind::AnthropicApiKey,
+            &format!("{endpoint}/v1"),
+            Some("placeholder-key"),
+            None,
+        )
+        .await
+        .expect("Anthropic key model discovery should read /v1/models");
+
+        assert_eq!(
+            model_names(&models),
+            vec!["claude-fable-5-1", "claude-opus-5", "claude-sonnet-5"]
+        );
+        assert_eq!(models[0].context_window, Some(1_000_000));
+        assert_eq!(models[0].max_output_tokens, Some(128_000));
+        assert_eq!(models[0].display_name.as_deref(), Some("Claude Fable 5.1"));
+        assert_eq!(
+            models[0].reasoning_efforts.as_deref(),
+            Some(
+                [
+                    crate::config::ReasoningEffort::Low,
+                    crate::config::ReasoningEffort::High,
+                    crate::config::ReasoningEffort::XHigh,
+                ]
+                .as_slice()
+            )
+        );
+        let requests = requests.lock().expect("requests lock");
+        let request = requests
+            .first()
+            .expect("captured request")
+            .to_ascii_lowercase();
+        assert!(
+            request.starts_with("get /v1/models?limit=100 "),
+            "key discovery must query /v1/models?limit=100: {request}"
+        );
+        for header in [
+            "authorization: bearer placeholder-key",
+            "anthropic-version: 2023-06-01",
+        ] {
+            assert!(request.contains(header), "{header} missing from {request}");
+        }
+        assert!(!request.contains("anthropic-beta"), "{request}");
     }
 
     #[tokio::test]

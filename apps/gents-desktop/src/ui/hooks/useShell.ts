@@ -114,7 +114,7 @@ export function useShell(
       sessionLoad: d.sessionLoad,
       conversationLoading: d.sessionLoadingStatus,
       clearError: d.onDismissError,
-      reconnect: d.onRetryStartup,
+      retryStartup: d.onRetryStartup,
       holds: [] as {
         sessionId?: string | null;
         toolCallId: string;

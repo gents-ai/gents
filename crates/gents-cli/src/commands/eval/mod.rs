@@ -78,7 +78,7 @@ pub(crate) async fn dispatch(command: EvalCommand) -> Result<()> {
         command,
         EvalCommand::Run(_) | EvalCommand::Resume(_) | EvalCommand::Init(_)
     ) {
-        resources::prepare()?;
+        crate::process_resources::prepare()?;
     }
     if let EvalCommand::Cancel(args) = &command {
         return cancel_without_context(args).await.map_err(surface_refusal);
@@ -670,5 +670,3 @@ mod tests {
         assert_eq!(named.default_behavior().unwrap(), "fixture-worker");
     }
 }
-
-mod resources;
