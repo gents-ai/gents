@@ -1,6 +1,12 @@
 type ChangeUnitResult {
   result_id: String @index(unique: true) @immutable
   work_unit_id: String @index @immutable
+  handoff_id: String @index @immutable
+  reply_session_id: String @index @immutable
+  attempt: Int @immutable
+  failed_request_id: String @immutable
+  failure_stage: String @immutable
+  failure_reason: String @immutable
   closure_id: String @immutable
   implementation_id: String @immutable
   review_id: String @immutable

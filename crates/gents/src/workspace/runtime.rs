@@ -758,6 +758,8 @@ mod tests {
     fn sealed_workspace() -> IsolatedWorkspaceRecord {
         IsolatedWorkspaceRecord {
             workspace_id: "ws-1".into(),
+            work_unit_id: None,
+            caused_by_invocation_id: None,
             owner_agent_did: "dep-1".into(),
             writer_principal: "did:key:zWriter".into(),
             integrator_principal: "did:key:zIntegrator".into(),

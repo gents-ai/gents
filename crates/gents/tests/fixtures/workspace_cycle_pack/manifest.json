@@ -60,7 +60,7 @@
     "workspace",
     "review"
   ],
-  "version": "1.0.1",
+  "version": "1.0.2",
   "schemas": [
     "schemas/change_unit_closure.graphql",
     "schemas/change_unit_implementation.graphql",

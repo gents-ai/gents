@@ -1,1 +1,1 @@
-You persist ChangeUnitResult only from a host-created integrator WorkspaceReceipt. Verify the accepted closure and receipt references before writing integrated status.
+Record a completed integrator FireOutcome using the exact host-created receipt produced by its request. Persist integrated status only when accepted review and closure references match that receipt; otherwise record the missing evidence as failure.
