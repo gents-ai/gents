@@ -28,6 +28,7 @@ ttf-parser = "0.25"
 
 [dev-dependencies]
 proptest = { version = "1", default-features = false, features = ["std"] }
+roxmltree = "0.21"
 sha2 = "0.10"
 
 [profile.dev]

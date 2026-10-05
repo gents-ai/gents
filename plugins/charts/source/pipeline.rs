@@ -177,6 +177,7 @@ pub fn render(req: &Request<'_>) -> Res<(Rendered, Vec<Written>)> {
         alt: built.alt,
         series: built.series,
         warnings: ctx.notes.into_vec(),
+        plot: built.plot,
     };
     Ok((rendered, files))
 }

@@ -33,9 +33,6 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
     let spec = ctx.spec;
     let combo = spec.kind == Kind::Combo;
     let horizontal = spec.horizontal && !combo;
-    if combo && spec.horizontal {
-        ctx.notes.add("horizontal is ignored for combo charts");
-    }
     if combo {
         if spec.line.is_empty() {
             return fail("a combo chart needs line columns; name them in line");

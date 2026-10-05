@@ -1,6 +1,8 @@
 //! charts: turns a small chart spec and data into SVG and PNG.
 pub mod axes;
 pub mod bars;
+#[cfg(test)]
+mod bars_tests;
 pub mod boxplot;
 pub mod cli;
 pub mod cols;
@@ -9,6 +11,8 @@ pub mod csvio;
 pub mod ctx;
 pub mod dates;
 pub mod det;
+#[cfg(test)]
+mod dist_tests;
 pub mod err;
 pub mod format;
 pub mod frame;
@@ -17,23 +21,31 @@ pub mod heatmap;
 pub mod hist;
 pub mod jsonio;
 pub mod line;
+#[cfg(test)]
+mod line_tests;
 pub mod load;
 pub mod marks;
 pub mod num;
 pub mod output;
 pub mod palette;
 pub mod pie;
+#[cfg(test)]
+mod pie_heat_tests;
 pub mod pipeline;
 pub mod raster;
 pub mod reduce;
 pub mod save;
 pub mod scale;
 pub mod scatter;
+#[cfg(test)]
+mod scatter_tests;
 pub mod shape;
 pub mod spec;
 pub mod stats;
 pub mod svg;
 pub mod table;
+#[cfg(test)]
+mod testkit;
 #[cfg(test)]
 mod testutil;
 pub mod text;

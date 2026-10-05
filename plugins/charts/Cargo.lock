@@ -67,6 +67,7 @@ dependencies = [
  "png",
  "proptest",
  "resvg",
+ "roxmltree",
  "serde",
  "serde_json",
  "sha2",

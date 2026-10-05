@@ -42,6 +42,8 @@ pub struct Rendered {
     pub series: Vec<SeriesInfo>,
     /// Warnings.
     pub warnings: Vec<String>,
+    /// The rectangle the data is drawn in.
+    pub plot: crate::frame::Rect,
 }
 
 fn num(v: f64) -> Value {
@@ -246,6 +248,12 @@ mod tests {
                 ..SeriesInfo::default()
             }],
             warnings: vec!["w".into()],
+            plot: crate::frame::Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 1.0,
+                h: 1.0,
+            },
         }
     }
 
