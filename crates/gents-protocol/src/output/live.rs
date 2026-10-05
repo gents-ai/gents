@@ -477,12 +477,12 @@ pub struct LiveObservation<'a> {
     pub target: LiveTarget<'a>,
     /// Visible messages in scope for origin lookup and terminal resolution.
     pub messages: &'a [(&'a str, &'a TranscriptMessage)],
-    /// The observation's authorized scope: the agent DID and the optional
+    /// The observation's authorized scope: the node DID and the optional
     /// requester DID the view is served under. Every header and origin lookup
     /// validates against this scope through the origin owner
     /// (`origin::lookup_message`); ACP authorization itself stays with its
     /// existing owner, and the classifier never fabricates authority.
-    pub agent_did: &'a str,
+    pub node_did: &'a str,
     pub requester_did: Option<&'a str>,
     /// Visible segments, replicating in any order.
     pub records: &'a [ObservedSegment<'a>],
