@@ -2,6 +2,7 @@
    Built from the kit's conversation patterns over the desktop app's
    session projection: the timeline items are the bridge's own
    RenderedTimelineItem, rendered as they arrive. */
+import { placeholderFor } from "@/lib/send-status";
 import {
   Fragment,
   createContext,
@@ -16,13 +17,14 @@ import {
   type RefObject,
 } from "react";
 import {
+  Check,
   ArrowDown,
   ArrowLeft,
   ChevronDown,
   Copy,
   PanelRight,
-  Play,
   Pencil,
+  Play,
   Split,
   Target,
   Timer,
@@ -51,7 +53,6 @@ import {
   ToolStep,
   ToolSteps,
   UserMessage,
-  type ToolStepStatus,
 } from "@gents/ui/conversation";
 import type { Shell } from "@/hooks/useShell";
 import { ChatFolderPicker } from "./ChatFolderPicker";
@@ -66,10 +67,10 @@ import {
   CollapsibleTrigger,
 } from "@gents/ui/components/collapsible";
 import { Hint } from "./Hint";
-import { firstFailure, foldWorkers, workerStory, type ToolRun } from "./tool-runs";
-import { DeploymentContext, useDeployment } from "./deployment-context";
+
 import { ToolIcon } from "./tool-icon";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
+import { Spinner } from "@gents/ui/components/spinner";
 import { bashAccess, behaviorName, fileAccess, network } from "./behavior";
 import { AgentAvatar } from "./AgentAvatar";
 import { BehaviorPicker } from "./BehaviorPicker";
@@ -93,22 +94,36 @@ import {
   AlertDialogTitle,
 } from "@gents/ui/components/alert-dialog";
 import { Markdown } from "./Markdown";
+import { SessionLoading } from "./SessionLoading";
+import { StreamContext, StreamText } from "./StreamText";
+import { createHandoff, holdLive, type HeldLive } from "./stream-reveal";
 import { ToolBody } from "./tool-views";
+import { foldWorkers, workerStory } from "./tool-runs";
+import { DeploymentContext, useDeployment } from "./deployment-context";
 import { SubagentList, WorkerStep, isWorkerStep } from "./WorkerStep";
 import { NO_WORKERS, useSessionProvenance, useWorkers, type Workers } from "./workers";
 import { useParentWork, type ParentWork } from "./parentWork";
 import { WorkerActionsContext, type WorkerActions } from "./WorkerActions";
 import { ArrowUpRight } from "lucide-react";
-import { toolSummary } from "./tool-summary";
+import {
+  diffTally,
+  duration,
+  readableReasoning,
+  reasoningWithheld,
+  stepStatus,
+  toolSummary,
+} from "./tool-summary";
+import {
+  groupLabel,
+  groupTools,
+  groupTranscript,
+  liveGroupLabel,
+  type GroupMember,
+  type TranscriptEntry,
+} from "./transcript-groups";
 import { Popover, PopoverContent, PopoverTrigger } from "@gents/ui/components/popover";
+import { ReplyingTo } from "./ReplyingTo";
 import { useExclusivePopover } from "@/hooks/useExclusivePopover";
-
-const stepStatus = (kind: string): ToolStepStatus =>
-  kind === "completed" || kind === "failed" || kind === "cancelled" || kind === "error"
-    ? "done"
-    : kind === "running"
-      ? "running"
-      : "pending";
 
 function formatTokens(value: number) {
   if (value < 1_000) return String(value);
@@ -123,7 +138,11 @@ export function presentedComposerSendStatus(
 ): SendStatus {
   return draft.trim()
     ? canonicalNonEmptyStatus
-    : { kind: "disabled", reason: "composerEmpty", hint: "Type a message to send" };
+    : {
+        kind: "disabled",
+        reason: "composerEmpty",
+        hint: "Type a message to send",
+      };
 }
 
 /* how full the context is, as a stroked ring: the track is the window, the
@@ -331,32 +350,53 @@ export function useBehaviorChoice(shell: Shell) {
 }
 
 /** Display the existing workflow owner's observation, never infer queue health. */
+/* The line under the composer holds its place whether or not it has
+   anything to say: a status arriving and leaving moved the composer up
+   and down, and a person's eye with it. One line of the small size is
+   always reserved; an error, being rarer and longer, may still grow it. */
 export function SessionSubmissionStatus({
   error,
   activityStatus,
-}: Pick<Shell, "error" | "activityStatus">) {
+  hint,
+}: Pick<Shell, "error" | "activityStatus"> & { hint?: string | null }) {
+  const status = activityStatus && !error ? activityStatus : null;
+  const quiet = !status && !error && hint;
   return (
-    <>
-      {activityStatus && !error && (
+    <div className="mt-2 min-h-4 px-1" data-testid="composer-status">
+      {status && (
         <div
           role="status"
-          title={activityStatus.detail}
-          className="mt-2 px-1 text-xs text-muted-foreground"
+          title={status.detail}
+          className="text-xs leading-4 text-muted-foreground animate-in fade-in-0 duration-200 motion-reduce:animate-none"
         >
-          <span>{activityStatus.label}</span>
+          <span>{status.label}</span>
         </div>
       )}
       {error && (
-        <p role="alert" className="mt-2 px-1 text-sm text-destructive">
+        <p role="alert" className="text-sm leading-4 text-destructive">
           {error}
         </p>
       )}
-    </>
+      {quiet && <p className="text-xs leading-4 text-muted-foreground">{hint}</p>}
+    </div>
   );
 }
 
 /* an earlier request's failure, shown where it happened; the session has
    moved on to a later request, so there is nothing to retry here */
+
+function FailedEarlier({ message }: { message: string }) {
+  return (
+    <div className="rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3">
+      <p className="text-sm font-medium">
+        This request could not finish. The session continued on a later one.
+      </p>
+      <pre className="mt-1 font-mono text-[11px] whitespace-pre-wrap text-muted-foreground">
+        {message}
+      </pre>
+    </div>
+  );
+}
 
 /* where this session came from: the session whose call started it, from
    provenance. It is an ordinary session; the link opens it as one. */
@@ -453,22 +493,78 @@ const ParentContext = createContext<ParentWork | null>(null);
 
 /* one tool call as a row, wherever it sits: loose in the group, or among
    the calls a run folded together */
-function Step({ tool, workers }: { tool: RenderedToolCallView; workers: Workers }) {
+function Step({
+  tool,
+  workers,
+  note,
+}: {
+  tool: RenderedToolCallView;
+  workers: Workers;
+  /* what the agent said before making this call. Inside a run it is not
+     shown in the rows — it mostly restates the row beneath it — but it is
+     the agent's own account and is kept where the call itself is opened. */
+  note?: string | null;
+}) {
   if (isWorkerStep(tool)) return <WorkerStep tool={tool} workers={workers} />;
   const summary = toolSummary(tool);
+  const open = tool.statusKind !== "running";
+  /* how big the edit was, on the row rather than inside it: the size of a
+     change is most of what a person wants from it, and asking them to open
+     the diff to find out makes them open every one */
+  const p = tool.presentation;
+  const tally = p.kind === "fileEdit" ? diffTally(p.diff) : null;
+  const status = stepStatus(tool);
+  /* how it ended, where the tally sits: `exit 1`, `timed out`. Only when
+     it did not simply work — a row that says "exit 0" after every command
+     is the noise this column has been kept clear of. */
+  const outcome =
+    status === "failed" || status === "stopped" ? summary.secondary : null;
   return (
     <ToolStep
       label={`${summary.kind} ${summary.primary}`.trim()}
       icon={<ToolIcon tool={tool} />}
-      status={stepStatus(tool.statusKind)}
+      meta={tally ?? outcome ?? undefined}
+      status={status}
+      stepKey={tool.itemKey}
     >
-      {tool.statusKind !== "running" ? <ToolBody tool={tool} /> : undefined}
+      {open || note ? (
+        <>
+          {note && <p className="pb-2 text-xs text-muted-foreground">{note}</p>}
+          {open ? <ToolBody tool={tool} /> : null}
+        </>
+      ) : undefined}
     </ToolStep>
   );
 }
 
-/* A worker's scattered steps as one row: who it was, where it got to, and
-   what was done to it along the way. Its steps keep their order inside. */
+type GroupState = {
+  folded: Record<string, boolean>;
+  openStep: Record<string, string | null>;
+  setFolded: (groupKey: string, folded: boolean) => void;
+  setOpenStep: (groupKey: string, stepKey: string | null) => void;
+};
+const GroupStateContext = createContext<GroupState | null>(null);
+
+function useGroupState(sessionKey: string | null): GroupState {
+  const [folded, setFoldedMap] = useState<Record<string, boolean>>({});
+  const [openStep, setOpenStepMap] = useState<Record<string, string | null>>({});
+  const [session, setSession] = useState(sessionKey);
+  if (session !== sessionKey) {
+    setSession(sessionKey);
+    setFoldedMap({});
+    setOpenStepMap({});
+  }
+  return useMemo(
+    () => ({
+      folded,
+      openStep,
+      setFolded: (key, value) => setFoldedMap((m) => ({ ...m, [key]: value })),
+      setOpenStep: (key, value) => setOpenStepMap((m) => ({ ...m, [key]: value })),
+    }),
+    [folded, openStep],
+  );
+}
+
 function WorkerRunStep({
   tools,
   workers,
@@ -517,32 +613,241 @@ function WorkerRunStep({
   );
 }
 
-/* what the run was made of, and what went wrong in it if anything did */
-function runDetail(run: Extract<ToolRun, { kind: "run" }>) {
-  /* what went wrong leads, and says what it was: the reason a person opens
-     a folded run is almost always the exception inside it, and a bare count
-     of failures makes them go looking for it */
-  const bad = firstFailure(run.tools);
-  if (bad) {
-    const summary = toolSummary(bad);
-    const others = run.failures > 1 ? ` · ${run.failures - 1} more failed` : "";
-    return `${summary.kind} ${summary.primary}`.trim() + " failed" + others;
+/* A worker's scattered steps gathered as one row inside its group: the
+   fold the transcript made before groups (tool-runs.ts, foldWorkers), kept
+   because a dozen rows about five workers read as nothing. A run of
+   similar calls is the group itself now, so runs are not folded again. */
+type PlacedMember =
+  GroupMember | { kind: "worker"; key: string; tools: RenderedToolCallView[] };
+
+function placeWorkers(members: GroupMember[]): PlacedMember[] {
+  const workersByTool = new Map<string, Extract<PlacedMember, { kind: "worker" }>>();
+  for (const run of foldWorkers(groupTools(members)))
+    if (run.kind === "worker")
+      for (const tool of run.tools) workersByTool.set(tool.itemKey, run);
+  const placed = new Set<string>();
+  const out: PlacedMember[] = [];
+  for (const m of members) {
+    const worker = m.kind === "tool" ? workersByTool.get(m.key) : undefined;
+    if (!worker) {
+      out.push(m);
+      continue;
+    }
+    if (placed.has(worker.key)) continue;
+    placed.add(worker.key);
+    out.push(worker);
   }
-  const top = run.tally
-    .slice(0, 4)
-    .map((t: { label: string; count: number }) => `${t.label} ${t.count}`);
-  const rest = run.tally.length - top.length;
-  return [...top, rest > 0 ? `+${rest} more` : null].filter(Boolean).join(" · ");
+  return out;
+}
+
+/* A stretch of consecutive calls, placed once (transcript-groups.ts) and
+   only ever added to at its end.
+
+   It is the same element from its first call: a lone call shows as its
+   row, and when a second arrives that row gives way to a header of the
+   same height, without rebuilding the rows. The group stays folded to
+   that header until the reader opens it; while a call runs, the header
+   says what it is doing.
+
+   Opened, its rows sit in a box about eight rows tall that follows the
+   newest call — unless the reader has scrolled inside it — so a long burst
+   grows inside the box instead of pushing the transcript around. A step
+   opened in it opens inside the box too: the group keeps its size, and the
+   box stops following new calls while the step is open, so what the
+   reader opened is not scrolled away from them. */
+function ActivityGroup({
+  entry,
+  workers,
+}: {
+  entry: Extract<TranscriptEntry, { kind: "group" }>;
+  workers: Workers;
+}) {
+  const state = useContext(GroupStateContext)!;
+  const single = entry.members.length === 1 && entry.members[0]!.kind === "tool";
+  const chosen = state.folded[entry.key];
+  const openStep = state.openStep[entry.key] ?? null;
+  /* Folded to its header until the reader opens it — live or finished.
+     Its header says what it is doing while a call runs, so a live group
+     shows its work in one line that never changes height; a lone call is
+     its own row, and becomes the header (the same height) when a second
+     arrives. A step the reader opened before the group formed keeps the
+     group open, so what they opened does not disappear under a fold. */
+  const folded = !single && (chosen ?? !openStep);
+  /* what it is doing right now, while a call in it runs */
+  const live = (!entry.settled && liveGroupLabel(entry.members)) || null;
+  /* only a fold the reader asks for is animated */
+  const [animated, setAnimated] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+
+  /* the capped box scrolls in the kit's ScrollArea, like the transcript
+     and the diffs: a plain overflow box drew WebKit's wide scrollbar */
+  const box = useRef<HTMLDivElement>(null);
+  const stick = useRef(true);
+  const capped = !single;
+  const viewport = () =>
+    box.current?.querySelector<HTMLElement>("[data-slot=scroll-area-viewport]") ?? null;
+  /* whether rows are hidden past either edge of the box: a fade says so,
+     the way the transcript's own edge does. A live box follows the newest
+     call, so what it hides is usually above. */
+  const [more, setMore] = useState({ above: false, below: false });
+  useEffect(() => {
+    const el = viewport();
+    if (!el) return;
+    const measure = () => {
+      const below = el.scrollHeight - el.scrollTop - el.clientHeight;
+      const above = el.scrollTop;
+      setMore((m) =>
+        m.above === above > 4 && m.below === below > 4
+          ? m
+          : { above: above > 4, below: below > 4 },
+      );
+      return below;
+    };
+    const onScroll = () => {
+      stick.current = measure() < 4;
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    const sizes = new ResizeObserver(measure);
+    sizes.observe(el);
+    if (el.firstElementChild) sizes.observe(el.firstElementChild);
+    measure();
+    return () => {
+      el.removeEventListener("scroll", onScroll);
+      sizes.disconnect();
+    };
+  }, []);
+  /* Follows the newest call only while the box is at its end. A step that
+     was open grew the box without a scroll, so on closing it the box's
+     place is read again from where it actually is, and left there: the row
+     the reader just closed stays in view. */
+  const wasOpen = useRef(openStep);
+  useLayoutEffect(() => {
+    const el = viewport();
+    const closing = wasOpen.current !== null && openStep === null;
+    wasOpen.current = openStep;
+    if (!el || !capped || openStep) return;
+    if (closing) {
+      stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 4;
+      return;
+    }
+    if (stick.current) el.scrollTop = el.scrollHeight;
+  }, [entry.members.length, capped, openStep]);
+
+  return (
+    <div ref={root} data-anchor-key={entry.key}>
+      {!single && (
+        <button
+          type="button"
+          onClick={() => {
+            /* hold the header under the pointer while the rows move */
+            const restore = anchor(root.current);
+            setAnimated(true);
+            state.setFolded(entry.key, !folded);
+            restore();
+          }}
+          aria-expanded={!folded}
+          aria-busy={live ? true : undefined}
+          className={cn(
+            "flex w-full cursor-pointer items-center gap-3 px-2 py-1 text-left text-sm hover:text-foreground",
+            /* a group at work reads like a step at work: full ink and a
+               little weight */
+            live ? "font-medium text-foreground" : "text-muted-foreground",
+          )}
+        >
+          <span className="grid size-4 shrink-0 place-items-center">
+            <ChevronDown
+              className={cn(
+                "size-3.5 transition-transform duration-150 motion-reduce:transition-none",
+                folded && "-rotate-90",
+              )}
+            />
+          </span>
+          {/* the caret stays the caret — it is what says this opens — and a
+              group at work shows the loader beside its label, the way the
+              Thinking line does */}
+          <span className="flex min-w-0 items-center gap-1.5">
+            {live && <Spinner className="size-3.5 shrink-0 motion-reduce:hidden" />}
+            <span className="min-w-0 truncate">
+              {live ?? groupLabel(entry.members)}
+            </span>
+          </span>
+        </button>
+      )}
+      {/* Folding animates the row track from 1fr to 0fr: the height is the
+          content's own, with nothing to measure, and the rows stay mounted
+          so nothing about them is rebuilt. A folded group is inert, so
+          focus cannot land in rows no one can see. */}
+      <div
+        inert={folded || undefined}
+        className={cn(
+          "grid ease-out motion-reduce:transition-none",
+          animated && "transition-[grid-template-rows] duration-200",
+          folded ? "grid-rows-[0fr]" : "grid-rows-[1fr]",
+        )}
+      >
+        <div ref={box} className="relative min-h-0 overflow-hidden">
+          <ScrollArea
+            className={cn(
+              capped && "max-h-80",
+              /* a scroll that starts in the box stays in the box: reaching its end
+                 does not carry on into the transcript (overscroll-behavior, which
+                 the ScrollArea's native viewport honours). The box's own viewport
+                 only, a direct child: a code block inside an opened step
+                 keeps its own scroll, and its end carries on into the box */
+              "[&>[data-slot=scroll-area-viewport]]:max-h-[inherit] [&>[data-slot=scroll-area-viewport]]:overscroll-contain",
+            )}
+          >
+            <ToolSteps
+              openId={openStep}
+              onOpenIdChange={(id) => state.setOpenStep(entry.key, id)}
+            >
+              {placeWorkers(entry.members).map((m) =>
+                m.kind === "tool" ? (
+                  <Step key={m.key} tool={m.tool} workers={workers} />
+                ) : m.kind === "worker" ? (
+                  <WorkerRunStep key={m.key} tools={m.tools} workers={workers} />
+                ) : (
+                  <div key={m.key} className="py-1">
+                    <Reasoning text={m.text} />
+                  </div>
+                ),
+              )}
+            </ToolSteps>
+          </ScrollArea>
+          {/* rows hidden past an edge of the box: the same fade the transcript's
+              own edge uses */}
+          <div
+            aria-hidden
+            className={cn(
+              "pointer-events-none absolute inset-x-0 top-0 h-6 bg-gradient-to-b from-background to-transparent transition-opacity duration-200",
+              capped && more.above ? "opacity-100" : "opacity-0",
+            )}
+          />
+          <div
+            aria-hidden
+            className={cn(
+              "pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-background to-transparent transition-opacity duration-200",
+              capped && more.below ? "opacity-100" : "opacity-0",
+            )}
+          />
+        </div>
+      </div>
+    </div>
+  );
 }
 
 const TranscriptItem = memo(function TranscriptItem({
   item,
   status = null,
+  final = false,
 }: {
   item: RenderedTimelineItem;
+  /* the run's status while this is the live tail: what it is doing between
+     actions, or Stopping, from the activity-status owner */
   status?: string | null;
+  /* the answer a finished turn ended on: it carries the response actions */
+  final?: boolean;
 }) {
-  const workers = useContext(WorkersContext);
   const parentWork = useContext(ParentContext);
   switch (item.kind) {
     case "userMessage":
@@ -591,48 +896,41 @@ const TranscriptItem = memo(function TranscriptItem({
       return (
         /* a turn that thought and then acted leaves reasoning with nothing
            said after it: that is a think, not an empty answer, so it carries
-           no action bar and no blank line where prose would be */
-        <AssistantMessage actions={item.content ? copyActions(item.content) : false}>
-          {item.reasoning && <Reasoning text={item.reasoning} />}
-          {item.content ? <Markdown>{item.content}</Markdown> : null}
-        </AssistantMessage>
+           no action bar and no blank line where prose would be.
+
+           The answer sits wider apart than the rows around it: the column's
+           gap is even, which puts the thing a person came to read at the
+           same distance as a row of activity. */
+        <>
+          <AssistantMessage
+            className={item.content ? "py-4" : undefined}
+            actions={item.content && !final ? copyActions(item.content) : false}
+          >
+            {/* a provider that will not hand its reasoning over leaves a
+              placeholder, not prose: say so in a line rather than offer a
+              disclosure with an apology behind it */}
+            {readableReasoning(item.reasoning) ? (
+              <Reasoning text={readableReasoning(item.reasoning)!} />
+            ) : reasoningWithheld(item.reasoning) ? (
+              <p className="pb-2 text-xs text-muted-foreground">
+                Reasoning was not shared by the provider.
+              </p>
+            ) : null}
+            {item.content ? (
+              <AssistantContent itemKey={item.itemKey} content={item.content} />
+            ) : null}
+          </AssistantMessage>
+          {final && item.content ? <ResponseActions text={item.content} /> : null}
+        </>
       );
     case "toolGroup":
-      return (
-        <ToolSteps>
-          {foldWorkers(item.tools).map((entry) =>
-            entry.kind === "one" ? (
-              <Step key={entry.tool.itemKey} tool={entry.tool} workers={workers} />
-            ) : entry.kind === "worker" ? (
-              <WorkerRunStep key={entry.key} tools={entry.tools} workers={workers} />
-            ) : (
-              <ToolStep
-                key={entry.key}
-                label={entry.label}
-                icon={<ToolIcon tool={entry.tools[0]!} />}
-                detail={runDetail(entry)}
-                status={entry.failures ? "pending" : "done"}
-                /* the moment a run forms, three rows become one with nothing
-                   to see: it arrives with a beat so the fold is noticed */
-                className="animate-in fade-in-0 slide-in-from-top-1 duration-200 motion-reduce:animate-none"
-              >
-                {/* its own group, so opening a step inside a run does not
-                    fold the run away from under it */}
-                <ToolSteps className="-mx-2">
-                  {entry.tools.map((tool) => (
-                    <Step key={tool.itemKey} tool={tool} workers={workers} />
-                  ))}
-                </ToolSteps>
-              </ToolStep>
-            ),
-          )}
-        </ToolSteps>
-      );
+      /* placed by the transcript into an ActivityGroup; never reaches here */
+      return null;
     case "liveAssistant":
       return (
         <div data-testid="live-assistant">
           <AssistantMessage>
-            {item.content && <Markdown>{item.content}</Markdown>}
+            {item.content && <LiveContent content={item.content} />}
             {status && <Thinking label={status} />}
           </AssistantMessage>
         </div>
@@ -693,6 +991,73 @@ function StoppedNotice({ cause }: { cause: DerivedCancelCauseView | null }) {
 
 type TranscriptActions = Pick<Shell, "loadOlderSessionTimeline" | "retryMessage">;
 
+/* The live tail's text, revealed at a steady pace, reporting what is on
+   screen so the message that replaces it can start from there. */
+function LiveContent({ content }: { content: string }) {
+  const stream = useContext(StreamContext);
+  return <StreamText text={content} onShown={stream?.handoff.noteShown} />;
+}
+
+/* A settled message. One that arrived while this transcript was open and
+   continues what the live tail was showing picks up where it left off;
+   anything else — history, a message from elsewhere — is simply there. */
+function AssistantContent({ itemKey, content }: { itemKey: string; content: string }) {
+  const stream = useContext(StreamContext);
+  const [from] = useState(() =>
+    stream?.isNew(itemKey) ? stream.handoff.claim(itemKey, content) : null,
+  );
+  /* No wrapper: prose-app spaces its blocks with `& > * + *`, so anything
+     between it and the markdown makes every paragraph, heading and list
+     lose its margins at once — silently, because the text still renders. */
+  if (from === null) return <Markdown>{content}</Markdown>;
+  return <StreamText text={content} startFrom={from} />;
+}
+
+/* Under a finished response, the way Codex does it: the actions sit on
+   the line below the answer and stay there, rather than floating over it on
+   hover. Copy takes the response as written — its markdown — and says so. */
+function ResponseActions({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => void (timer.current && clearTimeout(timer.current)), []);
+  const copy = () => {
+    navigator.clipboard
+      ?.writeText(text)
+      .then(() => {
+        setCopied(true);
+        if (timer.current) clearTimeout(timer.current);
+        timer.current = setTimeout(() => setCopied(false), 1200);
+      })
+      /* the clipboard may refuse; the check only claims a copy that happened */
+      .catch(() => {});
+  };
+  return (
+    /* on a desktop they wait for the pointer, like a step's caret: an
+       answer reads as the end of the turn, not as a row of controls. The
+       space is kept, so nothing moves when they appear; a touch screen has
+       no hover to wait for, and keyboard focus shows them too */
+    <div
+      className={cn(
+        "-mt-1 flex items-center gap-1 px-1 transition-opacity duration-150 motion-reduce:transition-none",
+        !copied &&
+          "sm:opacity-0 sm:group-hover/response:opacity-100 sm:focus-within:opacity-100",
+      )}
+      data-testid="response-actions"
+    >
+      <Hint label={copied ? "Copied" : "Copy response"}>
+        <Button
+          variant="quiet"
+          size="icon-xs"
+          aria-label="Copy response"
+          onClick={copy}
+        >
+          {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+        </Button>
+      </Hint>
+    </div>
+  );
+}
+
 export const TranscriptPanel = memo(function TranscriptPanel({
   actionsRef,
   holdsCount,
@@ -723,16 +1088,102 @@ export const TranscriptPanel = memo(function TranscriptPanel({
     () => actionsRef.current.loadOlderSessionTimeline(),
   );
   const [retrying, setRetrying] = useState(false);
+
+  /* the latest request's terminal facts; the bridge sends no response row */
+  const latest = session?.latestRequestOutcome;
   const live = session?.timelineItems.find((item) => item.kind === "liveAssistant");
   const status = inFlight
     ? activityStatus(session?.timelineItems ?? [], stopping)
     : null;
   const wasInterrupted = session?.turnState === "interrupted";
   const responseError =
-    session?.turnState === "failed"
+    latest?.failureReason?.trim() ||
+    (session?.turnState === "failed"
       ? "The request failed before a response was available. Check the request trace for details."
-      : "";
-  const showError = Boolean(responseError) && !wasInterrupted && !inFlight;
+      : "");
+  /* the request that ended failed, and the session is already on a later
+     one: both facts, in order, the failure before the live text */
+  const continuing =
+    Boolean(latest?.failureReason) && session?.turnState === "processing";
+  /* the list the transcript actually maps, held stable so the fold's
+     memo has a key that does not change on every render */
+  const visible = useMemo(
+    () =>
+      (continuing
+        ? session?.timelineItems.filter((item) => item.kind !== "liveAssistant")
+        : session?.timelineItems) ?? [],
+    [continuing, session?.timelineItems],
+  );
+  const showError =
+    Boolean(responseError) && !wasInterrupted && (continuing || !inFlight);
+
+  /* Streaming continuity: the live text is kept on screen until the
+     message that replaces it arrives (a projection can drop one before the
+     other lands), and the handoff carries how much was already shown. */
+  const sessionKey = session?.sessionId ?? null;
+  const stream = useMemo(() => {
+    const initial = new Set<string>();
+    let opened = false;
+    return {
+      handoff: createHandoff(),
+      isNew: (itemKey: string) => opened && !initial.has(itemKey),
+      open: (items: RenderedTimelineItem[]) => {
+        if (opened || items.length === 0) return;
+        for (const item of items) initial.add(item.itemKey);
+        opened = true;
+      },
+    };
+  }, [sessionKey]);
+  stream.open(visible);
+  const heldRef = useRef<HeldLive | null>(null);
+  const [heldExpiry, setHeldExpiry] = useState(0);
+  const held = useMemo(
+    () =>
+      continuing
+        ? { items: visible, held: null }
+        : holdLive(visible, heldRef.current, sessionKey),
+    // heldExpiry: a hold that ran out re-derives without it
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [visible, continuing, heldExpiry, sessionKey],
+  );
+  heldRef.current = held.held;
+  const holding =
+    held.held !== null &&
+    !visible.some((item) => item.kind === "liveAssistant" && Boolean(item.content));
+  useEffect(() => {
+    if (!holding) return;
+    /* nothing replaced it: an interrupted turn, or a message that never
+       came. Stop holding rather than show stale text indefinitely. */
+    const timer = setTimeout(() => {
+      heldRef.current = null;
+      setHeldExpiry((n) => n + 1);
+    }, 3_000);
+    return () => clearTimeout(timer);
+  }, [holding]);
+  const rendered = held.items;
+  const entries = useMemo(() => groupTranscript(rendered), [rendered]);
+  /* A turn's answer is the last thing it said before the person spoke
+     again, or before the transcript ends once nothing is running. Only a
+     finished turn has one: while the agent works, its last words are
+     narration that may yet be followed by more. */
+  const finalKeys = useMemo(() => {
+    const keys = new Set<string>();
+    let last: string | null = null;
+    for (const e of entries) {
+      if (e.kind === "group") {
+        last = null;
+        continue;
+      }
+      const k = e.item.kind;
+      if (k === "userMessage" || k === "pendingUserTurn") {
+        if (last) keys.add(last);
+        last = null;
+      } else if (k === "assistantMessage" && e.item.content?.trim()) last = e.key;
+    }
+    if (last && !inFlight) keys.add(last);
+    return keys;
+  }, [entries, inFlight]);
+  const groupState = useGroupState(sessionKey);
 
   const retry = async () => {
     const requestId = session?.latestRequestId;
@@ -768,22 +1219,44 @@ export const TranscriptPanel = memo(function TranscriptPanel({
           {loadingOlder ? "Loading older messages…" : null}
         </div>
       )}
-      <DeploymentContext.Provider value={deployment}>
-        <WorkersContext.Provider value={workers}>
-          <WorkerActionsContext.Provider value={workerActions}>
-            <ParentContext.Provider value={parentWork}>
-              {session?.timelineItems.map((item) => (
-                <div key={item.itemKey} data-timeline-key={item.itemKey}>
-                  <TranscriptItem
-                    item={item}
-                    status={item.kind === "liveAssistant" ? status : null}
-                  />
-                </div>
-              ))}
-            </ParentContext.Provider>
-          </WorkerActionsContext.Provider>
-        </WorkersContext.Provider>
-      </DeploymentContext.Provider>
+      <StreamContext.Provider value={stream}>
+        <DeploymentContext.Provider value={deployment}>
+          <WorkersContext.Provider value={workers}>
+            <WorkerActionsContext.Provider value={workerActions}>
+              <ParentContext.Provider value={parentWork}>
+                <GroupStateContext.Provider value={groupState}>
+                  {entries.map((entry) =>
+                    entry.kind === "item" ? (
+                      /* keyed for the pager, which holds the reader's place
+                         by the row under their eye while older pages land */
+                      <div
+                        key={entry.key}
+                        data-timeline-key={entry.key}
+                        className="group/response"
+                      >
+                        <TranscriptItem
+                          item={entry.item}
+                          status={entry.item.kind === "liveAssistant" ? status : null}
+                          final={finalKeys.has(entry.key)}
+                        />
+                      </div>
+                    ) : (
+                      <ActivityGroup key={entry.key} entry={entry} workers={workers} />
+                    ),
+                  )}
+                </GroupStateContext.Provider>
+                {continuing && showError && <FailedEarlier message={responseError} />}
+                {continuing &&
+                  session?.timelineItems
+                    .filter((item) => item.kind === "liveAssistant")
+                    .map((item) => (
+                      <TranscriptItem key={item.itemKey} item={item} status={status} />
+                    ))}
+              </ParentContext.Provider>
+            </WorkerActionsContext.Provider>
+          </WorkersContext.Provider>
+        </DeploymentContext.Provider>
+      </StreamContext.Provider>
       {wasInterrupted && !inFlight && (
         <StoppedNotice cause={session?.latestRequestOutcome?.cancelCause ?? null} />
       )}
@@ -822,9 +1295,10 @@ export function SessionScreen({ shell }: { shell: Shell }) {
   const { draft, setDraft } = shell;
   const [requestedStop, setRequestedStop] = useState<string | null>(null);
   /* the fork notice keeps its session through its exit; the shell owner decides when it shows */
-  const [forked, setForked] = useState<{ sessionId: string; title: string } | null>(
-    null,
-  );
+  const [forked, setForked] = useState<{
+    sessionId: string;
+    title: string;
+  } | null>(null);
   const forkNotice = useExclusivePopover();
   const [traceOpenPref, setTracePref] = useTraceOpen();
   /* the remembered state is a desktop habit; on a phone the sheet opens only by
@@ -886,7 +1360,9 @@ export function SessionScreen({ shell }: { shell: Shell }) {
     });
     io.observe(el);
     return () => io.disconnect();
-  }, [shell.selectedSessionId]);
+    /* the loader shows first and the marker mounts with the session, after
+       this effect has already run once and found nothing: run again then */
+  }, [shell.selectedSessionId, session]);
   const wide = useMediaQuery(ROOMY_WINDOW);
   const traceOpen = wide ? traceOpenPref : traceSheet.open;
   const setTraceOpen = (open: boolean) =>
@@ -1034,11 +1510,14 @@ export function SessionScreen({ shell }: { shell: Shell }) {
             models={[]}
             disabled={shell.nonEmptyContentSendStatus.kind === "disabled"}
             above={
-              <SlashSkillMenu
-                items={startSlash.items}
-                active={startSlash.active}
-                onPick={startSlash.accept}
-              />
+              <>
+                <ReplyingTo shell={shell} />
+                <SlashSkillMenu
+                  items={startSlash.items}
+                  active={startSlash.active}
+                  onPick={startSlash.accept}
+                />
+              </>
             }
             onKeyDown={startSlash.onKeyDown}
             leading={
@@ -1056,9 +1535,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
               </>
             }
             sending={shell.sending}
-            placeholder={
-              startStatus.kind === "disabled" ? startStatus.hint : "Ask anything"
-            }
+            placeholder={placeholderFor(startStatus, "Ask anything")}
           />
         </div>
         <SessionSubmissionStatus
@@ -1142,6 +1619,19 @@ export function SessionScreen({ shell }: { shell: Shell }) {
     }
   };
 
+  /* Until the session is here, nothing of its screen is. Drawn without it,
+     the screen assembled under the reader's eye — chrome, then a title
+     reading "loading", then the transcript — and changed shape as each
+     part landed. One mark, centred, says it is coming. A load that failed,
+     or a session the store does not have, keeps the screen: its
+     LoadingStatus says what happened and offers the way on. */
+  if (
+    !session &&
+    shell.sessionLoad.phase !== "failed" &&
+    shell.sessionLoad.found !== false
+  )
+    return <SessionLoading />;
+
   return (
     <div
       className="grid h-full min-h-0"
@@ -1199,6 +1689,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                 <Split />
               </Button>
             </Hint>
+
             <Hint label={traceOpen ? "Close side panel" : "Open side panel"}>
               <Button
                 variant="ghost"
@@ -1249,8 +1740,10 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                       }}
                     />
                   ) : (
+                    /* no session to name: the LoadingStatus below says what
+                       happened, so the title stays neutral */
                     <h1 className="font-heading text-lg font-medium text-heading">
-                      {shell.sessionLoad.phase}
+                      Session
                     </h1>
                   )}
                   {parentWork.parent && (
@@ -1292,6 +1785,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                       <Split />
                     </Button>
                   </Hint>
+
                   <Hint label={traceOpen ? "Close side panel" : "Open side panel"}>
                     <Button
                       variant="ghost"
@@ -1307,7 +1801,6 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                 </div>
               </div>
 
-              {session?.goal && <Goal goal={session.goal} />}
               <div ref={headerEnd} aria-hidden="true" />
               <TranscriptPanel
                 deployment={deployment}
@@ -1331,6 +1824,9 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                 ref={composer}
                 className="sticky bottom-0 z-20 mt-auto bg-background pt-6 pb-6"
               >
+                {/* a goal outlives the turns under it, so it sits with the
+                    next one rather than at the top where it scrolls away */}
+                {session?.goal && <Goal goal={session.goal} />}
                 {/* conversation still running on under the composer: a short
                     fade on its top edge says the transcript has not ended,
                     where a hard edge reads as the end of it */}
@@ -1413,11 +1909,14 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                       shell.nonEmptyContentSendStatus.kind === "disabled" && !inFlight
                     }
                     above={
-                      <SlashSkillMenu
-                        items={slash.items}
-                        active={slash.active}
-                        onPick={slash.accept}
-                      />
+                      <>
+                        <ReplyingTo shell={shell} />
+                        <SlashSkillMenu
+                          items={slash.items}
+                          active={slash.active}
+                          onPick={slash.accept}
+                        />
+                      </>
                     }
                     onKeyDown={slash.onKeyDown}
                     leading={
@@ -1429,23 +1928,20 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                     sending={shell.sending || inFlight}
                     onStop={inFlight && !stopping ? stop : undefined}
                     placeholder={
-                      status.kind === "disabled" && !inFlight
-                        ? status.hint
-                        : "Ask anything"
+                      inFlight ? "Ask anything" : placeholderFor(status, "Ask anything")
                     }
                   />
                 </div>
-                {status.kind === "disabled" &&
-                  !shell.activityStatus &&
-                  !shell.error &&
-                  !inFlight && (
-                    <p className="mt-2 px-1 text-xs text-muted-foreground">
-                      {status.hint}
-                    </p>
-                  )}
+                {/* the placeholder already says why sending is off while the
+                    box is empty; the hint is only for when typed text hides it */}
                 <SessionSubmissionStatus
                   error={shell.error}
                   activityStatus={shell.activityStatus}
+                  hint={
+                    status.kind === "disabled" && !inFlight && draft.trim() !== ""
+                      ? status.hint
+                      : null
+                  }
                 />
               </div>
             </div>
@@ -1507,9 +2003,9 @@ export function SessionScreen({ shell }: { shell: Shell }) {
           <AlertDialogHeader>
             <AlertDialogTitle>Forked</AlertDialogTitle>
             <AlertDialogDescription>
-              A copy of this transcript is now its own session, "{forked?.title}". This
-              one stays as it is. Open the fork, or stay here and find it later in the
-              sessions list.
+              A copy of this transcript is now its own session, "{forked?.title}
+              ". This one stays as it is. Open the fork, or stay here and find it later
+              in the sessions list.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -1597,32 +2093,123 @@ function Title({
   );
 }
 
-/* the goal a session runs under: what a task or trigger set as its
-   objective, with the budget it has used */
+/* The goal a session runs under, pinned above the composer rather than
+   left at the top of the transcript to scroll away. A goal outlives every
+   turn under it, so it belongs where the next turn is typed: what it is
+   for, how long it has been at it, and — opened — what it has spent and
+   what is holding it up.
+
+   Every field here is the runtime's. What it cannot show is a plan: the
+   projection carries an objective and a budget, not the steps toward it,
+   so "how far along" is answered with elapsed time, continuations and
+   spend rather than a checklist. That gap is filed in BACKGROUND-WORK.md. */
 function Goal({ goal }: { goal: GoalView }) {
-  const used = goal.tokenBudget
-    ? Math.round((goal.tokensUsed / goal.tokenBudget) * 100)
-    : null;
+  const [open, setOpen] = useState(false);
+  const used = goal.tokenBudget ? goal.tokensUsed / goal.tokenBudget : null;
+  const blocked = Boolean(goal.lastBlockedReason) || goal.consecutiveBlockedAudits > 0;
+  /* The label names the thing, and the state qualifies it only where there
+     is something to say: a goal being pursued is what a goal does, so it
+     is just "Goal". Blocked, wrapping up and met are worth a word. */
+  const phrase = goal.wrapupCompleted
+    ? "Goal met"
+    : blocked
+      ? "Goal blocked"
+      : goal.wrapupRequested
+        ? "Goal · wrapping up"
+        : "Goal";
   return (
-    <div className="mt-4 rounded-2xl border border-dashed border-border px-4 py-3">
-      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        <Target className="size-3.5" />
-        <span className="font-mono uppercase tracking-wide">Goal</span>
-        <span>· {goal.status ?? "active"}</span>
-        {goal.wrapupRequested && <span>· wrapping up</span>}
-        {used !== null && (
-          <span className="ml-auto font-mono">
-            {used}% of {Math.round(goal.tokenBudget! / 1000)}k tokens
+    <Collapsible open={open} onOpenChange={setOpen} className="mb-2">
+      <div
+        className={cn(
+          "flex items-center gap-2 rounded-xl border border-border bg-raised px-3 py-2 text-sm",
+          blocked && "border-destructive/30",
+        )}
+      >
+        <Target
+          className={cn("size-4 shrink-0", blocked ? "text-destructive" : "text-ink")}
+        />
+        <span className={cn("shrink-0 font-medium", blocked && "text-destructive")}>
+          {phrase}
+        </span>
+        {goal.objective && (
+          <span
+            className="min-w-0 truncate text-muted-foreground"
+            title={goal.objective}
+          >
+            {goal.objective}
           </span>
         )}
+        {goal.activeTimeSeconds > 0 && (
+          <span className="ml-auto shrink-0 font-mono text-xs text-muted-foreground tabular-nums">
+            {duration(goal.activeTimeSeconds * 1000)}
+          </span>
+        )}
+        <CollapsibleTrigger
+          render={<Button variant="quiet" size="icon-xs" />}
+          aria-label={open ? "Hide goal detail" : "Show goal detail"}
+          className={cn("shrink-0", goal.activeTimeSeconds > 0 ? "" : "ml-auto")}
+        >
+          <ChevronDown
+            className={cn("size-3.5 transition-transform", open && "rotate-180")}
+          />
+        </CollapsibleTrigger>
       </div>
-      {goal.objective && <p className="mt-1 text-sm">{goal.objective}</p>}
-      {goal.lastBlockedReason && (
-        <p className="mt-1 text-xs text-destructive">
-          Blocked: {goal.lastBlockedReason}
-        </p>
-      )}
-    </div>
+      <CollapsibleContent className="px-3 pt-2">
+        {/* what it has spent, which is the budget a goal runs against */}
+        {used !== null && (
+          <div className="grid gap-1">
+            <div className="flex items-baseline justify-between text-xs text-muted-foreground">
+              <span>Budget</span>
+              <span className="font-mono tabular-nums">
+                {Math.round(used * 100)}% of {Math.round(goal.tokenBudget! / 1000)}k
+                tokens
+              </span>
+            </div>
+            <div className="h-1 overflow-hidden rounded-full bg-muted">
+              <div
+                className={cn(
+                  "h-full rounded-full",
+                  used > 0.9 ? "bg-destructive" : "bg-brand",
+                )}
+                style={{ width: `${Math.min(100, Math.round(used * 100))}%` }}
+              />
+            </div>
+          </div>
+        )}
+        <dl className="mt-2 grid gap-1 text-xs text-muted-foreground">
+          {goal.continuationSequence > 0 && (
+            <div className="flex justify-between gap-4">
+              <dt>Continued</dt>
+              <dd className="font-mono tabular-nums">
+                {goal.continuationSequence}{" "}
+                {goal.continuationSequence === 1 ? "time" : "times"}
+              </dd>
+            </div>
+          )}
+          {goal.status && (
+            <div className="flex justify-between gap-4">
+              <dt>Status</dt>
+              <dd>{goal.status}</dd>
+            </div>
+          )}
+        </dl>
+        {goal.lastBlockedReason && (
+          <p className="mt-2 text-xs text-destructive">
+            Blocked: {goal.lastBlockedReason}
+          </p>
+        )}
+        {goal.lastFailure && (
+          <p className="mt-1 text-xs text-destructive">
+            Last failure: {goal.lastFailure}
+          </p>
+        )}
+        {goal.completionEvidence && (
+          <p className="mt-2 text-xs text-muted-foreground">
+            Evidence: {goal.completionEvidence}
+          </p>
+        )}
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 
@@ -1663,7 +2250,9 @@ function Reasoning({ text }: { text: string }) {
       ref={root}
       open={open}
       onOpenChange={(next) => (next ? setOpen(true) : fold(() => setOpen(false)))}
-      className="mb-2"
+      /* the answer is the thing a person came for, so it does not begin
+         directly under the working-out that led to it */
+      className="mb-5"
     >
       {/* the controls at the foot are the way out, so the trigger stays put:
           two sticky things for one block meet in the middle as soon as the
