@@ -374,6 +374,8 @@ jobs:
 
       - name: Run full CLI test suite
         if: matrix.suite == 'cli' && github.event_name != 'pull_request'
+        env:
+          RUST_MIN_STACK: 16777216
         # --no-fail-fast: cli binaries run alphabetically; without this the
         # first red binary hides every later one (how a broken cli_subagent
         # masked cli_trace_export for days — see #1139).
