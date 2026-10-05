@@ -61,6 +61,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) workspace_path_capability_cases: Vec<serde_json::Value>,
     pub(crate) workspace_path_alias_cases: Vec<serde_json::Value>,
     pub(crate) logical_output_obligation_cases: Vec<serde_json::Value>,
+    pub(crate) schema_argument_repair_cases: Vec<serde_json::Value>,
     pub(crate) invalid_tool_progress_cases: Vec<serde_json::Value>,
     pub(crate) repeated_tool_failure_cases: Vec<serde_json::Value>,
     /// `Conformance.ToolTimeouts`: host-ceiling resolution of Tools timeouts.

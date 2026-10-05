@@ -670,6 +670,33 @@ pub(super) async fn owned_test_hook_with_policy(
     crate::streaming::DefraStreamWriter,
     crate::lifecycle::RequestLifecycle,
 ) {
+    owned_test_hook_with_identity_policy(None, policy).await
+}
+
+pub(super) async fn owned_test_hook_with_identity(
+    identity: Arc<dyn crate::AgentIdentity>,
+) -> (
+    Arc<defra_node::EmbeddedNode>,
+    DefraSessionHook,
+    crate::streaming::DefraStreamWriter,
+    crate::lifecycle::RequestLifecycle,
+) {
+    owned_test_hook_with_identity_policy(Some(identity), FailurePolicy::default()).await
+}
+
+async fn owned_test_hook_with_identity_policy(
+    identity: Option<Arc<dyn crate::AgentIdentity>>,
+    policy: FailurePolicy,
+) -> (
+    Arc<defra_node::EmbeddedNode>,
+    DefraSessionHook,
+    crate::streaming::DefraStreamWriter,
+    crate::lifecycle::RequestLifecycle,
+) {
+    let agent_did = identity
+        .as_ref()
+        .map_or("did:test:test", |identity| identity.did());
+    let requester_did = identity.as_ref().map(|_| agent_did);
     let data_path = std::env::temp_dir().join(format!("agent-owned-loop-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
         defra_node::EmbeddedNode::builder()
@@ -681,37 +708,68 @@ pub(super) async fn owned_test_hook_with_policy(
     ensure_runtime_schemas(&node).await.unwrap();
     let session_id = uuid::Uuid::new_v4().to_string();
     let request_id = uuid::Uuid::new_v4().to_string();
-    crate::session::create_session_with_behavior_id(
+    crate::session::ensure_session_with_behavior_id_and_requester_did(
         &node,
         &session_id,
         "general",
-        "did:test:test",
+        agent_did,
         "general",
+        requester_did,
     )
     .await
     .unwrap();
-    let now = chrono::Utc::now().to_rfc3339();
-    let response = node
-        .execute(&format!(
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let mutation = if let Some(identity) = identity.as_ref() {
+        crate::lifecycle::build_signed_request(
+            crate::lifecycle::RequestSpec::new(
+                gents_protocol::request_admission::RequestPurpose::Normal,
+                crate::lifecycle::RequestIdentity {
+                    requester_did: requester_did.map(str::to_owned),
+                    request_id: request_id.clone(),
+                    agent_did: agent_did.to_owned(),
+                    behavior_id: "general".to_owned(),
+                    session_id: session_id.clone(),
+                    content: "owned loop test".to_owned(),
+                    execution_origin: crate::lifecycle::ExecutionOrigin::Interactive,
+                    created_at: now,
+                },
+                gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
+                    agent_did,
+                ),
+            ),
+            crate::lifecycle::RequestSigner::Identity(identity.as_ref()),
+        )
+        .await
+        .unwrap()
+        .graphql_mutation()
+        .unwrap()
+    } else {
+        format!(
             r#"mutation {{ create_AgentRequest(input: {{ request_id: "{}", purpose: "normal", agent_did: "did:test:test", behavior_id: "general", session_id: "{}", subagent_depth: 0, retry_parent_request: "", retry_root_request: "{}", superseded_by_request: "", content: "owned loop test", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", created_at: "{}", retry_count: 0, max_retries: 3 }}) {{ _docID }} }}"#,
             crate::graphql::escape_graphql_string(&request_id),
             crate::graphql::escape_graphql_string(&session_id),
             crate::graphql::escape_graphql_string(&request_id),
-            now,
-        ))
-        .await;
-    assert!(
-        !response.has_errors(),
-        "create request: {:?}",
-        response.errors
-    );
-    let loaded = node
-        .execute(&format!(
+            crate::graphql::escape_graphql_string(&now),
+        )
+    };
+    crate::config_client::ConfigAccess::write_local(
+        &node,
+        "agent.owned_loop_test_request",
+        &mutation,
+    )
+    .await
+    .unwrap();
+    let loaded = crate::graphql::graphql_with_transaction_retry(
+        &node,
+        &format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{ {} }} }}"#,
             crate::graphql::escape_graphql_string(&request_id),
             crate::watcher::AGENT_REQUEST_FIELDS,
-        ))
-        .await;
+        ),
+        "load owned loop test request",
+    )
+    .await
+    .unwrap();
     let row: gents_protocol::row::AgentRequestRow =
         crate::graphql::first_row(&loaded, "AgentRequest")
             .unwrap()
@@ -720,13 +778,13 @@ pub(super) async fn owned_test_hook_with_policy(
         node.clone(),
         &session_id,
         "general",
-        "did:test:test",
-        None,
+        agent_did,
+        requester_did,
         policy,
     )
     .await
     .unwrap();
-    hook.set_active_request_lineage(Some(request_id), None)
+    hook.set_active_request_lineage(Some(request_id), requester_did.map(str::to_owned))
         .await
         .unwrap();
     hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::seconds(60)))
@@ -734,7 +792,7 @@ pub(super) async fn owned_test_hook_with_policy(
     let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_agent_did(
         node.clone(),
         "general",
-        "did:test:test",
+        agent_did,
         row.try_into().unwrap(),
         60,
     );
@@ -742,8 +800,7 @@ pub(super) async fn owned_test_hook_with_policy(
         lifecycle.claim().await.unwrap(),
         crate::lifecycle::ClaimOutcome::Claimed
     );
-    let writer =
-        crate::streaming::DefraStreamWriter::new(node.clone(), "did:test:test", Duration::ZERO);
+    let writer = crate::streaming::DefraStreamWriter::new(node.clone(), agent_did, Duration::ZERO);
     lifecycle.begin_owned_execution(&writer).await.unwrap();
     (node, hook, writer, lifecycle)
 }

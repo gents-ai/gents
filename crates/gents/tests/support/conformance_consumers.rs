@@ -483,6 +483,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "claude_messages_redacted_and_signed_tool_round_trip_through_owned_loop",
         },
         ConformanceConsumer::RustTest {
+            id: "agent::loop_stream::tests::generated_schema_argument_repair_cases_drive_owned_loop",
+            package: "gents",
+            source_path: "crates/gents/src/agent/loop_stream/tests/schema_argument_repair.rs",
+            module_path: "agent::loop_stream::tests",
+            function: "generated_schema_argument_repair_cases_drive_owned_loop",
+        },
+        ConformanceConsumer::RustTest {
             id: "agent::loop_stream::tests::generated_invalid_tool_progress_cases_drive_owned_loop",
             package: "gents",
             source_path: "crates/gents/src/agent/loop_stream/tests/invalid_tool_progress.rs",
