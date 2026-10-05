@@ -44,7 +44,8 @@ export function useDesktopShell({
   const [error, setError] = useState<string | null>(null);
   // A failed action is reported where
   // it happened and is over; only the client's own state belongs in the
-  // banner. Action hooks get this setter; the lifecycle keeps setError.
+  // banner. Action hooks get this setter; background projection and
+  // lifecycle errors keep setError.
   const [actionError, setActionError] = useState<string | null>(null);
   const {
     session,
@@ -59,7 +60,7 @@ export function useDesktopShell({
     selectedAgentDidRef,
     selectedSessionIdRef,
     selectedTrackedRequestIdRef,
-    setError: setActionError,
+    setError,
   });
   const {
     autostartAttempted,
@@ -207,7 +208,7 @@ export function useDesktopShell({
     selectedTrackedRequestId,
     sending,
     setLocalWorkflow,
-    setError: setActionError,
+    setError,
     setSelectedAgentDid: selectAgent,
     setSelectedBehaviorId,
     snapshot,

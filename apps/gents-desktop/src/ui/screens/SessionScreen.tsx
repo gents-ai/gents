@@ -2094,21 +2094,32 @@ function Title({
    Every field here is the runtime's. What it cannot show is a plan: the
    projection carries an objective and a budget, not the steps toward it,
    so "how far along" is answered with elapsed time, continuations and
-   spend rather than a checklist. That gap is filed in BACKGROUND-WORK.md. */
+   spend rather than a checklist. */
 function Goal({ goal }: { goal: GoalView }) {
   const [open, setOpen] = useState(false);
   const used = goal.tokenBudget ? goal.tokensUsed / goal.tokenBudget : null;
-  const blocked = Boolean(goal.lastBlockedReason) || goal.consecutiveBlockedAudits > 0;
-  /* The label names the thing, and the state qualifies it only where there
-     is something to say: a goal being pursued is what a goal does, so it
-     is just "Goal". Blocked, wrapping up and met are worth a word. */
-  const phrase = goal.wrapupCompleted
-    ? "Goal met"
-    : blocked
-      ? "Goal blocked"
-      : goal.wrapupRequested
-        ? "Goal · wrapping up"
-        : "Goal";
+  const blocked = goal.status === "blocked";
+  /* Wrap-up also completes when a budget-limited goal stops, so only the
+     runtime's status says whether the goal was met. */
+  const state =
+    goal.status === "complete"
+      ? "met"
+      : goal.status === "blocked"
+        ? "blocked"
+        : goal.status === "paused"
+          ? "paused"
+          : goal.status === "usage_limited"
+            ? "· usage limit reached"
+            : goal.status === "budget_limited"
+              ? "· budget reached"
+              : null;
+  const wrapping = goal.wrapupRequested && !goal.wrapupCompleted;
+  const phrase = [
+    state ? `Goal ${state}` : "Goal",
+    wrapping && goal.status !== "complete" ? "· wrapping up" : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
   return (
     <Collapsible open={open} onOpenChange={setOpen} className="mb-2">
       <div

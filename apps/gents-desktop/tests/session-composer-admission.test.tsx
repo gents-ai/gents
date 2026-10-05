@@ -367,3 +367,36 @@ describe("SessionScreen canonical composer admission", () => {
     expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
   });
 });
+
+describe("SessionScreen goal label", () => {
+  const goal = (status: string, wrapupCompleted: boolean) => ({
+    goalId: "g",
+    status,
+    objective: "Unfinished work",
+    wrapupRequested: true,
+    wrapupCompleted,
+    tokensUsed: 1000,
+    tokenBudget: 1000,
+    consecutiveBlockedAudits: 0,
+    activeTimeSeconds: 12,
+    continuationSequence: 1,
+    lastBlockedReason: null,
+    lastFailure: null,
+    completionEvidence: null,
+  });
+
+  it("does not report a wrapped-up budget-limited goal as met", () => {
+    const shell = existingSessionShell({ kind: "ready" });
+    shell.selectedSession!.goal = goal("budget_limited", true);
+    render(<OwnedSessionScreen shell={shell} />);
+    expect(screen.queryByText("Goal met")).not.toBeInTheDocument();
+    expect(screen.getByText("Goal · budget reached")).toBeInTheDocument();
+  });
+
+  it("reports a complete goal as met", () => {
+    const shell = existingSessionShell({ kind: "ready" });
+    shell.selectedSession!.goal = goal("complete", true);
+    render(<OwnedSessionScreen shell={shell} />);
+    expect(screen.getByText("Goal met")).toBeInTheDocument();
+  });
+});
