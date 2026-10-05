@@ -51,6 +51,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) goal_claimed_publication_cases: Vec<serde_json::Value>,
     pub(crate) goal_request_head_cases: Vec<serde_json::Value>,
     pub(crate) goal_operator_resume_cases: Vec<serde_json::Value>,
+    pub(crate) goal_operator_resume_on_cases: Vec<serde_json::Value>,
     pub(crate) goal_config_reactivation_cases: Vec<serde_json::Value>,
     pub(crate) goal_reset_resume_cases: Vec<serde_json::Value>,
     pub(crate) graph_logical_invocation_cases: Vec<serde_json::Value>,

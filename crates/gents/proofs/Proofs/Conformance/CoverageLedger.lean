@@ -1201,6 +1201,11 @@ def caseCoverage : List CoverageEntry :=
       "cli_goal::goal_resume_request_reuses_signed_predecessor_and_returns_same_child")
       "durable-goals" [Surface.operatorCli]
   , tagged (consumerCoverage
+      "goal_operator_resume_on_cases"
+      "GoalOperatorResumeOnCases"
+      "goal::operator_resume::tests::generated_resume_on_cases_drive_account_preflight_and_receipt_recovery")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "goal_config_reactivation_cases"
       "GoalConfigReactivationCases"
       "goal::operator_resume::contract_tests::generated_goal_config_reactivation_cases_drive_transactional_setter")

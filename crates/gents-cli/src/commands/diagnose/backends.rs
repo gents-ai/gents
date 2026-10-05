@@ -261,7 +261,7 @@ mod tests {
             "inference_profiles": [crate::shared::test_support::xai_effort_profile(owner)],
         }))
         .unwrap();
-        let reports = diagnose_backends(&access, &bundle).await;
+        let reports = diagnose_backends(&access, &bundle, &[]).await;
         let warnings = reports[0]["warnings"].as_array().expect("warnings");
         assert_eq!(warnings.len(), 1, "{reports:#?}");
         assert!(
