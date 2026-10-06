@@ -30,7 +30,7 @@ use crate::backend_registry::{
     list_enabled_backends_for_agent, set_backend_probe_status_with_last_probe, InferenceBackend,
     UNKNOWN_PROBE_STATUS,
 };
-use crate::oauth_credential::OAuthRefreshKind;
+use crate::oauth_credential::{BearerSource, OAuthRefreshKind};
 
 #[derive(Clone, Debug)]
 pub struct BackendProberOptions {
@@ -280,7 +280,7 @@ async fn oauth_credential_for_probe(
     let Some(provider) = backend.provider_kind.oauth_provider() else {
         anyhow::bail!("backend kind has no OAuth provider");
     };
-    let (_, credential) = crate::oauth_http::bootstrap_oauth_client(
+    let (bearer, mut credential) = crate::oauth_http::bootstrap_oauth_client(
         context.node.clone(),
         context.principal_did,
         provider,
@@ -295,10 +295,15 @@ async fn oauth_credential_for_probe(
             backend.backend_id
         )
     })?;
+    credential.access_token = bearer.current_bearer().await.with_context(|| {
+        format!(
+            "resolving current bearer for backend {} provider {provider}",
+            backend.backend_id
+        )
+    })?;
     tracing::debug!(
         backend_id = %backend.backend_id,
         provider,
-        expires_at = %credential.access_token_expires_at.to_rfc3339(),
         "oauth credential probe ok: bearer current through the credential owner"
     );
     Ok(credential)
@@ -723,7 +728,8 @@ mod tests {
     use crate::backend_registry::DEFAULT_MAX_QUEUE_DEPTH;
     use crate::lean_vocab_test::lean_backend_health_cases;
     use crate::oauth_credential::test_support::{
-        seed_credential, seed_credential_with_refresh_token, test_node,
+        one_shot_token_server, seed_credential, seed_credential_with_refresh_token, test_node,
+        TOKEN_URL_ENV,
     };
 
     fn state_from_lean(name: &str, state: &str) -> BackendHealthState {
@@ -903,6 +909,7 @@ mod tests {
     struct ModelsListener {
         port: u16,
         requests: Arc<AtomicUsize>,
+        last_authorization: Arc<std::sync::RwLock<Option<String>>>,
         shutdown: Option<oneshot::Sender<()>>,
         handle: Option<tokio::task::JoinHandle<std::io::Result<()>>>,
     }
@@ -919,10 +926,19 @@ mod tests {
                 tokio::net::TcpListener::from_std(listener).expect("build async models listener");
             let requests = Arc::new(AtomicUsize::new(0));
             let observed = requests.clone();
-            let models = move || {
+            let last_authorization = Arc::new(std::sync::RwLock::new(None));
+            let captured = last_authorization.clone();
+            let models = move |headers: axum::http::HeaderMap| {
                 let observed = observed.clone();
+                let captured = captured.clone();
                 async move {
                     observed.fetch_add(1, Ordering::Relaxed);
+                    if let Some(value) = headers
+                        .get(axum::http::header::AUTHORIZATION)
+                        .and_then(|value| value.to_str().ok())
+                    {
+                        *captured.write().expect("authorization capture lock") = Some(value.into());
+                    }
                     Json(serde_json::json!({
                         "data": [{"id": "test-model"}],
                         "models": [{"model": "test-model", "name": "Test model"}]
@@ -943,6 +959,7 @@ mod tests {
             Self {
                 port,
                 requests,
+                last_authorization,
                 shutdown: Some(shutdown_tx),
                 handle: Some(handle),
             }
@@ -954,6 +971,13 @@ mod tests {
 
         fn requests(&self) -> usize {
             self.requests.load(Ordering::Relaxed)
+        }
+
+        fn last_authorization(&self) -> Option<String> {
+            self.last_authorization
+                .read()
+                .expect("authorization capture lock")
+                .clone()
         }
 
         async fn shutdown(mut self) {
@@ -1824,6 +1848,106 @@ mod tests {
                 assert_eq!(snap.state, BackendHealthState::Unhealthy);
             }
         }
+    }
+
+    /// Removes a process-global token-URL override when dropped, so a failing
+    /// assertion cannot leak it into sibling tests.
+    struct TokenUrlOverrideGuard(&'static str);
+
+    impl Drop for TokenUrlOverrideGuard {
+        fn drop(&mut self) {
+            std::env::remove_var(self.0);
+        }
+    }
+
+    #[tokio::test]
+    async fn oauth_kinds_refresh_an_expired_credential_on_probe_and_recover() {
+        let node = Arc::new(test_node().await);
+        let did = "did:key:z6MkProbeExpired";
+        let provider = crate::claude_oauth::CLAUDE_OAUTH_PROVIDER;
+        seed_credential_with_refresh_token(
+            &node,
+            did,
+            provider,
+            Utc::now() - chrono::Duration::minutes(1),
+            "refresh-TEST",
+        )
+        .await;
+        let (options, client, health_map) = (
+            probe_options(),
+            reqwest::Client::new(),
+            BackendHealthMap::new(),
+        );
+        let mut claude = claude_backend();
+        claude.agent_did = did.to_string();
+        let models = ModelsListener::start();
+        claude.endpoint = models.endpoint();
+        seed_backend_observation(&node, &claude, "unknown").await;
+
+        // Process-global; hold TOKEN_URL_ENV while the override is set.
+        let _env = TOKEN_URL_ENV.lock().await;
+        let _guard =
+            TokenUrlOverrideGuard(crate::claude_oauth::CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV);
+        let (url, server) = one_shot_token_server(
+            200,
+            r#"{"access_token":"access-REFRESHED","refresh_token":"refresh-ROTATED","expires_in":28800}"#,
+        )
+        .await;
+        std::env::set_var(
+            crate::claude_oauth::CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV,
+            &url,
+        );
+        let outcome = probe_backends_cycle(
+            &node,
+            &client,
+            std::slice::from_ref(&claude),
+            Utc::now(),
+            &health_map,
+            &options,
+            Some(OAuthProbeContext {
+                node: node.clone(),
+                principal_did: did,
+            }),
+        )
+        .await;
+        assert_eq!(
+            outcome.promotable,
+            vec!["claude".to_string()],
+            "a probe whose credential owner refreshed the token must report the backend healthy"
+        );
+        let snap = health_map.get("claude").await.expect("entry");
+        assert_eq!(snap.state, BackendHealthState::Healthy);
+        assert_eq!(snap.failure_count, 0);
+        assert!(snap.last_error.is_none(), "{:?}", snap.last_error);
+        assert_eq!(
+            models.last_authorization().as_deref(),
+            Some("Bearer access-REFRESHED"),
+            "discovery must send the token the credential owner resolved, not the stale row"
+        );
+        let refresh_request = tokio::time::timeout(Duration::from_secs(5), server)
+            .await
+            .expect("the probe refreshes through the token endpoint")
+            .expect("token server task");
+        assert!(
+            refresh_request.contains("refresh-TEST"),
+            "the refresh must present the stored refresh token: {refresh_request}"
+        );
+        let stored = crate::oauth_credential::lookup_oauth_credential_by_id(
+            &node,
+            &crate::oauth_credential::oauth_credential_id(did, provider),
+        )
+        .await
+        .expect("lookup stored credential")
+        .expect("stored credential row");
+        assert_eq!(
+            stored.access_token, "access-REFRESHED",
+            "the credential owner must persist the refreshed access token"
+        );
+        assert_eq!(
+            stored.refresh_token, "refresh-ROTATED",
+            "the credential owner must persist the rotated refresh token"
+        );
+        models.shutdown().await;
     }
 
     #[tokio::test]
