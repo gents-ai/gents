@@ -4,6 +4,13 @@ All desktop crates and npm packages release together at `workspace.package.versi
 (lockstep train). The bundled frontend and Rust bridge use generated types and
 source consistency checks, not a separate runtime compatibility version.
 
+## Unreleased
+
+- Grok subscription backends advertise client version 1.0.46, above the
+  proxy's floor (#2274). A 426 version gate now fails fast instead of burning
+  the retry ladder, and `grok-auth-probe` and model discovery name the version
+  gents sent and the `GENTS_XAI_GROK_CLIENT_VERSION` override.
+
 ## 0.20.0 - 2026-10-05
 
 - Desktop shell (macOS): a two-finger swipe goes back or forward. AppKit

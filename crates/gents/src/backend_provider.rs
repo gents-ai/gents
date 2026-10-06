@@ -37,6 +37,12 @@ impl ModelDiscoveryHttpError {
     pub fn is_auth(&self) -> bool {
         matches!(self.status, 401 | 403)
     }
+
+    /// HTTP 426 Upgrade Required: the provider demands a newer client version
+    /// than the one gents advertised.
+    pub fn is_client_version_gate(&self) -> bool {
+        self.status == 426
+    }
 }
 
 fn provider_display_name(kind: BackendProviderKind) -> &'static str {
@@ -727,25 +733,7 @@ mod tests {
             r#"{"data":[{"id":"row-1","model":"grok-4.5","name":"Grok 4.5","contextWindow":256000,"apiBackend":"responses"},{"id":"row-2","modelId":"grok-build-0.1","name":"Grok Build"}]}"#,
         )
         .await;
-        let credential = crate::oauth_credential::OAuthCredential {
-            doc_id: None,
-            credential_id: "xai-oauth:did:key:zAgent".to_string(),
-            agent_did: "did:key:zAgent".to_string(),
-            provider: crate::xai_grok_oauth::XAI_OAUTH_PROVIDER.to_string(),
-            access_token: "access-token".to_string(),
-            refresh_token: "refresh-token".to_string(),
-            id_token: None,
-            account_id: None,
-            chatgpt_plan_type: None,
-            is_fedramp: false,
-            access_token_expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
-            last_refresh: None,
-            enabled: true,
-            account_ref: None,
-            connected_at: None,
-            provider_account_key: None,
-            label: None,
-        };
+        let credential = grok_credential();
 
         let models = discover_models(
             &Client::new(),
@@ -764,6 +752,40 @@ mod tests {
             "Grok discovery must query the official /models-v2 catalog: {}",
             requests[0]
         );
+    }
+
+    #[tokio::test]
+    async fn discover_models_grok_426_is_a_client_version_gate() {
+        // The subscription proxy answers 426 when the advertised
+        // `x-grok-client-version` is below its floor; the CLI needs the typed
+        // status to append the version-gate guidance.
+        let (endpoint, _requests) = spawn_model_discovery_server_with_status(
+            "426 Upgrade Required",
+            r#"{"error":{"message":"Your Grok CLI version (1.0.13) is outdated. Please update to version 1.0.46 or later"}}"#,
+        )
+        .await;
+        let credential = grok_credential();
+
+        let error = discover_models(
+            &Client::new(),
+            BackendProviderKind::XaiGrokOAuth,
+            &endpoint,
+            None,
+            Some(&credential),
+        )
+        .await
+        .expect_err("426 from /models-v2 must fail discovery");
+
+        let http = error
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<ModelDiscoveryHttpError>())
+            .expect("426 must surface as ModelDiscoveryHttpError so the CLI appends version-gate guidance");
+        assert_eq!(http.status, 426, "{http}");
+        assert!(
+            http.is_client_version_gate(),
+            "426 is the client-version gate, not an auth failure: {http}"
+        );
+        assert!(!http.is_auth(), "{http}");
     }
 
     #[tokio::test]
@@ -851,6 +873,28 @@ mod tests {
             credential_id: "claude-subscription:did:key:zAgent".to_string(),
             agent_did: "did:key:zAgent".to_string(),
             provider: crate::claude_oauth::CLAUDE_OAUTH_PROVIDER.to_string(),
+            access_token: "access-token".to_string(),
+            refresh_token: "refresh-token".to_string(),
+            id_token: None,
+            account_id: None,
+            chatgpt_plan_type: None,
+            is_fedramp: false,
+            access_token_expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+            last_refresh: None,
+            enabled: true,
+            account_ref: None,
+            connected_at: None,
+            provider_account_key: None,
+            label: None,
+        }
+    }
+
+    fn grok_credential() -> crate::oauth_credential::OAuthCredential {
+        crate::oauth_credential::OAuthCredential {
+            doc_id: None,
+            credential_id: "xai-oauth:did:key:zAgent".to_string(),
+            agent_did: "did:key:zAgent".to_string(),
+            provider: crate::xai_grok_oauth::XAI_OAUTH_PROVIDER.to_string(),
             access_token: "access-token".to_string(),
             refresh_token: "refresh-token".to_string(),
             id_token: None,
