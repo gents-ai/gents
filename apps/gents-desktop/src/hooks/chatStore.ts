@@ -1,9 +1,9 @@
-import type { SetStateAction } from "react";
 import { createStore, type StoreApi } from "zustand/vanilla";
 
-import type {
-  ChatWorkflowState,
-  OptimisticPendingTurn,
+import {
+  reconcileProjectedWorkflow,
+  type ChatWorkflowState,
+  type OptimisticPendingTurn,
 } from "@source-inc/gents-desktop-chat";
 
 import { loadChatFolders, type ChatFolders } from "./chatFolders";
@@ -33,14 +33,52 @@ export function createChatStore(initial: Partial<ChatState> = {}) {
   );
 }
 
-/** A setter for one field, taking a value or an updater, as React's did. */
-export function setterOf<K extends keyof ChatState>(store: ChatStore, key: K) {
-  return (next: SetStateAction<ChatState[K]>) =>
-    store.setState((state) => {
-      const value =
-        typeof next === "function"
-          ? (next as (current: ChatState[K]) => ChatState[K])(state[key])
-          : next;
-      return Object.is(value, state[key]) ? state : { [key]: value };
-    });
+const READY: ChatWorkflowState = { kind: "ready" };
+
+/** A submission's workflow once its send has ended: ready, unless something
+    has already moved it on. */
+export function releaseOwnedSubmissionWorkflow(
+  current: ChatWorkflowState,
+  owned: ChatWorkflowState,
+): ChatWorkflowState {
+  return current === owned ? READY : current;
 }
+
+/** The chat's changes. A send's workflow and its sending flag change in one
+    write, so no state between them is seen. */
+export const chat = {
+  /** a send or retry starts, owning this workflow */
+  beginSubmission(store: ChatStore, owned: ChatWorkflowState) {
+    store.setState({ localWorkflow: owned, sending: true });
+  },
+  /** it ends: sending stops, and the workflow it owned is released */
+  endSubmission(store: ChatStore, owned: ChatWorkflowState) {
+    store.setState((state) => ({
+      localWorkflow: releaseOwnedSubmissionWorkflow(state.localWorkflow, owned),
+      sending: false,
+    }));
+  },
+  /** the bridge accepted the request: wait for the transcript to show it */
+  awaitObservation(
+    store: ChatStore,
+    request: { agentDid: string; sessionId: string; requestId: string },
+  ) {
+    store.setState({ localWorkflow: { kind: "awaitingObservation", ...request } });
+  },
+  /** nothing in flight */
+  resetWorkflow(store: ChatStore) {
+    if (store.getState().localWorkflow !== READY)
+      store.setState({ localWorkflow: READY });
+  },
+  /** the workflow as the transcript now shows it */
+  followProjection(store: ChatStore, projected: ChatWorkflowState) {
+    store.setState((state) => {
+      const next = reconcileProjectedWorkflow(state.localWorkflow, projected);
+      return next === state.localWorkflow ? state : { localWorkflow: next };
+    });
+  },
+  /** the turn a person sent, drawn until the transcript holds it */
+  showPendingTurn(store: ChatStore, turn: OptimisticPendingTurn) {
+    store.setState({ optimisticPendingTurn: turn });
+  },
+};

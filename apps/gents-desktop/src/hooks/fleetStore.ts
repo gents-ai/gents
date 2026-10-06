@@ -43,6 +43,29 @@ export type FleetState = {
 
 export type FleetStore = StoreApi<FleetState>;
 
+/** The node with this DID; null when the client cannot see it. */
+export const nodeOf = (fleet: FleetState, agentDid: string | null | undefined) =>
+  agentDid ? (fleet.nodes[nodeKeyOf({ agentDid })] ?? null) : null;
+
+/** The first node in the snapshot's order; null before there is one. */
+export const firstNode = (fleet: FleetState) => {
+  const first = fleet.nodeKeys[0];
+  return first ? (fleet.nodes[first] ?? null) : null;
+};
+
+/** A session as the node with this DID lists it. */
+export function listedSession(
+  fleet: FleetState,
+  agentDid: string | null | undefined,
+  sessionId: string | null | undefined,
+): SessionSummary | null {
+  if (!agentDid || !sessionId) return null;
+  return (
+    fleet.sessionsOf[nodeKeyOf({ agentDid })]?.find((s) => s.sessionId === sessionId) ??
+    null
+  );
+}
+
 const EMPTY: FleetState = {
   nodeKeys: [],
   nodes: {},

@@ -13,7 +13,8 @@ import {
   withFolder,
   writeChatFolders,
 } from "./chatFolders";
-import { setterOf } from "./chatStore";
+import { chat } from "./chatStore";
+import { firstNode, nodeOf } from "./fleetStore";
 import { actionFailure, shownFailure } from "./desktopShellRuntime";
 import { selection } from "./selectionStore";
 import type { ShellProjection, ShellStores } from "./shellProjection";
@@ -31,13 +32,6 @@ type ChatActionParams = {
   reportFailure: (message: string) => void;
 };
 
-export function releaseOwnedSubmissionWorkflow(
-  current: ChatWorkflowState,
-  owned: ChatWorkflowState,
-): ChatWorkflowState {
-  return current === owned ? { kind: "ready" } : current;
-}
-
 /**
  * Sending, retrying and renaming in the selected chat. Each reads the
  * selection, the node and the shell projection when it runs.
@@ -51,30 +45,19 @@ export function createDesktopShellChatActions({
   reportFailure,
 }: ChatActionParams) {
   const store = stores.selection;
-  const setLocalWorkflow = setterOf(stores.chat, "localWorkflow");
-  const setOptimisticPendingTurn = setterOf(stores.chat, "optimisticPendingTurn");
   /* Synchronous admission implements startSubmit before React renders
      sending. Every send and retry entry point shares it. */
   let submissionInFlight = false;
 
-  /** the selected node, or for a send with none selected, the first */
-  const selectedNode = () => {
-    const fleet = stores.fleet.getState();
-    const agentDid = store.getState().agentDid;
-    return (agentDid ? fleet.nodes[agentDid] : undefined) ?? null;
-  };
-  const firstNode = () => {
-    const fleet = stores.fleet.getState();
-    const first = fleet.nodeKeys[0];
-    return (first ? fleet.nodes[first] : undefined) ?? null;
-  };
+  /** the selected node; a send with none selected goes to the first */
+  const selectedNode = () => nodeOf(stores.fleet.getState(), store.getState().agentDid);
 
   async function sendMessage(
     content: string,
     behaviorId?: string | null,
   ): Promise<ChatSendResult | null> {
     if (submissionInFlight) return null;
-    const node = selectedNode() ?? firstNode();
+    const node = selectedNode() ?? firstNode(stores.fleet.getState());
     if (!node || !content.trim()) return null;
 
     const projection = project();
@@ -100,9 +83,7 @@ export function createDesktopShellChatActions({
       agentDid: node.agentDid,
       sessionId: selectedSessionId,
     };
-    /* one write: the app releases a submission whose send has ended, so the
-       workflow and the send start together */
-    stores.chat.setState({ localWorkflow: ownedWorkflow, sending: true });
+    chat.beginSubmission(stores.chat, ownedWorkflow);
     try {
       const result = await api.sendChatMessage({
         agentDid: node.agentDid,
@@ -118,7 +99,7 @@ export function createDesktopShellChatActions({
         );
       if (!selection.acceptsIntent(store, intentGeneration)) return result;
       selection.adoptSession(store, result.sessionId);
-      setOptimisticPendingTurn({
+      chat.showPendingTurn(stores.chat, {
         sessionId: result.sessionId,
         requestId: result.requestId,
         content,
@@ -126,8 +107,7 @@ export function createDesktopShellChatActions({
         lifecycleState: "pending",
         createdAt: new Date().toISOString(),
       });
-      setLocalWorkflow({
-        kind: "awaitingObservation",
+      chat.awaitObservation(stores.chat, {
         agentDid: node.agentDid,
         sessionId: result.sessionId,
         requestId: result.requestId,
@@ -135,17 +115,11 @@ export function createDesktopShellChatActions({
       return result;
     } catch (err) {
       if (!selection.acceptsIntent(store, intentGeneration)) return null;
-      setLocalWorkflow({ kind: "ready" });
+      chat.resetWorkflow(stores.chat);
       reportFailure(actionFailure("send the message", err));
       return null;
     } finally {
-      stores.chat.setState((state) => ({
-        localWorkflow: releaseOwnedSubmissionWorkflow(
-          state.localWorkflow,
-          ownedWorkflow,
-        ),
-        sending: false,
-      }));
+      chat.endSubmission(stores.chat, ownedWorkflow);
       submissionInFlight = false;
     }
   }
@@ -166,31 +140,22 @@ export function createDesktopShellChatActions({
       agentDid: node.agentDid,
       sessionId: store.getState().sessionId,
     };
-    /* one write: the app releases a submission whose send has ended, so the
-       workflow and the send start together */
-    stores.chat.setState({ localWorkflow: ownedWorkflow, sending: true });
+    chat.beginSubmission(stores.chat, ownedWorkflow);
     try {
       const result = await api.retryRequest(requestId, node.agentDid);
       if (!selection.acceptsIntent(store, intentGeneration)) return;
       selection.settleSession(store, result.sessionId);
-      setLocalWorkflow({
-        kind: "awaitingObservation",
+      chat.awaitObservation(stores.chat, {
         agentDid: node.agentDid,
         sessionId: result.sessionId,
         requestId: result.requestId,
       });
     } catch (err) {
       if (!selection.acceptsIntent(store, intentGeneration)) return;
-      setLocalWorkflow({ kind: "ready" });
+      chat.resetWorkflow(stores.chat);
       reportFailure(actionFailure("retry the message", err));
     } finally {
-      stores.chat.setState((state) => ({
-        localWorkflow: releaseOwnedSubmissionWorkflow(
-          state.localWorkflow,
-          ownedWorkflow,
-        ),
-        sending: false,
-      }));
+      chat.endSubmission(stores.chat, ownedWorkflow);
       submissionInFlight = false;
     }
   }

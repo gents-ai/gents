@@ -13,9 +13,9 @@ import {
 import {
   ManagedServerStartupError,
   observeManagedServerOperation,
+  type ManagedServerWait,
 } from "../lib/managedServerStartup";
 import { isMobileTauriShell, ownsAutomaticRecovery } from "../lib/shellPlatform";
-import { clientSetter } from "./clientStore";
 import { delay, logShellEvent, timingConfig } from "./desktopShellRuntime";
 import { createSnapshotPublicationOwner } from "./desktopSnapshotPublication";
 import { applyFleetSnapshot, equal } from "./fleetStore";
@@ -23,6 +23,7 @@ import { restoreManagedServer } from "./managedServerLifecycle";
 import { writeSession } from "./sessionStore";
 import type { ShellStores } from "./shellProjection";
 import { createIncompatibleHomeOps } from "./useIncompatibleHome";
+import { clientStatus } from "./clientStore";
 
 type ClientLifecycleParams = {
   api: DesktopApiAdapter;
@@ -55,11 +56,14 @@ export function createClientLifecycle({
   refreshSession,
 }: ClientLifecycleParams) {
   const { client, fleet } = stores;
-  const setError = clientSetter(client, "error");
-  const setStarting = clientSetter(client, "starting");
-  const setStopping = clientSetter(client, "stopping");
-  const setManagedServerWait = clientSetter(client, "managedServerWait");
-  const setManagedServerFailure = clientSetter(client, "managedServerFailure");
+  const setError = (error: string | null) => clientStatus.setError(client, error);
+  const setStarting = (starting: boolean) => clientStatus.setStarting(client, starting);
+  const setStopping = (stopping: boolean) => client.setState({ stopping });
+  const setManagedServerWait = (managedServerWait: ManagedServerWait | null) =>
+    client.setState({ managedServerWait });
+  const setManagedServerFailure = (
+    managedServerFailure: ManagedServerStartupError | null,
+  ) => client.setState({ managedServerFailure });
   const recovery: ClientRecovery = {
     autostartAttempted: false,
     autoRestartInFlight: false,

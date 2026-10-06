@@ -3,9 +3,9 @@ import type {
   DesktopApiAdapter,
   DesktopClientSnapshot,
 } from "@source-inc/gents-desktop-client";
-import { clientSetter } from "./clientStore";
 import { shownFailure } from "./desktopShellRuntime";
 import type { ShellStores } from "./shellProjection";
+import { clientStatus } from "./clientStore";
 
 type PeerActionParams = {
   api: DesktopApiAdapter;
@@ -28,7 +28,8 @@ export function createDesktopShellPeerActions({
   reportFailure,
   selectAgent,
 }: PeerActionParams) {
-  const setStarting = clientSetter(stores.client, "starting");
+  const setStarting = (starting: boolean) =>
+    clientStatus.setStarting(stores.client, starting);
   /** whether the client runs, as last read */
   const clientRuns = () => Boolean(stores.client.getState().snapshot?.client);
   async function initLocalRuntime(label?: string | null) {

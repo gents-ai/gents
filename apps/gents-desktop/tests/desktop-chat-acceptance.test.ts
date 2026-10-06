@@ -4,10 +4,8 @@ import {
   type ChatWorkflowState,
 } from "@source-inc/gents-desktop-chat";
 import { projectDeploymentOperationalState } from "@source-inc/gents-desktop-client";
-import {
-  createDesktopShellChatActions,
-  releaseOwnedSubmissionWorkflow,
-} from "../src/hooks/desktopShellChatActions";
+import { releaseOwnedSubmissionWorkflow } from "../src/hooks/chatStore";
+import { createDesktopShellChatActions } from "../src/hooks/desktopShellChatActions";
 import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 import { selection } from "../src/hooks/selectionStore";
 import { admittingProjection, historyOf, shellStores } from "./shell-fixture";

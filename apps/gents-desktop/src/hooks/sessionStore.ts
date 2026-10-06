@@ -66,6 +66,19 @@ export function createSessionStore(session: DesktopSessionSnapshot | null = null
   return store;
 }
 
+/** The held read when it is the selected session's: a read for the previous
+    selection can still be held while the next one loads. */
+export function heldFor<S extends { sessionId: string; agentDid?: string | null }>(
+  held: S | null,
+  sessionId: string | null,
+  agentDid: string | null,
+): S | null {
+  return held?.sessionId === sessionId &&
+    (!agentDid || !held.agentDid || held.agentDid === agentDid)
+    ? held
+    : null;
+}
+
 export function readSession(store: SessionStore): DesktopSessionSnapshot | null {
   return store.getState().session;
 }

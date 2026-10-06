@@ -1,9 +1,11 @@
 import { selectedBehaviorIdForDeployment } from "@source-inc/gents-desktop-client";
 
-import { setterOf } from "./chatStore";
+import { chat } from "./chatStore";
+import { firstNode, listedSession, nodeOf } from "./fleetStore";
 import { selection } from "./selectionStore";
 import { writeSession } from "./sessionStore";
 import type { ShellStores } from "./shellProjection";
+import { clientStatus } from "./clientStore";
 
 type SelectionActionParams = {
   stores: ShellStores;
@@ -20,14 +22,6 @@ export function createDesktopShellSelectionActions({ stores }: SelectionActionPa
   const fleet = () => stores.fleet.getState();
   const dropSession = () => writeSession(stores.session, null);
 
-  /** the session as the selected node lists it */
-  const listedOnSelected = (sessionId: string) => {
-    const agentDid = store.getState().agentDid;
-    return agentDid
-      ? fleet().sessionsOf[agentDid]?.find((s) => s.sessionId === sessionId)
-      : undefined;
-  };
-
   function selectAgent(agentDid: string | null) {
     if (selection.selectAgent(store, agentDid)) dropSession();
   }
@@ -37,17 +31,13 @@ export function createDesktopShellSelectionActions({ stores }: SelectionActionPa
   }
 
   function selectSession(sessionId: string) {
-    const listed = listedOnSelected(sessionId);
+    const listed = listedSession(fleet(), store.getState().agentDid, sessionId);
     selection.selectSession(store, sessionId, listed?.behaviorId);
     if (!listed) dropSession();
   }
 
   function startNewSession(behaviorId?: string | null) {
-    const { nodes, nodeKeys } = fleet();
-    const selected = store.getState().agentDid;
-    const first = nodeKeys[0];
-    const node =
-      (selected ? nodes[selected] : undefined) ?? (first ? nodes[first] : undefined);
+    const node = nodeOf(fleet(), store.getState().agentDid) ?? firstNode(fleet());
     if (!node) return;
     selection.startNewSession(
       store,
@@ -55,10 +45,10 @@ export function createDesktopShellSelectionActions({ stores }: SelectionActionPa
       selectedBehaviorIdForDeployment(node, behaviorId ?? null),
     );
     dropSession();
-    setterOf(stores.chat, "localWorkflow")({ kind: "ready" });
+    chat.resetWorkflow(stores.chat);
     /* the banner may hold the session left behind (a read that failed);
        the new session starts without it */
-    stores.client.setState({ error: null });
+    clientStatus.setError(stores.client, null);
   }
 
   function followRoute(sessionId: string | null, fromSnapshot = false) {

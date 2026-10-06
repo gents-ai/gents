@@ -63,7 +63,8 @@ import { span, when } from "./time";
 import { useApp } from "@/app/AppContext";
 import { toastFailure } from "@/lib/failure";
 import { useDeployments } from "@/hooks/useClient";
-import { nodeOf, useFleet } from "@/hooks/useFleet";
+import { nodeOf } from "../../hooks/fleetStore";
+import { useFleet } from "@/hooks/useFleet";
 
 type BadgeVariant = ComponentProps<typeof Badge>["variant"];
 

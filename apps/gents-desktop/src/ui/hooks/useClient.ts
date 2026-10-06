@@ -6,7 +6,7 @@ import { useShallow } from "zustand/react/shallow";
 
 import type { DeploymentView } from "@source-inc/gents-desktop-client";
 
-import type { NodeView } from "../../hooks/fleetStore";
+import { firstNode, nodeOf, type NodeView } from "../../hooks/fleetStore";
 
 import { folderOf } from "../../hooks/chatFolders";
 import { useIncompatibleHome } from "../../hooks/useIncompatibleHome";
@@ -59,7 +59,7 @@ export function useSelectedDeployment(): DeploymentView | null {
 /** The selected node's DID, or the first node's while nothing is selected. */
 export function useSelectedAgentDid(): string | null {
   const agentDid = useApp().stores.selection.use.agentDid();
-  const first = useFleet((state) => fleetNodes(state)[0]?.agentDid ?? null);
+  const first = useFleet((state) => firstNode(state)?.agentDid ?? null);
   return agentDid ?? first;
 }
 
@@ -67,12 +67,7 @@ export function useSelectedAgentDid(): string | null {
     is selected yet; the same object while it is unchanged. */
 export function useSelectedNode(): NodeView | null {
   const agentDid = useApp().stores.selection.use.agentDid();
-  return useFleet(
-    (state) =>
-      fleetNodes(state).find((node) => node.agentDid === agentDid) ??
-      fleetNodes(state)[0] ??
-      null,
-  );
+  return useFleet((state) => nodeOf(state, agentDid) ?? firstNode(state));
 }
 
 /** The node this machine runs, as the fleet holds it; null when the client

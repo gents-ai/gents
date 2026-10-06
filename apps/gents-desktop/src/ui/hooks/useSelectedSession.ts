@@ -1,6 +1,7 @@
 import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
 
 import {
+  heldFor,
   useSessionFields,
   useSessionValue,
   type SessionFacts,
@@ -8,8 +9,7 @@ import {
 } from "../../hooks/sessionStore";
 import { useApp } from "../app/AppContext";
 
-/** The held session when it is the selected one, else null: a read for the
-    previous selection can still be held while the next one loads. */
+/** The held session when it is the selected one (heldFor), else null. */
 export function selectedIn(
   state: SessionState,
   {
@@ -17,11 +17,7 @@ export function selectedIn(
     selectedAgentDid,
   }: { selectedSessionId: string | null; selectedAgentDid: string | null },
 ): DesktopSessionSnapshot | null {
-  const session = state.session;
-  return session?.sessionId === selectedSessionId &&
-    (!selectedAgentDid || !session.agentDid || session.agentDid === selectedAgentDid)
-    ? session
-    : null;
+  return heldFor(state.session, selectedSessionId, selectedAgentDid);
 }
 
 /* the session store and the selection that picks the held read out of it */

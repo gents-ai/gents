@@ -55,10 +55,18 @@ export function createClientStore(
   );
 }
 
-/** A setter for one field. */
-export function clientSetter<K extends keyof ClientState>(store: ClientStore, key: K) {
-  return (value: ClientState[K]) =>
-    store.setState((state) =>
-      Object.is(state[key], value) ? state : ({ [key]: value } as Partial<ClientState>),
-    );
-}
+/** The client's changes made outside its lifecycle, which owns the rest. */
+export const clientStatus = {
+  /** the client's own failure, shown in the banner; null once it no longer applies */
+  setError(store: ClientStore, error: string | null) {
+    if (store.getState().error !== error) store.setState({ error });
+  },
+  /** a start of the client is under way, by the lifecycle or a local runtime's setup */
+  setStarting(store: ClientStore, starting: boolean) {
+    if (store.getState().starting !== starting) store.setState({ starting });
+  },
+  /** where the logs are, read before the first snapshot when startup failed */
+  setDiagnosticsHint(store: ClientStore, hint: string | null) {
+    store.setState({ startupDiagnosticsHint: hint });
+  },
+};

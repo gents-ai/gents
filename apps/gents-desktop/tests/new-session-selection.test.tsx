@@ -8,7 +8,7 @@ import type {
   DesktopSessionSnapshot,
 } from "@source-inc/gents-desktop-client";
 import { useStore } from "zustand";
-import { setterOf } from "../src/hooks/chatStore";
+
 import { applyFleetSnapshot } from "../src/hooks/fleetStore";
 import { readSession, writeSession } from "../src/hooks/sessionStore";
 import { admittingProjection, shellStores } from "./shell-fixture";

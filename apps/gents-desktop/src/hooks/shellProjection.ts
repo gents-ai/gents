@@ -13,9 +13,14 @@ import {
 import type { ChatStore } from "./chatStore";
 import type { ClientStore } from "./clientStore";
 import { trackedRequestIdForSession } from "./desktopShellRuntime";
-import type { FleetStore, NodeView } from "./fleetStore";
+import { listedSession, nodeOf, type FleetStore, type NodeView } from "./fleetStore";
 import type { Selection, SelectionStore } from "./selectionStore";
-import { headerOf, type SessionHeader, type SessionStore } from "./sessionStore";
+import {
+  headerOf,
+  heldFor,
+  type SessionHeader,
+  type SessionStore,
+} from "./sessionStore";
 
 /** Every store the shell is projected from. */
 export type ShellStores = {
@@ -99,24 +104,10 @@ export function projectionInputsOf(stores: ShellStores): ProjectionInputs {
     clientAvailable: Boolean(snapshot?.client),
     syncHealth: snapshot?.client?.syncHealth ?? null,
     selection,
-    node: agentDid ? (fleet.nodes[agentDid] ?? null) : null,
-    sessionSummary: summaryIn(fleet, agentDid, selection.sessionId),
-    session:
-      held?.sessionId === selection.sessionId &&
-      (!agentDid || !held.agentDid || held.agentDid === agentDid)
-        ? headerOf(held)
-        : null,
+    node: nodeOf(fleet, agentDid),
+    sessionSummary: listedSession(fleet, agentDid, selection.sessionId),
+    session: headerOf(heldFor(held, selection.sessionId, agentDid)),
     localWorkflow: chat.localWorkflow,
     sending: chat.sending,
   };
-}
-
-/** The selected session as its node lists it. */
-export function summaryIn(
-  fleet: ReturnType<FleetStore["getState"]>,
-  agentDid: string | null,
-  sessionId: string | null,
-): SessionSummary | null {
-  if (!agentDid || !sessionId) return null;
-  return fleet.sessionsOf[agentDid]?.find((s) => s.sessionId === sessionId) ?? null;
 }

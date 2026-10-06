@@ -3,11 +3,9 @@ import type {
   DesktopClientUpdatedListenerFactory,
 } from "@source-inc/gents-desktop-client";
 
-import { reconcileProjectedWorkflow } from "@source-inc/gents-desktop-chat";
-
-import { createChatStore, setterOf, type ChatState } from "./chatStore";
+import { chat, createChatStore, type ChatState } from "./chatStore";
 import { createClientLifecycle } from "./clientLifecycle";
-import { clientSetter, createClientStore } from "./clientStore";
+import { clientStatus, createClientStore } from "./clientStore";
 import { createFleetStore } from "./fleetStore";
 import { createSelectionStore } from "./selectionStore";
 import { createSessionReads } from "./sessionReads";
@@ -65,7 +63,7 @@ export function createDesktopApp({
     store: stores.selection,
     sessionStore: stores.session,
     trackedRequestId,
-    setError: clientSetter(stores.client, "error"),
+    setError: (error) => clientStatus.setError(stores.client, error),
   });
   const lifecycle = createClientLifecycle({
     api,
@@ -95,15 +93,14 @@ export type DesktopApp = ReturnType<typeof createDesktopApp>;
  * and its sending flag together, so no state between them is seen.
  */
 function followTranscript(stores: ShellStores, view: ShellViewStore) {
-  const setLocalWorkflow = setterOf(stores.chat, "localWorkflow");
   view.subscribe((state, prev) => {
     const projected = state.shellProjection.workflow;
     if (projected !== prev.shellProjection.workflow)
-      setLocalWorkflow((current) => reconcileProjectedWorkflow(current, projected));
+      chat.followProjection(stores.chat, projected);
   });
   const ended = (state: ChatState) =>
     state.localWorkflow.kind === "submittingRequest" && !state.sending;
   stores.chat.subscribe((state, prev) => {
-    if (ended(state) && !ended(prev)) setLocalWorkflow({ kind: "ready" });
+    if (ended(state) && !ended(prev)) chat.resetWorkflow(stores.chat);
   });
 }

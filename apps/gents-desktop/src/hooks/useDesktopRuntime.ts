@@ -15,6 +15,8 @@ import {
 } from "./desktopShellRuntime";
 import { selection } from "./selectionStore";
 import { useDesktopProjectionEffects } from "./useDesktopProjectionEffects";
+import { clientStatus } from "./clientStore";
+import { firstNode, nodeOf } from "./fleetStore";
 
 /**
  * What the app does on its own while it runs: starts and recovers the
@@ -60,9 +62,10 @@ function useStartup({
       .then(() => api.fetchDesktopSnapshot())
       .then((next) => {
         if (current)
-          stores.client.setState({
-            startupDiagnosticsHint: next.bootstrap.diagnosticsHint || null,
-          });
+          clientStatus.setDiagnosticsHint(
+            stores.client,
+            next.bootstrap.diagnosticsHint || null,
+          );
       })
       .catch(() => {});
     return () => {
@@ -127,13 +130,11 @@ export function useSelectionReconcile({
   const agentDid = useStore(store, (state) => state.agentDid);
   const behaviorId = useStore(store, (state) => state.behaviorId);
   const composingFor = useStore(store, (state) => state.composingFor);
-  const firstNode = useStore(stores.fleet, (state) => {
-    const first = state.nodeKeys[0];
-    return first ? (state.nodes[first]?.agentDid ?? null) : null;
-  });
-  const node = useStore(stores.fleet, (state) =>
-    agentDid ? (state.nodes[agentDid] ?? null) : null,
+  const firstNodeDid = useStore(
+    stores.fleet,
+    (state) => firstNode(state)?.agentDid ?? null,
   );
+  const node = useStore(stores.fleet, (state) => nodeOf(state, agentDid));
 
   // Snapshot absence is not an explicit navigation intent. Preserve an
   // existing principal selection while bounded observations catch up; only
@@ -141,8 +142,8 @@ export function useSelectionReconcile({
   // effect runs first in the same commit (it is a child's), so the store,
   // not this render's value, says whether a node is already selected.
   useEffect(() => {
-    if (!store.getState().agentDid && firstNode) actions.selectAgent(firstNode);
-  }, [actions, agentDid, firstNode, store]);
+    if (!store.getState().agentDid && firstNodeDid) actions.selectAgent(firstNodeDid);
+  }, [actions, agentDid, firstNodeDid, store]);
 
   // Read from the stores for the same reason: the route may have selected a
   // node and behavior in this commit. The subscriptions above only rerun it.
