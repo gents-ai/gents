@@ -146,14 +146,13 @@ export function AgentScreen({
             </SelectContent>
           </Select>
         </div>
-        <div className="mx-auto max-w-page px-4 py-6 md:px-8 md:py-8">
-          {section === "agent" && (
-            <AgentPanel
-              key={deployment.agentPrincipal.agentDid}
-
-              deployment={deployment}
-            />
-          )}
+        {/* a panel's drafts and dialogs belong to the agent they were opened
+            on: switching agents starts every panel over */}
+        <div
+          key={deployment.agentDid}
+          className="mx-auto max-w-page px-4 py-6 md:px-8 md:py-8"
+        >
+          {section === "agent" && <AgentPanel deployment={deployment} />}
           {section === "behaviors" && (
             <BehaviorsPanel deployment={deployment} behaviorId={item} />
           )}
