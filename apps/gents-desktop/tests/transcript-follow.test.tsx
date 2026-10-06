@@ -41,36 +41,71 @@ function transcriptFixture() {
   };
 }
 
+/* the reader's own input, then the scroll it makes */
+function readerScrollsTo(viewport: HTMLElement, top: number) {
+  act(() => {
+    viewport.dispatchEvent(new Event("wheel"));
+    viewport.scrollTop = top;
+    viewport.dispatchEvent(new Event("scroll"));
+  });
+}
+
+/* the foot: the end of the content at the bottom of the 200px view */
+const foot = (height: number) => height - 200;
+
 describe("transcript streaming follow", () => {
-  it("stays pinned across growth, releases on scroll up, and relocks at the tip", () => {
+  it("stays pinned across growth, releases on the reader's scroll up, and relocks near the foot", () => {
     const fixture = transcriptFixture();
     const { result } = renderHook(() => useFollowTail(fixture.viewport, "session-1"));
 
-    expect(fixture.viewport.scrollTop).toBe(500);
+    expect(fixture.viewport.scrollTop).toBe(foot(500));
     expect(result.current.atBottom).toBe(true);
 
-    // The model appends a chunk larger than the proximity threshold. Follow is
-    // based on the reader's prior intent, not the newly increased height.
+    // A chunk larger than the view arrives: following is the reader's
+    // standing choice, not a judgment of the new height.
     fixture.growTo(900);
-    expect(fixture.viewport.scrollTop).toBe(900);
+    expect(fixture.viewport.scrollTop).toBe(foot(900));
 
-    act(() => {
-      fixture.viewport.scrollTop = 100;
-      fixture.viewport.dispatchEvent(new Event("scroll"));
-    });
+    readerScrollsTo(fixture.viewport, 100);
     expect(result.current.atBottom).toBe(false);
 
     fixture.growTo(1_200);
     expect(fixture.viewport.scrollTop).toBe(100);
 
+    readerScrollsTo(fixture.viewport, foot(1_200) - 10);
+    expect(result.current.atBottom).toBe(true);
+
+    fixture.growTo(1_500);
+    expect(fixture.viewport.scrollTop).toBe(foot(1_500));
+  });
+
+  it("is not moved off the foot by a scroll the reader did not make", () => {
+    const fixture = transcriptFixture();
+    const { result } = renderHook(() => useFollowTail(fixture.viewport, "session-1"));
+
+    // the browser clamps or resets the position: no wheel, touch or key
     act(() => {
-      fixture.viewport.scrollTop = 1_000;
+      fixture.viewport.scrollTop = 0;
       fixture.viewport.dispatchEvent(new Event("scroll"));
     });
     expect(result.current.atBottom).toBe(true);
 
-    fixture.growTo(1_500);
-    expect(fixture.viewport.scrollTop).toBe(1_500);
+    fixture.growTo(800);
+    expect(fixture.viewport.scrollTop).toBe(foot(800));
+  });
+
+  it("returns to the foot and follows again from the way back", () => {
+    const fixture = transcriptFixture();
+    const { result } = renderHook(() => useFollowTail(fixture.viewport, "session-1"));
+    readerScrollsTo(fixture.viewport, 0);
+    expect(result.current.atBottom).toBe(false);
+
+    act(() => result.current.toBottom());
+    expect(result.current.atBottom).toBe(true);
+    expect(fixture.viewport.scrollTop).toBe(foot(500));
+
+    fixture.growTo(700);
+    expect(fixture.viewport.scrollTop).toBe(foot(700));
   });
 
   it("lands at the foot of a scroller that mounts after its subject was chosen", () => {
@@ -81,7 +116,7 @@ describe("transcript streaming follow", () => {
     );
     fixture.setHeight(800);
     rerender({ scroller: fixture.viewport });
-    expect(fixture.viewport.scrollTop).toBe(800);
+    expect(fixture.viewport.scrollTop).toBe(foot(800));
   });
 
   it("starts a new subject at its foot even after the reader scrolled up", () => {
@@ -92,13 +127,10 @@ describe("transcript streaming follow", () => {
         initialProps: { subject: "a" },
       },
     );
-    act(() => {
-      fixture.viewport.scrollTop = 0;
-      fixture.viewport.dispatchEvent(new Event("scroll"));
-    });
+    readerScrollsTo(fixture.viewport, 0);
     fixture.setHeight(700);
     rerender({ subject: "b" });
-    expect(fixture.viewport.scrollTop).toBe(700);
+    expect(fixture.viewport.scrollTop).toBe(foot(700));
   });
 });
 

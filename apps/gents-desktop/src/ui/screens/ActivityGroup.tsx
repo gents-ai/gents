@@ -6,7 +6,7 @@ import type { RenderedToolCallView } from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
 import { cn } from "@gents/ui/lib/utils";
 import { ToolStep, ToolSteps } from "@gents/ui/conversation";
-import { anchor, useFollowNewest, useScrollEdges } from "@/lib/scroll";
+import { holdRow, useFollowNewest, useScrollEdges } from "@/lib/scroll";
 import {
   Collapsible,
   CollapsibleContent,
@@ -234,11 +234,10 @@ export function ActivityGroup({
         <button
           type="button"
           onClick={() => {
-            /* hold the header under the pointer while the rows move */
-            const restore = anchor(root.current);
+            /* the transcript holds the header still while the rows move */
+            holdRow(root.current);
             setAnimated(true);
             state.setFolded(entry.key, !folded);
-            restore();
           }}
           aria-expanded={!folded}
           aria-busy={live ? true : undefined}
@@ -356,12 +355,11 @@ export function Reasoning({ text }: { text: string }) {
     observer.observe(el);
     return () => observer.disconnect();
   }, [open, all, text]);
-  /* folding thousands of words away moves everything under them; hold the
-     block where the reader left it rather than dropping them elsewhere */
+  /* folding thousands of words away moves everything under them; the
+     transcript holds the block where the reader left it */
   const fold = (next: () => void) => {
-    const restore = anchor(root.current);
+    holdRow(root.current);
     next();
-    restore();
   };
   return (
     <Collapsible

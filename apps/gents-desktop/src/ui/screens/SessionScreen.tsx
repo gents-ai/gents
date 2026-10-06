@@ -246,14 +246,14 @@ export function SessionScreen() {
     [ownScroller],
   );
   /* away from the bottom, a button offers the way back; scrolling is the cue */
-  const { atBottom, toBottom } = useFollowTail(scroller, selectedSessionId);
+  const { atBottom, toBottom, settle } = useFollowTail(scroller, selectedSessionId);
   /* once the full header scrolls out, a condensed one sticks to the top */
   const [condensed, headerEnd] = useHeaderScrolledOut(scroller);
   const choice = useBehaviorChoice();
   const provenance = useSessionProvenance();
   const workers = useWorkers(provenance);
   const parentWork = useParentWork(provenance);
-  const composer = useComposerRoom(column);
+  const composer = useComposerRoom(column, settle);
   /* a person stopping a subagent from here: the canonical interrupt of the
      one request that row's call caused; the row settles when that request
      is terminal */

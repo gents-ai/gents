@@ -44,6 +44,8 @@ async function readInsideReply(page: Page) {
       Array.from(scroller.querySelectorAll("p")).find((p) =>
         p.textContent!.startsWith("Paragraph 12 of"),
       );
+    /* as a reader does: their own wheel, then the scroll it makes */
+    scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -1 }));
     scroller.scrollTop +=
       find()!.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 200;
     const tops: (number | null)[] = [];
