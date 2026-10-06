@@ -105,3 +105,21 @@ test("dragging the divider lays the pane out once, on release", async ({
   /* then laid out once where the divider was let go */
   expect(distinct(widths.map((w) => w.pane))).toHaveLength(2);
 });
+
+/* WebKit restyles everything inside a size container at each width it
+   takes, so a container over the transcript would restyle every row of a
+   long session at each step of a drag or a dock settling. */
+test("nothing over the transcript is a size container", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "webkit-desktop", "one engine");
+  await gotoHarness(page, "mobile-performance");
+  await page.locator('[data-testid="session-session-large"]').click();
+  await page.getByTestId("transcript-panel").getByText("stream-start").last().waitFor();
+  const containers = await page.getByTestId("transcript-panel").evaluate((panel) => {
+    const found: string[] = [];
+    for (let el: Element | null = panel; el; el = el.parentElement)
+      if (getComputedStyle(el).containerType !== "normal")
+        found.push(`${el.tagName.toLowerCase()}.${el.className}`);
+    return found;
+  });
+  expect(containers).toEqual([]);
+});

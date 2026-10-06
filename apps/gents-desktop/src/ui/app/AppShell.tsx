@@ -98,7 +98,7 @@ export function AppShell({
           data-testid="pane"
         >
           <main
-            className="@container relative min-h-0 min-w-0 flex-1 overflow-hidden"
+            className="relative min-h-0 min-w-0 flex-1 overflow-hidden"
             /* The pane's content keeps a width of its own where the card is
                narrower than it should lay out at: past the divider's range it
                keeps its minimum, and while the divider moves it keeps the width
