@@ -7,7 +7,7 @@ import {
   type SessionLoadState,
   type SessionLoadingStatus,
 } from "../lib/loadingStatus";
-import { equal } from "./fleetStore";
+import { equal, shareUnchanged } from "./fleetStore";
 import {
   projectShell,
   projectionInputsOf,
@@ -85,8 +85,8 @@ function viewOf(inputs: ViewInputs): ShellView {
 /**
  * Keeps the view in step with the stores: recomputed when an input
  * changes, synchronously, so an action reading it right after a write sees
- * that write. A part that comes out equal keeps its previous object, so a
- * screen selecting it is not re-rendered; a streamed chunk changes no
+ * that write. A part that comes out equal, at any depth, keeps its previous
+ * object, so a screen selecting it is not re-rendered; a streamed chunk changes no
  * input at all.
  */
 export function createShellView(stores: ShellStores): ShellViewStore {
@@ -97,17 +97,8 @@ export function createShellView(stores: ShellStores): ShellViewStore {
     if (sameInputs(inputs, next)) return;
     inputs = next;
     const prev = view.getState();
-    const fresh = viewOf(next);
-    const kept = Object.fromEntries(
-      Object.entries(fresh).map(([key, value]) => {
-        const before = prev[key as keyof ShellView];
-        return [key, equal(before, value) ? before : value];
-      }),
-    ) as ShellView;
-    if (
-      (Object.keys(kept) as (keyof ShellView)[]).some((key) => kept[key] !== prev[key])
-    )
-      view.setState(kept, true);
+    const kept = shareUnchanged(prev, viewOf(next));
+    if (kept !== prev) view.setState(kept, true);
   };
   stores.selection.subscribe(update);
   stores.session.subscribe(update);
