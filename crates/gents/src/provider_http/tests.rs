@@ -6,7 +6,8 @@ use rig::completion::CompletionModel;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::*;
-use crate::error::{classify_completion_error, InferenceError};
+use crate::error::InferenceError;
+use crate::llm::rig_compat::classify_completion_error;
 
 /// Answers one request with `status`, the extra `headers`, and `body`.
 pub(crate) async fn one_shot_server(

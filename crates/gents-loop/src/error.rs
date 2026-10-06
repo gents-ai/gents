@@ -137,22 +137,102 @@ pub enum HookError {
 /// classified earlier, above this list.
 const PERMANENT_HTTP_STATUSES: &[u16] = &[400, 401, 403, 404, 422, 426];
 
-pub fn classify_completion_error(error: &rig::agent::StreamingError) -> InferenceError {
-    let msg = strip_provider_limit_marker(&error.to_string()).to_string();
+/// What failed in an owned-loop stream, read from the provider client's error
+/// at the `rig_compat` boundary.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LoopFailureCause {
+    /// A provider call failed; `reason` renders the call error alone.
+    Completion {
+        failure: CompletionFailure,
+        reason: String,
+    },
+    /// The turn budget ran out.
+    MaxTurns,
+    /// Another prompt failure, such as cancellation.
+    Prompt,
+    /// The tool set failed.
+    Tool,
+}
+
+/// The kind of a failed provider call.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CompletionFailure {
+    /// The HTTP transport failed.
+    Http,
+    /// The provider, or the loop on its behalf, reported this message.
+    Provider(String),
+    /// The request could not be encoded, addressed or built.
+    Request,
+    /// The provider response could not be decoded.
+    Response,
+}
+
+/// A terminal failure of the owned loop's stream. Display and source chain
+/// are the provider client's error, which failure reasons persist verbatim.
+#[derive(Debug)]
+pub struct LoopStreamError {
+    cause: LoopFailureCause,
+    error: Box<dyn std::error::Error + Send + Sync>,
+}
+
+impl LoopStreamError {
+    pub fn new(
+        cause: LoopFailureCause,
+        error: impl std::error::Error + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            cause,
+            error: Box::new(error),
+        }
+    }
+
+    pub fn cause(&self) -> &LoopFailureCause {
+        &self.cause
+    }
+
+    /// The provider-reported message, if the provider call reported one.
+    pub fn provider_message(&self) -> Option<&str> {
+        match &self.cause {
+            LoopFailureCause::Completion {
+                failure: CompletionFailure::Provider(message),
+                ..
+            } => Some(message),
+            _ => None,
+        }
+    }
+
+    pub fn classify(&self) -> InferenceError {
+        classify_loop_failure(&self.cause, &self.error.to_string())
+    }
+}
+
+impl std::fmt::Display for LoopStreamError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.error.fmt(formatter)
+    }
+}
+
+impl std::error::Error for LoopStreamError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.error.source()
+    }
+}
+
+/// Classify a loop failure whose full rendering is `message`.
+pub fn classify_loop_failure(cause: &LoopFailureCause, message: &str) -> InferenceError {
+    let msg = strip_provider_limit_marker(message).to_string();
 
     if msg.contains("context_length_exceeded") || msg.contains("maximum context length") {
         return InferenceError::ContextLengthExceeded { reason: msg };
     }
 
-    match error {
-        rig::agent::StreamingError::Completion(completion_err) => {
-            let reason = completion_err.to_string();
+    match cause {
+        LoopFailureCause::Completion { failure, reason } => {
             if matches!(
-                completion_err,
-                rig::completion::CompletionError::HttpError(_)
-                    | rig::completion::CompletionError::ProviderError(_)
+                failure,
+                CompletionFailure::Http | CompletionFailure::Provider(_)
             ) {
-                match classify_provider_limit(&reason, chrono::Utc::now()) {
+                match classify_provider_limit(reason, chrono::Utc::now()) {
                     Some(ProviderLimit::UsageExhausted(limit)) => {
                         return InferenceError::UsageLimited(limit);
                     }
@@ -162,16 +242,16 @@ pub fn classify_completion_error(error: &rig::agent::StreamingError) -> Inferenc
                     None => {}
                 }
             }
-            let reason = strip_provider_limit_marker(&reason).to_string();
-            match completion_err {
-                rig::completion::CompletionError::HttpError(_) => {
+            let reason = strip_provider_limit_marker(reason).to_string();
+            match failure {
+                CompletionFailure::Http => {
                     if message_has_any_status(&reason, PERMANENT_HTTP_STATUSES) {
                         InferenceError::PermanentFailure { reason }
                     } else {
                         InferenceError::TransientFailure { reason }
                     }
                 }
-                rig::completion::CompletionError::ProviderError(provider_msg) => {
+                CompletionFailure::Provider(provider_msg) => {
                     let provider_msg_lower = provider_msg.to_ascii_lowercase();
                     if provider_message_is_tool_call_json_parse_failure(provider_msg) {
                         InferenceError::TransientFailure { reason }
@@ -192,17 +272,14 @@ pub fn classify_completion_error(error: &rig::agent::StreamingError) -> Inferenc
                         InferenceError::TransientFailure { reason }
                     }
                 }
-                rig::completion::CompletionError::JsonError(_)
-                | rig::completion::CompletionError::UrlError(_)
-                | rig::completion::CompletionError::RequestError(_) => {
-                    InferenceError::PermanentFailure { reason }
-                }
-                _ => InferenceError::TransientFailure { reason },
+                CompletionFailure::Request => InferenceError::PermanentFailure { reason },
+                CompletionFailure::Response => InferenceError::TransientFailure { reason },
             }
         }
         // Tool and prompt errors are permanent (not retryable).
-        rig::agent::StreamingError::Tool(_) => InferenceError::PermanentFailure { reason: msg },
-        rig::agent::StreamingError::Prompt(_) => InferenceError::PermanentFailure { reason: msg },
+        LoopFailureCause::MaxTurns | LoopFailureCause::Prompt | LoopFailureCause::Tool => {
+            InferenceError::PermanentFailure { reason: msg }
+        }
     }
 }
 

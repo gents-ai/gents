@@ -1060,11 +1060,9 @@ const RIG_OWNER_MODULES: &[&str] = &[
 #[rustfmt::skip]
 const RIG_PATH_ALLOWLIST: &[&str] = &[
     "crates/gents-loop/src/claude_messages_body.rs",
-    "crates/gents-loop/src/error.rs",
     "crates/gents-loop/src/provider_stream.rs",
     "crates/gents-loop/src/provider_usage.rs",
     "crates/gents-loop/src/rendered_request/transport.rs",
-    "crates/gents-loop/src/stream_processor.rs",
     "crates/gents/src/chatgpt_codex.rs",
     "crates/gents/src/claude_messages.rs",
     "crates/gents/src/claude_subscription.rs",
@@ -1072,7 +1070,6 @@ const RIG_PATH_ALLOWLIST: &[&str] = &[
     "crates/gents/src/llm/backend_client.rs",
     "crates/gents/src/oauth_http.rs",
     "crates/gents/src/provider_http.rs",
-    "crates/gents/src/retry.rs",
     "crates/gents/src/usage_observation.rs",
     "crates/gents/src/xai_grok_oauth.rs",
 ];

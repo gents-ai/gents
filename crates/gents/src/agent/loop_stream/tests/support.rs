@@ -499,9 +499,9 @@ pub(super) struct CollectedScriptedStream {
     pub(super) error: Option<String>,
 }
 
-pub(super) async fn collect_scripted_stream<S, R>(stream: S) -> CollectedScriptedStream
+pub(super) async fn collect_scripted_stream<S>(stream: S) -> CollectedScriptedStream
 where
-    S: Stream<Item = Result<LoopStreamItem<R>, StreamingError>>,
+    S: Stream<Item = Result<LoopStreamItem, crate::error::LoopStreamError>>,
 {
     futures::pin_mut!(stream);
     let mut collected = CollectedScriptedStream::default();
@@ -523,25 +523,16 @@ where
             Ok(Some(Ok(LoopStreamItem::TurnRetracted { turn, attempt, .. }))) => {
                 collected.retractions.push((turn, attempt));
             }
-            Ok(Some(Ok(LoopStreamItem::Item(MultiTurnStreamItem::StreamAssistantItem(
-                StreamedAssistantContent::Text(text),
-            ))))) => {
-                collected.text_chunks.push(text.text);
+            Ok(Some(Ok(LoopStreamItem::Text(text)))) => {
+                collected.text_chunks.push(text);
             }
-            Ok(Some(Ok(LoopStreamItem::Item(MultiTurnStreamItem::StreamUserItem(
-                StreamedUserContent::ToolResult { tool_result, .. },
-            ))))) => {
-                collected.tool_results.push(
-                    tool_result_text(&crate::llm::rig_compat::from_rig_tool_result_content(
-                        &tool_result.content.first(),
-                    ))
-                    .to_string(),
-                );
+            Ok(Some(Ok(LoopStreamItem::ToolResult { tool_result, .. }))) => {
+                collected
+                    .tool_results
+                    .push(tool_result_text(&tool_result.content[0]).to_string());
             }
-            Ok(Some(Ok(LoopStreamItem::Item(MultiTurnStreamItem::FinalResponse(
-                final_response,
-            ))))) => {
-                collected.final_text = Some(final_response.response().to_string());
+            Ok(Some(Ok(LoopStreamItem::Final { text }))) => {
+                collected.final_text = Some(text);
             }
             Ok(Some(Ok(_))) => {}
             Ok(Some(Err(error))) => {
@@ -562,7 +553,7 @@ where
 /// daemon loop. Each yielded operation is durably folded before the generator
 /// is polled again, so `ProviderTurnReady` grants dispatch authority before a
 /// following tool call can run.
-pub(super) async fn collect_owned_scripted_stream<S, R>(
+pub(super) async fn collect_owned_scripted_stream<S>(
     stream: S,
     hook: &DefraSessionHook,
     writer: &crate::streaming::DefraStreamWriter,
@@ -570,7 +561,7 @@ pub(super) async fn collect_owned_scripted_stream<S, R>(
     profile: gents_loop::provider_input::ProviderInputProfile,
 ) -> CollectedScriptedStream
 where
-    S: Stream<Item = Result<LoopStreamItem<R>, StreamingError>>,
+    S: Stream<Item = Result<LoopStreamItem, crate::error::LoopStreamError>>,
 {
     collect_owned_scripted_stream_with_capture_scope(stream, hook, writer, lifecycle, profile, None)
         .await
@@ -579,7 +570,7 @@ where
 /// The same owned acceptance driver with an optional durable capture scope.
 /// Most scripted tests use the noop scope; the Claude transport fixture passes
 /// the real DefraDB scope so its replay resolver can verify the captured send.
-pub(super) async fn collect_owned_scripted_stream_with_capture_scope<S, R>(
+pub(super) async fn collect_owned_scripted_stream_with_capture_scope<S>(
     stream: S,
     hook: &DefraSessionHook,
     writer: &crate::streaming::DefraStreamWriter,
@@ -588,7 +579,7 @@ pub(super) async fn collect_owned_scripted_stream_with_capture_scope<S, R>(
     capture_scope: Option<Arc<crate::rendered_request::scope::RequestCaptureScope>>,
 ) -> CollectedScriptedStream
 where
-    S: Stream<Item = Result<LoopStreamItem<R>, StreamingError>>,
+    S: Stream<Item = Result<LoopStreamItem, crate::error::LoopStreamError>>,
 {
     let scope = capture_scope.unwrap_or_else(|| {
         let context = crate::rendered_request::context_for_claimed_request(
@@ -626,19 +617,12 @@ where
                 Ok(LoopStreamItem::TurnRetracted { turn, attempt, .. }) => {
                     collected.retractions.push((*turn, *attempt));
                 }
-                Ok(LoopStreamItem::Item(MultiTurnStreamItem::StreamAssistantItem(
-                    StreamedAssistantContent::Text(text),
-                ))) => collected.text_chunks.push(text.text.clone()),
-                Ok(LoopStreamItem::Item(MultiTurnStreamItem::StreamUserItem(
-                    StreamedUserContent::ToolResult { tool_result, .. },
-                ))) => collected.tool_results.push(
-                    tool_result_text(&crate::llm::rig_compat::from_rig_tool_result_content(
-                        &tool_result.content.first(),
-                    ))
-                    .to_string(),
-                ),
-                Ok(LoopStreamItem::Item(MultiTurnStreamItem::FinalResponse(response))) => {
-                    collected.final_text = Some(response.response().to_string());
+                Ok(LoopStreamItem::Text(text)) => collected.text_chunks.push(text.clone()),
+                Ok(LoopStreamItem::ToolResult { tool_result, .. }) => collected
+                    .tool_results
+                    .push(tool_result_text(&tool_result.content[0]).to_string()),
+                Ok(LoopStreamItem::Final { text }) => {
+                    collected.final_text = Some(text.clone());
                 }
                 Err(error) => collected.error = Some(error.to_string()),
                 _ => {}
