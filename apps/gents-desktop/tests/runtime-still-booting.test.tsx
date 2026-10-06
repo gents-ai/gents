@@ -1,7 +1,7 @@
-import { screen } from "@testing-library/react";
+import { act, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { renderIn, testApp } from "./app-fixture";
+import { publishSnapshot, renderIn, testApp } from "./app-fixture";
 import {
   BridgeInvokeError,
   type DesktopApiAdapter,
@@ -177,5 +177,34 @@ describe("runtimeStillBooting is a wait, not a failure", () => {
     renderIn(testApp({ api }), <LocalServer />);
     expect(await screen.findByText("updating data")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Change access…" })).toBeNull();
+  });
+});
+
+describe("the local server's status", () => {
+  it("keeps the status a stop reported when an older status read lands after it", async () => {
+    const user = userEvent.setup();
+    let late!: (status: ManagedServerStatus) => void;
+    const api = {
+      managedServerStatus: vi
+        .fn()
+        .mockResolvedValue(stopped)
+        .mockResolvedValueOnce(base)
+        /* read when the client changed, answered only after the stop */
+        .mockReturnValueOnce(new Promise((resolve) => (late = resolve))),
+      stopManagedServer: vi.fn(async () => stopped),
+      fetchDesktopSnapshot: vi.fn(async () => ({ bootstrap: {}, client: null })),
+    } as unknown as DesktopApiAdapter;
+    const app = testApp({ api, snapshot: { bootstrap: {}, client: null } });
+    renderIn(app, <LocalServer />);
+    await screen.findByRole("button", { name: "Stop agent" });
+    act(() =>
+      publishSnapshot(app, { bootstrap: { moved: true }, client: null } as never),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Stop agent" }));
+    await screen.findByRole("button", { name: "Start agent" });
+    await act(async () => late(base));
+
+    expect(screen.getByRole("button", { name: "Start agent" })).toBeInTheDocument();
   });
 });
