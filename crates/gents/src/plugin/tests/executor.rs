@@ -409,7 +409,7 @@ mod bound {
             .bind_dir
             .as_mut()
             .unwrap()
-            .write_fields = vec!["output".into()];
+            .write_fields = vec!["output".into(), "delete".into()];
         store::write_record(fx.home.path(), &fx.record).unwrap();
         let tool = tool_for(&fx.home, &fx.record);
         let reader = fx.root.join("docs");
@@ -439,6 +439,19 @@ mod bound {
             assert!(escalation.contains(expected), "{escalation}");
         }
         assert!(!reader.join("out.json").exists());
+        let both = format!(
+            "{:#}",
+            tool.call(
+                serde_json::json!({ "path": reader, "output": "out.json", "delete": true })
+                    .to_string()
+            )
+            .await
+            .unwrap_err()
+        );
+        assert!(
+            both.contains(r#"call again without "output", "delete" to only read"#),
+            "a call that sets two write fields is told to drop both: {both}"
+        );
 
         call(&writer, false).await.unwrap_err();
         assert!(

@@ -61,7 +61,7 @@ fn not_allowed(
     resolved: &allowed::Resolved,
     access: crate::pack::BindAccess,
     granted: Option<crate::pack::BindAccess>,
-    write_field: Option<&str>,
+    write_fields: &[&str],
     context: &BindContext<'_>,
 ) -> String {
     let flag = match access {
@@ -77,12 +77,17 @@ fn not_allowed(
         "allow it with `gents plugin dirs add {}{flag}`",
         resolved.folder().display()
     );
-    match (granted, write_field) {
-        (Some(crate::pack::BindAccess::Read), Some(field)) => format!(
-            "{} is allowed read-only and this call writes because it sets {field:?} ({asked}{allow}, or call again without {field:?} to only read)",
+    let fields = write_fields
+        .iter()
+        .map(|field| format!("{field:?}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    match granted {
+        Some(crate::pack::BindAccess::Read) if !write_fields.is_empty() => format!(
+            "{} is allowed read-only and this call writes because it sets {fields} ({asked}{allow}, or call again without {fields} to only read)",
             resolved.target.display(),
         ),
-        (Some(crate::pack::BindAccess::Read), None) => format!(
+        Some(crate::pack::BindAccess::Read) => format!(
             "{} is allowed read-only and this plugin writes on every call ({asked}{allow})",
             resolved.target.display(),
         ),
@@ -248,7 +253,7 @@ impl PluginExecutor {
                     &resolved,
                     access,
                     granted,
-                    binding.write_field_set(input),
+                    &binding.write_fields_set(input),
                     context,
                 )));
             }

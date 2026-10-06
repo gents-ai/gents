@@ -274,24 +274,25 @@ impl PluginDirBinding {
         match self.access {
             BindAccess::Read => BindAccess::Read,
             BindAccess::ReadWrite if self.write_fields.is_empty() => BindAccess::ReadWrite,
-            BindAccess::ReadWrite => match self.write_field_set(arguments) {
-                Some(_) => BindAccess::ReadWrite,
-                None => BindAccess::Read,
-            },
+            BindAccess::ReadWrite if self.write_fields_set(arguments).is_empty() => {
+                BindAccess::Read
+            }
+            BindAccess::ReadWrite => BindAccess::ReadWrite,
         }
     }
 
-    /// The first declared write field `arguments` sets, the one an error
-    /// names when that call is refused for writing.
-    pub fn write_field_set(&self, arguments: &serde_json::Value) -> Option<&str> {
+    /// The declared write fields `arguments` sets, the ones an error names
+    /// when that call is refused for writing.
+    pub fn write_fields_set(&self, arguments: &serde_json::Value) -> Vec<&str> {
         self.write_fields
             .iter()
-            .find(|field| {
+            .filter(|field| {
                 arguments
                     .get(field.as_str())
                     .is_some_and(|value| !value.is_null())
             })
             .map(String::as_str)
+            .collect()
     }
 }
 
