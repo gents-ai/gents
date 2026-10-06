@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct Task {
-    pub agent_did: String,
+    pub node_did: String,
     pub task_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
@@ -17,7 +17,7 @@ pub struct Task {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub description: Option<String>,
-    pub behavior_id: String,
+    pub agent_id: String,
     pub prompt_template: String,
     /// Emit one durable FireOutcome at the request or Goal terminal boundary.
     /// Outcome consumers must leave this disabled.

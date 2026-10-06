@@ -10,13 +10,13 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-pub struct SubagentTargetDocument {
+pub struct AgentTargetDocument {
     pub target_id: String,
     /// Principal that owns this target configuration (DefraDB ACP applies).
-    pub agent_did: String,
+    pub node_did: String,
     /// Principal that owns the destination behavior.
-    pub target_agent_did: String,
-    pub behavior_id: String,
+    pub target_node_did: String,
+    pub agent_id: String,
     /// Friendly callable name exposed to the model.
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -11,7 +11,7 @@ use crate::openai_wire::OpenAiWireApi;
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct InferenceBackend {
-    pub agent_did: String,
+    pub node_did: String,
     pub backend_id: String,
     pub name: String,
     pub provider_kind: BackendProviderKind,
@@ -156,7 +156,7 @@ impl BackendAuth {
 pub struct BackendModelCatalog {
     /// None denotes the backend's shared credential scope; Some identifies the
     /// principal whose existing OAuthCredential was used. Never contains secrets.
-    pub agent_did: Option<String>,
+    pub node_did: Option<String>,
     /// Successful observation time. A failed refresh must not erase a prior
     /// catalog or claim it was freshly observed. Health remains separately owned.
     pub observed_at: String,

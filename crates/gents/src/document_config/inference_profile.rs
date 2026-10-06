@@ -12,7 +12,7 @@ use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct InferenceProfile {
-    pub agent_did: String,
+    pub node_did: String,
     pub profile_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
