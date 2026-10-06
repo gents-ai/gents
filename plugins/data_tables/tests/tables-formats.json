@@ -547,7 +547,8 @@
       }
     ],
     "warnings": [
-      "1 repeated column name got a number added (name_2, name_3)",
+      "2 repeated column names got a number added (name_2, name_3)",
+      "1 empty column name was named column_<position>",
       "people.parquet is the table people_2",
       "rows with fewer than 3 fields were padded with NULL (first on line 3)",
       "cells holding spreadsheet errors (such as #DIV/0!) were read as NULL"
