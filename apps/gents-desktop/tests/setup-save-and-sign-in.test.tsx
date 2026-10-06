@@ -11,7 +11,8 @@ import type {
   DesktopApiAdapter,
   DesktopClientSnapshot,
 } from "@source-inc/gents-desktop-client";
-import { SetupScreen, type ProviderId } from "../src/ui/screens/setup/SetupScreen";
+import { SetupScreen } from "../src/ui/screens/setup/SetupScreen";
+import type { ProviderId } from "../src/ui/screens/setup/InferenceSetup";
 import { createDesktopUiHarness } from "./ui-harness/desktopHarness";
 
 const AGENT = "did:key:z6MkBombadilAgent";

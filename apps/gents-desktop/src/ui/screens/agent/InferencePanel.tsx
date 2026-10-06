@@ -7,7 +7,8 @@ import type { NodeView } from "../../../hooks/fleetStore";
 import { setEnabled } from "./enabled";
 import { dependentsWarning } from "./dependents";
 import { useEffect, useRef, useState } from "react";
-import { PROVIDER_VISUALS, SetupScreen, type ProviderId } from "../setup/SetupScreen";
+import { SetupScreen } from "../setup/SetupScreen";
+import { PROVIDER_VISUALS, type ProviderId } from "../setup/InferenceSetup";
 import { toast } from "sonner";
 import type {
   DesktopApiAdapter,
