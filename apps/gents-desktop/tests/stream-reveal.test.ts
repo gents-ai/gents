@@ -14,7 +14,12 @@ import {
   revealedText,
   stepReveal,
 } from "@/screens/stream-reveal";
-import { assistantMessage, liveAssistant, userMessage } from "./timeline-fixture";
+import {
+  assistantMessage,
+  liveAssistant,
+  pendingUserTurn,
+  userMessage,
+} from "./timeline-fixture";
 
 const FRAME = 16;
 
@@ -237,6 +242,46 @@ describe("the keys replies are drawn under", () => {
     const once = drawKeys(streaming, [message("One")], "a-r1", "s");
     const twice = drawKeys(once, [message("One")], "a-r1", "s");
     expect(drawKey(twice, message("One"))).toBe(drawKey(once, message("One")));
+  });
+
+  it("draws a saved message under the key of the pending turn it replaces", () => {
+    const pending = pendingUserTurn({
+      itemKey: "pending-r2",
+      requestId: "r2",
+      content: "again",
+    });
+    const saved = userMessage({
+      kind: "userMessage",
+      itemKey: "u2",
+      requestId: "r2",
+      sequence: 3,
+      content: "again",
+      timestamp: null,
+    });
+    const sent = drawKeys(noDrawKeys("s"), [person, pending], undefined, "s");
+    const settled = drawKeys(sent, [person, saved], undefined, "s");
+    expect(drawKey(settled, saved)).toBe(drawKey(sent, pending));
+  });
+
+  it("keeps a saved message's own key while its pending turn is still shown", () => {
+    const pending = pendingUserTurn({
+      itemKey: "pending-r2",
+      requestId: "r2",
+      content: "again",
+    });
+    const saved = userMessage({
+      kind: "userMessage",
+      itemKey: "u2",
+      requestId: "r2",
+      sequence: 3,
+      content: "again",
+      timestamp: null,
+    });
+    const sent = drawKeys(noDrawKeys("s"), [pending], undefined, "s");
+    const both = drawKeys(sent, [pending, saved], undefined, "s");
+    const after = drawKeys(both, [saved], undefined, "s");
+    expect(drawKey(both, saved)).toBe("u2");
+    expect(drawKey(after, saved)).toBe("u2");
   });
 
   it("starts again for another session", () => {

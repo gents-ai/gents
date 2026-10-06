@@ -200,14 +200,20 @@ export function holdLive(
   };
 }
 
-/* The keys a transcript draws its replies under. The bridge names every
-   turn's live tail alike, so each tail is drawn under a key of its own, and
-   the message that replaces it keeps that key for as long as it is drawn. */
+/* The keys a transcript draws its turns under. Two items stand in for
+   one another as a turn settles, each under its own key: the live tail and
+   the message that replaces it, and the pending turn and the person's saved
+   message. Drawn under their own keys, React removes one's rows and inserts
+   the other's, and the browser lays the page out between the two. Each is
+   drawn under the key of the item it replaces instead. The bridge names
+   every turn's live tail alike, so each tail gets a key of its own. */
 export type DrawKeys = {
   sessionId: string | null;
   tail: string | null;
   inherited: ReadonlyMap<string, string>;
   tails: number;
+  /** pending turns seen, by request, until their saved message is */
+  pending: ReadonlyMap<string, string>;
 };
 
 export const noDrawKeys = (sessionId: string | null): DrawKeys => ({
@@ -215,6 +221,7 @@ export const noDrawKeys = (sessionId: string | null): DrawKeys => ({
   tail: null,
   inherited: new Map(),
   tails: 0,
+  pending: new Map(),
 });
 
 /* `replacedBy` is the message that just ended the hold (`holdLive`). */
@@ -234,6 +241,30 @@ export function drawKeys(
   }
   if (!next.tail && items.some((i) => i.kind === "liveAssistant")) {
     next = { ...next, tail: `reply-${next.tails + 1}`, tails: next.tails + 1 };
+  }
+  for (const item of items) {
+    if (item.kind === "pendingUserTurn" && !next.pending.has(item.requestId)) {
+      next = {
+        ...next,
+        pending: new Map(next.pending).set(item.requestId, item.itemKey),
+      };
+    }
+    const requestId = item.kind === "userMessage" ? item.requestId : null;
+    const pendingKey = requestId ? next.pending.get(requestId) : undefined;
+    if (!requestId || pendingKey === undefined) continue;
+    /* decided once, when the saved message first shows: it takes the
+       pending turn's key only if that turn has gone, so two rows never
+       share one key and a row's key never changes after it is drawn */
+    const pending = new Map(next.pending);
+    pending.delete(requestId);
+    const replaced = !items.some((i) => i.itemKey === pendingKey);
+    next = {
+      ...next,
+      pending,
+      inherited: replaced
+        ? new Map(next.inherited).set(item.itemKey, pendingKey)
+        : next.inherited,
+    };
   }
   return next;
 }

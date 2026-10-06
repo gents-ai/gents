@@ -152,6 +152,11 @@ export type MobilePerformanceHarnessController = {
    * as the bridge renders it) or not yet, the turn running or completed.
    */
   endReply(step: { live: "keep" | "drop"; saved: boolean; completed: boolean }): void;
+  /**
+   * A message the person sent, as the bridge shows it: first the pending
+   * turn, then the saved message under its own key, before the live tail.
+   */
+  userTurn(stage: "pending" | "saved"): void;
 };
 
 export type SessionSyncHarnessController = {
@@ -2508,6 +2513,44 @@ export function createDesktopUiHarness(
               turnState: completed ? "completed" : "running",
               timelineItems,
             });
+            syncSessions();
+            notify("store");
+          },
+          userTurn(stage) {
+            const session = sessions.get("session-large");
+            if (!session) {
+              throw new Error("mobile performance fixture lost session-large");
+            }
+            const requestId = "large-request-sent";
+            const turn =
+              stage === "pending"
+                ? {
+                    kind: "pendingUserTurn" as const,
+                    itemKey: `pending-${requestId}`,
+                    requestId,
+                    content: "again",
+                    selectedSkillIds: [],
+                    lifecycleState: "pending",
+                    createdAt: STARTED_AT,
+                  }
+                : {
+                    kind: "userMessage" as const,
+                    itemKey: "large-user-sent",
+                    requestId,
+                    sequence: session.timelineItems.length,
+                    content: "again",
+                    timestamp: STARTED_AT,
+                    reconstruction: HARNESS_READY_RECONSTRUCTION,
+                  };
+            const without = session.timelineItems.filter(
+              (item) => !("requestId" in item) || item.requestId !== requestId,
+            );
+            const tailAt = without.findIndex((item) => item.kind === "liveAssistant");
+            const timelineItems =
+              tailAt < 0
+                ? [...without, turn]
+                : [...without.slice(0, tailAt), turn, ...without.slice(tailAt)];
+            sessions.set("session-large", { ...session, timelineItems });
             syncSessions();
             notify("store");
           },

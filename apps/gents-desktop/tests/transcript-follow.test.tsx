@@ -94,6 +94,19 @@ describe("transcript streaming follow", () => {
     expect(fixture.viewport.scrollTop).toBe(foot(800));
   });
 
+  it("leaves a scroll the reader did not make where it lands", () => {
+    const fixture = transcriptFixture();
+    const { result } = renderHook(() => useFollowTail(fixture.viewport, "session-1"));
+    // find-in-page or focus moving into the transcript: no wheel, touch or
+    // key, and the view is not dragged back to the foot
+    act(() => {
+      fixture.viewport.scrollTop = 40;
+      fixture.viewport.dispatchEvent(new Event("scroll"));
+    });
+    expect(fixture.viewport.scrollTop).toBe(40);
+    expect(result.current.atBottom).toBe(true);
+  });
+
   it("returns to the foot and follows again from the way back", () => {
     const fixture = transcriptFixture();
     const { result } = renderHook(() => useFollowTail(fixture.viewport, "session-1"));

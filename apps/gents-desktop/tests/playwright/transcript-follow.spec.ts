@@ -63,3 +63,36 @@ test.describe("a reader scrolled up in a transcript", () => {
     expect(await viewport.evaluate((scroller) => scroller.scrollTop)).toBe(before);
   });
 });
+
+/* Following at the foot, the view stays there when the message the person
+   sent is replaced by its saved copy. */
+test("stays at the foot when a sent message is saved", async ({ page }, testInfo) => {
+  test.skip(
+    !["webkit-desktop", "chromium-desktop"].includes(testInfo.project.name),
+    "one layout per engine",
+  );
+  await gotoHarness(page, "mobile-performance");
+  await page.locator('[data-testid="session-session-large"]').click();
+  await page.getByTestId("transcript-panel").getByText("stream-start").last().waitFor();
+  await page.evaluate(() => window.__GENTS_MOBILE_PERFORMANCE__!.userTurn("pending"));
+  await expect(page.getByTestId("transcript-panel").getByText("again")).toBeVisible();
+  await page.waitForTimeout(300);
+  const viewport = page.locator('[data-slot="scroll-area-viewport"][data-following]');
+  await viewport.evaluate((scroller) => {
+    const gaps: number[] = [];
+    const tick = () => {
+      gaps.push(
+        Math.round(scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight),
+      );
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+    Object.assign(window, { __footGaps: gaps });
+  });
+  await page.evaluate(() => window.__GENTS_MOBILE_PERFORMANCE__!.userTurn("saved"));
+  await page.waitForTimeout(600);
+  const gaps = await page.evaluate(
+    () => (window as unknown as { __footGaps: number[] }).__footGaps,
+  );
+  expect([...new Set(gaps)].filter((gap) => gap > 1)).toEqual([]);
+});
