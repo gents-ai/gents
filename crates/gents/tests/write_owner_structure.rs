@@ -1083,10 +1083,19 @@ struct RigPathVisitor {
     sites: usize,
 }
 
+/// An owner names a file, or a module whose `.rs` file and directory it owns.
+fn owned_by(relative: &str, owner: &str) -> bool {
+    relative == owner
+        || relative
+            .strip_prefix(owner)
+            .is_some_and(|rest| rest == ".rs" || rest.starts_with('/'))
+}
+
 fn rig_use_roots(tree: &syn::UseTree) -> usize {
     match tree {
         syn::UseTree::Path(syn::UsePath { ident, .. })
-        | syn::UseTree::Rename(syn::UseRename { ident, .. }) => usize::from(ident == "rig"),
+        | syn::UseTree::Rename(syn::UseRename { ident, .. })
+        | syn::UseTree::Name(syn::UseName { ident }) => usize::from(ident == "rig"),
         syn::UseTree::Group(group) => group.items.iter().map(rig_use_roots).sum(),
         _ => 0,
     }
@@ -1189,7 +1198,7 @@ fn rig_types_stay_behind_their_owners() {
         .filter(|(relative, _)| {
             !RIG_OWNER_MODULES
                 .iter()
-                .any(|owner| relative.starts_with(owner))
+                .any(|owner| owned_by(relative, owner))
         })
         .filter(|(_, syntax)| rig_path_sites(syntax) > 0)
         .map(|(relative, _)| relative)
@@ -1220,6 +1229,23 @@ fn rig_types_stay_behind_their_owners() {
 }
 
 #[test]
+fn rig_owners_match_whole_module_paths() {
+    let owner = "crates/gents-loop/src/provider_input";
+    assert!(owned_by("crates/gents-loop/src/provider_input.rs", owner));
+    assert!(owned_by(
+        "crates/gents-loop/src/provider_input/budget.rs",
+        owner
+    ));
+    assert!(!owned_by(
+        "crates/gents-loop/src/provider_input_budget.rs",
+        owner
+    ));
+    let file = "crates/gents-loop/src/rig_compat.rs";
+    assert!(owned_by(file, file));
+    assert!(!owned_by("crates/gents-loop/src/rig_compat.rs.bak", file));
+}
+
+#[test]
 fn rig_fence_counts_paths_uses_and_macros_outside_tests() {
     for (source, sites) in [
         ("use rig::completion::Usage;", 1),
@@ -1227,6 +1253,8 @@ fn rig_fence_counts_paths_uses_and_macros_outside_tests() {
         ("use rig as provider;", 1),
         ("extern crate rig as provider;", 1),
         ("use {rig as provider};", 1),
+        ("pub use rig;", 1),
+        ("pub use {rig};", 1),
         ("fn f(u: rig::completion::Usage) {}", 1),
         (
             "fn f() { let s = try_stream! { rig::streaming::x(); }; }",
