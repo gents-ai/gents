@@ -118,6 +118,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@gents/ui/components/po
 import { ReplyingTo } from "./ReplyingTo";
 import { useExclusivePopover } from "@/hooks/useExclusivePopover";
 import { workspace } from "@/app/workspace";
+import { useCopied } from "@/lib/clipboard";
 import { toastFailure } from "@/lib/failure";
 import {
   useSelectedSession,
@@ -1029,20 +1030,7 @@ function AssistantContent({ itemKey, content }: { itemKey: string; content: stri
 /* Under a finished response the actions sit on the line below the answer
    and stay there, rather than floating over it on hover. Copy takes the response as written — its markdown — and says so. */
 function ResponseActions({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => () => void (timer.current && clearTimeout(timer.current)), []);
-  const copy = () => {
-    navigator.clipboard
-      ?.writeText(text)
-      .then(() => {
-        setCopied(true);
-        if (timer.current) clearTimeout(timer.current);
-        timer.current = setTimeout(() => setCopied(false), 1200);
-      })
-      /* the clipboard may refuse; the check only claims a copy that happened */
-      .catch(() => {});
-  };
+  const { copied, copy } = useCopied();
   return (
     /* on a desktop they wait for the pointer, like a step's caret: an
        answer reads as the end of the turn, not as a row of controls. The
@@ -1061,7 +1049,7 @@ function ResponseActions({ text }: { text: string }) {
           variant="quiet"
           size="icon-xs"
           aria-label="Copy response"
-          onClick={copy}
+          onClick={() => copy(text)}
         >
           {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
         </Button>
