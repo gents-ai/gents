@@ -7,14 +7,21 @@ import type {
   ToolDiffLineView,
   ToolPresentationView,
 } from "@source-inc/gents-desktop-client";
-import { shortPath } from "./tool-runs";
 import type { ToolStepStatus } from "@gents/ui/conversation";
 
-/* `cd <somewhere> && real-command …` is how a shell tool is usually
-   called, and the cd is scaffolding: a real export had it leading 1,037 of
-   1,525 commands. The row says what ran; the body still has the whole of
-   it, exactly as it was issued. */
-export { shortPath };
+/* An absolute path inside a checkout is mostly the checkout: every row in a
+   real session began with the same forty characters of home directory and
+   repo. Keep the tail, which is what tells two rows apart, and let the
+   title carry the rest. */
+export const shortPath = (path: string, keep = 3): string => {
+  /* a machine that separates with a backslash has the same long prefix to
+     lose, and a drive letter is as absolute as a leading slash */
+  const sep = path.includes("\\") && !path.includes("/") ? "\\" : "/";
+  const absolute = path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path);
+  const segments = path.split(/[\\/]/).filter(Boolean);
+  if (!absolute || segments.length <= keep) return path;
+  return `…${sep}${segments.slice(-keep).join(sep)}`;
+};
 
 /* leading VAR=value assignments before a command; the command is what reads */
 const ASSIGNMENTS = /^(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S*)(?:\s+|$))+/;

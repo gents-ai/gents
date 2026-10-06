@@ -92,7 +92,7 @@ import { SessionLoading } from "./SessionLoading";
 import { StreamContext, StreamText } from "./StreamText";
 import { createHandoff, holdLive, type HeldLive } from "./stream-reveal";
 import { ToolBody } from "./tool-views";
-import { foldWorkers, workerStory } from "./tool-runs";
+import { gatherWorkers, workerStory, type GatheredWorker } from "./worker-gathering";
 import { SubagentList, WorkerStep, isWorkerStep } from "./WorkerStep";
 import { NO_WORKERS, useSessionProvenance, useWorkers, type Workers } from "./workers";
 import { useParentWork, type ParentWork } from "./parentWork";
@@ -624,29 +624,22 @@ function WorkerRunStep({
   );
 }
 
-/* A worker's scattered steps gathered as one row inside its group: the
-   fold the transcript made before groups (tool-runs.ts, foldWorkers), kept
-   because a dozen rows about five workers read as nothing. A run of
-   similar calls is the group itself now, so runs are not folded again. */
-type PlacedMember =
-  GroupMember | { kind: "worker"; key: string; tools: RenderedToolCallView[] };
+/* A worker's scattered steps as one row inside its group, at its first step. */
+type PlacedMember = GroupMember | ({ kind: "worker" } & GatheredWorker);
 
 function placeWorkers(members: GroupMember[]): PlacedMember[] {
-  const workersByTool = new Map<string, Extract<PlacedMember, { kind: "worker" }>>();
-  for (const run of foldWorkers(groupTools(members)))
-    if (run.kind === "worker")
-      for (const tool of run.tools) workersByTool.set(tool.itemKey, run);
+  const gathered = gatherWorkers(groupTools(members));
   const placed = new Set<string>();
   const out: PlacedMember[] = [];
   for (const m of members) {
-    const worker = m.kind === "tool" ? workersByTool.get(m.key) : undefined;
+    const worker = m.kind === "tool" ? gathered.get(m.key) : undefined;
     if (!worker) {
       out.push(m);
       continue;
     }
     if (placed.has(worker.key)) continue;
     placed.add(worker.key);
-    out.push(worker);
+    out.push({ kind: "worker", ...worker });
   }
   return out;
 }
