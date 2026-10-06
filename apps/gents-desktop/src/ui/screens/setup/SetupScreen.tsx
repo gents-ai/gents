@@ -1,6 +1,7 @@
 import type { DesktopClientSnapshot } from "@source-inc/gents-desktop-client";
 
-import { InferenceSetup, type ProviderId } from "./InferenceSetup";
+import { InferenceSetup } from "./InferenceSetup";
+import type { ProviderId } from "./inferenceSetupForm";
 import { OnboardingWizard } from "./OnboardingWizard";
 
 /** Setup, in either of its flows: first run (from where the agent lives

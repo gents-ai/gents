@@ -60,11 +60,7 @@ export function createProviderReads({ api, store, client }: ProviderReadParams) 
         (catalog) => {
           if (catalog) providers.catalogRead(store, catalog);
         },
-        (error: unknown) =>
-          providers.catalogFailed(
-            store,
-            error instanceof Error ? error.message : String(error),
-          ),
+        (cause: unknown) => providers.catalogFailed(store, { cause }),
       )
       .finally(() => {
         catalogRead = null;

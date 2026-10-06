@@ -2,7 +2,7 @@
    and its defaults, and save them in one operator transaction. Shared by
    first run, setup re-entry and adding a backend from the agent screen.
    Provider/model guidance comes from the versioned Rust contract. */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import {
   ArrowRight,
   CircleCheck,
@@ -14,12 +14,7 @@ import {
 import type {
   DesktopClientSnapshot,
   InferenceAuthMethod,
-  InferenceDiscoveryResult,
   InferenceModelOption,
-  InferenceModelRecommendation,
-  InferenceProviderId,
-  InferenceSetupCatalog,
-  ProviderAccountView,
 } from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
 import { Input } from "@gents/ui/components/input";
@@ -53,26 +48,25 @@ import {
 import { buildInferenceSetupPlan } from "@/lib/inferenceSetupPersistence";
 import {
   InferenceModelControls,
-  recommendedInferenceSettings,
   validateInferenceSettings,
-  type InferenceSettingsDraft,
 } from "../inference/InferenceModelControls";
 import { useApp } from "@/app/AppContext";
 import { useBootstrap, useSelectedNode } from "@/hooks/useClient";
 import { useFleet } from "@/hooks/useFleet";
 import { nodeOf } from "../../../hooks/fleetStore";
 import { Field, Frame, Nav, Option, Title } from "./parts";
+import { useSetupCatalog } from "@/hooks/useProviders";
+import {
+  connectionDefaults,
+  initialSetupForm,
+  setupFormReducer,
+  type ConnectionDraft,
+  type ProviderId,
+} from "./inferenceSetupForm";
 
 /* The runtime confirms a save only after it reconciles the new documents,
    starts the rebound behavior and replicates its readiness back. */
 const SAVE_CONFIRMATION_TIMEOUT_MS = 15_000;
-
-export type ProviderId = InferenceProviderId;
-type ConnectionDraft = {
-  authMethod: InferenceAuthMethod;
-  endpoint: string;
-  apiKey: string;
-};
 
 export const PROVIDER_VISUALS: Record<
   ProviderId,
@@ -102,36 +96,6 @@ const oauthProviderFor = (method: InferenceAuthMethod): OauthProvider | null =>
       : method === "grok_oauth"
         ? "grok"
         : null;
-
-export function providerSignInState(accounts: readonly ProviderAccountView[]) {
-  const next: Partial<Record<ProviderId, string>> = {};
-  for (const [providerId, credentialKind] of Object.entries(PROVIDER_CREDENTIAL_KIND)) {
-    const account = accounts.find(
-      (entry) =>
-        entry.enabled && !entry.pendingSave && entry.provider === credentialKind,
-    );
-    if (account) next[providerId as OauthProvider] = account.credentialId;
-  }
-  return next;
-}
-
-/** Providers whose completed sign-in the bridge holds after a failed save. */
-export function providerPendingSaveState(accounts: readonly ProviderAccountView[]) {
-  const next: Partial<Record<ProviderId, true>> = {};
-  for (const [providerId, credentialKind] of Object.entries(PROVIDER_CREDENTIAL_KIND)) {
-    if (
-      accounts.some((entry) => entry.pendingSave && entry.provider === credentialKind)
-    )
-      next[providerId as OauthProvider] = true;
-  }
-  return next;
-}
-
-function withoutProvider<T>(state: Partial<Record<ProviderId, T>>, id: ProviderId) {
-  const next = { ...state };
-  delete next[id];
-  return next;
-}
 
 const notAdded = (label: string) =>
   `This sign-in refreshed the account stored as ${label}. No account was added.`;
@@ -164,28 +128,44 @@ export function InferenceSetup({
   } = useApp();
   const selectedNode = useSelectedNode();
   const allowLocal = supportsLocalManagedServer();
-  const [busy, setBusy] = useState(false);
-  /* which account operation holds busy, so its controls say what is running
-     and Cancel only ever cancels a sign-in */
-  const [accountOp, setAccountOp] = useState<"signIn" | "retrySave" | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [form, dispatch] = useReducer(
+    setupFormReducer,
+    fixedProvider,
+    initialSetupForm,
+  );
   const [managedWait, setManagedWait] = useState<ManagedServerWait | null>(null);
-  const [catalog, setCatalog] = useState<InferenceSetupCatalog | null>(null);
-  /* a failed catalog read, kept apart from the form's error; clearing it
-     reads the catalog again */
-  const [catalogFailure, setCatalogFailure] = useState<string | null>(null);
-  const [provider, setProvider] = useState<ProviderId>(fixedProvider ?? "openai");
-  const [connections, setConnections] = useState<
-    Partial<Record<ProviderId, ConnectionDraft>>
-  >({});
-  const [signedIn, setSignedIn] = useState<Partial<Record<ProviderId, string>>>({});
-  const [storedAccounts, setStoredAccounts] = useState<ProviderAccountView[]>([]);
-  const [accountLabel, setAccountLabel] = useState("");
-  const [signInHint, setSignInHint] = useState<string | null>(null);
+  const { catalog, error: catalogFailure, retry: retryCatalog } = useSetupCatalog();
+  const busy = form.op !== null;
+  const { error, runtimeGate, accountLabel, signInHint, authUrl } = form;
+  const { signedIn, pendingSave, stored: storedAccounts } = form.accounts;
+  const {
+    discovery,
+    search: modelSearch,
+    pickerOpen: modelPickerOpen,
+    name: model,
+    manual: manualModel,
+    recommendation: selectedRecommendation,
+    settings,
+    customize,
+  } = form.model;
+  /* which account operation holds the form, so its controls say what is
+     running and Cancel only ever cancels a sign-in */
+  const accountOp = form.op === "signIn" || form.op === "retrySave" ? form.op : null;
+  const provider: ProviderId = form.provider ?? catalog?.providers[0]?.id ?? "openai";
+  const providerOption = catalog?.providers.find((option) => option.id === provider);
+  const edited = form.connections[provider];
+  const connection = useMemo(
+    () => edited ?? (providerOption ? connectionDefaults(providerOption) : undefined),
+    [edited, providerOption],
+  );
+  /* reads that answer for another agent, or before a sign-in that changed
+     what they would say, are dropped */
   const accountRevision = useRef(0);
   const setupAgentDid = agentDid ?? selectedNode?.agentDid;
   const setupAgentDidRef = useRef(setupAgentDid);
   setupAgentDidRef.current = setupAgentDid;
+  const discoveryRevision = useRef(0);
+  const currentDiscoveryKey = useRef("");
   /* Setup re-entry opens at the provider step without first run's
      provisioning, so a local agent's managed runtime may not be serving.
      Provider sign-in and the final save both write through it. */
@@ -197,23 +177,22 @@ export function InferenceSetup({
     setupDeployment &&
     isLocalAgent(setupDeployment, bootstrap?.initAgentDid),
   );
-  const [runtimeGate, setRuntimeGate] = useState<
-    "idle" | "checking" | "ready" | "unavailable"
-  >("idle");
   const runtimeFallbackName = bootstrap?.initAgentName?.trim() || "Local Agent";
   const checkManagedRuntime = async () => {
-    setRuntimeGate("checking");
-    setError(null);
+    dispatch({ type: "runtimeGate", gate: "checking" });
     try {
       await ensureManagedRuntimeServing(api, runtimeFallbackName, {
         onWait: setManagedWait,
       });
-      setRuntimeGate("ready");
+      dispatch({ type: "runtimeGate", gate: "ready" });
       /* Account lookup goes through the runtime, so repeat it once it serves. */
       if (setupAgentDidRef.current) void observeAccounts(setupAgentDidRef.current);
     } catch (cause) {
-      setRuntimeGate("unavailable");
-      setError(setupErrorMessage(cause));
+      dispatch({
+        type: "runtimeGate",
+        gate: "unavailable",
+        error: setupErrorMessage(cause),
+      });
     }
   };
   useEffect(() => {
@@ -221,13 +200,11 @@ export function InferenceSetup({
     void checkManagedRuntime();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [requiresManagedRuntime, runtimeGate]);
-  const [pendingSave, setPendingSave] = useState<Partial<Record<ProviderId, true>>>({});
-  /* Sign-in state is known, so a chosen provider may start its sign-in. */
-  const [accountsObserved, setAccountsObserved] = useState(false);
   const observeAccounts = (agentDid: string) => {
     const revision = ++accountRevision.current;
+    const seedSignedIn = purpose !== "add-backend";
     if (!api.listProviderAccounts) {
-      setAccountsObserved(true);
+      dispatch({ type: "accountsRead", accounts: [], seedSignedIn: false });
       return Promise.resolve();
     }
     return api
@@ -238,11 +215,7 @@ export function InferenceSetup({
           setupAgentDidRef.current !== agentDid
         )
           return;
-        setStoredAccounts(accounts);
-        /* adding a backend signs in a further account; only its own sign-in connects */
-        if (purpose !== "add-backend") setSignedIn(providerSignInState(accounts));
-        setPendingSave(providerPendingSaveState(accounts));
-        setAccountsObserved(true);
+        dispatch({ type: "accountsRead", accounts, seedSignedIn });
       })
       .catch(() => {
         /* Sign-in remains available if account lookup fails, but only a
@@ -250,9 +223,7 @@ export function InferenceSetup({
       });
   };
   useEffect(() => {
-    setSignedIn({});
-    setPendingSave({});
-    setAccountsObserved(false);
+    dispatch({ type: "accountsCleared" });
     if (!setupAgentDid) {
       accountRevision.current += 1;
       return;
@@ -260,45 +231,6 @@ export function InferenceSetup({
     void observeAccounts(setupAgentDid);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api, setupAgentDid]);
-  const [authUrl, setAuthUrl] = useState<string | null>(null);
-  /* The provider the user just chose, whose sign-in starts without a click. */
-  const autoSignIn = useRef<ProviderId | null>(fixedProvider ?? null);
-  const [autoSignInRequest, setAutoSignInRequest] = useState(0);
-  const [discovery, setDiscovery] = useState<InferenceDiscoveryResult | null>(null);
-  const [modelSearch, setModelSearch] = useState("");
-  const [modelPickerOpen, setModelPickerOpen] = useState(true);
-  const [model, setModel] = useState("");
-  const [manualModel, setManualModel] = useState(false);
-  const [settings, setSettings] = useState<InferenceSettingsDraft | null>(null);
-  const [selectedRecommendation, setSelectedRecommendation] =
-    useState<InferenceModelRecommendation | null>(null);
-  const [customize, setCustomize] = useState(false);
-  const discoveryRevision = useRef(0);
-  const currentDiscoveryKey = useRef("");
-  const connection = connections[provider];
-  const providerOption = catalog?.providers.find((option) => option.id === provider);
-
-  useEffect(() => {
-    if (catalog || catalogFailure) return;
-    void api
-      .getInferenceSetupCatalog()
-      .then((next) => {
-        setCatalog(next);
-        setConnections((current) => {
-          const initialized = { ...current };
-          for (const option of next.providers) {
-            initialized[option.id] ??= {
-              authMethod: option.defaultAuthMethod,
-              endpoint: option.defaultEndpoint,
-              apiKey: "",
-            };
-          }
-          return initialized;
-        });
-        if (next.providers[0] && !fixedProvider) setProvider(next.providers[0].id);
-      })
-      .catch((cause) => setCatalogFailure(setupErrorMessage(cause)));
-  }, [api, catalog, catalogFailure]);
 
   const accountsOf = (oauthProvider: OauthProvider) =>
     storedAccounts.filter(
@@ -311,21 +243,22 @@ export function InferenceSetup({
     const oauthProvider = oauthProviderFor(connection.authMethod);
     if (!oauthProvider) return;
     if (requiresManagedRuntime && runtimeGate !== "ready") return;
-    autoSignIn.current = null;
+    dispatch({ type: "autoSignInTaken" });
     const label = accountLabel.trim();
     if (label && accountsOf(oauthProvider).some((account) => account.label === label)) {
-      setError(`Another account is already labelled “${label}”. Choose another label.`);
+      dispatch({
+        type: "failed",
+        error: `Another account is already labelled “${label}”. Choose another label.`,
+      });
       return;
     }
-    setBusy(true);
-    setAccountOp("signIn");
-    setError(null);
-    setAuthUrl(null);
-    setSignInHint(null);
+    dispatch({ type: "opStarted", op: "signIn" });
     let unlisten = () => {};
     let agentDid: string | undefined;
     try {
-      unlisten = await watchProviderLoginUrl(oauthProvider, setAuthUrl);
+      unlisten = await watchProviderLoginUrl(oauthProvider, (url) =>
+        dispatch({ type: "authUrl", url }),
+      );
       const snapshot = await api.fetchDesktopSnapshot();
       agentDid = setupAgentDid ?? snapshot.client?.deployments[0]?.agentDid;
       if (!agentDid) throw new Error("No agent to sign in");
@@ -343,10 +276,11 @@ export function InferenceSetup({
                 : api.grokLogin(agentDid));
       if (setupAgentDidRef.current !== agentDid) return;
       accountRevision.current += 1;
-      setPendingSave((current) => withoutProvider(current, provider));
-      setAuthUrl(null);
+      dispatch({ type: "pendingSaveCleared", provider });
+      dispatch({ type: "authUrl", url: null });
       const outcome = result.signIn;
-      if (outcome.result === "refreshed") setSignInHint(outcome.hint);
+      if (outcome.result === "refreshed")
+        dispatch({ type: "hint", hint: outcome.hint });
       /* an added account's backend was created with the account, and a refreshed
          one already has its backend: nothing to save */
       if (
@@ -354,21 +288,20 @@ export function InferenceSetup({
         (outcome.accountRef !== null || outcome.result === "refreshed")
       ) {
         if (outcome.result === "added") onDone(await api.fetchDesktopSnapshot());
-        else setSignInHint(outcome.hint ?? notAdded(outcome.label));
+        else dispatch({ type: "hint", hint: outcome.hint ?? notAdded(outcome.label) });
         return;
       }
-      setSignedIn((current) => ({ ...current, [provider]: result.credentialId }));
+      dispatch({ type: "connected", provider, credentialId: result.credentialId });
       invalidateDiscovery();
     } catch (cause) {
       if (agentDid && bridgeErrorCode(cause) === CREDENTIAL_NOT_SAVED) {
-        setAuthUrl(null);
+        dispatch({ type: "authUrl", url: null });
         void observeAccounts(agentDid);
       }
-      setError(setupErrorMessage(cause));
+      dispatch({ type: "failed", error: setupErrorMessage(cause) });
     } finally {
       unlisten();
-      setBusy(false);
-      setAccountOp(null);
+      dispatch({ type: "opEnded" });
     }
   };
 
@@ -380,13 +313,11 @@ export function InferenceSetup({
     /* with a stored account, a store adds only under a new reference, so a
        retry returning no reference refreshed the original account */
     const hadStored = accountsOf(oauthProvider).length > 0;
-    setBusy(true);
-    setAccountOp("retrySave");
-    setError(null);
+    dispatch({ type: "opStarted", op: "retrySave" });
     try {
       if (requiresManagedRuntime) {
         await ensureManagedRuntimeServing(api, runtimeFallbackName);
-        setRuntimeGate("ready");
+        dispatch({ type: "runtimeGate", gate: "ready" });
       }
       const account = await api.retrySaveProviderAccount(
         agentDid,
@@ -398,22 +329,22 @@ export function InferenceSetup({
         onDone(await api.fetchDesktopSnapshot());
         return;
       }
-      setPendingSave((current) => withoutProvider(current, pendingProvider));
+      dispatch({ type: "pendingSaveCleared", provider: pendingProvider });
       if (purpose === "add-backend" && hadStored) {
-        setSignInHint(notAdded(account.label));
+        dispatch({ type: "hint", hint: notAdded(account.label) });
         return;
       }
-      setSignedIn((current) => ({
-        ...current,
-        [pendingProvider]: account.credentialId,
-      }));
+      dispatch({
+        type: "connected",
+        provider: pendingProvider,
+        credentialId: account.credentialId,
+      });
       invalidateDiscovery();
     } catch (cause) {
       if (bridgeErrorCode(cause) === "notFound") void observeAccounts(agentDid);
-      setError(setupErrorMessage(cause));
+      dispatch({ type: "failed", error: setupErrorMessage(cause) });
     } finally {
-      setBusy(false);
-      setAccountOp(null);
+      dispatch({ type: "opEnded" });
     }
   };
 
@@ -424,30 +355,29 @@ export function InferenceSetup({
     else if (oauthProvider === "grok") void api.cancelGrokLogin();
   };
 
+  /* a discovery still out answers for a connection that no longer stands */
   const invalidateDiscovery = () => {
     discoveryRevision.current += 1;
     currentDiscoveryKey.current = "";
-    setDiscovery(null);
-    setModel("");
-    setManualModel(false);
-    setSelectedRecommendation(null);
-    setSettings(null);
-    setCustomize(false);
   };
 
-  const updateConnection = (changes: Partial<ConnectionDraft>) => {
-    setConnections((current) => ({
-      ...current,
-      [provider]: { ...current[provider]!, ...changes },
-    }));
+  const updateConnection = (
+    changes: Partial<ConnectionDraft>,
+    { autoSignIn = false } = {},
+  ) => {
+    if (!connection) return;
+    dispatch({
+      type: "connectionEdited",
+      provider,
+      connection: { ...connection, ...changes },
+      autoSignIn,
+    });
     invalidateDiscovery();
-    setError(null);
   };
 
   const discoverModels = async () => {
     if (!connection || busy) return;
-    setBusy(true);
-    setError(null);
+    dispatch({ type: "opStarted", op: "discover" });
     const requestKey = inferenceDiscoveryKey(
       ++discoveryRevision.current,
       provider,
@@ -459,8 +389,7 @@ export function InferenceSetup({
       const snapshot = await api.fetchDesktopSnapshot();
       const agentDid = setupAgentDid ?? snapshot.client?.deployments[0]?.agentDid;
       if (!agentDid) {
-        setBusy(false);
-        setError("No agent to configure");
+        dispatch({ type: "failed", error: "No agent to configure" });
         return;
       }
       const result = await api.discoverInferenceModels({
@@ -473,32 +402,21 @@ export function InferenceSetup({
       });
       const current = currentInferenceDiscovery(currentDiscoveryKey.current, result);
       if (!current) return;
-      setDiscovery(current);
-      // Discovery supplies choices, but the user makes the one model decision.
-      // Even a one-item catalog is never accepted implicitly.
-      setModel("");
-      setSelectedRecommendation(null);
-      setSettings(null);
+      dispatch({ type: "modelsDiscovered", discovery: current });
     } catch (cause) {
       if (currentDiscoveryKey.current !== requestKey) return;
-      setError(setupErrorMessage(cause));
+      dispatch({ type: "failed", error: setupErrorMessage(cause) });
     } finally {
-      setBusy(false);
+      dispatch({ type: "opEnded" });
     }
   };
 
-  const chooseModel = (option: InferenceModelOption) => {
-    setModel(option.advertised.model_name);
-    setSelectedRecommendation(option.recommendation);
-    setSettings(recommendedInferenceSettings(option.recommendation));
-    setCustomize(false);
-    setModelPickerOpen(false);
-  };
+  const chooseModel = (option: InferenceModelOption) =>
+    dispatch({ type: "modelChosen", option });
 
   const describeManualModel = async () => {
     if (!connection || !model.trim()) return;
-    setBusy(true);
-    setError(null);
+    dispatch({ type: "opStarted", op: "describe" });
     try {
       const recommendation = await api.getInferenceModelRecommendation({
         provider,
@@ -510,15 +428,13 @@ export function InferenceSetup({
         maxOutputTokens: null,
         reasoningEfforts: null,
       });
-      setSelectedRecommendation(recommendation);
-      setSettings(recommendedInferenceSettings(recommendation));
+      dispatch({ type: "recommendationLoaded", recommendation });
     } catch (cause) {
-      setError(setupErrorMessage(cause));
+      dispatch({ type: "failed", error: setupErrorMessage(cause) });
     } finally {
-      setBusy(false);
+      dispatch({ type: "opEnded" });
     }
   };
-
   const persistInference = async () => {
     if (!connection || !discovery || !selectedRecommendation || !settings)
       throw new Error("Complete provider discovery and model selection first");
@@ -601,61 +517,51 @@ export function InferenceSetup({
   };
 
   const saveInference = async () => {
-    setBusy(true);
-    setError(null);
+    dispatch({ type: "opStarted", op: "save" });
     try {
       const { profileId, defaultBehaviorId } = await persistInference();
       const snapshot = await waitForSelectedBehavior(profileId, defaultBehaviorId);
       onDone(snapshot);
     } catch (cause) {
-      setError(setupErrorMessage(cause));
+      dispatch({ type: "failed", error: setupErrorMessage(cause) });
     } finally {
-      setBusy(false);
+      dispatch({ type: "opEnded" });
     }
   };
 
   const pickProvider = (id: ProviderId) => {
     if (busy) return;
-    autoSignIn.current = id;
-    if (id === provider) {
-      /* Choosing the preselected provider is a choice too. */
-      setAutoSignInRequest((count) => count + 1);
-      return;
-    }
-    setProvider(id);
-    setAuthUrl(null);
-    setError(null);
-    invalidateDiscovery();
+    if (id !== provider) invalidateDiscovery();
+    dispatch({ type: "providerPicked", provider: id, current: provider });
   };
+  /* a provider just chosen starts its sign-in once the catalog, the account
+     read and the runtime allow it, unless an account is already connected */
   useEffect(() => {
     if (
-      autoSignIn.current !== provider ||
+      form.autoSignIn?.provider !== provider ||
       !catalog ||
       !connection ||
       !oauthProviderFor(connection.authMethod) ||
-      !accountsObserved ||
+      !form.accounts.observed ||
       busy ||
       (requiresManagedRuntime && runtimeGate !== "ready")
     )
       return;
-    autoSignIn.current = null;
+    dispatch({ type: "autoSignInTaken" });
     if (signedIn[provider] || pendingSave[provider]) return;
     const oauthProvider = oauthProviderFor(connection.authMethod)!;
     if (purpose === "add-backend" && accountsOf(oauthProvider).length) return;
     void signIn();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    autoSignInRequest,
+    form.autoSignIn,
     provider,
     catalog,
     connection,
-    accountsObserved,
+    form.accounts,
     busy,
     requiresManagedRuntime,
     runtimeGate,
-    signedIn,
-    pendingSave,
-    storedAccounts,
   ]);
   if (
     requiresManagedRuntime &&
@@ -736,12 +642,14 @@ export function InferenceSetup({
               onValueChange={(next) => {
                 if (!next) return;
                 const option = authOptions.find((item) => item.method === next);
-                autoSignIn.current = provider;
-                updateConnection({
-                  authMethod: next as InferenceAuthMethod,
-                  endpoint: option?.defaultEndpoint ?? connection.endpoint,
-                  apiKey: "",
-                });
+                updateConnection(
+                  {
+                    authMethod: next as InferenceAuthMethod,
+                    endpoint: option?.defaultEndpoint ?? connection.endpoint,
+                    apiKey: "",
+                  },
+                  { autoSignIn: true },
+                );
               }}
             >
               <SelectTrigger className="w-full">
@@ -771,7 +679,9 @@ export function InferenceSetup({
                     <Input
                       disabled={busy}
                       value={accountLabel}
-                      onChange={(event) => setAccountLabel(event.target.value)}
+                      onChange={(event) =>
+                        dispatch({ type: "labelEdited", label: event.target.value })
+                      }
                       placeholder="Optional, e.g. Work"
                     />
                   </Field>
@@ -887,7 +797,7 @@ export function InferenceSetup({
                 <Button
                   variant="outline"
                   disabled={busy}
-                  onClick={() => setModelPickerOpen(true)}
+                  onClick={() => dispatch({ type: "pickerOpened" })}
                 >
                   Change model
                 </Button>
@@ -897,7 +807,9 @@ export function InferenceSetup({
                 <Input
                   disabled={busy}
                   value={modelSearch}
-                  onChange={(event) => setModelSearch(event.target.value)}
+                  onChange={(event) =>
+                    dispatch({ type: "searchEdited", search: event.target.value })
+                  }
                   placeholder="Search advertised models"
                   aria-label="Search advertised models"
                 />
@@ -944,12 +856,9 @@ export function InferenceSetup({
                 <Input
                   disabled={busy}
                   value={model}
-                  onChange={(event) => {
-                    setModel(event.target.value);
-                    setManualModel(true);
-                    setSelectedRecommendation(null);
-                    setSettings(null);
-                  }}
+                  onChange={(event) =>
+                    dispatch({ type: "manualModelTyped", name: event.target.value })
+                  }
                   placeholder="Exact served model ID"
                 />
               </Field>
@@ -1007,9 +916,13 @@ export function InferenceSetup({
               <InferenceModelControls
                 recommendation={selectedRecommendation}
                 value={settings}
-                onChange={setSettings}
+                onChange={(next) =>
+                  dispatch({ type: "settingsEdited", settings: next })
+                }
                 expanded={customize}
-                onExpandedChange={setCustomize}
+                onExpandedChange={(expanded) =>
+                  dispatch({ type: "customizeToggled", expanded })
+                }
               />
             ) : null}
           </fieldset>
@@ -1092,7 +1005,7 @@ export function InferenceSetup({
               <Button
                 variant="outline"
                 className="justify-self-start"
-                onClick={() => setCatalogFailure(null)}
+                onClick={() => void retryCatalog()}
               >
                 Try again
               </Button>

@@ -10,6 +10,7 @@ import type {
 } from "@source-inc/gents-desktop-client";
 
 import { useApp } from "../app/AppContext";
+import { setupErrorMessage } from "../lib/providerLogin";
 
 const NO_ACCOUNTS: readonly ProviderAccountView[] = [];
 const NO_USAGE: readonly BackendUsageView[] = [];
@@ -60,14 +61,15 @@ export function useSetupCatalog() {
   const { stores, actions } = useApp();
   const { loadSetupCatalog, retrySetupCatalog } = actions;
   const catalog = stores.providers.use.catalog();
-  const error = stores.providers.use.catalogError();
+  const failure = stores.providers.use.catalogFailure();
   useEffect(() => {
     void loadSetupCatalog();
   }, [loadSetupCatalog]);
   return {
     catalog,
     providers: catalog?.providers ?? NO_PROVIDERS,
-    error,
+    /* worded without the bridge's internal detail */
+    error: failure ? setupErrorMessage(failure.cause) : null,
     retry: retrySetupCatalog,
   };
 }

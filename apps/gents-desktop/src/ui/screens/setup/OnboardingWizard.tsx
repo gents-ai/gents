@@ -30,7 +30,8 @@ import { authoritiesEqual, authorityForSelection } from "@/lib/managedRuntimeAut
 import { useApp } from "@/app/AppContext";
 import { useBootstrap, useStartup } from "@/hooks/useClient";
 import { Field, Frame, Nav, Option, Title } from "./parts";
-import { InferenceSetup, type ProviderId } from "./InferenceSetup";
+import { InferenceSetup } from "./InferenceSetup";
+import type { ProviderId } from "./inferenceSetupForm";
 
 type Step = "welcome" | "starting" | "inference";
 

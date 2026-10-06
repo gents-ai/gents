@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { watchProviderLoginUrl } from "../src/ui/lib/providerLogin";
-import { providerSignInState } from "../src/ui/screens/setup/InferenceSetup";
+import { providerSignInState } from "../src/ui/screens/setup/inferenceSetupForm";
 import { ceilingFromInit } from "../src/ui/screens/setup/OnboardingWizard";
 
 const { listen, openExternalUrl } = vi.hoisted(() => ({

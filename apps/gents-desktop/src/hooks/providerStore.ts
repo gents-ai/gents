@@ -15,8 +15,9 @@ export type ProviderState = {
   accounts: Readonly<Record<string, readonly ProviderAccountView[]>>;
   usage: Readonly<Record<string, readonly BackendUsageView[]>>;
   catalog: InferenceSetupCatalog | null;
-  /** why the catalog could not be read; null once a read is asked again */
-  catalogError: string | null;
+  /** why the catalog could not be read, as the bridge said it; null once a
+      read is asked again. Screens word it. */
+  catalogFailure: { cause: unknown } | null;
 };
 
 export type ProviderStore = WithSelectors<StoreApi<ProviderState>>;
@@ -27,7 +28,7 @@ export function createProviderStore() {
       accounts: {},
       usage: {},
       catalog: null,
-      catalogError: null,
+      catalogFailure: null,
     })),
   );
 }
@@ -49,9 +50,9 @@ export const providers = {
     store.setState((state) => ({ usage: { ...state.usage, [agentDid]: views } }));
   },
   catalogRead(store: ProviderStore, catalog: InferenceSetupCatalog) {
-    store.setState({ catalog, catalogError: null });
+    store.setState({ catalog, catalogFailure: null });
   },
-  catalogFailed(store: ProviderStore, error: string | null) {
-    store.setState({ catalogError: error });
+  catalogFailed(store: ProviderStore, failure: { cause: unknown } | null) {
+    store.setState({ catalogFailure: failure });
   },
 };

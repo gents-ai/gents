@@ -12,7 +12,7 @@ import type {
   DesktopClientSnapshot,
 } from "@source-inc/gents-desktop-client";
 import { SetupScreen } from "../src/ui/screens/setup/SetupScreen";
-import type { ProviderId } from "../src/ui/screens/setup/InferenceSetup";
+import type { ProviderId } from "../src/ui/screens/setup/inferenceSetupForm";
 import { createDesktopUiHarness } from "./ui-harness/desktopHarness";
 
 const AGENT = "did:key:z6MkBombadilAgent";
