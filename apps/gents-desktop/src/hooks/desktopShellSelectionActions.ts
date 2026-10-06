@@ -61,6 +61,9 @@ export function createDesktopShellSelectionActions({
     dropSession();
     setterOf(stores.chat, "localWorkflow")({ kind: "ready" });
     setError(null);
+    /* the banner may hold the session left behind (a read that failed);
+       the new session starts without it */
+    stores.client.setState({ error: null });
   }
 
   function followRoute(sessionId: string | null, fromSnapshot = false) {

@@ -157,6 +157,17 @@ describe("explicit session selection", () => {
     expect(readSession(stores.session)).toBeNull();
   });
 
+  it("starts a new session without the error the session left behind", () => {
+    const stores = shellStores();
+    applyFleetSnapshot(stores.fleet, {
+      bootstrap: {},
+      client: { deployments: [initialDeployment] },
+    } as unknown as DesktopClientSnapshot);
+    stores.client.setState({ error: "Session not found" });
+    createDesktopShellSelectionActions({ stores, setError: vi.fn() }).startNewSession();
+    expect(stores.client.getState().error).toBeNull();
+  });
+
   it("keeps a fresh composer after choosing Setup and creates a new session on send", async () => {
     const { result, rerender } = renderHook(
       ({ deployment }) => useHarness(deployment, "first-setup"),
