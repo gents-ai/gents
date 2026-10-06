@@ -1083,6 +1083,15 @@ struct RigPathVisitor {
     sites: usize,
 }
 
+fn rig_use_roots(tree: &syn::UseTree) -> usize {
+    match tree {
+        syn::UseTree::Path(syn::UsePath { ident, .. })
+        | syn::UseTree::Rename(syn::UseRename { ident, .. }) => usize::from(ident == "rig"),
+        syn::UseTree::Group(group) => group.items.iter().map(rig_use_roots).sum(),
+        _ => 0,
+    }
+}
+
 fn starts_with_rig(path: &syn::Path) -> bool {
     path.segments.len() > 1
         && path
@@ -1139,11 +1148,7 @@ impl<'ast> Visit<'ast> for RigPathVisitor {
     }
 
     fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
-        if matches!(&item.tree, syn::UseTree::Path(syn::UsePath { ident, .. })
-            | syn::UseTree::Rename(syn::UseRename { ident, .. }) if ident == "rig")
-        {
-            self.sites += 1;
-        }
+        self.sites += rig_use_roots(&item.tree);
         visit::visit_item_use(self, item);
     }
 
@@ -1221,6 +1226,7 @@ fn rig_fence_counts_paths_uses_and_macros_outside_tests() {
         ("use rig::{client, completion};", 1),
         ("use rig as provider;", 1),
         ("extern crate rig as provider;", 1),
+        ("use {rig as provider};", 1),
         ("fn f(u: rig::completion::Usage) {}", 1),
         (
             "fn f() { let s = try_stream! { rig::streaming::x(); }; }",
