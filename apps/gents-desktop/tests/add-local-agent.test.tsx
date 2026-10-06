@@ -141,6 +141,27 @@ describe("Add agent enrollment", () => {
     ).toBeInTheDocument();
   });
 
+  it("shows a failed request's reason, and opens clean the next time", async () => {
+    const { api, app } = fleet([forge]);
+    api.requestStatusEnrollment.mockRejectedValueOnce(new Error("server refused"));
+    let dialog = await openAddAgent(app);
+    await userEvent.type(
+      within(dialog).getByLabelText("Agent server"),
+      "server.example:9191",
+    );
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Request enrolment" }),
+    );
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "server refused",
+    );
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await userEvent.click(screen.getByRole("button", { name: /Add agent/ }));
+    dialog = await screen.findByRole("dialog");
+    expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("retains initial remote enrollment", async () => {
     const { api, app } = fleet([forge]);
     api.requestStatusEnrollment.mockResolvedValue({ requestId: "request-1" });

@@ -29,11 +29,15 @@ export function ManagedRuntimeAuthorityPicker({
 }) {
   const [validating, setValidating] = useState(false);
   const [directoryDraft, setDirectoryDraft] = useState(toolRoot ?? home);
+  /* a committed folder becomes the draft; while one is being validated
+     (null) the draft stays as typed */
+  const [committedRoot, setCommittedRoot] = useState(toolRoot);
+  if (toolRoot !== committedRoot) {
+    setCommittedRoot(toolRoot);
+    if (toolRoot !== null) setDirectoryDraft(toolRoot);
+  }
   const input = useRef<HTMLInputElement>(null);
   const validationGeneration = useRef(0);
-  useEffect(() => {
-    if (toolRoot !== null) setDirectoryDraft(toolRoot);
-  }, [toolRoot]);
   useEffect(
     () => () => {
       validationGeneration.current += 1;

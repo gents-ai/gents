@@ -117,9 +117,12 @@ export function MailboxScreen({
      node to start, then whatever the chips choose */
   const ctx = useScopeContext();
   const [storedNodeIds, setNodeIds] = useStoredStrings("gents-prototype-mailbox-nodes");
-  useEffect(() => {
+  /* a node named on the route narrows the list to it, once per route */
+  const [routedNode, setRoutedNode] = useState<string>();
+  if (nodeDid !== routedNode) {
+    setRoutedNode(nodeDid);
     if (nodeDid) setNodeIds([nodeDid]);
-  }, [nodeDid, setNodeIds]);
+  }
   const nodeIds = knownNodeIds(storedNodeIds, ctx);
   const scope: Scope = {
     nodes: nodeIds.length ? nodeIds : defaultScope("mailbox").nodes,

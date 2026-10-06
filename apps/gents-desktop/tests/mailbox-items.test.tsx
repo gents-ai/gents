@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { MailboxItemView } from "@source-inc/gents-desktop-client";
 import type { DesktopApp } from "../src/hooks/desktopApp";
 import { MailboxScreen } from "../src/ui/screens/MailboxScreen";
-import { testApp, withApp } from "./app-fixture";
+import { node, testApp, withApp } from "./app-fixture";
 
 /* the sender's hover card reads the whole deployment; the card is not
    what these cases are about */
@@ -253,5 +253,31 @@ describe("mailbox question", () => {
     expect(
       screen.getByTestId("mailbox-item-body").querySelector("pre"),
     ).toHaveTextContent('"pr": 42');
+  });
+});
+
+describe("a mailbox opened from a node", () => {
+  it("narrows to the node the route names, and keeps that choice", () => {
+    const stored = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => stored.get(key) ?? null,
+      setItem: (key: string, value: string) => stored.set(key, value),
+      removeItem: (key: string) => stored.delete(key),
+    });
+    const nodeWith = (agentDid: string, title: string) =>
+      node({
+        agentDid,
+        mailboxItems: [item({ itemId: `${agentDid}-item`, agentDid, title })],
+      });
+    const app = testApp({
+      deployments: [nodeWith("did:key:a", "From A"), nodeWith("did:key:b", "From B")],
+    });
+    render(<MailboxScreen nodeDid="did:key:b" />, { wrapper: withApp(app) });
+    expect(screen.getByRole("heading", { name: "From B" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "From A" })).not.toBeInTheDocument();
+    expect(JSON.parse(stored.get("gents-prototype-mailbox-nodes") ?? "[]")).toEqual([
+      "did:key:b",
+    ]);
+    vi.unstubAllGlobals();
   });
 });

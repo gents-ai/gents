@@ -1,6 +1,6 @@
 /* Sessions: a heading row with search and New, then plain rows on the
    ground: title, the behavior's chip, and when it last moved. */
-import { memo, useEffect, useMemo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import {
   ChevronDown,
   CornerDownRight,
@@ -82,9 +82,12 @@ export function SessionsScreen({
     "gents-prototype-sessions-nodes",
     defaultNodeIds,
   );
-  useEffect(() => {
+  /* a node named on the route narrows the list to it, once per route */
+  const [routedNode, setRoutedNode] = useState<string>();
+  if (nodeDid !== routedNode) {
+    setRoutedNode(nodeDid);
     if (nodeDid) setNodeIds([nodeDid]);
-  }, [nodeDid, setNodeIds]);
+  }
   /* a pick whose nodes are all gone starts over at the working node */
   const knownIds = knownNodeIds(storedNodeIds, ctx);
   const nodeIds =

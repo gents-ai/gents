@@ -4,7 +4,7 @@
    offers (rename the saved label, check the peer, remove). Add agent is
    the desktop's status enrolment: a server address, a request the
    server's admin approves, then the peer joins. */
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { EllipsisVertical, Inbox, Plus, SlidersHorizontal } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@gents/ui/components/button";
@@ -396,14 +396,18 @@ export function AgentsScreen() {
 }
 
 function AddAgentDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { api } = useApp();
-  const { refreshSnapshot } = useApp().actions;
+  const {
+    api,
+    actions: { refreshSnapshot },
+  } = useApp();
   const [address, setAddress] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
-    if (open) setError(null);
-  }, [open]);
+  /* every way out clears the failure, so the next opening starts clean */
+  const close = () => {
+    setError(null);
+    onClose();
+  };
   const ready = /\S/.test(address);
   const submit = async () => {
     setBusy(true);
@@ -413,7 +417,7 @@ function AddAgentDialog({ open, onClose }: { open: boolean; onClose: () => void 
       await refreshSnapshot();
       toast(`Enrolment request ${r.requestId} sent · waiting for acceptance`);
       setAddress("");
-      onClose();
+      close();
     } catch (e) {
       const reason = e instanceof Error ? e.message : String(e);
       setError(`Couldn't request enrolment: ${reason}`);
@@ -422,7 +426,7 @@ function AddAgentDialog({ open, onClose }: { open: boolean; onClose: () => void 
     }
   };
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+    <Dialog open={open} onOpenChange={(o) => !o && close()}>
       <DialogContent aria-modal="true">
         <DialogHeader>
           <DialogTitle>Add agent</DialogTitle>
@@ -457,7 +461,7 @@ function AddAgentDialog({ open, onClose }: { open: boolean; onClose: () => void 
           </p>
         ) : null}
         <DialogFooter>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
+          <Button variant="outline" onClick={close} disabled={busy}>
             Cancel
           </Button>
           <Button

@@ -160,24 +160,28 @@ const SUBSCRIPTION: Record<
   },
 };
 
+const NO_ACCOUNTS: ProviderAccountView[] = [];
+
 export function useAccounts(agentDid: string) {
   const { api } = useApp();
   const snapshot = useSnapshot();
-  const [accounts, setAccounts] = useState<ProviderAccountView[]>([]);
+  /* held with the agent they were read for: another agent's never show */
+  const [held, setHeld] = useState<{
+    agentDid: string;
+    views: ProviderAccountView[];
+  } | null>(null);
+  const accounts = held?.agentDid === agentDid ? held.views : NO_ACCOUNTS;
   const latest = useRef(0);
   const load = useCallback(() => {
     const read = ++latest.current;
     return (api.listProviderAccounts?.(agentDid) ?? Promise.resolve([])).then(
       (views) => {
-        if (latest.current === read) setAccounts(views);
+        if (latest.current === read) setHeld({ agentDid, views });
       },
       () => {
-        if (latest.current === read) setAccounts([]);
+        if (latest.current === read) setHeld({ agentDid, views: [] });
       },
     );
-  }, [api, agentDid]);
-  useEffect(() => {
-    setAccounts([]);
   }, [api, agentDid]);
   useEffect(() => {
     void load();
