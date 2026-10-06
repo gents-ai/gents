@@ -1,7 +1,7 @@
 /* First run, from the Startup designs: choose where the agent lives,
    name it, watch it come online, then connect one inference provider
    (InferenceSetup). */
-import { useEffect, useState } from "react";
+import { useEffect, useReducer, useState } from "react";
 import { Server, Wifi } from "lucide-react";
 import type {
   DesktopClientSnapshot,
@@ -34,6 +34,71 @@ import { InferenceSetup } from "./InferenceSetup";
 import type { ProviderId } from "./inferenceSetupForm";
 
 type Step = "welcome" | "starting" | "inference";
+type FailedPhase = Exclude<DesktopStartupPhase, "ready">;
+type StartupDetail = "managedServer" | "configuration" | "client";
+
+/* where first run is, and how far its provisioning has got */
+type Run = {
+  step: Step;
+  /** a provisioning run is out */
+  busy: boolean;
+  error: string | null;
+  phase: FailedPhase;
+  details: Partial<Record<StartupDetail, string>>;
+  /** when everything started; the provider step follows a moment later */
+  provisionedAt: number | null;
+};
+
+type RunEvent =
+  | { type: "begun"; phase: FailedPhase }
+  | { type: "reached"; phase: FailedPhase; detail?: [StartupDetail, string] }
+  | { type: "provisioned"; at: number; client: string }
+  | { type: "failed"; phase: FailedPhase; error: string }
+  | { type: "ended" }
+  /** Try again after a failure: back to the welcome step without it */
+  | { type: "retried" }
+  /** back to the welcome step, keeping what was said */
+  | { type: "wentBack" }
+  | { type: "continued" };
+
+function runReducer(run: Run, event: RunEvent): Run {
+  switch (event.type) {
+    case "begun":
+      return {
+        ...run,
+        step: "starting",
+        busy: true,
+        error: null,
+        phase: event.phase,
+        details: {},
+        provisionedAt: null,
+      };
+    case "reached":
+      return {
+        ...run,
+        phase: event.phase,
+        details: event.detail
+          ? { ...run.details, [event.detail[0]]: event.detail[1] }
+          : run.details,
+      };
+    case "provisioned":
+      return {
+        ...run,
+        details: { ...run.details, client: event.client },
+        provisionedAt: event.at,
+      };
+    case "failed":
+      return { ...run, phase: event.phase, error: event.error };
+    case "ended":
+      return { ...run, busy: false };
+    case "retried":
+      return { ...run, step: "welcome", error: null };
+    case "wentBack":
+      return { ...run, step: "welcome" };
+    case "continued":
+      return { ...run, step: "inference", provisionedAt: null };
+  }
+}
 
 function shortDid(did: string | null) {
   if (!did) return "a new agent identity";
@@ -75,7 +140,15 @@ export function OnboardingWizard({
   } = useApp();
   const { diagnosticsHint } = useStartup();
   const { incompatibleHome } = useStartup();
-  const [step, setStep] = useState<Step>(initialStep);
+  const [run, dispatch] = useReducer(runReducer, {
+    step: initialStep,
+    busy: false,
+    error: null,
+    phase: "checking-managed-server",
+    details: {},
+    provisionedAt: null,
+  });
+  const { step, busy, error, phase, details: startupDetails, provisionedAt } = run;
   const allowLocal = supportsLocalManagedServer();
   const [where, setWhere] = useState<"local" | "remote">(
     allowLocal ? "local" : "remote",
@@ -99,20 +172,11 @@ export function OnboardingWizard({
     bootstrap?.initToolRoot ?? undefined,
   );
   const [authorityError, setAuthorityError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [phase, setPhase] = useState<Exclude<DesktopStartupPhase, "ready">>(
-    "checking-managed-server",
-  );
-  const [startupDetails, setStartupDetails] = useState<
-    Partial<Record<"managedServer" | "configuration" | "client", string>>
-  >({});
   const [managedWait, setManagedWait] = useState<ManagedServerWait | null>(null);
-  const [provisionedAt, setProvisionedAt] = useState<number | null>(null);
   useEffect(() => {
     if (provisionedAt === null) return;
     const timer = window.setTimeout(
-      () => setStep("inference"),
+      () => dispatch({ type: "continued" }),
       Math.max(0, provisionedAt + SETUP_COMPLETE_DWELL_MS - Date.now()),
     );
     return () => window.clearTimeout(timer);
@@ -148,13 +212,13 @@ export function OnboardingWizard({
     } else {
       await refreshSnapshot();
     }
-    setStartupDetails((current) => ({
-      ...current,
+    dispatch({
+      type: "provisioned",
+      at: Date.now(),
       client: nextDeployment
         ? `Connected securely to ${nextDeployment.label}`
         : "Secure client started",
-    }));
-    setProvisionedAt(Date.now());
+    });
   };
 
   const createAgent = async () => {
@@ -166,16 +230,11 @@ export function OnboardingWizard({
           ? "Choose and validate an existing directory."
           : "The user home directory is still being resolved.",
       );
-      setStep("welcome");
+      dispatch({ type: "wentBack" });
       return;
     }
-    setBusy(true);
-    setError(null);
-    setStep("starting");
-    setPhase("checking-managed-server");
-    setStartupDetails({});
-    setProvisionedAt(null);
-    let failedPhase: Exclude<DesktopStartupPhase, "ready"> = "managed-server-error";
+    dispatch({ type: "begun", phase: "checking-managed-server" });
+    let failedPhase: FailedPhase = "managed-server-error";
     try {
       if (api.startManagedServer) {
         const startManagedServer = api.startManagedServer;
@@ -203,18 +262,23 @@ export function OnboardingWizard({
             "The managed runtime started with different authority than the reviewed settings.",
           );
         }
-        setStartupDetails({
-          managedServer: `${requestedName} is running as ${shortDid(status.agentDid)}, with its identity and data in ${root}`,
+        dispatch({
+          type: "reached",
+          phase: "checking-managed-server",
+          detail: [
+            "managedServer",
+            `${requestedName} is running as ${shortDid(status.agentDid)}, with its identity and data in ${root}`,
+          ],
         });
       }
-      setPhase("loading-configuration");
+      dispatch({ type: "reached", phase: "loading-configuration" });
       failedPhase = "configuration-error";
       await initLocalRuntime(requestedName);
-      setStartupDetails((current) => ({
-        ...current,
-        configuration: `Saved the local connection to ${requestedName}`,
-      }));
-      setPhase("starting-client");
+      dispatch({
+        type: "reached",
+        phase: "starting-client",
+        detail: ["configuration", `Saved the local connection to ${requestedName}`],
+      });
       failedPhase = "client-error";
       if (api.commitManagedServerAutoStart) {
         await api.commitManagedServerAutoStart(requestedName);
@@ -222,28 +286,21 @@ export function OnboardingWizard({
       await waitForManagedRuntimePairing(api);
       await finishProvisioning();
     } catch (e) {
-      setPhase(failedPhase);
-      setError(setupErrorMessage(e));
+      dispatch({ type: "failed", phase: failedPhase, error: setupErrorMessage(e) });
       await incompatibleHome?.adopt(e);
     } finally {
-      setBusy(false);
+      dispatch({ type: "ended" });
     }
   };
   const enrol = async () => {
-    setBusy(true);
-    setError(null);
-    setStep("starting");
-    setPhase("starting-client");
-    setStartupDetails({});
-    setProvisionedAt(null);
+    dispatch({ type: "begun", phase: "starting-client" });
     try {
       await api.requestStatusEnrollment(address.trim());
       await finishProvisioning();
     } catch (e) {
-      setPhase("client-error");
-      setError(setupErrorMessage(e));
+      dispatch({ type: "failed", phase: "client-error", error: setupErrorMessage(e) });
     } finally {
-      setBusy(false);
+      dispatch({ type: "ended" });
     }
   };
   if (step === "inference")
@@ -255,7 +312,9 @@ export function OnboardingWizard({
         agentDid={agentDid}
         onCancel={onCancel}
         provider={provider}
-        onBack={initialStep === "inference" ? undefined : () => setStep("welcome")}
+        onBack={
+          initialStep === "inference" ? undefined : () => dispatch({ type: "wentBack" })
+        }
       />
     );
   if (step === "welcome") {
@@ -427,14 +486,8 @@ export function OnboardingWizard({
           ]}
           wait={managedWait}
           error={error}
-          onRetry={() => {
-            setError(null);
-            setStep("welcome");
-          }}
-          onContinue={() => {
-            setProvisionedAt(null);
-            setStep("inference");
-          }}
+          onRetry={() => dispatch({ type: "retried" })}
+          onContinue={() => dispatch({ type: "continued" })}
           onOpenLoginItems={api.openManagedServerLoginItems}
           diagnosticsHint={diagnosticsHint ?? bootstrap?.diagnosticsHint}
         />
