@@ -6,13 +6,8 @@ import {
   type DesktopClientUpdatedListenerFactory,
 } from "@source-inc/gents-desktop-client";
 
-import { isMacTauriShell, ownsAutomaticRecovery } from "../lib/shellPlatform";
+import { isMacTauriShell } from "../lib/shellPlatform";
 import type { DesktopApp } from "./desktopApp";
-import {
-  logShellEvent,
-  shouldAutoRestartP2P,
-  timingConfig,
-} from "./desktopShellRuntime";
 import { selection } from "./selectionStore";
 import { useDesktopProjectionEffects } from "./useDesktopProjectionEffects";
 import { clientRunning, clientStatus } from "./clientStore";
@@ -29,7 +24,6 @@ export function useDesktopRuntime(
   listenToUpdates: DesktopClientUpdatedListenerFactory,
 ) {
   useStartup(app);
-  useClientRecovery(app);
   useDesktopProjectionEffects(app, listenToUpdates);
   useSelectionReconcile(app);
   usePublishedSelection(app);
@@ -72,50 +66,6 @@ function useStartup({
       current = false;
     };
   }, [api, needsHint, stores]);
-}
-
-/** Restarts a client whose P2P transport is wedged, at most once per
-    cooldown. */
-function useClientRecovery({
-  stores,
-  lifecycle,
-}: Pick<DesktopApp, "stores" | "lifecycle">) {
-  const { recovery } = lifecycle;
-  const snapshot = useStore(stores.client, (state) => state.snapshot);
-  const starting = useStore(stores.client, (state) => state.starting);
-  const stopping = useStore(stores.client, (state) => state.stopping);
-  const sending = useStore(stores.chat, (state) => state.sending);
-  const runtimeHealth = snapshot?.client?.p2pHealth ?? null;
-
-  useEffect(() => {
-    const previousHealth = recovery.lastObservedP2PHealth;
-    recovery.lastObservedP2PHealth = runtimeHealth;
-    if (!runtimeHealth) return;
-    if (runtimeHealth.status === "healthy") {
-      recovery.lastP2PAutoRestartAt = null;
-      return;
-    }
-    if (
-      !ownsAutomaticRecovery() ||
-      recovery.autoRestartInFlight ||
-      starting ||
-      stopping ||
-      sending ||
-      !shouldAutoRestartP2P(
-        previousHealth,
-        runtimeHealth,
-        recovery.lastP2PAutoRestartAt,
-        Date.now(),
-        timingConfig().p2pAutoRestartCooldownMs,
-      )
-    )
-      return;
-    recovery.lastP2PAutoRestartAt = Date.now();
-    logShellEvent(
-      `auto restart requested reason="P2P transport wedged" status=${runtimeHealth.status} failures=${runtimeHealth.consecutiveFailures}`,
-    );
-    void lifecycle.restartDesktopClient("P2P transport wedged");
-  }, [lifecycle, recovery, runtimeHealth, sending, starting, stopping]);
 }
 
 /** The selection kept valid against what the nodes list. */

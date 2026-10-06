@@ -221,4 +221,33 @@ describe("desktop client restart selection ordering", () => {
     expect(lifecycle.startupPhase).toBe("ready");
     expect(lifecycle.snapshot).toEqual(ready);
   });
+
+  it("restarts a wedged transport once the send that held it back ends", async () => {
+    const wedged = {
+      bootstrap: { clientStateExists: true, savedPeers: [{}] },
+      client: {
+        p2pHealth: {
+          status: "wedged",
+          connectedPeerCount: 0,
+          replicatorCount: 0,
+          consecutiveFailures: 3,
+          lastError: "dial timeout",
+          lastOkAt: null,
+          lastFailureAt: null,
+        },
+      },
+    };
+    const api = {
+      fetchDesktopSnapshot: vi.fn().mockResolvedValue(wedged),
+      shutdownDesktopClient: vi.fn(async () => undefined),
+      startDesktopClient: vi.fn(async () => wedged),
+    };
+    const lifecycle = lifecycleFor(api);
+    lifecycle.stores.chat.setState({ sending: true });
+    await waitFor(() => expect(lifecycle.snapshot).not.toBeNull());
+    expect(api.shutdownDesktopClient).not.toHaveBeenCalled();
+
+    lifecycle.stores.chat.setState({ sending: false });
+    await waitFor(() => expect(api.shutdownDesktopClient).toHaveBeenCalledOnce());
+  });
 });

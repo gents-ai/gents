@@ -16,7 +16,12 @@ import {
   type ManagedServerWait,
 } from "../lib/managedServerStartup";
 import { isMobileTauriShell, ownsAutomaticRecovery } from "../lib/shellPlatform";
-import { delay, logShellEvent, timingConfig } from "./desktopShellRuntime";
+import {
+  delay,
+  logShellEvent,
+  shouldAutoRestartP2P,
+  timingConfig,
+} from "./desktopShellRuntime";
 import { createSnapshotPublicationOwner } from "./desktopSnapshotPublication";
 import { applyFleetSnapshot, equal, shareUnchanged } from "./fleetStore";
 import { restoreManagedServer } from "./managedServerLifecycle";
@@ -96,7 +101,7 @@ export function createClientLifecycle({
        (sync health, the bootstrap) is not notified when another changed */
     if (!unchanged) client.setState({ snapshot: shareUnchanged(before, next) });
     resolveStartupPhase(next);
-    autostart();
+    recover();
   });
   const home = createIncompatibleHomeOps({
     api,
@@ -171,23 +176,58 @@ export function createClientLifecycle({
     return pending;
   }
 
-  /* Starts a stopped client that autostarts, once per startup, when no start,
-     restart or send is under way. Asked after every read, a repeated one
-     included (startup run again reads the same stopped client), and again
-     when a start or a send ends. */
-  function autostart() {
-    const { snapshot, starting } = client.getState();
-    if (!ownsAutomaticRecovery() || !snapshot || snapshot.client || starting) return;
-    if (stores.chat.getState().sending) return;
-    if (!clientAutostarts(snapshot) || recovery.autostartAttempted) return;
-    recovery.autostartAttempted = true;
-    void startClient();
+  /* Automatic recovery, where this window owns it: asked after every read, a
+     repeated one included (startup run again reads the same stopped client),
+     and again when a start, stop or send that held it back ends. */
+  function recover() {
+    if (!ownsAutomaticRecovery()) return;
+    const { snapshot, starting, stopping } = client.getState();
+    const held = starting || stopping || stores.chat.getState().sending;
+    if (!snapshot) return;
+    if (!snapshot.client) {
+      recovery.lastObservedP2PHealth = null;
+      if (held || !clientAutostarts(snapshot) || recovery.autostartAttempted) return;
+      recovery.autostartAttempted = true;
+      void startClient();
+      return;
+    }
+    restartIfWedged(snapshot.client.p2pHealth ?? null, held);
   }
+
+  /* A health seen while a restart could not run is left unobserved, so the
+     restart is weighed against it once what held it back ends. */
+  function restartIfWedged(health: P2PHealth | null, held: boolean) {
+    if (!health || health.status === "healthy") {
+      recovery.lastObservedP2PHealth = health;
+      if (health) recovery.lastP2PAutoRestartAt = null;
+      return;
+    }
+    if (held || recovery.autoRestartInFlight) return;
+    const previous = recovery.lastObservedP2PHealth;
+    recovery.lastObservedP2PHealth = health;
+    if (
+      !shouldAutoRestartP2P(
+        previous,
+        health,
+        recovery.lastP2PAutoRestartAt,
+        Date.now(),
+        timingConfig().p2pAutoRestartCooldownMs,
+      )
+    )
+      return;
+    recovery.lastP2PAutoRestartAt = Date.now();
+    logShellEvent(
+      `auto restart requested reason="P2P transport wedged" status=${health.status} failures=${health.consecutiveFailures}`,
+    );
+    void restartDesktopClient("P2P transport wedged");
+  }
+
   client.subscribe((state, prev) => {
-    if (prev.starting && !state.starting) autostart();
+    if ((prev.starting && !state.starting) || (prev.stopping && !state.stopping))
+      recover();
   });
   stores.chat.subscribe((state, prev) => {
-    if (prev.sending && !state.sending) autostart();
+    if (prev.sending && !state.sending) recover();
   });
 
   async function startClient() {
