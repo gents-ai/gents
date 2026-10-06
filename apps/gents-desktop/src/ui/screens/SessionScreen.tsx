@@ -84,7 +84,7 @@ import { Thinking } from "./Thinking";
 import { activityStatus, isStopping } from "./activity-status";
 import { AccessSentence, BehaviorAvatar } from "./parts";
 import { NodeBehaviorStack } from "./NodeBehaviorStack";
-import { isWorkingNode, nodeDidOf } from "@/lib/nodes";
+import { isWorkingNode } from "@/lib/nodes";
 import { Markdown } from "./Markdown";
 import { SessionLoading } from "./SessionLoading";
 import { StreamContext, StreamText } from "./StreamText";
@@ -123,18 +123,20 @@ import {
   useSelectedSessionFields,
 } from "../hooks/useSelectedSession";
 import { useDraft } from "../../hooks/draftStore";
+import { useShallow } from "zustand/react/shallow";
 import { useFleet, workersOfId } from "../hooks/useFleet";
+import { listedSession, nodeOf } from "../../hooks/fleetStore";
+import { fleetNodes } from "@/lib/scope";
 import { agentOf } from "@/lib/agents";
 import { useApp, useView } from "@/app/AppContext";
 import {
   useChatFolder,
-  useDeployments,
   useHomeDid,
   useInterruptVisible,
   useMailboxCause,
   useSelectedAgentDid,
+  useNodeCount,
   useSelectedBehaviorId,
-  useSelectedDeployment,
   useSelectedNode,
   useSelectedSessionId,
   useSessionLoad,
@@ -344,6 +346,63 @@ export function useBehaviorChoice() {
     behaviorId: selectedBehaviorId,
     setPicked: selectBehavior,
   };
+}
+
+/* the node a new chat starts on, where there is a choice: the name is the
+   button's own text, so the heading still reads as one sentence */
+function NodeChoice({
+  name,
+  selectedAgentDid,
+  onSelect,
+}: {
+  name: string;
+  selectedAgentDid: string | null;
+  onSelect: (agentDid: string) => void;
+}) {
+  const nodes = useFleet(useShallow(fleetNodes));
+  const homeDid = useHomeDid();
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <button
+            type="button"
+            title="Choose a node"
+            className="inline-flex items-center gap-1 underline decoration-border underline-offset-4 hover:decoration-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-sm"
+          />
+        }
+      >
+        {name}
+        <ChevronDown className="size-4 opacity-50" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-56">
+        <DropdownMenuRadioGroup value={selectedAgentDid ?? ""} onValueChange={onSelect}>
+          {nodes.map((n, i, all) => (
+            <Fragment key={n.agentDid}>
+              {/* a faint line between the local node and the paired ones */}
+              {i > 0 &&
+                isWorkingNode(all[i - 1]!, homeDid) &&
+                !isWorkingNode(n, homeDid) && (
+                  <DropdownMenuSeparator className="opacity-60" />
+                )}
+              <DropdownMenuRadioItem value={n.agentDid} disabled={!n.dialSucceeded}>
+                <AgentAvatar
+                  name={n.agentPrincipal.displayName ?? n.label}
+                  className="size-5 text-[9px]"
+                />
+                <span className="min-w-0 flex-1 truncate">
+                  {n.agentPrincipal.displayName ?? n.label}
+                </span>
+                {isWorkingNode(n, homeDid) && (
+                  <span className="text-xs text-muted-foreground">local</span>
+                )}
+              </DropdownMenuRadioItem>
+            </Fragment>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
 }
 
 /** Display the existing workflow owner's observation, never infer queue health. */
@@ -1273,13 +1332,13 @@ export function SessionScreen() {
     },
   } = useApp();
   const chatFolder = useChatFolder();
-  const deployments = useDeployments();
+  const nodeCount = useNodeCount();
   const draftKey = useView((view) => view.draftKey);
   const inFlight = useInterruptVisible();
   const mailboxCause = useMailboxCause();
   const sendStatus = useView((view) => view.shellProjection.nonEmptyContentSendStatus);
   const selectedAgentDid = useSelectedAgentDid();
-  const deployment = useSelectedDeployment();
+  const deployment = useSelectedNode();
   const selectedSessionId = useSelectedSessionId();
   const sending = stores.chat.use.sending();
   const sessionLoad = useSessionLoad();
@@ -1382,8 +1441,10 @@ export function SessionScreen() {
     deployment?.agentPrincipal.displayName ?? deployment?.label ?? "the agent";
   /* the snapshot says what happened in a session; the summary says where it
      came from, which is the list's own view of it */
-  const summary =
-    deployment?.sessions.find((x) => x.sessionId === session?.sessionId) ?? null;
+  const summary = useFleet((s) =>
+    listedSession(s, deployment?.agentDid, session?.sessionId),
+  );
+  const sessionNode = useFleet((s) => nodeOf(s, session?.agentDid));
 
   const send = async (text: string) => {
     const pending = sendMessage(text, session?.behaviorId ?? choice.behaviorId);
@@ -1432,58 +1493,12 @@ export function SessionScreen() {
           <div>
             <h1 className="font-heading text-lg font-medium text-heading">
               Start a new chat with{" "}
-              {deployments.length > 1 ? (
-                /* the node the chat starts on, where there is a choice: the
-                   name is the button's own text, so the heading still reads
-                   as one sentence */
-                <DropdownMenu>
-                  <DropdownMenuTrigger
-                    render={
-                      <button
-                        type="button"
-                        title="Choose a node"
-                        className="inline-flex items-center gap-1 underline decoration-border underline-offset-4 hover:decoration-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-sm"
-                      />
-                    }
-                  >
-                    {agentName}
-                    <ChevronDown className="size-4 opacity-50" />
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start" className="w-56">
-                    <DropdownMenuRadioGroup
-                      value={selectedAgentDid ?? ""}
-                      onValueChange={(did) => selectAgent(did)}
-                    >
-                      {deployments.map((n, i, all) => (
-                        <Fragment key={n.agentDid}>
-                          {/* a faint line between the local node and the paired ones */}
-                          {i > 0 &&
-                            isWorkingNode(all[i - 1]!, homeDid) &&
-                            !isWorkingNode(n, homeDid) && (
-                              <DropdownMenuSeparator className="opacity-60" />
-                            )}
-                          <DropdownMenuRadioItem
-                            value={n.agentDid}
-                            disabled={!n.dialSucceeded}
-                          >
-                            <AgentAvatar
-                              name={n.agentPrincipal.displayName ?? n.label}
-                              className="size-5 text-[9px]"
-                            />
-                            <span className="min-w-0 flex-1 truncate">
-                              {n.agentPrincipal.displayName ?? n.label}
-                            </span>
-                            {isWorkingNode(n, homeDid) && (
-                              <span className="text-xs text-muted-foreground">
-                                local
-                              </span>
-                            )}
-                          </DropdownMenuRadioItem>
-                        </Fragment>
-                      ))}
-                    </DropdownMenuRadioGroup>
-                  </DropdownMenuContent>
-                </DropdownMenu>
+              {nodeCount > 1 ? (
+                <NodeChoice
+                  name={agentName}
+                  selectedAgentDid={selectedAgentDid}
+                  onSelect={selectAgent}
+                />
               ) : (
                 agentName
               )}
@@ -1726,14 +1741,9 @@ export function SessionScreen() {
                       {behaviorName(session?.behaviorId ?? null, deployment)}
                       {/* the node only when it is not the local one, as the
                           marks beside it do */}
-                      {(() => {
-                        const node = deployments.find(
-                          (n) => nodeDidOf(n) === session?.agentDid,
-                        );
-                        return node && !isWorkingNode(node, homeDid)
-                          ? ` on ${node.agentPrincipal.displayName ?? node.label}`
-                          : null;
-                      })()}
+                      {sessionNode && !isWorkingNode(sessionNode, homeDid)
+                        ? ` on ${sessionNode.agentPrincipal.displayName ?? sessionNode.label}`
+                        : null}
                     </span>
                     {session?.context && <SessionContext context={session.context} />}
                   </div>

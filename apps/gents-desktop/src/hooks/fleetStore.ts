@@ -53,6 +53,10 @@ export const firstNode = (fleet: FleetState) => {
   return first ? (fleet.nodes[first] ?? null) : null;
 };
 
+/** The node with this DID, or the first node while it is not listed. */
+export const nodeOrFirst = (fleet: FleetState, agentDid: string | null | undefined) =>
+  nodeOf(fleet, agentDid) ?? firstNode(fleet);
+
 /** A session as the node with this DID lists it. */
 export function listedSession(
   fleet: FleetState,

@@ -21,7 +21,7 @@ import { href } from "@/lib/router";
 import { useState } from "react";
 import { Age, span } from "./time";
 import { useApp } from "@/app/AppContext";
-import { useMailboxCause, useSelectedDeployment } from "@/hooks/useClient";
+import { useMailboxCause, useSelectedNodeMailboxItem } from "@/hooks/useClient";
 import { deadlineOf, dueSoon } from "./mailbox-triage";
 
 const KIND_LABEL: Record<string, string> = {
@@ -34,11 +34,10 @@ const KIND_LABEL: Record<string, string> = {
 
 export function ReplyingTo() {
   const cause = useMailboxCause();
-  const selectedDeployment = useSelectedDeployment();
+  const item = useSelectedNodeMailboxItem(cause?.itemId);
   const { clearMailboxCause } = useApp().actions;
   const [open, setOpen] = useState(false);
   if (!cause) return null;
-  const item = selectedDeployment?.mailboxItems.find((m) => m.itemId === cause.itemId);
   return (
     <div
       className="flex items-center px-2 pt-2"

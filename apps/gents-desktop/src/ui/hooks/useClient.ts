@@ -6,7 +6,14 @@ import { useShallow } from "zustand/react/shallow";
 
 import type { DeploymentView } from "@source-inc/gents-desktop-client";
 
-import { firstNode, nodeOf, type NodeView } from "../../hooks/fleetStore";
+import type { MailboxItemView } from "@source-inc/gents-desktop-client";
+
+import {
+  firstNode,
+  nodeKeyOf,
+  nodeOrFirst,
+  type NodeView,
+} from "../../hooks/fleetStore";
 
 import { folderOf } from "../../hooks/chatFolders";
 import { useIncompatibleHome } from "../../hooks/useIncompatibleHome";
@@ -67,7 +74,20 @@ export function useSelectedAgentDid(): string | null {
     is selected yet; the same object while it is unchanged. */
 export function useSelectedNode(): NodeView | null {
   const agentDid = useApp().stores.selection.use.agentDid();
-  return useFleet((state) => nodeOf(state, agentDid) ?? firstNode(state));
+  return useFleet((state) => nodeOrFirst(state, agentDid));
+}
+
+/** A mailbox item on the selected node, or the first node while nothing is
+    selected yet; null when that node no longer lists it. */
+export function useSelectedNodeMailboxItem(
+  itemId: string | null | undefined,
+): MailboxItemView | null {
+  const agentDid = useApp().stores.selection.use.agentDid();
+  return useFleet((state) => {
+    const node = nodeOrFirst(state, agentDid);
+    if (!node || !itemId) return null;
+    return state.mailboxOf[nodeKeyOf(node)]?.find((m) => m.itemId === itemId) ?? null;
+  });
 }
 
 /** The node this machine runs, as the fleet holds it; null when the client

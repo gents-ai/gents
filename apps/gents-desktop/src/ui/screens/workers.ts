@@ -16,8 +16,9 @@ import type {
   SessionProvenanceView,
   SessionSummary,
 } from "@source-inc/gents-desktop-client";
+import { useShallow } from "zustand/react/shallow";
 import { useApp } from "@/app/AppContext";
-import { useFleet } from "@/hooks/useFleet";
+import { NO_SESSIONS, useFleet } from "@/hooks/useFleet";
 import { isLive } from "@/lib/live";
 import {
   selectedIn,
@@ -69,6 +70,21 @@ export const scopeKey = (r: {
 export const summariesByScope = (sessions: readonly SessionSummary[] | undefined) =>
   new Map((sessions ?? []).map((s) => [scopeKey(s), s]));
 
+/* The sessions the node with this DID lists under these scopes, and only
+   those: a change elsewhere in its list does not re-render the caller. */
+export function useListedScopes(
+  agentDid: string | null | undefined,
+  scopes: readonly string[],
+): readonly SessionSummary[] {
+  return useFleet(
+    useShallow((s) => {
+      if (!agentDid || !scopes.length) return NO_SESSIONS;
+      const byScope = summariesByScope(s.sessionsOf[agentDid]);
+      return scopes.flatMap((key) => byScope.get(key) ?? []);
+    }),
+  );
+}
+
 /* The listed session with this agent and label. Two listed scopes under one
    label are ambiguous, and neither is picked. */
 export function listedSession(
@@ -115,8 +131,9 @@ export function useSessionProvenance(): SessionProvenanceView | null {
   const sessionId = useSelectedSessionValue((s) => s?.sessionId ?? null);
   const rowsRevision = useSessionFacts()?.rowsRevision ?? 0;
   const agentDid = stores.selection.use.agentDid();
-  const sessions = useFleet((s) => (agentDid ? s.sessionsOf[agentDid] : undefined));
-  const summary = listedSession(sessions, agentDid, sessionId);
+  const summary = useFleet((s) =>
+    listedSession(agentDid ? s.sessionsOf[agentDid] : undefined, agentDid, sessionId),
+  );
   const listed = summary !== null;
   const requesterDid = summary?.requesterDid ?? null;
   const scope = `${agentDid ?? ""}\u0000${sessionId ?? ""}\u0000${requesterDid ?? ""}`;
@@ -129,9 +146,11 @@ export function useSessionProvenance(): SessionProvenanceView | null {
   const storeVersion = useSelectedSessionValue((s) =>
     awaitsCaused ? (s?.projectionRevision?.storeVersion ?? null) : null,
   );
-  const sessionsCue = (sessions ?? [])
-    .map((s) => `${s.sessionId}:${s.turnState ?? ""}:${s.updatedAt ?? ""}`)
-    .join();
+  const sessionsCue = useFleet((s) =>
+    ((agentDid && s.sessionsOf[agentDid]) || NO_SESSIONS)
+      .map((x) => `${x.sessionId}:${x.turnState ?? ""}:${x.updatedAt ?? ""}`)
+      .join(),
+  );
   const generation = useRef(0);
   /* what the last ask observed: a live lineage arriving starts following the
      store version without asking again for the one it was read at */
@@ -184,7 +203,15 @@ export function useWorkers(provenance: SessionProvenanceView | null): Workers {
   const { api, stores } = useApp();
   const facts = useSessionFacts();
   const agentDid = stores.selection.use.agentDid();
-  const sessions = useFleet((s) => (agentDid ? s.sessionsOf[agentDid] : undefined));
+  const sessions = useListedScopes(
+    agentDid,
+    provenance
+      ? [
+          ...provenance.started.map(scopeKey),
+          ...provenance.calls.map((call) => scopeKey(call.caused)),
+        ]
+      : [],
+  );
   const [heldOps, setHeldOps] = useState<Held<DesktopOperationsSnapshot> | null>(null);
   const ops = heldOps?.scope === agentDid ? heldOps.value : null;
   /* asked again when a tool changes, which the session store counts */
