@@ -12,7 +12,7 @@ import {
   DropdownMenuTrigger,
 } from "@gents/ui/components/dropdown-menu";
 import type { ThemePreference } from "@/theme";
-import type { NavMode } from "@/nav";
+import type { NavMode } from "@/preferences";
 import { preferences, useNavMode, useTheme } from "@/preferences";
 import { useApp } from "./AppContext";
 

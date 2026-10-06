@@ -10,12 +10,12 @@ import { applyShellPlatform, isMacTauriShell } from "../../lib/shellPlatform";
 import { useSelectedSessionValue } from "../hooks/useSelectedSession";
 import { useSelectedDeployment } from "../hooks/useClient";
 import type { Route } from "../lib/router";
-import { initTheme } from "../theme";
+import { applyChosenTheme } from "../preferences";
 
 /** The window's theme, platform styling, link guard and simulator boot, once. */
 export function usePlatformSetup() {
   useEffect(() => {
-    initTheme();
+    applyChosenTheme();
     applyShellPlatform();
   }, []);
   useEffect(() => installExternalLinkGuard(document), []);

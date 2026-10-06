@@ -1,10 +1,11 @@
-/* A node pick in local storage outlives the node it names: storage belongs
+/* A node pick kept in browser storage outlives the node it names: storage belongs
    to the app's origin, so a reset home or a removed peer leaves a DID no
    node has. The list must not narrow to nothing, and an empty list must
    not claim there are no sessions when a filter hides them. */
 import { cleanup, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
+import { listViews } from "../src/ui/app/listViews";
 import { SessionsScreen } from "../src/ui/screens/SessionsScreen";
 import { node, renderIn, testApp } from "./app-fixture";
 
@@ -43,17 +44,11 @@ const app = (deployments: ReturnType<typeof nodeWith>[]) =>
       client: { deployments },
     },
   });
-const storedNodes = (dids: string[]) =>
-  vi.stubGlobal("localStorage", {
-    getItem: (key: string) =>
-      key === "gents-prototype-sessions-nodes" ? JSON.stringify(dids) : null,
-    setItem: vi.fn(),
-    removeItem: vi.fn(),
-  });
+const storedNodes = (dids: string[]) => listViews.setSessionNodes(dids);
 
 afterEach(() => {
   cleanup();
-  vi.unstubAllGlobals();
+  listViews.setSessionNodes(null);
 });
 
 describe("a stored node pick", () => {

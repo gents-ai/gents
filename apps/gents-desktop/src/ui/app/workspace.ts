@@ -15,6 +15,7 @@ import { createJSONStorage, persist } from "zustand/middleware";
 import { createStore } from "zustand/vanilla";
 
 import { useRoute } from "@/lib/router";
+import { browserStorage } from "@/lib/storage";
 import type { Route } from "@gents/shell";
 
 export type DockState = {
@@ -47,31 +48,6 @@ type WorkspaceState = {
   docks: Record<string, DockState>;
   /** scopes by last visit, most recent last; bounds what is remembered */
   visited: string[];
-};
-
-/* the dock works without storage: unavailable or refused, it lasts the run */
-const browserStorage = {
-  getItem(key: string) {
-    try {
-      return localStorage.getItem(key);
-    } catch {
-      return null;
-    }
-  },
-  setItem(key: string, value: string) {
-    try {
-      localStorage.setItem(key, value);
-    } catch {
-      /* storage unavailable */
-    }
-  },
-  removeItem(key: string) {
-    try {
-      localStorage.removeItem(key);
-    } catch {
-      /* storage unavailable */
-    }
-  },
 };
 
 const isRecord = (v: unknown): v is Record<string, unknown> =>

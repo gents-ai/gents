@@ -46,12 +46,12 @@ import { Kbd } from "@gents/ui/components/kbd";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { cn } from "@gents/ui/lib/utils";
 import { href, navigate } from "@/lib/router";
-import { useEffect, useState, type ComponentProps } from "react";
+import { useEffect, useLayoutEffect, useState, type ComponentProps } from "react";
 import { behaviorName } from "./behavior";
 import { defaultScope, knownNodeIds, mailboxInScope, type Scope } from "@/lib/scope";
 import { useHomeDid, useScopeContext } from "@/hooks/useClient";
 import type { ShellActions } from "@/../hooks/shellActions";
-import { useStoredStrings } from "@/lib/stored";
+import { listViews, useListViews } from "@/app/listViews";
 import { nodeDidOf } from "@/lib/nodes";
 import { NodeAxis } from "./NodeAxis";
 import { NodeBehaviorStack } from "./NodeBehaviorStack";
@@ -117,14 +117,15 @@ export function MailboxScreen({
   /* the mailbox is what waits on the person wherever it came from: every
      node to start, then whatever the chips choose */
   const ctx = useScopeContext();
-  const [storedNodeIds, setNodeIds] = useStoredStrings("gents-prototype-mailbox-nodes");
-  /* a node named on the route narrows the list to it, once per route */
-  const [routedNode, setRoutedNode] = useState<string>();
-  if (nodeDid !== routedNode) {
-    setRoutedNode(nodeDid);
-    if (nodeDid) setNodeIds([nodeDid]);
-  }
-  const nodeIds = knownNodeIds(storedNodeIds, ctx);
+  const nodeIds = knownNodeIds(
+    useListViews((v) => v.mailboxNodes),
+    ctx,
+  );
+  /* a node named on the route narrows the list to it, once per route,
+     before the list is painted */
+  useLayoutEffect(() => {
+    if (nodeDid) listViews.setMailboxNodes([nodeDid]);
+  }, [nodeDid]);
   const scope: Scope = {
     nodes: nodeIds.length ? nodeIds : defaultScope("mailbox").nodes,
     agents: [],
@@ -142,7 +143,7 @@ export function MailboxScreen({
   /* null: the search is closed, not merely empty — the same two states
      the sessions list keeps */
   const [query, setQuery] = useState<string | null>(null);
-  const [kinds, setKinds] = useStoredStrings("gents-prototype-mailbox-kinds");
+  const kinds = useListViews((v) => v.mailboxKinds);
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
   const [dismissing, setDismissing] = useState(false);
 
@@ -238,7 +239,7 @@ export function MailboxScreen({
                   counts={nodeCounts}
                   value={nodeIds}
                   onChange={(next) => {
-                    setNodeIds(next);
+                    listViews.setMailboxNodes(next);
                     if (nodeDid) navigate({ name: "mailbox" });
                   }}
                 />
@@ -248,7 +249,7 @@ export function MailboxScreen({
                   options={KINDS}
                   counts={kindCounts}
                   value={kinds}
-                  onChange={setKinds}
+                  onChange={listViews.setMailboxKinds}
                 />
                 {(kinds.length > 0 || nodeIds.length > 0) && (
                   <Button
@@ -256,8 +257,8 @@ export function MailboxScreen({
                     size="icon-sm"
                     aria-label="Clear filters"
                     onClick={() => {
-                      setKinds([]);
-                      setNodeIds([]);
+                      listViews.setMailboxKinds([]);
+                      listViews.setMailboxNodes([]);
                     }}
                   >
                     <X />
@@ -377,7 +378,7 @@ export function MailboxScreen({
               className="underline decoration-border underline-offset-4 hover:text-foreground"
               onClick={() => {
                 setQuery(null);
-                setKinds([]);
+                listViews.setMailboxKinds([]);
               }}
             >
               Clear the search and filter

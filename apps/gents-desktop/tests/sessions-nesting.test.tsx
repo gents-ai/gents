@@ -2,7 +2,8 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
 import { SessionsScreen } from "../src/ui/screens/SessionsScreen";
-import { emptyFilter, filterSessions } from "../src/ui/screens/SessionFilters";
+import { emptyFilter } from "../src/ui/lib/session-filter";
+import { filterSessions } from "../src/ui/screens/SessionFilters";
 import { publish, testApp, withApp } from "./app-fixture";
 
 const session = (overrides: Partial<SessionSummary>): SessionSummary => ({

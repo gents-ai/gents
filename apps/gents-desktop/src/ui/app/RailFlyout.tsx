@@ -14,7 +14,7 @@ import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { cn } from "@gents/ui/lib/utils";
 import { PortalContainerProvider } from "@gents/ui/lib/portal-container";
 import { href, type Route } from "@/lib/router";
-import type { NavMode } from "@/nav";
+import type { NavMode } from "@/preferences";
 import { AgentAvatar } from "@/screens/AgentAvatar";
 import { SessionStatus } from "@/screens/SessionStatus";
 import { SyncHealth } from "./SyncHealth";

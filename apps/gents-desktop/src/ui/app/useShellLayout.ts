@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import type { Route } from "@/lib/router";
-import type { NavMode } from "@/nav";
+import type { NavMode } from "@/preferences";
 import { useNavMode } from "@/preferences";
 import { useDivider } from "@/lib/divider";
 import { ROOMY_WINDOW, useMediaQuery } from "@/lib/media";

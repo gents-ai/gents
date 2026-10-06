@@ -1,6 +1,6 @@
 /* Sessions: a heading row with search and New, then plain rows on the
    ground: title, the behavior's chip, and when it last moved. */
-import { memo, useState } from "react";
+import { memo, useLayoutEffect, useState } from "react";
 import {
   ChevronDown,
   CornerDownRight,
@@ -27,17 +27,13 @@ import {
 } from "@/lib/scope";
 import { useHomeDid, useScopeContext } from "@/hooks/useClient";
 import { nodeDidOf, nodeOfSession } from "@/lib/nodes";
-import { useStoredStrings } from "@/lib/stored";
 import { NodeBehaviorStack } from "./NodeBehaviorStack";
 import { NodeAxis } from "./NodeAxis";
 import { SessionStatus } from "./SessionStatus";
 import { isLive } from "@/lib/live";
-import {
-  SessionFilters,
-  filterSessions,
-  hasFilter,
-  useSessionFilter,
-} from "./SessionFilters";
+import { SessionFilters, filterSessions } from "./SessionFilters";
+import { hasFilter } from "@/lib/session-filter";
+import { listViews, useListViews } from "@/app/listViews";
 import {
   NO_SESSIONS,
   parentOf as parentOfIn,
@@ -56,7 +52,7 @@ export function SessionsScreen({
   const homeDid = useHomeDid();
   const [query, setQuery] = useState<string | null>(null);
   /* the three axes the summary carries: behavior, state, and what started it */
-  const [filter, setFilter] = useSessionFilter();
+  const filter = useListViews((v) => v.sessionFilter);
   /* which parents are showing their workers; a person who opened one meant it */
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   /* the nodes the list shows: the working node to start, then whatever the
@@ -64,20 +60,18 @@ export function SessionsScreen({
   const fleet = useFleet((s) => s);
   const ctx = useScopeContext();
   const defaultNodeIds = nodesInScope(defaultScope("sessions"), ctx).map(nodeDidOf);
-  const [storedNodeIds, setNodeIds] = useStoredStrings(
-    "gents-prototype-sessions-nodes",
-    defaultNodeIds,
-  );
-  /* a node named on the route narrows the list to it, once per route */
-  const [routedNode, setRoutedNode] = useState<string>();
-  if (nodeDid !== routedNode) {
-    setRoutedNode(nodeDid);
-    if (nodeDid) setNodeIds([nodeDid]);
-  }
+  const storedNodeIds = useListViews((v) => v.sessionNodes);
+  /* a node named on the route narrows the list to it, once per route,
+     before the list is painted */
+  useLayoutEffect(() => {
+    if (nodeDid) listViews.setSessionNodes([nodeDid]);
+  }, [nodeDid]);
   /* a pick whose nodes are all gone starts over at the working node */
-  const knownIds = knownNodeIds(storedNodeIds, ctx);
+  const knownIds = storedNodeIds && knownNodeIds(storedNodeIds, ctx);
   const nodeIds =
-    storedNodeIds.length > 0 && knownIds.length === 0 ? defaultNodeIds : knownIds;
+    !knownIds || (knownIds.length === 0 && storedNodeIds!.length > 0)
+      ? defaultNodeIds
+      : knownIds;
   /* the working node is where the list starts, not a filter to clear */
   const nodesPicked =
     nodeIds.length !== defaultNodeIds.length ||
@@ -171,7 +165,7 @@ export function SessionsScreen({
               counts={nodeCounts}
               value={nodeIds}
               onChange={(next) => {
-                setNodeIds(next);
+                listViews.setSessionNodes(next);
                 /* a pick is the person's, so the route stops naming a node */
                 if (nodeDid) navigate({ name: "sessions" });
               }}
@@ -180,10 +174,10 @@ export function SessionsScreen({
               sessions={inScope}
               nodeDids={nodesInScope(scope, ctx).map(nodeDidOf)}
               value={filter}
-              onChange={setFilter}
+              onChange={listViews.setSessionFilter}
               nodes={{
                 picked: nodesPicked,
-                clear: () => setNodeIds(defaultNodeIds),
+                clear: () => listViews.setSessionNodes(null),
               }}
             />
             <Button

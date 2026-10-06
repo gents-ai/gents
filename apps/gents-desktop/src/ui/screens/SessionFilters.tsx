@@ -6,9 +6,15 @@
    axes, so narrowing never hides the way back. */
 import { useExclusivePopover } from "@/hooks/useExclusivePopover";
 import { Activity, CircleX, CornerDownRight, Play, User, X } from "lucide-react";
-import { useEffect, useState } from "react";
 import type { ComponentType, ReactNode } from "react";
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
+import {
+  emptyFilter,
+  hasFilter,
+  type SessionFilter,
+  type SessionSource,
+  type SessionState,
+} from "@/lib/session-filter";
 import { nodeKeyOf } from "../../hooks/fleetStore";
 import { useFleet } from "@/hooks/useFleet";
 import { behaviorName } from "./behavior";
@@ -32,60 +38,6 @@ import {
 import { cn } from "@gents/ui/lib/utils";
 import { isLive } from "@/lib/live";
 import { BehaviorAvatar } from "./parts";
-
-export type SessionState = "live" | "failed";
-export type SessionSource = "person" | "task" | "session";
-
-export type SessionFilter = {
-  states: SessionState[];
-  sources: SessionSource[];
-  behaviors: string[];
-};
-
-export const emptyFilter: SessionFilter = {
-  states: [],
-  sources: [],
-  behaviors: [],
-};
-export const hasFilter = (f: SessionFilter) =>
-  f.states.length > 0 || f.sources.length > 0 || f.behaviors.length > 0;
-
-const KEY = "gents-session-filter";
-const strings = (v: unknown) =>
-  Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
-
-/* the narrowing outlives the visit: a person who works from "failed"
-   comes back to it. The trigger takes full ink and the row carries a
-   clear while anything is set, so a filter is never quietly on. */
-export function useSessionFilter() {
-  const [filter, setFilter] = useState<SessionFilter>(() => {
-    try {
-      const raw = localStorage.getItem(KEY);
-      if (!raw) return emptyFilter;
-      const parsed = JSON.parse(raw) as Record<string, unknown>;
-      return {
-        /* a state this build no longer offers is dropped, not misread */
-        states: strings(parsed.states).filter(isSessionState),
-        sources: strings(parsed.sources) as SessionSource[],
-        behaviors: strings(parsed.behaviors),
-      };
-    } catch {
-      return emptyFilter;
-    }
-  });
-  useEffect(() => {
-    try {
-      if (hasFilter(filter)) localStorage.setItem(KEY, JSON.stringify(filter));
-      else localStorage.removeItem(KEY);
-    } catch {
-      /* storage unavailable */
-    }
-  }, [filter]);
-  return [filter, setFilter] as const;
-}
-
-const isSessionState = (value: string): value is SessionState =>
-  value === "live" || value === "failed";
 
 const matchesState = (c: SessionSummary, state: SessionState) =>
   state === "live" ? isLive(c.turnState) : c.turnState === "failed";

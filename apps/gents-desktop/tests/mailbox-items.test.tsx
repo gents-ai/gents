@@ -262,12 +262,6 @@ describe("mailbox question", () => {
 
 describe("a mailbox opened from a node", () => {
   it("narrows to the node the route names, and keeps that choice", () => {
-    const stored = new Map<string, string>();
-    vi.stubGlobal("localStorage", {
-      getItem: (key: string) => stored.get(key) ?? null,
-      setItem: (key: string, value: string) => stored.set(key, value),
-      removeItem: (key: string) => stored.delete(key),
-    });
     const nodeWith = (agentDid: string, title: string) =>
       node({
         agentDid,
@@ -276,21 +270,17 @@ describe("a mailbox opened from a node", () => {
     const app = testApp({
       deployments: [nodeWith("did:key:a", "From A"), nodeWith("did:key:b", "From B")],
     });
-    render(<MailboxScreen nodeDid="did:key:b" />, { wrapper: withApp(app) });
+    const view = render(<MailboxScreen nodeDid="did:key:b" />, {
+      wrapper: withApp(app),
+    });
     expect(screen.getByRole("heading", { name: "From B" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "From A" })).not.toBeInTheDocument();
-    expect(JSON.parse(stored.get("gents-prototype-mailbox-nodes") ?? "[]")).toEqual([
-      "did:key:b",
-    ]);
+    /* back on the mailbox without a node, the narrowing it was left with holds */
+    view.rerender(<MailboxScreen />);
+    expect(screen.queryByRole("heading", { name: "From A" })).not.toBeInTheDocument();
   });
 
   it("keeps the filters when the routed node has nothing open, so it can be cleared", () => {
-    const stored = new Map<string, string>();
-    vi.stubGlobal("localStorage", {
-      getItem: (key: string) => stored.get(key) ?? null,
-      setItem: (key: string, value: string) => stored.set(key, value),
-      removeItem: (key: string) => stored.delete(key),
-    });
     const app = testApp({
       deployments: [
         node({

@@ -4,7 +4,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
 
-import { emptyFilter, SessionFilters } from "../src/ui/screens/SessionFilters";
+import { emptyFilter } from "../src/ui/lib/session-filter";
+import { SessionFilters } from "../src/ui/screens/SessionFilters";
 import { node, renderIn, testApp } from "./app-fixture";
 import { deployment } from "./config-panel-wiring/fixtures";
 
