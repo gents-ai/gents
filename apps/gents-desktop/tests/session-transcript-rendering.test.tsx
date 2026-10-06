@@ -14,7 +14,7 @@ vi.mock("../src/ui/screens/Markdown", () => ({
   },
 }));
 
-import { TranscriptPanel } from "../src/ui/screens/SessionScreen";
+import { TranscriptPanel } from "../src/ui/screens/Transcript";
 import { renderIn, testApp } from "./app-fixture";
 import { assistantMessage } from "./timeline-fixture";
 import { NO_PARENT } from "../src/ui/screens/parentWork";

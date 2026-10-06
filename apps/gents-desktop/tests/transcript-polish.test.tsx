@@ -13,7 +13,7 @@ vi.mock("../src/ui/screens/Markdown", () => ({
   Markdown: ({ children }: { children: string }) => <div>{children}</div>,
 }));
 
-import { TranscriptPanel } from "../src/ui/screens/SessionScreen";
+import { TranscriptPanel } from "../src/ui/screens/Transcript";
 import { ToolBody } from "../src/ui/screens/tool-views";
 import { diffText, lineCount, toolSummary } from "../src/ui/screens/tool-summary";
 import { activityStatus, isStopping } from "../src/ui/screens/activity-status";
