@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { renderIn, testApp } from "./app-fixture";
@@ -136,16 +136,15 @@ describe("managed server startup waits", () => {
   });
 
   it("names a data update without offering a restart", () => {
-    render(
-      <StartupScreen
-        error={null}
-        managedServerSupported
-        managedServerWait={{ kind: "updating", since: Date.now() - 400_000 }}
-        onRestartManagedServer={vi.fn(async () => undefined)}
-        onRetry={vi.fn(async () => undefined)}
-        phase="checking-managed-server"
-      />,
-    );
+    const app = testApp({
+      api: { restartManagedServer: vi.fn(async () => undefined) },
+      supportsManagedServer: true,
+    });
+    app.stores.client.setState({
+      startupPhase: "checking-managed-server",
+      managedServerWait: { kind: "updating", since: Date.now() - 400_000 },
+    });
+    renderIn(app, <StartupScreen />);
     expect(screen.getByTestId("startup-screen")).toHaveTextContent("Updating data…");
     expect(
       screen.queryByTestId("startup-restart-managed-server"),
@@ -224,18 +223,31 @@ describe("managed server startup waits", () => {
   });
 
   it("offers restart and continuing without the agent when launch startup fails", async () => {
-    const restart = vi.fn(async () => undefined);
-    const skip = vi.fn();
-    render(
-      <StartupScreen
-        error="The background agent keeps exiting before it becomes ready: it exited with code 78."
-        managedServerSupported
-        onRestartManagedServer={restart}
-        onRetry={vi.fn(async () => undefined)}
-        onSkipManagedServerWait={skip}
-        phase="managed-server-error"
-      />,
-    );
+    const message =
+      "The background agent keeps exiting before it becomes ready: it exited with code 78.";
+    const app = testApp({
+      api: { restartManagedServer: vi.fn(async () => undefined) },
+      supportsManagedServer: true,
+    });
+    app.stores.client.setState({
+      startupPhase: "managed-server-error",
+      error: message,
+      managedServerFailure: new ManagedServerStartupError(
+        message,
+        managedStatus({
+          state: "failed",
+          agentName: "Workshop Agent",
+          effectiveToolCeiling: "readwrite",
+        }),
+      ),
+    });
+    const restart = vi
+      .spyOn(app.lifecycle, "restartManagedServer")
+      .mockResolvedValue(undefined);
+    const skip = vi
+      .spyOn(app.lifecycle, "skipManagedServerWait")
+      .mockReturnValue(undefined);
+    renderIn(app, <StartupScreen />);
     expect(screen.getByTestId("startup-screen")).toHaveTextContent(
       "exited with code 78",
     );
@@ -249,26 +261,24 @@ describe("managed server startup waits", () => {
   });
 
   it("names where the logs are when launch startup fails", () => {
-    const { rerender } = render(
-      <StartupScreen
-        diagnosticsHint="Console.app: subsystem ai.gents. Runtime startup errors: /desk/logs/runtime-errors.log"
-        error="the native Gents service exited normally before it published runtime readiness"
-        managedServerSupported
-        onRetry={vi.fn(async () => undefined)}
-        phase="managed-server-error"
-      />,
-    );
+    const app = testApp({ supportsManagedServer: true });
+    app.stores.client.setState({
+      startupPhase: "managed-server-error",
+      error:
+        "the native Gents service exited normally before it published runtime readiness",
+      startupDiagnosticsHint:
+        "Console.app: subsystem ai.gents. Runtime startup errors: /desk/logs/runtime-errors.log",
+    });
+    renderIn(app, <StartupScreen />);
     expect(screen.getByTestId("diagnostics-hint")).toHaveTextContent(
       "/desk/logs/runtime-errors.log",
     );
-    rerender(
-      <StartupScreen
-        diagnosticsHint="Console.app: subsystem ai.gents"
-        error={null}
-        managedServerSupported
-        onRetry={vi.fn(async () => undefined)}
-        phase="checking-managed-server"
-      />,
+    act(() =>
+      app.stores.client.setState({
+        startupPhase: "checking-managed-server",
+        error: null,
+        startupDiagnosticsHint: "Console.app: subsystem ai.gents",
+      }),
     );
     expect(screen.queryByTestId("diagnostics-hint")).not.toBeInTheDocument();
   });
@@ -361,18 +371,18 @@ describe("managed server startup waits", () => {
 
   it("shows macOS approval guidance with a settings shortcut on the launch screen", async () => {
     const open = vi.fn(async () => undefined);
-    const skip = vi.fn();
-    render(
-      <StartupScreen
-        error={null}
-        managedServerSupported
-        managedServerWait={{ kind: "approval", since: Date.now() - 12_000 }}
-        onOpenLoginItems={open}
-        onRetry={vi.fn(async () => undefined)}
-        onSkipManagedServerWait={skip}
-        phase="checking-managed-server"
-      />,
-    );
+    const app = testApp({
+      api: { openManagedServerLoginItems: open },
+      supportsManagedServer: true,
+    });
+    app.stores.client.setState({
+      startupPhase: "checking-managed-server",
+      managedServerWait: { kind: "approval", since: Date.now() - 12_000 },
+    });
+    const skip = vi
+      .spyOn(app.lifecycle, "skipManagedServerWait")
+      .mockReturnValue(undefined);
+    renderIn(app, <StartupScreen />);
 
     const screenText = screen.getByTestId("startup-screen");
     expect(screenText).toHaveTextContent(
@@ -387,15 +397,12 @@ describe("managed server startup waits", () => {
   });
 
   it("names a booting runtime and how long it has waited instead of failing", () => {
-    render(
-      <StartupScreen
-        error={null}
-        managedServerSupported
-        managedServerWait={{ kind: "booting", since: Date.now() - 75_000 }}
-        onRetry={vi.fn(async () => undefined)}
-        phase="checking-managed-server"
-      />,
-    );
+    const app = testApp({ supportsManagedServer: true });
+    app.stores.client.setState({
+      startupPhase: "checking-managed-server",
+      managedServerWait: { kind: "booting", since: Date.now() - 75_000 },
+    });
+    renderIn(app, <StartupScreen />);
     const screenText = screen.getByTestId("startup-screen");
     expect(screenText).toHaveTextContent(
       "Waiting for the background agent to finish starting",

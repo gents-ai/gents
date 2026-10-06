@@ -7,6 +7,9 @@ const listeners = new Set<() => void>();
 let timer: number | null = null;
 const start = () => {
   if (timer !== null) return;
+  /* the clock stood still while nothing ran; the first reader is told the
+     time now, not when it stopped */
+  now = Date.now();
   timer = window.setInterval(() => {
     now = Date.now();
     for (const l of listeners) l();

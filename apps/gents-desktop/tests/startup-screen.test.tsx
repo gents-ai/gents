@@ -10,6 +10,7 @@ import type {
 
 import App from "../src/App";
 import { StartupScreen } from "../src/components/StartupScreen";
+import { renderIn, testApp } from "./app-fixture";
 import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
 
 function deferred<T>() {
@@ -190,13 +191,9 @@ describe("desktop startup screen", () => {
 
   it("does not invent a synchronization phase while client startup is pending", () => {
     vi.useFakeTimers();
-    const { unmount } = render(
-      <StartupScreen
-        error={null}
-        onRetry={vi.fn(async () => undefined)}
-        phase="starting-client"
-      />,
-    );
+    const app = testApp();
+    app.stores.client.setState({ startupPhase: "starting-client" });
+    const { unmount } = renderIn(app, <StartupScreen />);
 
     act(() => vi.advanceTimersByTime(5_000));
 

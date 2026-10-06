@@ -46,8 +46,11 @@ export function testApp({
   session,
   selection,
   reportFailure,
+  supportsManagedServer,
 }: {
   api?: object;
+  /** whether the window owns a managed server, which startup checks first */
+  supportsManagedServer?: boolean;
   /** the client as read, when a test gives more than its nodes */
   snapshot?: unknown;
   /** where a failed action is shown; the app passes its toast */
@@ -56,7 +59,11 @@ export function testApp({
   session?: DesktopSessionSnapshot | null;
   selection?: Partial<SelectionState>;
 } = {}): DesktopApp {
-  const app = createDesktopApp({ api: api as DesktopApiAdapter, reportFailure });
+  const app = createDesktopApp({
+    api: api as DesktopApiAdapter,
+    reportFailure,
+    supportsManagedServer,
+  });
   if (snapshot) publishSnapshot(app, snapshot as DesktopClientSnapshot);
   if (deployments) publish(app, deployments);
   app.stores.selection.setState({

@@ -95,13 +95,13 @@ function AppHost({ bridge: given }: { bridge?: DesktopBridge }) {
   useManagedServerTrayControls(bridge.api);
   return (
     <AppProvider value={app}>
-      <AppBody managedServerSupported={bridge.supportsManagedServer === true} />
+      <AppBody />
     </AppProvider>
   );
 }
 
-function AppBody({ managedServerSupported }: { managedServerSupported: boolean }) {
-  const { api, lifecycle, actions } = useApp();
+function AppBody() {
+  const { actions } = useApp();
   const route = useRoute();
   const history = useHistory();
   /* the dock of each screen is found from its route while rendering; this
@@ -175,19 +175,7 @@ function AppBody({ managedServerSupported }: { managedServerSupported: boolean }
     return (
       <>
         {titlebar}
-        <StartupScreen
-          error={startup.error}
-          managedServerSupported={managedServerSupported}
-          onRetry={lifecycle.retryStartup}
-          managedServerWait={startup.managedServerWait}
-          diagnosticsHint={startup.diagnosticsHint}
-          onSkipManagedServerWait={lifecycle.skipManagedServerWait}
-          onRestartManagedServer={
-            startup.canRestartManagedServer ? lifecycle.restartManagedServer : undefined
-          }
-          onOpenLoginItems={api.openManagedServerLoginItems}
-          phase={startup.phase}
-        />
+        <StartupScreen />
       </>
     );
   }

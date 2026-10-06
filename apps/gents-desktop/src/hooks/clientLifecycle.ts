@@ -353,6 +353,8 @@ export function createClientLifecycle({
     /** Restarts a managed server whose start failed, with the agent and
         authority that start reported, then runs startup again. */
     restartManagedServer,
+    /** Whether this window owns a managed server, which startup checks first. */
+    supportsManagedServer,
     /** Runs startup again from the beginning. */
     retryStartup,
     /** Stops and starts the client, a bounded number of times, then reads
