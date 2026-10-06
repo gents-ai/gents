@@ -122,3 +122,12 @@ export function newBehaviorView(deployment: NodeView): BehaviorView {
     createdAt: null,
   };
 }
+
+/** A new behavior drafted beside another page, before its first save. */
+export type DraftMode = {
+  /* the new behavior's id once saved */
+  onSaved: (behaviorId: string) => void;
+  onCancel: () => void;
+  /* from a session's composer: saved enabled, to be used at once */
+  enabled?: boolean;
+};
