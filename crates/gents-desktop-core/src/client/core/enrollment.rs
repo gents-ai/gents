@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
+use defra_node::QueryResponse;
 use defra_p2p_adapter::{
     P2PError, P2POperations as P2POps, P2pDocumentRequest, ReplicationFilter, TransportPeerId,
 };
@@ -275,9 +276,10 @@ impl ClientCore {
                 pins
             });
         let decisions = rows::<EnrollmentDecisionRow>(&response, "NetworkEnrollmentDecision")?;
-        let revisions = rows::<EnrollmentRevisionRow>(&response, "NetworkAuthorizationRevision")?;
+        let revisions = listing_revision_rows(&response)?;
         let request_rows = rows::<EnrollmentRequestRow>(&response, "NetworkEnrollmentRequest")?;
         let retired = self.sync_state.retired_enrollment_digests().await;
+        let assembly_requests = listing_assembly_requests(&request_rows, &self.principal).await;
         let mut active = Vec::new();
 
         for row in &request_rows {
@@ -334,7 +336,7 @@ impl ClientCore {
                 &offer,
                 &request,
                 admin_did,
-                &request_rows,
+                &assembly_requests,
                 &decisions,
                 &revisions,
                 &self.principal,
@@ -801,6 +803,15 @@ enum EnrollmentAuthorityOutcome {
     Conflicted { reason: String },
 }
 
+/// The durable projection of one local enrollment request. A current
+/// decision and revision keep the authorization generation current whether
+/// or not a current route receipt opens the transport route.
+enum DesktopApprovalProjection {
+    Routed(ApprovedStatusEnrollment),
+    CurrentWithoutRoute,
+    Absent,
+}
+
 fn prioritized_current_approvals(
     outcomes: &BTreeMap<String, EnrollmentAuthorityOutcome>,
     known_peers: &BTreeSet<String>,
@@ -842,11 +853,17 @@ pub(super) async fn reconcile_status_enrollment_approvals(
     sync_state: &ClientSyncStateOwner,
     route_manager: &Arc<ClientRouteManager>,
 ) -> Result<BTreeMap<String, EnrollmentAuthorizationGeneration>> {
-    let outcomes =
+    let (outcomes, authorized_server_peers) =
         load_status_enrollment_approvals(node.as_ref(), principal.as_ref(), local_peer_id).await?;
-    let observed_server_peers = outcomes.keys().cloned().collect::<BTreeSet<_>>();
+    // The prune keys on authority presence, not on the receipt-gated
+    // outcomes: a missing route receipt must not end a retirement whose
+    // decision and revision still read current, or the peer it removed
+    // could be reinstalled once the receipt observation returns. Conflicted
+    // scopes keep their retirements too.
+    let mut authority_server_peers = authorized_server_peers;
+    authority_server_peers.extend(outcomes.keys().cloned());
     if let Err(error) = sync_state
-        .prune_retired_enrollments(&observed_server_peers)
+        .prune_retired_enrollments(&authority_server_peers)
         .await
     {
         tracing::warn!(error = %error, "failed to prune retired enrollment generations");
@@ -1018,11 +1035,19 @@ async fn demote_enrollment_peer(sync_state: &ClientSyncStateOwner, peer_id: &str
     }
 }
 
+/// Loads the scoped enrollment authority. The outcomes are receipt-gated
+/// (an approval only counts once its route receipt is current); the
+/// returned server peers are authority-gated instead, so a retirement can
+/// be held against the generation it named even while the receipt
+/// observation is empty.
 async fn load_status_enrollment_approvals(
     node: &defra_node::EmbeddedNode,
     principal: &PrincipalIdentity,
     local_peer_id: &str,
-) -> Result<BTreeMap<String, EnrollmentAuthorityOutcome>> {
+) -> Result<(
+    BTreeMap<String, EnrollmentAuthorityOutcome>,
+    BTreeSet<String>,
+)> {
     let response = graphql_with_transaction_retry(
         node,
         STATUS_ENROLLMENT_QUERY,
@@ -1271,6 +1296,7 @@ async fn load_status_enrollment_approvals(
     }
 
     let mut approved = Vec::new();
+    let mut authorized_server_peers = BTreeSet::new();
     for request_row in &requests {
         let server_peer = request_row.server_peer.clone();
         match project_desktop_approval(
@@ -1285,8 +1311,14 @@ async fn load_status_enrollment_approvals(
         )
         .await
         {
-            Ok(Some(approval)) => approved.push(approval),
-            Ok(None) => {}
+            Ok(DesktopApprovalProjection::Routed(approval)) => {
+                authorized_server_peers.insert(server_peer);
+                approved.push(approval);
+            }
+            Ok(DesktopApprovalProjection::CurrentWithoutRoute) => {
+                authorized_server_peers.insert(server_peer);
+            }
+            Ok(DesktopApprovalProjection::Absent) => {}
             Err(error) => add_scoped_conflict(
                 &mut conflicts,
                 &server_peer,
@@ -1295,7 +1327,10 @@ async fn load_status_enrollment_approvals(
         }
     }
     apply_current_generational_conflicts(&approved, generational_conflicts, &mut conflicts);
-    Ok(scoped_authority_outcomes(approved, conflicts))
+    Ok((
+        scoped_authority_outcomes(approved, conflicts),
+        authorized_server_peers,
+    ))
 }
 
 fn add_generational_conflict(
@@ -1458,7 +1493,7 @@ async fn project_desktop_approval(
     pins: &BTreeMap<String, Vec<String>>,
     principal: &PrincipalIdentity,
     local_peer_id: &str,
-) -> Result<Option<ApprovedStatusEnrollment>> {
+) -> Result<DesktopApprovalProjection> {
     let request = request_row.to_record()?;
     anyhow::ensure!(
         request.candidate_did == principal.did() && request.candidate_peer == local_peer_id,
@@ -1542,6 +1577,7 @@ async fn project_desktop_approval(
         receipts.push((receipt, verified));
     }
 
+    let mut current_without_route = false;
     for (decision, decision_verified) in projection.decisions {
         let pure_decision = to_pure_decision(&decision, decision_verified);
         if !projection.documents.current_approval(
@@ -1560,21 +1596,28 @@ async fn project_desktop_approval(
             )
         });
         if has_current_receipt {
-            return Ok(Some(ApprovedStatusEnrollment {
-                network_id: request.network_id,
-                request_id: request.request_id,
-                server_peer: request.server_peer,
-                server_ticket: offer.server_ticket,
-                admin_did: request.admin_did,
-                owner_agent: request.owner_agent,
-                request_digest: request.request_digest,
-                authorization_sequence: decision.authorization_sequence,
-                authorization_expires_at: decision.authorization_expires_at,
-                decided_at: decision.decided_at,
-            }));
+            return Ok(DesktopApprovalProjection::Routed(
+                ApprovedStatusEnrollment {
+                    network_id: request.network_id,
+                    request_id: request.request_id,
+                    server_peer: request.server_peer,
+                    server_ticket: offer.server_ticket,
+                    admin_did: request.admin_did,
+                    owner_agent: request.owner_agent,
+                    request_digest: request.request_digest,
+                    authorization_sequence: decision.authorization_sequence,
+                    authorization_expires_at: decision.authorization_expires_at,
+                    decided_at: decision.decided_at,
+                },
+            ));
         }
+        current_without_route = true;
     }
-    Ok(None)
+    Ok(if current_without_route {
+        DesktopApprovalProjection::CurrentWithoutRoute
+    } else {
+        DesktopApprovalProjection::Absent
+    })
 }
 
 /// The durable observation one local enrollment request is projected against.
@@ -1586,6 +1629,48 @@ struct DurableEnrollmentProjection {
     offer: PureOffer,
     request: PureRequest,
     decisions: Vec<(EnrollmentDecisionRecord, bool)>,
+}
+
+/// The reconciler preflights malformed authority rows into scoped conflicts
+/// before projecting them; the listing has no conflict channel, so the same
+/// rows are skipped per row and the well-formed remainder still lists.
+fn listing_revision_rows(response: &QueryResponse) -> Result<Vec<EnrollmentRevisionRow>> {
+    Ok(rows::<Value>(response, "NetworkAuthorizationRevision")?
+        .into_iter()
+        .filter_map(|raw| {
+            let row = serde_json::from_value::<EnrollmentRevisionRow>(raw).ok()?;
+            row.to_record().ok()?;
+            Some(row)
+        })
+        .collect())
+}
+
+/// A foreign candidate request that fails to decode or verify must not fail
+/// the whole listing; the assembly propagates same-server rows so the
+/// reconciler can turn them into per-scope conflicts.
+async fn listing_assembly_requests(
+    request_rows: &[EnrollmentRequestRow],
+    principal: &PrincipalIdentity,
+) -> Vec<EnrollmentRequestRow> {
+    let mut contained = Vec::new();
+    for row in request_rows {
+        let Ok(candidate) = row.to_record() else {
+            continue;
+        };
+        if principal
+            .verify(
+                &candidate.candidate_did,
+                &candidate.signing_payload(),
+                &candidate.candidate_sig,
+            )
+            .await
+            .is_err()
+        {
+            continue;
+        }
+        contained.push(row.clone());
+    }
+    contained
 }
 
 async fn assemble_durable_enrollment_documents(
@@ -1706,7 +1791,7 @@ struct EnrollmentPinRow {
     admin_did: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct EnrollmentRequestRow {
     #[serde(rename = "_docID")]
     doc_id: String,
@@ -2650,20 +2735,22 @@ mod tests {
         };
         let pins = BTreeMap::from([("network-1".into(), vec![admin.did().into()])]);
 
-        assert!(project_desktop_approval(
-            &request_row,
-            std::slice::from_ref(&request_row),
-            std::slice::from_ref(&decision_row),
-            std::slice::from_ref(&revision_row(&revision)),
-            &[],
-            &pins,
-            &candidate,
-            "client-peer",
-        )
-        .await
-        .unwrap()
-        .is_none());
-        let approved = project_desktop_approval(
+        assert!(matches!(
+            project_desktop_approval(
+                &request_row,
+                std::slice::from_ref(&request_row),
+                std::slice::from_ref(&decision_row),
+                std::slice::from_ref(&revision_row(&revision)),
+                &[],
+                &pins,
+                &candidate,
+                "client-peer",
+            )
+            .await
+            .unwrap(),
+            DesktopApprovalProjection::CurrentWithoutRoute,
+        ));
+        let approved = match project_desktop_approval(
             &request_row,
             std::slice::from_ref(&request_row),
             std::slice::from_ref(&decision_row),
@@ -2675,7 +2762,10 @@ mod tests {
         )
         .await
         .unwrap()
-        .expect("signed current receipt opens exact generation");
+        {
+            DesktopApprovalProjection::Routed(approved) => approved,
+            _ => panic!("signed current receipt opens exact generation"),
+        };
         assert_eq!(approved.request_digest, request.request_digest);
         assert_eq!(approved.authorization_sequence, 1);
         assert_eq!(approved.authorization_expires_at, authorization_expires_at);
@@ -2742,19 +2832,21 @@ mod tests {
             &request.request_digest,
         );
         revoked.admin_sig = admin.sign(&revoked.signing_payload()).unwrap();
-        assert!(project_desktop_approval(
-            &request_row,
-            std::slice::from_ref(&request_row),
-            std::slice::from_ref(&decision_row),
-            &[revision_row(&revoked)],
-            std::slice::from_ref(&receipt_row),
-            &pins,
-            &candidate,
-            "client-peer",
-        )
-        .await
-        .unwrap()
-        .is_none());
+        assert!(matches!(
+            project_desktop_approval(
+                &request_row,
+                std::slice::from_ref(&request_row),
+                std::slice::from_ref(&decision_row),
+                &[revision_row(&revoked)],
+                std::slice::from_ref(&receipt_row),
+                &pins,
+                &candidate,
+                "client-peer",
+            )
+            .await
+            .unwrap(),
+            DesktopApprovalProjection::Absent,
+        ));
         demote_enrollment_peer(&sync_state, &approved.server_peer).await;
         let revoked_record = sync_state.records().into_iter().next().unwrap();
         assert!(
@@ -3196,8 +3288,8 @@ mod tests {
         commit_document(core, "desktop.enrollment.test.admin_pin", &mutation).await;
     }
 
-    async fn commit_enrollment_request(core: &ClientCore, authority: &SignedEnrollmentAuthority) {
-        let input = enrollment_request_input(&authority.request);
+    async fn commit_enrollment_request(core: &ClientCore, request: &EnrollmentRequestRecord) {
+        let input = enrollment_request_input(request);
         let mutation =
             format!("mutation {{ create_NetworkEnrollmentRequest(input: {input}) {{ _docID }} }}");
         commit_document(core, "desktop.enrollment.test.request", &mutation).await;
@@ -3232,6 +3324,19 @@ mod tests {
     }
 
     async fn commit_revision(core: &ClientCore, revision: &AuthorizationRevisionRecord) {
+        commit_revision_with_admin_sig(
+            core,
+            revision,
+            &bs58::encode(&revision.admin_sig).into_string(),
+        )
+        .await;
+    }
+
+    async fn commit_revision_with_admin_sig(
+        core: &ClientCore,
+        revision: &AuthorizationRevisionRecord,
+        admin_sig: &str,
+    ) {
         let mutation = format!(
             r#"mutation {{ create_NetworkAuthorizationRevision(input: {{
                 protocol_version: {}, revision_id: "{}", request_id: "{}", request_digest: "{}",
@@ -3253,7 +3358,7 @@ mod tests {
             revision.kind.as_str(),
             escape_graphql_string(&revision.issued_at),
             escape_graphql_string(&revision.signer_did),
-            bs58::encode(&revision.admin_sig).into_string(),
+            escape_graphql_string(admin_sig),
         );
         commit_document(core, "desktop.enrollment.test.revision", &mutation).await;
     }
@@ -3337,7 +3442,7 @@ mod tests {
                 .unwrap();
         let authority = signed_enrollment_authority(&admin, core.principal(), core.local_peer_id());
         commit_admin_pin(&core, &authority).await;
-        commit_enrollment_request(&core, &authority).await;
+        commit_enrollment_request(&core, &authority.request).await;
         commit_decision(&core, &authority).await;
         commit_revision(&core, &authority.revision).await;
         commit_route_receipt(&core, &authority).await;
@@ -3449,7 +3554,7 @@ mod tests {
                 .unwrap();
         let authority = signed_enrollment_authority(&admin, core.principal(), core.local_peer_id());
         commit_admin_pin(&core, &authority).await;
-        commit_enrollment_request(&core, &authority).await;
+        commit_enrollment_request(&core, &authority.request).await;
         commit_decision(&core, &authority).await;
         commit_revision(&core, &authority.revision).await;
 
@@ -3492,7 +3597,7 @@ mod tests {
                 .await
                 .unwrap();
         let authority = signed_enrollment_authority(&admin, core.principal(), core.local_peer_id());
-        commit_enrollment_request(&core, &authority).await;
+        commit_enrollment_request(&core, &authority.request).await;
         locally_retire(&core, &authority).await;
 
         let offer = decode_offer(&authority.offer_token).unwrap();
@@ -3504,6 +3609,128 @@ mod tests {
             reused.is_none(),
             "a retired generation must not be reused inside its offer window: {reused:?}"
         );
+
+        core.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn malformed_authority_rows_are_skipped_by_the_active_listing() {
+        use super::super::ClientCoreOptions;
+        use crate::client::paths::DesktopPaths;
+
+        let temp = tempfile::tempdir().unwrap();
+        let core = ClientCore::start_with_paths_and_options(
+            DesktopPaths::from_root(temp.path().to_path_buf()),
+            ClientCoreOptions::local_only(),
+        )
+        .await
+        .unwrap();
+        let admin =
+            PrincipalIdentity::load_or_create(&DesktopPaths::from_root(temp.path().join("admin")))
+                .await
+                .unwrap();
+        let authority = signed_enrollment_authority(&admin, core.principal(), core.local_peer_id());
+        commit_admin_pin(&core, &authority).await;
+        commit_enrollment_request(&core, &authority.request).await;
+        commit_decision(&core, &authority).await;
+        commit_revision(&core, &authority.revision).await;
+
+        let mut malformed_revision = authority.revision.clone();
+        malformed_revision.revision_id = format!("{}-malformed", malformed_revision.revision_id);
+        commit_revision_with_admin_sig(&core, &malformed_revision, "not-a-base58-signature").await;
+        let mut foreign = authority.request.clone();
+        foreign.request_id = format!("{}-foreign", foreign.request_id);
+        foreign.request_digest = format!("{}-foreign", foreign.request_digest);
+        foreign.challenge = format!("{}-foreign", foreign.challenge);
+        foreign.candidate_did = admin.did().to_string();
+        foreign.candidate_peer = "foreign-peer".into();
+        foreign.candidate_sig = vec![1, 2, 3];
+        commit_enrollment_request(&core, &foreign).await;
+
+        let listed = core.active_status_enrollment_requests().await.unwrap();
+        assert_eq!(listed.len(), 1, "{listed:?}");
+        assert_eq!(listed[0].state, "approved");
+        assert_eq!(listed[0].request_id, authority.request.request_id);
+
+        core.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_retirement_survives_an_absent_route_receipt_while_authority_is_current() {
+        use super::super::ClientCoreOptions;
+        use crate::client::paths::DesktopPaths;
+        use std::sync::atomic::Ordering::SeqCst;
+
+        let temp = tempfile::tempdir().unwrap();
+        let core = ClientCore::start_with_paths_and_options(
+            DesktopPaths::from_root(temp.path().to_path_buf()),
+            ClientCoreOptions::local_only(),
+        )
+        .await
+        .unwrap();
+        let admin =
+            PrincipalIdentity::load_or_create(&DesktopPaths::from_root(temp.path().join("admin")))
+                .await
+                .unwrap();
+        let authority = signed_enrollment_authority(&admin, core.principal(), core.local_peer_id());
+        commit_admin_pin(&core, &authority).await;
+        commit_enrollment_request(&core, &authority.request).await;
+        commit_decision(&core, &authority).await;
+        commit_revision(&core, &authority.revision).await;
+        locally_retire(&core, &authority).await;
+
+        let transport = Arc::new(EnrollmentTransport {
+            peer: authority.offer.server_ticket.clone(),
+            resolved: Some(identity::Did::new(admin.did().to_string()).unwrap()),
+            connected: false.into(),
+            dials: 0.into(),
+            observations: 0.into(),
+        });
+        let p2p: Arc<dyn P2POps> = transport.clone();
+        let principal = Arc::new(core.principal().clone());
+        let route_manager = Arc::new(ClientRouteManager::new(
+            core.node_arc(),
+            Arc::clone(&p2p),
+            Arc::clone(&principal),
+        ));
+        let reconcile = || async {
+            reconcile_status_enrollment_approvals(
+                &core.node_arc(),
+                &p2p,
+                &principal,
+                core.local_peer_id(),
+                &core.sync_state,
+                &route_manager,
+            )
+            .await
+            .unwrap()
+        };
+
+        reconcile().await;
+        assert_eq!(
+            core.sync_state.retired_enrollment_digests().await,
+            BTreeSet::from([authority.request.request_digest.clone()]),
+            "an absent route receipt must not prune a retirement whose authority is current"
+        );
+        assert!(core.peer_records().await.is_empty());
+
+        commit_route_receipt(&core, &authority).await;
+        reconcile().await;
+        assert_eq!(
+            core.sync_state.retired_enrollment_digests().await,
+            BTreeSet::from([authority.request.request_digest.clone()]),
+            "the retirement outlives the authorization generation it names"
+        );
+        assert!(
+            core.peer_records().await.is_empty(),
+            "a receipt arriving after removal must not reinstall the enrolled server"
+        );
+        assert_eq!(
+            transport.dials.load(SeqCst),
+            0,
+            "a removed enrollment is not re-dialled once its receipt returns"
+        );
+        assert_eq!(transport.observations.load(SeqCst), 0);
 
         core.shutdown().await.unwrap();
     }

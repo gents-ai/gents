@@ -294,18 +294,19 @@ impl PeerDirectory {
             .collect()
     }
 
-    /// Drop retirements whose enrolled server no longer appears in the scoped
-    /// durable observation. Lease expiry and revocation both remove the
-    /// outcome, which prunes the retirement with the authority it named.
+    /// Drop retirements whose enrolled server no longer has a current
+    /// durable authorization. Lease expiry and revocation end the
+    /// generation and prune the retirement with it; an absent route receipt
+    /// must not, because the generation it named still reads current.
     pub(in crate::client) async fn prune_retired_enrollments(
         &mut self,
-        observed_server_peers: &BTreeSet<String>,
+        authority_server_peers: &BTreeSet<String>,
     ) -> Result<()> {
         let mut candidate = self.clone();
         let before = candidate.retired_enrollments.len();
         candidate
             .retired_enrollments
-            .retain(|retired| observed_server_peers.contains(&retired.server_peer));
+            .retain(|retired| authority_server_peers.contains(&retired.server_peer));
         if candidate.retired_enrollments.len() != before {
             self.commit(candidate).await?;
         }

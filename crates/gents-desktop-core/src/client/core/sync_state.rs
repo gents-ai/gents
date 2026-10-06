@@ -152,11 +152,11 @@ impl ClientSyncStateOwner {
 
     pub(super) async fn prune_retired_enrollments(
         &self,
-        observed_server_peers: &BTreeSet<String>,
+        authority_server_peers: &BTreeSet<String>,
     ) -> anyhow::Result<()> {
         let mut directory = self.directory.write().await;
         directory
-            .prune_retired_enrollments(observed_server_peers)
+            .prune_retired_enrollments(authority_server_peers)
             .await
     }
 
