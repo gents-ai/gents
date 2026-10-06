@@ -762,6 +762,15 @@ fn validate_manifest(manifest: &ScenarioManifest) -> Result<()> {
             bail!("allowed_folders names {path} twice");
         }
     }
+    if !allowed.is_empty()
+        && manifest
+            .init
+            .tool_root
+            .as_deref()
+            .is_none_or(|root| root.trim().is_empty())
+    {
+        bail!("allowed_folders needs init.tool_root: every allowed folder stays inside it");
+    }
     if !manifest.expect.source_edges.is_empty() && !manifest.expect.signed_provenance {
         bail!("expect.source_edges requires expect.signed_provenance=true");
     }
