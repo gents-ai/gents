@@ -21,7 +21,8 @@ import {
   TextRow,
 } from "./editors";
 import { ProfileSheet } from "./ProfileSheet";
-import { InferencePanel, profileBackend } from "./InferencePanel";
+import { InferencePanel } from "./InferencePanel";
+import { profileBackend } from "./ProviderAccounts";
 import { useAccounts, useSetupCatalog } from "@/hooks/useProviders";
 import { BackendSheet } from "./BackendSheet";
 import { Plus } from "lucide-react";

@@ -1,7 +1,7 @@
 /* A backend's full editor beside the page that references it. */
 import type { NodeView } from "../../../hooks/fleetStore";
 import { EditorSheet } from "./EditorSheet";
-import { BackendEditor } from "./InferencePanel";
+import { BackendEditor } from "./BackendEditor";
 import { useAccounts } from "@/hooks/useProviders";
 
 export function BackendSheet({
