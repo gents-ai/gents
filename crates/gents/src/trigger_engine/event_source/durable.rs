@@ -298,10 +298,13 @@ impl EventSource {
         trigger: &crate::runtime_snapshot::ResolvedEventTrigger,
     ) -> anyhow::Result<Option<FireIntent>> {
         let owner = Self::delivery(snapshot, trigger)?.owner().to_owned();
-        let record =
-            ConfigAccess::transact_local(&self.node, None, "trigger.read_arrival_cursor", |txn| {
+        let record = ConfigAccess::transact_local_readonly(
+            &self.node,
+            None,
+            "trigger.read_arrival_cursor",
+            |txn| {
                 Box::pin(async {
-                    crate::config_client::event_source_cursor::load_or_seed_for_source(
+                    crate::config_client::event_source_cursor::load_for_source(
                         txn,
                         &owner,
                         &trigger.trigger_id,
@@ -309,8 +312,31 @@ impl EventSource {
                     )
                     .await
                 })
-            })
-            .await?;
+            },
+        )
+        .await?;
+        let record = match record {
+            Some(record) => record,
+            None => {
+                ConfigAccess::transact_local(
+                    &self.node,
+                    None,
+                    "trigger.seed_arrival_cursor",
+                    |txn| {
+                        Box::pin(async {
+                            crate::config_client::event_source_cursor::load_or_seed_for_source(
+                                txn,
+                                &owner,
+                                &trigger.trigger_id,
+                                &trigger.source_collection,
+                            )
+                            .await
+                        })
+                    },
+                )
+                .await?
+            }
+        };
         let response = crate::graphql::graphql_with_transaction_retry(&self.node, &format!(
             "{{ _documentArrivals(collection: \"{}\", after: \"{}\", limit: 128) {{ head next entries {{ cursor docID }} }} }}",
             escape_graphql_string(&record.cursor.source_collection), escape_graphql_string(&record.cursor.after)), "trigger.read_arrivals").await?;

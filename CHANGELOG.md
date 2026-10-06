@@ -11,6 +11,9 @@ source consistency checks, not a separate runtime compatibility version.
   those owners use native `ProviderModel`/`ProviderClient` handles and admission
   errors and usage, and a structure test keeps Rig paths behind their owners
   (#438). No behavior change.
+- iOS builds again: the DB Explorer window keeps its desktop-only title, size and
+  focus calls off mobile targets, and CI checks the iOS simulator build on main.
+
 - Grok subscription backends advertise client version 1.0.46, above the
   proxy's floor (#2274). A 426 version gate now fails fast instead of burning
   the retry ladder, and `grok-auth-probe` and model discovery name the version
