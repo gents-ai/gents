@@ -346,7 +346,14 @@ impl EventSource {
             let source_document = intent.doc_vars.clone();
             let (tx, rx) = tokio::sync::oneshot::channel();
             let observe = intent.on_result;
+            let unacknowledged = UnacknowledgedGuard::new(
+                self.node.clone(),
+                owner.clone(),
+                trigger.trigger_id.clone(),
+                doc_id.to_string(),
+            );
             intent.on_result = Box::new(move |result| {
+                unacknowledged.acknowledge();
                 let _ = tx.send(result.clone());
                 observe(result);
             });

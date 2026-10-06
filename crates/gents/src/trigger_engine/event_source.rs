@@ -1753,6 +1753,49 @@ impl EventSource {
         });
     }
 
+    /// A fire whose result never reached the acknowledgment channel has no
+    /// `on_result` writer of its own, so its park would otherwise leave no
+    /// durable reason and a seed wait would spend its whole deadline on it.
+    /// The caller may be an unwinding or aborting task, so the spawn is
+    /// best-effort: outside a runtime it does nothing rather than panic.
+    fn spawn_unacknowledged_field_write(
+        node: Arc<EmbeddedNode>,
+        agent_did: String,
+        trigger_id: String,
+        source_doc_id: String,
+    ) {
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        handle.spawn(async move {
+            let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+            let update = crate::document_config::TriggerRuntimeUpdate {
+                last_attempt_at: Some(now),
+                last_fired_source_doc_id: Some(source_doc_id),
+                last_status: Some(crate::trigger_engine::UNACKNOWLEDGED_STATUS.to_string()),
+                last_error: Some(
+                    "the fire produced no result before its acknowledgment channel closed"
+                        .to_string(),
+                ),
+                ..Default::default()
+            };
+            if let Err(error) = crate::document_config::update_trigger_runtime_fields(
+                &node,
+                &agent_did,
+                &trigger_id,
+                update,
+            )
+            .await
+            {
+                tracing::warn!(
+                    trigger_id = %trigger_id,
+                    %error,
+                    "event trigger runtime-field update failed"
+                );
+            }
+        });
+    }
+
     /// Build a `FireIntent` for every active event-source trigger whose
     /// `source_collection` matches `collection_name` AND `event_kind` matches
     /// `kind`. Each candidate's operator-authored filter is probed against
@@ -2064,6 +2107,53 @@ impl EventSource {
         }
         self.durable_ready = true;
         self.next_durable_fire().await
+    }
+}
+
+/// A durable fire's acknowledgment. Dropping the guard without acknowledging
+/// means the driver died between emitting the intent and seeing it answered —
+/// a panic or abort inside dispatch — which is the one loss mode no live owner
+/// can report; Drop records it on the Trigger so a seed wait can tell a lost
+/// fire from a configuration error.
+pub(super) struct UnacknowledgedGuard {
+    node: Arc<EmbeddedNode>,
+    agent_did: String,
+    trigger_id: String,
+    source_doc_id: String,
+    armed: std::cell::Cell<bool>,
+}
+
+impl UnacknowledgedGuard {
+    pub(super) fn new(
+        node: Arc<EmbeddedNode>,
+        agent_did: String,
+        trigger_id: String,
+        source_doc_id: String,
+    ) -> Self {
+        Self {
+            node,
+            agent_did,
+            trigger_id,
+            source_doc_id,
+            armed: std::cell::Cell::new(true),
+        }
+    }
+
+    fn acknowledge(&self) {
+        self.armed.set(false);
+    }
+}
+
+impl Drop for UnacknowledgedGuard {
+    fn drop(&mut self) {
+        if self.armed.get() {
+            EventSource::spawn_unacknowledged_field_write(
+                self.node.clone(),
+                self.agent_did.clone(),
+                self.trigger_id.clone(),
+                self.source_doc_id.clone(),
+            );
+        }
     }
 }
 
