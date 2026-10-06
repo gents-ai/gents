@@ -6,11 +6,9 @@ import { publishSnapshot, renderIn, testApp, withApp } from "./app-fixture";
 
 import type { DesktopClientSnapshot } from "@source-inc/gents-desktop-client";
 import { AgentPanel } from "../src/ui/screens/agent/AgentPanel";
-import {
-  BehaviorEditor,
-  BehaviorsPanel,
-  newBehaviorView,
-} from "../src/ui/screens/agent/BehaviorsPanel";
+import { BehaviorEditor } from "../src/ui/screens/agent/BehaviorEditor";
+import { BehaviorsPanel } from "../src/ui/screens/agent/BehaviorsPanel";
+import { newBehaviorView } from "../src/ui/screens/agent/behaviorDraft";
 import { ContextsPanel } from "../src/ui/screens/agent/ContextsPanel";
 import { EventSourcesPanel } from "../src/ui/screens/agent/EventSourcesPanel";
 import { InferencePanel } from "../src/ui/screens/agent/InferencePanel";
