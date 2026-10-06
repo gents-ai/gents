@@ -212,3 +212,38 @@ export function equal(a: unknown, b: unknown): boolean {
     keys.every((key) => key in right && equal(left[key], right[key]))
   );
 }
+
+/** `next`, reusing each part of `prev` it is equal to, so a reader of a part
+    that did not change keeps the same object. Arrays are matched by index;
+    anything but a plain object or array is reused only when identical. */
+export function shareUnchanged<T>(prev: unknown, next: T): T {
+  if (Object.is(prev, next)) return next;
+  if (
+    typeof prev !== "object" ||
+    typeof next !== "object" ||
+    prev === null ||
+    next === null
+  )
+    return next;
+  if (Array.isArray(next)) {
+    if (!Array.isArray(prev)) return next;
+    let same = prev.length === next.length;
+    const out = next.map((item: unknown, i) => {
+      const shared = shareUnchanged(prev[i], item);
+      if (shared !== prev[i]) same = false;
+      return shared;
+    });
+    return (same ? prev : out) as T;
+  }
+  if (Array.isArray(prev) || !isPlain(prev) || !isPlain(next)) return next;
+  const before = prev as Record<string, unknown>;
+  const after = next as Record<string, unknown>;
+  const keys = Object.keys(after);
+  let same = keys.length === Object.keys(before).length;
+  const out: Record<string, unknown> = {};
+  for (const key of keys) {
+    out[key] = shareUnchanged(before[key], after[key]);
+    if (!(key in before) || out[key] !== before[key]) same = false;
+  }
+  return (same ? prev : out) as T;
+}

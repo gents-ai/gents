@@ -66,14 +66,14 @@ describe("desktop snapshot publication", () => {
     secondSave.resolve(newerPayload);
     newerResult = await newer;
     expect(newerResult).toBe(newerPayload);
-    expect(lifecycle.snapshot).toBe(authoritative);
+    expect(lifecycle.snapshot).toEqual(authoritative);
 
     const olderPayload = snapshot("older-stale-payload");
     let olderResult: DesktopClientSnapshot | undefined;
     firstSave.resolve(olderPayload);
     olderResult = await older;
     expect(olderResult).toBe(olderPayload);
-    expect(lifecycle.snapshot).toBe(authoritative);
+    expect(lifecycle.snapshot).toEqual(authoritative);
     expect(fetchDesktopSnapshot).toHaveBeenCalledTimes(3);
   });
 
@@ -103,6 +103,6 @@ describe("desktop snapshot publication", () => {
     const observed = snapshot("read-after-failure");
     pendingRead.resolve(observed);
     await reading;
-    expect(lifecycle.snapshot).toBe(observed);
+    expect(lifecycle.snapshot).toEqual(observed);
   });
 });

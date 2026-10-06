@@ -18,7 +18,7 @@ import {
 import { isMobileTauriShell, ownsAutomaticRecovery } from "../lib/shellPlatform";
 import { delay, logShellEvent, timingConfig } from "./desktopShellRuntime";
 import { createSnapshotPublicationOwner } from "./desktopSnapshotPublication";
-import { applyFleetSnapshot, equal } from "./fleetStore";
+import { applyFleetSnapshot, equal, shareUnchanged } from "./fleetStore";
 import { restoreManagedServer } from "./managedServerLifecycle";
 import { writeSession } from "./sessionStore";
 import type { ShellStores } from "./shellProjection";
@@ -92,7 +92,9 @@ export function createClientLifecycle({
       before !== null &&
       fleet.getState() === fleetBefore &&
       equal(withoutDeployments(before), withoutDeployments(next));
-    if (!unchanged) client.setState({ snapshot: next });
+    /* what did not change keeps its object, so a screen reading one part
+       (sync health, the bootstrap) is not notified when another changed */
+    if (!unchanged) client.setState({ snapshot: shareUnchanged(before, next) });
     resolveStartupPhase(next);
     autostart();
   });

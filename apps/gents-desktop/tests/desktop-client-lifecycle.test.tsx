@@ -68,7 +68,7 @@ describe("desktop client restart selection ordering", () => {
     const starting = lifecycle.ensureDesktopClientStarted();
     start.resolve(newer);
     await starting;
-    expect(lifecycle.snapshot).toBe(newer);
+    expect(lifecycle.snapshot).toEqual(newer);
     expect(lifecycle.startupPhase).toBe("ready");
 
     refresh.resolve({
@@ -76,7 +76,7 @@ describe("desktop client restart selection ordering", () => {
       client: null,
     });
     await refresh.promise;
-    expect(lifecycle.snapshot).toBe(newer);
+    expect(lifecycle.snapshot).toEqual(newer);
     expect(lifecycle.startupPhase).toBe("ready");
   });
 
@@ -105,11 +105,11 @@ describe("desktop client restart selection ordering", () => {
           : lifecycle.restartDesktopClient("test");
       await waitFor(() => expect(api.startDesktopClient).toHaveBeenCalledOnce());
       await lifecycle.refreshSnapshot();
-      expect(lifecycle.snapshot).toBe(stopped);
+      expect(lifecycle.snapshot).toEqual(stopped);
       api.fetchDesktopSnapshot.mockResolvedValue(ready);
       start.resolve(ready);
       await pending;
-      expect(lifecycle.snapshot).toBe(ready);
+      expect(lifecycle.snapshot).toEqual(ready);
       expect(lifecycle.startupPhase).toBe("ready");
       expect(lifecycle.starting).toBe(false);
       expect(api.fetchDesktopSnapshot).toHaveBeenCalledTimes(3);
@@ -141,7 +141,7 @@ describe("desktop client restart selection ordering", () => {
     start.reject(new Error("stale start failed"));
     await expect(starting).rejects.toThrow("stale start failed");
 
-    expect(lifecycle.snapshot).toBe(refreshed);
+    expect(lifecycle.snapshot).toEqual(refreshed);
     expect(lifecycle.startupPhase).toBe("ready");
     expect(lifecycle.errors).not.toContain("Error: stale start failed");
   });
@@ -219,6 +219,6 @@ describe("desktop client restart selection ordering", () => {
     expect(api.startDesktopClient).toHaveBeenCalledOnce();
     await lifecycle.refreshSnapshot();
     expect(lifecycle.startupPhase).toBe("ready");
-    expect(lifecycle.snapshot).toBe(ready);
+    expect(lifecycle.snapshot).toEqual(ready);
   });
 });
