@@ -569,7 +569,9 @@ mod tests {
     /// (`grok-build`, `grok-build-*`) as `_meta.agentProfile` even without
     /// `--agent`. Those names are Grok's, not Gents behavior ids: they must
     /// resolve to the shim's bound default behavior, on a fresh connection
-    /// and on one already bound to that default, while every name outside
+    /// and on one already bound to that default, both when selected on
+    /// `session/new` and when stock Grok re-sends the profile on
+    /// `session/load`, while every name outside
     /// the family stays strictly validated against a registered, enabled,
     /// same-principal behavior and cannot switch an already-bound
     /// connection.
@@ -624,6 +626,23 @@ mod tests {
                 "re-selecting built-in profile {built_in} on a connection already bound to the \
                  default behavior must keep serving it: {reopened}"
             );
+            let resuming = factory(index as u64 + 4, &registration).unwrap();
+            let resumed = send(
+                &resuming,
+                json!({"jsonrpc":"2.0","id":3,"method":"session/load",
+                "params":{"sessionId":format!("built-in-{index}"),"_meta":{"agentProfile":built_in}}}),
+            )
+            .await;
+            assert!(
+                resumed.get("error").is_none(),
+                "stock Grok re-sends the built-in profile {built_in} on session/load; the \
+                 alias must select the default behavior there too: {resumed}"
+            );
+            assert_eq!(
+                resumed["result"]["models"]["currentModelId"], "GLM-5.3-NVFP4",
+                "the resumed built-in session must serve the default behavior's bound model"
+            );
+            resuming.on_disconnect().await;
             delegate.on_disconnect().await;
         }
         let rejecting = factory(2, &registration).unwrap();
