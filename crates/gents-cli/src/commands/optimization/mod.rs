@@ -751,11 +751,18 @@ mod tests {
             }))
             .unwrap(),
         );
+        let mut sessions = base.clone();
+        sessions.tools[0]
+            .built_ins
+            .as_mut()
+            .unwrap()
+            .enable_session_history_tool = Some(true);
         let mut skills = base.clone();
         skills.contexts[0].skill_ids = vec!["review".to_owned()];
         for (config, offending) in [
             (cli, "\"rg\""),
             (subagent, "\"agent_new\""),
+            (sessions, "\"sessions\""),
             (skills, "has skills [\"review\"]"),
         ] {
             let error = ensure_tool_less(&config, OWNER, "fixture-author")
