@@ -4,9 +4,9 @@
 # `origin` and `journal` are Strings holding serialized JSON: a JSON column
 # decodes numbers as f64 and would not round-trip u64 budgets above 2^53.
 # Local-only: the journal carries candidate system prompts.
-type OptimizationJob @index(fields: ["owner_agent_did", "job_id"], unique: true) {
+type OptimizationJob @index(fields: ["owner_node_did", "job_id"], unique: true) {
     job_id: String @immutable
-    owner_agent_did: String @index @immutable
+    owner_node_did: String @index @immutable
     origin: String @immutable
     journal: String
     journal_len: Int

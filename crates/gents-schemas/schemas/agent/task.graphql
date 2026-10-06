@@ -1,9 +1,9 @@
-type Task @branchable @index(fields: ["agent_did", "task_id"], unique: true) {
+type Task @branchable @index(fields: ["node_did", "task_id"], unique: true) {
     task_id: String @index
-    agent_did: String @index
+    node_did: String @index
     display_name: String
     description: String
-    behavior_id: String @index
+    agent_id: String @index
     prompt_template: String
     emit_outcome: Boolean
     # Optional durable terminal condition provisioned before a task request is runnable.

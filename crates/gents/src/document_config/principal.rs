@@ -9,19 +9,20 @@ use super::serde_helpers::first_row_with_doc_id;
 /// Default admission bound on a request's causal hop.
 pub const DEFAULT_MAX_REQUEST_HOP: u32 = 8;
 
-/// DefraDB DID identity for the runtime principal. One active instance is an
-/// operating convention; runtime enforcement is deferred to #1435. No host identity.
+/// DefraDB DID identity for the runtime node principal. One active instance
+/// is an operating convention; runtime enforcement is deferred to #1435. No
+/// host identity.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-pub struct AgentPrincipal {
-    pub agent_did: String,
+pub struct Node {
+    pub node_did: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub display_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
-    pub default_behavior_id: Option<String>,
+    pub default_agent_id: Option<String>,
     #[serde(
         default = "super::serde_helpers::default_enabled",
         deserialize_with = "super::serde_helpers::deserialize_enabled",
@@ -35,7 +36,7 @@ pub struct AgentPrincipal {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub created_by: Option<String>,
-    /// Admission bound on a request's causal hop (`subagent_depth`). Absent
+    /// Admission bound on a request's causal hop (`request_hop`). Absent
     /// uses [`DEFAULT_MAX_REQUEST_HOP`].
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]

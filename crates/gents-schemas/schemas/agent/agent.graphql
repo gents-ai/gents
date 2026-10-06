@@ -1,6 +1,6 @@
-type AgentBehavior @branchable @index(fields: ["agent_did", "behavior_id"], unique: true) {
-    behavior_id: String
-    agent_did: String @index
+type Agent @branchable @index(fields: ["node_did", "agent_id"], unique: true) {
+    agent_id: String
+    node_did: String @index
     display_name: String
     description: String
     context_id: String @index

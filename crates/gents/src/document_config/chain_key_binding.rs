@@ -12,7 +12,7 @@ use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct ChainKeyBindingDocument {
     pub binding_id: String,
-    pub agent_did: String,
+    pub node_did: String,
     pub address: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]

@@ -1,9 +1,9 @@
-type AgentRuntime @branchable {
-    agent_did: String @index(unique: true)
+type NodeRuntime @branchable {
+    node_did: String @index(unique: true)
     reconcile_phase: String @index
-    behavior_executor_capacity: Int
-    behavior_executor_queue_depth: Int
-    behavior_executor_status_json: String
+    agent_executor_capacity: Int
+    agent_executor_queue_depth: Int
+    agent_executor_status_json: String
     last_reconcile_result: String @index
     last_reconcile_error: String
     last_reconcile_completed_at: String @index

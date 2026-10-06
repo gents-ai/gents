@@ -1,6 +1,6 @@
-type InferenceExecution @branchable @index(fields: ["agent_did", "execution_id"], unique: true) {
+type InferenceExecution @branchable @index(fields: ["node_did", "execution_id"], unique: true) {
     execution_id: String
-    agent_did: String @index
+    node_did: String @index
     display_name: String
     max_turns: Int
     max_total_tokens: Int

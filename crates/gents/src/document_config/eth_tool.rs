@@ -13,7 +13,7 @@ use super::serde_helpers::deserialize_optional_string_vec;
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct EthToolDocument {
     pub tool_id: String,
-    pub agent_did: String,
+    pub node_did: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub display_name: Option<String>,

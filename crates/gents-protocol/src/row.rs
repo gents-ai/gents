@@ -32,16 +32,16 @@ where
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AgentRuntimeRow {
-    pub agent_did: String,
+pub struct NodeRuntimeRow {
+    pub node_did: String,
     #[serde(default)]
     pub reconcile_phase: Option<String>,
     #[serde(default)]
-    pub behavior_executor_capacity: Option<i64>,
+    pub agent_executor_capacity: Option<i64>,
     #[serde(default)]
-    pub behavior_executor_queue_depth: Option<i64>,
+    pub agent_executor_queue_depth: Option<i64>,
     #[serde(default)]
-    pub behavior_executor_status_json: Option<String>,
+    pub agent_executor_status_json: Option<String>,
     #[serde(default)]
     pub last_reconcile_result: Option<String>,
     #[serde(default)]
@@ -60,7 +60,7 @@ pub struct AgentRequestRow {
     #[serde(default)]
     pub purpose: Option<crate::request_admission::RequestPurpose>,
     #[serde(default)]
-    pub agent_did: Option<String>,
+    pub node_did: Option<String>,
     #[serde(default)]
     pub requester_did: Option<String>,
     #[serde(default)]
@@ -86,7 +86,7 @@ pub struct AgentRequestRow {
     #[serde(default)]
     pub runtime_source_kind: Option<String>,
     #[serde(default)]
-    pub behavior_id: Option<String>,
+    pub agent_id: Option<String>,
     #[serde(default)]
     pub session_id: Option<String>,
     #[serde(default)]
@@ -172,12 +172,13 @@ pub struct AgentRequestRow {
     #[serde(default)]
     pub valid_until: Option<String>,
     #[serde(default)]
-    pub subagent_depth: Option<i64>,
+    pub request_hop: Option<i64>,
     #[serde(default)]
     pub workspace_id: Option<String>,
-    /// Signed workspace reference scope, independent of the executing principal.
+    /// Node workspace scope copied from the verified workspace, independent of
+    /// the executing node; not host identity.
     #[serde(default)]
-    pub workspace_owner_agent_did: Option<String>,
+    pub workspace_owner_node_did: Option<String>,
     #[serde(default)]
     pub workspace_authority: Option<String>,
     #[serde(default)]
@@ -207,7 +208,7 @@ pub struct MailboxItemRow {
     pub doc_id: String,
     pub item_key: String,
     pub requester_did: String,
-    pub agent_did: String,
+    pub node_did: String,
     pub status: String,
     pub kind: String,
     pub action: String,
@@ -226,8 +227,8 @@ pub struct MailboxItemRow {
     pub graph_run_id: Option<String>,
     #[serde(default)]
     pub cause_doc_id: Option<String>,
-    pub target_agent_did: String,
-    pub target_behavior_id: String,
+    pub target_node_did: String,
+    pub target_agent_id: String,
     #[serde(default)]
     pub expected_collection: Option<String>,
     #[serde(default)]
@@ -257,7 +258,7 @@ pub struct GoalRow {
     )]
     pub tags: Vec<String>,
     pub session_id: String,
-    pub agent_did: String,
+    pub node_did: String,
     #[serde(default)]
     pub creation_key: Option<String>,
     #[serde(default)]
@@ -305,7 +306,7 @@ pub struct AgentToolCallRow {
     #[serde(default, rename = "_docID")]
     pub doc_id: Option<String>,
     #[serde(default)]
-    pub agent_did: Option<String>,
+    pub node_did: Option<String>,
     #[serde(default)]
     pub request_doc_id: Option<String>,
     pub tool_call_key: String,
@@ -402,7 +403,7 @@ pub struct OAuthCredentialRow {
     pub doc_id: Option<String>,
     pub credential_id: String,
     #[serde(default)]
-    pub agent_did: Option<String>,
+    pub node_did: Option<String>,
     #[serde(default)]
     pub provider: Option<String>,
     #[serde(default)]
@@ -459,7 +460,7 @@ pub struct ToolServiceRegistryRow {
     #[serde(default)]
     pub mcp_path: Option<String>,
     #[serde(default, deserialize_with = "deserialize_null_default")]
-    pub send_agent_did: bool,
+    pub send_node_did: bool,
     #[serde(default, deserialize_with = "deserialize_null_default")]
     pub tools: Vec<ToolServiceEntry>,
     #[serde(default)]
@@ -470,7 +471,7 @@ pub struct ToolServiceRegistryRow {
     pub updated_at: Option<String>,
 }
 
-/// Persisted snapshot of one MCP service's health, written by the agent's
+/// Persisted snapshot of one MCP service's health, written by the node's
 /// `health_checker` on every probe cycle. `status` carries the raw
 /// `ToolServiceHealthState` vocabulary ("healthy" / "degraded" / "evicted" /
 /// "reconnecting"; see `tool_service_health::ToolServiceHealthState`) so the
@@ -482,7 +483,7 @@ pub struct ToolServiceRegistryRow {
 pub struct ToolServiceHealthStateRow {
     pub service_id: String,
     #[serde(default)]
-    pub agent_did: Option<String>,
+    pub node_did: Option<String>,
     #[serde(default)]
     pub endpoint: Option<String>,
     #[serde(default)]

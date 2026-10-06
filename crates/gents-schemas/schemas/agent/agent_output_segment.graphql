@@ -11,7 +11,7 @@
 # are the highest-volume collection. Live, sealed and lease reads are all
 # request_doc_id scans; session_id serves replication routing and hydration.
 type AgentOutputSegment @branchable {
-    agent_did: String @index @immutable
+    node_did: String @index @immutable
     requester_did: String @index @immutable
     session_id: String @index @immutable
     request_doc_id: String @index @immutable

@@ -1,6 +1,6 @@
-type InferenceRetryPolicy @branchable @index(fields: ["agent_did", "retry_policy_id"], unique: true) {
+type InferenceRetryPolicy @branchable @index(fields: ["node_did", "retry_policy_id"], unique: true) {
     retry_policy_id: String
-    agent_did: String @index
+    node_did: String @index
     display_name: String
     max_transport_retries: Int
     backoff_ms: [Int]
