@@ -267,6 +267,7 @@ export function MailboxScreen({
                     onClick={() => {
                       listViews.setMailboxKinds([]);
                       listViews.setMailboxNodes([]);
+                      if (nodeDid) navigate({ name: "mailbox" });
                     }}
                   >
                     <X />

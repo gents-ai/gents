@@ -197,7 +197,10 @@ export function SessionsScreen({
               onChange={listViews.setSessionFilter}
               nodes={{
                 picked: nodesPicked,
-                clear: () => listViews.setSessionNodes(null),
+                clear: () => {
+                  listViews.setSessionNodes(null);
+                  if (nodeDid) navigate({ name: "sessions" });
+                },
               }}
             />
             <Button
