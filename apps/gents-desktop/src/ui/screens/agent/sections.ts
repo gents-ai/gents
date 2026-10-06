@@ -1,34 +1,33 @@
-import {
-  Bot,
-  FolderOpen,
-  Plug,
-  ListChecks,
-  Package,
-  Play,
-  Radio,
-  Sparkles,
-  Timer,
-  Workflow,
-  Wrench,
-  Zap,
-} from "lucide-react";
+/* The agent configuration screen's sections: an extension point. Each is a
+   route (`agent/<id>`), so a section is linkable, and a section in the
+   sidebar names its group, label and mark. A route that has no entry of its
+   own (an older link, or a page reached from another section) names the
+   entry it lights up instead. */
+import type { ComponentType } from "react";
+import type { DeploymentView } from "@source-inc/gents-desktop-client";
+import { createRegistry } from "@/app/registry";
 
-/* the config tabs, grouped by what the user is doing (gents-design config
-   flows). Contexts have no entry: each behavior edits its own instructions
-   and tools, and the Behaviors list links to unused contexts, so the
-   `contexts` route stays for those links. */
-export const SECTIONS = [
-  { group: "Configure", id: "agent", label: "Agent", icon: Bot },
-  { group: "Configure", id: "behaviors", label: "Behaviors", icon: Workflow },
-  { group: "Configure", id: "skills", label: "Skills", icon: ListChecks },
-  { group: "Configure", id: "profiles", label: "Providers", icon: Sparkles },
-  { group: "Automation", id: "tasks", label: "Tasks", icon: Play },
-  { group: "Automation", id: "triggers", label: "Triggers", icon: Zap },
-  { group: "Automation", id: "schedules", label: "Schedules", icon: Timer },
-  { group: "Automation", id: "event-sources", label: "Event sources", icon: Radio },
-  { group: "Tools", id: "tools", label: "Tools", icon: Wrench },
-  { group: "Tools", id: "tool-services", label: "Remote Tools", icon: Plug },
-  { group: "Tools", id: "folders", label: "Allowed folders", icon: FolderOpen },
-  { group: "Packs", id: "packs", label: "Packs", icon: Package },
-] as const;
-export type SectionId = (typeof SECTIONS)[number]["id"];
+export type SectionPanelProps = {
+  deployment: DeploymentView;
+  /** the document the route opens, when it names one */
+  item?: string;
+};
+
+type Listed = {
+  /** the sidebar's group; groups show in the order their first section registered */
+  group: string;
+  label: string;
+  icon: ComponentType<{ className?: string }>;
+  /** how many the sidebar shows beside the label */
+  count?: (deployment: DeploymentView) => number;
+};
+
+export type AgentSection = {
+  id: string;
+  Panel: ComponentType<SectionPanelProps>;
+} & (Listed | { under: string });
+
+export const agentSections = createRegistry<AgentSection>();
+
+export const isListed = (section: AgentSection): section is AgentSection & Listed =>
+  !("under" in section);

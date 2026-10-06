@@ -18,22 +18,9 @@ import {
   SelectValue,
 } from "@gents/ui/components/select";
 import { href, navigate } from "@/lib/router";
-import { AgentPanel } from "./AgentPanel";
-import { BehaviorsPanel } from "./BehaviorsPanel";
-import { ProfilesPanel } from "./ProfilesPanel";
-import { InferencePanel } from "./InferencePanel";
-import { SchedulesPanel } from "./SchedulesPanel";
-import { SkillsPanel } from "./SkillsPanel";
-import { TasksPanel } from "./TasksPanel";
-import { ContextsPanel } from "./ContextsPanel";
-import { EventSourcesPanel } from "./EventSourcesPanel";
-import { ToolsPanel } from "./ToolsPanel";
-import { ToolServicesPanel } from "./ToolServicesPanel";
-import { TriggersPanel } from "./TriggersPanel";
-import { AllowedFoldersPanel } from "./AllowedFoldersPanel";
-import { PacksPanel } from "./PacksPanel";
-import { SECTIONS, type SectionId } from "./sections";
 import { useDeployments } from "@/hooks/useClient";
+import "./builtInSections";
+import { agentSections, isListed } from "./sections";
 
 export function AgentScreen({
   agentDid,
@@ -45,6 +32,7 @@ export function AgentScreen({
   item?: string;
 }) {
   const deployments = useDeployments();
+  const sections = agentSections.useList();
   /* a new section or document starts at the top; the scroll area keeps its
      position across hash changes otherwise */
   const page = useRef<HTMLDivElement>(null);
@@ -61,24 +49,12 @@ export function AgentScreen({
       </p>
     );
   }
-  const counts: Partial<Record<SectionId, number>> = {
-    behaviors: deployment.behaviors.length,
-    skills: deployment.skills.length,
-    profiles: deployment.inferenceBackends.length,
-    tools: deployment.tools.length,
-    "tool-services": deployment.toolServiceRegistries.length,
-    tasks: deployment.tasks.length,
-    schedules: deployment.schedules.length,
-    "event-sources": deployment.eventSources.length,
-    triggers: deployment.triggers.length,
-  };
-  /* routes that older links still use */
-  const ALIASES: Record<string, string> = {
-    contexts: "behaviors",
-    automations: "triggers",
-    inference: "profiles",
-  };
-  const groups = [...new Set(SECTIONS.map((s) => s.group))];
+  const current = sections.find((s) => s.id === section) ?? null;
+  /* the sidebar entry this route lights up: its own, or the one it sits under */
+  const entry = current && !isListed(current) ? current.under : section;
+  const listed = sections.filter(isListed);
+  const groups = [...new Set(listed.map((s) => s.group))];
+  const Panel = current?.Panel;
   return (
     <div
       className="grid h-full min-h-0 grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)] @4xl:grid-cols-[20rem_minmax(0,1fr)]"
@@ -90,22 +66,19 @@ export function AgentScreen({
         <SidebarNav className="w-auto">
           {groups.map((group) => (
             <SidebarGroup key={group} title={group}>
-              {SECTIONS.filter((s) => s.group === group).map((s) => (
-                <SidebarItem
-                  key={s.id}
-                  href={href({ name: "agent", agentDid, section: s.id })}
-                  icon={<s.icon />}
-                  active={
-                    section === s.id ||
-                    (s.id === "behaviors" && section === "contexts") ||
-                    (s.id === "triggers" && section === "automations") ||
-                    (s.id === "profiles" && section === "inference")
-                  }
-                  count={counts[s.id]}
-                >
-                  {s.label}
-                </SidebarItem>
-              ))}
+              {listed
+                .filter((s) => s.group === group)
+                .map((s) => (
+                  <SidebarItem
+                    key={s.id}
+                    href={href({ name: "agent", agentDid, section: s.id })}
+                    icon={<s.icon />}
+                    active={entry === s.id}
+                    count={s.count?.(deployment)}
+                  >
+                    {s.label}
+                  </SidebarItem>
+                ))}
             </SidebarGroup>
           ))}
         </SidebarNav>
@@ -115,8 +88,8 @@ export function AgentScreen({
             takes; without it the list becomes a sticky section picker */}
         <div className="sticky top-0 z-10 border-b border-border/60 bg-background/95 px-4 py-2 backdrop-blur @4xl:hidden">
           <Select
-            items={SECTIONS.map((s) => ({ value: s.id, label: s.label }))}
-            value={ALIASES[section] ?? section}
+            items={listed.map((s) => ({ value: s.id, label: s.label }))}
+            value={entry}
             onValueChange={(v) =>
               v && navigate({ name: "agent", agentDid, section: v })
             }
@@ -128,19 +101,21 @@ export function AgentScreen({
               {groups.map((group) => (
                 <SelectGroup key={group}>
                   <SelectLabel>{group}</SelectLabel>
-                  {SECTIONS.filter((s) => s.group === group).map((s) => (
-                    <SelectItem key={s.id} value={s.id}>
-                      <span className="flex items-center gap-2">
-                        <s.icon className="size-4 text-muted-foreground" />
-                        {s.label}
-                        {counts[s.id] ? (
-                          <span className="ml-auto pl-3 text-xs text-muted-foreground">
-                            {counts[s.id]}
-                          </span>
-                        ) : null}
-                      </span>
-                    </SelectItem>
-                  ))}
+                  {listed
+                    .filter((s) => s.group === group)
+                    .map((s) => (
+                      <SelectItem key={s.id} value={s.id}>
+                        <span className="flex items-center gap-2">
+                          <s.icon className="size-4 text-muted-foreground" />
+                          {s.label}
+                          {s.count?.(deployment) ? (
+                            <span className="ml-auto pl-3 text-xs text-muted-foreground">
+                              {s.count(deployment)}
+                            </span>
+                          ) : null}
+                        </span>
+                      </SelectItem>
+                    ))}
                 </SelectGroup>
               ))}
             </SelectContent>
@@ -152,41 +127,7 @@ export function AgentScreen({
           key={deployment.agentDid}
           className="mx-auto max-w-page px-4 py-6 md:px-8 md:py-8"
         >
-          {section === "agent" && <AgentPanel deployment={deployment} />}
-          {section === "behaviors" && (
-            <BehaviorsPanel deployment={deployment} behaviorId={item} />
-          )}
-          {section === "contexts" && (
-            <ContextsPanel deployment={deployment} item={item} />
-          )}
-          {section === "skills" && <SkillsPanel deployment={deployment} item={item} />}
-          {/* a backend opens on its own; the list is the Providers page, with
-              each backend's profiles under it */}
-          {section === "inference" &&
-            (item ? (
-              <InferencePanel deployment={deployment} item={item} />
-            ) : (
-              <ProfilesPanel deployment={deployment} />
-            ))}
-          {section === "profiles" && (
-            <ProfilesPanel deployment={deployment} item={item} />
-          )}
-          {section === "tools" && <ToolsPanel deployment={deployment} item={item} />}
-          {section === "tool-services" && (
-            <ToolServicesPanel deployment={deployment} item={item} />
-          )}
-          {section === "tasks" && <TasksPanel deployment={deployment} item={item} />}
-          {section === "schedules" && (
-            <SchedulesPanel deployment={deployment} item={item} />
-          )}
-          {section === "event-sources" && (
-            <EventSourcesPanel deployment={deployment} item={item} />
-          )}
-          {(section === "automations" || section === "triggers") && (
-            <TriggersPanel deployment={deployment} item={item} />
-          )}
-          {section === "folders" && <AllowedFoldersPanel />}
-          {section === "packs" && <PacksPanel />}
+          {Panel && <Panel deployment={deployment} item={item} />}
         </div>
       </ScrollArea>
     </div>

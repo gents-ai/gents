@@ -22,6 +22,7 @@ import {
 } from "./lib/shellPlatform";
 import { AppProvider, useApp } from "./ui/app/AppContext";
 import { AppShell } from "./ui/app/AppShell";
+import { RouteScreenOutlet } from "./ui/app/routeScreens";
 import { usePlatformSetup, useWindowTitle } from "./ui/app/platform";
 import { useFirstRun } from "./ui/app/useFirstRun";
 import { WindowControls } from "./ui/app/WindowControls";
@@ -39,14 +40,10 @@ import {
   useRoute,
 } from "./ui/lib/router";
 import { useSwipeNav } from "./ui/lib/swipe-nav";
-import { AgentScreen } from "./ui/screens/agent/AgentScreen";
-import { AgentsScreen } from "./ui/screens/AgentsScreen";
-import { MailboxScreen } from "./ui/screens/MailboxScreen";
 import { PluginAccessPrompt } from "./ui/screens/PluginAccessPrompt";
-import { SessionScreen } from "./ui/screens/SessionScreen";
-import { SessionsScreen } from "./ui/screens/SessionsScreen";
 import { SetupScreen } from "./ui/screens/setup/SetupScreen";
 import { Shortcuts } from "./ui/screens/Shortcuts";
+import "./ui/screens/routes";
 import "./ui/screens/surfaces";
 
 import "./App.css";
@@ -185,17 +182,7 @@ function AppBody() {
   return (
     <TooltipProvider>
       <AppShell route={route} history={history}>
-        {route.name === "sessions" && <SessionsScreen nodeDid={route.nodeDid} />}
-        {route.name === "session" && <SessionScreen />}
-        {route.name === "mailbox" && <MailboxScreen nodeDid={route.nodeDid} />}
-        {(route.name === "agents" || route.name === "nodes") && <AgentsScreen />}
-        {route.name === "agent" && (
-          <AgentScreen
-            agentDid={route.agentDid}
-            section={route.section}
-            item={route.item}
-          />
-        )}
+        <RouteScreenOutlet route={route} />
       </AppShell>
       <Toaster />
       {hasLocalAgent && <PluginAccessPrompt />}

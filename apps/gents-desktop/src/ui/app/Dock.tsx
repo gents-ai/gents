@@ -9,7 +9,7 @@ import { Hint } from "@/screens/Hint";
 import { PanelMenu } from "./PanelMenu";
 import { cn } from "@gents/ui/lib/utils";
 import { dockView } from "./dock-scope";
-import type { Placement } from "./surfaces";
+import { useSurfaces, type Placement } from "./surfaces";
 import { dockScopeOf, useDockFor } from "./workspace";
 import { useFleet } from "../hooks/useFleet";
 
@@ -27,7 +27,7 @@ export function Dock({
   placement?: Placement;
 }) {
   const { dock, closeDock } = useDockFor(dockScopeOf(routeName, sessionId));
-  const view = dockView(dock, routeName, placement);
+  const view = dockView(dock, routeName, useSurfaces(), placement);
   /* the card keeps showing its last surface while the divider settles shut
      after the store has closed the dock; the shell unmounts it at 0 */
   const last = useRef(view.active);
@@ -165,7 +165,7 @@ export function DockTabs({
     if (drag.to <= index && index < drag.from) return step;
     return 0;
   };
-  const view = dockView(dock, routeName, "dock");
+  const view = dockView(dock, routeName, useSurfaces(), "dock");
   /* the tablist's keys (APG tabs, automatic activation): arrows, Home and
      End move between tabs and show the one reached; Delete closes the tab,
      and focus follows to the one showing next */

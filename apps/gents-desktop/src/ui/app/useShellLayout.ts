@@ -5,6 +5,7 @@ import { navPreference, saveNavPreference, type NavMode } from "@/nav";
 import { useDivider } from "@/lib/divider";
 import { ROOMY_WINDOW, useMediaQuery } from "@/lib/media";
 import { dockView } from "./dock-scope";
+import { useSurfaces } from "./surfaces";
 import { dockScope, useDockFor } from "./workspace";
 
 /** The shell's columns for the window it is in: the rail, the pane and the
@@ -16,7 +17,8 @@ export function useShellLayout(route: Route) {
     setNav(mode);
   };
   const { dock, scope: dockOwner, closeDock } = useDockFor(dockScope(route));
-  const dockOpen = dockView(dock, route.name).shown;
+  const surfaces = useSurfaces();
+  const dockOpen = dockView(dock, route.name, surfaces).shown;
   const shellRef = useRef<HTMLDivElement>(null);
   /* Observed on the shell itself: the window's resize event fires before the
      frame's width variable has caught up, so it would measure the old width */
@@ -54,11 +56,11 @@ export function useShellLayout(route: Route) {
   /* the dock is the pane's: leaving for a route where none of its tabs
      apply closes it, and it opens again only when asked */
   useEffect(() => {
-    if (dock.open && !dockView(dock, route.name).shown) {
+    if (dock.open && !dockView(dock, route.name, surfaces).shown) {
       closeDock();
       jumpClosed();
     }
-  }, [route.name, dock, jumpClosed, closeDock]);
+  }, [route.name, dock, surfaces, jumpClosed, closeDock]);
   /* the dock stays in the grid while it settles shut */
   const dockVisible = docked && (dockOpen || divider.pos > 0);
   const dockCol = dockVisible ? divider.pos + 8 : 0;

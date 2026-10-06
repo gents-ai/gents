@@ -13,7 +13,7 @@ import {
   DropdownMenuTrigger,
 } from "@gents/ui/components/dropdown-menu";
 import { Hint } from "@/screens/Hint";
-import { listSurfaces } from "./surfaces";
+import { useSurfaces } from "./surfaces";
 import { inScope } from "./dock-scope";
 import { useDock } from "./workspace";
 
@@ -28,7 +28,9 @@ export function PanelMenu({
   actions?: ReactNode;
 }) {
   const { dock, closeTab, openSurface, closeDock, reopenDock } = useDock();
-  const surfaces = listSurfaces("dock").filter((s) => inScope(s, routeName));
+  const surfaces = useSurfaces().filter(
+    (s) => s.placements.includes("dock") && inScope(s, routeName),
+  );
   const showing =
     dock.open && dock.tabs.some((id) => surfaces.some((s) => s.id === id));
   return (
