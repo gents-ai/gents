@@ -30,7 +30,7 @@ import { RouteScreenOutlet } from "./ui/app/routeScreens";
 import { usePlatformSetup, useWindowTitle } from "./ui/app/platform";
 import { useFirstRun } from "./ui/app/useFirstRun";
 import { WindowControls } from "./ui/app/WindowControls";
-import { dockScope, workspace } from "./ui/app/workspace";
+import { useDockVisit } from "./ui/app/workspace";
 import { useHomeDid, useStartup } from "./ui/hooks/useClient";
 import { useFleet } from "./ui/hooks/useFleet";
 import { fleetNodes } from "./ui/lib/scope";
@@ -108,6 +108,7 @@ function AppReactions({ app, bridge }: { app: DesktopApp; bridge: DesktopBridge 
   useDesktopRuntime(app, bridge.listenToUpdates);
   useFollowRoute(route);
   useWindowTitle(route);
+  useDockVisit(route);
   useMobileVisualViewport();
   usePlatformSetup();
   useManagedServerTrayControls(bridge.api);
@@ -118,10 +119,6 @@ function AppBody() {
   const { actions } = useApp();
   const route = useRoute();
   const history = useHistory();
-  /* the dock of each screen is found from its route while rendering; this
-     only records the visit, which bounds how many docks are remembered */
-  const scope = dockScope(route);
-  useEffect(() => workspace.visit(scope), [scope]);
   useHistoryInputs(history);
   useSwipeNav(history);
 

@@ -9,7 +9,7 @@
    screen's dock. Which tabs a dock holds outlives the visit and the app;
    that it was open lasts the run. The dock's width is the resize hook's,
    in the shell. */
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { useStore } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { createStore } from "zustand/vanilla";
@@ -204,6 +204,15 @@ export function useDock(): DockHandle {
 }
 
 /** The dock of `scope`, with its changes bound to it. */
+/** Records that the route's screen is shown, which keeps its dock
+    remembered longest. Whose dock a screen shows is found from its route
+    while rendering; this is only the bookkeeping that bounds how many are
+    kept. */
+export function useDockVisit(route: Route) {
+  const scope = dockScope(route);
+  useEffect(() => workspace.visit(scope), [scope]);
+}
+
 export function useDockFor(scope: string): DockHandle {
   const dock = useStore(store, (state) => dockIn(state, scope));
   return useMemo(
