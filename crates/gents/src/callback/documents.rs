@@ -310,14 +310,19 @@ async fn load_config<T: serde::de::DeserializeOwned + Send>(
     owner: &str,
     id: &str,
 ) -> Result<Option<T>> {
-    crate::config_client::ConfigAccess::transact_local_readonly(node, None, "callback.read_config", |txn| {
-        Box::pin(async move {
-            crate::config_client::read_desired_state_record_in_txn(txn, collection, owner, id)
-                .await?
-                .map(|(_, value)| serde_json::from_value(value).map_err(Into::into))
-                .transpose()
-        })
-    })
+    crate::config_client::ConfigAccess::transact_local_readonly(
+        node,
+        None,
+        "callback.read_config",
+        |txn| {
+            Box::pin(async move {
+                crate::config_client::read_desired_state_record_in_txn(txn, collection, owner, id)
+                    .await?
+                    .map(|(_, value)| serde_json::from_value(value).map_err(Into::into))
+                    .transpose()
+            })
+        },
+    )
     .await
 }
 
