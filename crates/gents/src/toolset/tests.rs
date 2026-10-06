@@ -1867,55 +1867,81 @@ async fn bash_request_deadline_resolves_to_typed_timeout() {
 #[tokio::test]
 async fn unrestricted_bash_timeout_kills_descendants_and_returns_promptly() {
     let root = temp_root("gents-bash-process-tree-timeout");
-    let pid_file = root.join("descendant.pid");
-    let tool = UnrestrictedBashTool::with_policy(
-        ToolContext::new(root, false).unwrap(),
-        Duration::from_secs(1),
-        Duration::from_secs(1),
-        DEFAULT_MAX_COMMAND_CHARS,
-        CommandExecutionPolicy::write_capable().with_mode(CommandExecutionMode::Unrestricted),
-    );
-    let command = "trap '' TERM; while :; do sleep 1; done & child=$!; printf '%s' \"$child\" > descendant.pid; wait";
-
-    let boxed: Box<dyn crate::llm::tool::ToolDyn> = Box::new(tool);
-    let call = crate::tool_call_lifecycle::runtime::call_tool_managed(
-        boxed.as_ref(),
-        serde_json::json!({
-            "command": command,
-            "timeout_secs": 1,
-        })
-        .to_string(),
-    );
-    let outcome = match tokio::time::timeout(Duration::from_secs(4), call).await {
-        Ok(outcome) => outcome,
-        Err(_) => {
-            if let Ok(pid) =
-                std::fs::read_to_string(&pid_file).map(|value| value.trim().parse::<i32>().unwrap())
-            {
-                unsafe {
-                    libc::kill(pid, libc::SIGKILL);
-                }
-            }
-            panic!("bash timeout hung while a descendant held its output pipes open");
-        }
+    let descendant_pid_at = |pid_file: &std::path::Path| -> Option<i32> {
+        let raw = match std::fs::read_to_string(pid_file) {
+            Ok(raw) => raw,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+            Err(error) => panic!("reading descendant pid file {pid_file:?}: {error}"),
+        };
+        Some(raw.trim().parse::<i32>().unwrap_or_else(|error| {
+            panic!("descendant pid file {pid_file:?} held {raw:?}: {error}")
+        }))
     };
-    let crate::tool_call_lifecycle::ToolOutcome::Failed {
-        class: crate::tool_call_lifecycle::FailureClass::External,
-        text: output,
-        ..
-    } = outcome
-    else {
-        panic!("background process-tree timeout must be typed failed, got {outcome:?}");
+
+    // The command timeout is armed when the call starts, so its window must
+    // also cover shell startup and the descendant spawn before the pid write.
+    // An attempt whose pid file is missing at the outcome witnessed nothing
+    // about descendant termination and is retried with a wider window; only a
+    // witnessed attempt is asserted on.
+    let mut window_secs = 1;
+    let mut attempt = 0;
+    let (output, descendant_pid) = loop {
+        let pid_file = root.join(format!("descendant-{attempt}.pid"));
+        let command = format!(
+            "trap '' TERM; while :; do sleep 1; done & child=$!; printf '%s' \"$child\" > '{}'; wait",
+            pid_file.display()
+        );
+        let tool = UnrestrictedBashTool::with_policy(
+            ToolContext::new(root.clone(), false).unwrap(),
+            Duration::from_secs(window_secs),
+            Duration::from_secs(window_secs),
+            DEFAULT_MAX_COMMAND_CHARS,
+            CommandExecutionPolicy::write_capable().with_mode(CommandExecutionMode::Unrestricted),
+        );
+
+        let boxed: Box<dyn crate::llm::tool::ToolDyn> = Box::new(tool);
+        let call = crate::tool_call_lifecycle::runtime::call_tool_managed(
+            boxed.as_ref(),
+            serde_json::json!({
+                "command": command,
+                "timeout_secs": window_secs,
+            })
+            .to_string(),
+        );
+        let outcome = match tokio::time::timeout(Duration::from_secs(window_secs + 4), call).await {
+            Ok(outcome) => outcome,
+            Err(_) => {
+                if let Some(pid) = descendant_pid_at(&pid_file) {
+                    unsafe {
+                        libc::kill(pid, libc::SIGKILL);
+                    }
+                }
+                panic!("bash timeout hung while a descendant held its output pipes open");
+            }
+        };
+        let crate::tool_call_lifecycle::ToolOutcome::Failed {
+            class: crate::tool_call_lifecycle::FailureClass::External,
+            text: output,
+            ..
+        } = outcome
+        else {
+            panic!("background process-tree timeout must be typed failed, got {outcome:?}");
+        };
+
+        if let Some(pid) = descendant_pid_at(&pid_file) {
+            break (output, pid);
+        }
+        attempt += 1;
+        assert!(
+            attempt < 5,
+            "no attempt reached descendant readiness before its command timeout; last window {window_secs}s"
+        );
+        window_secs *= 2;
     };
 
     let meta = compact_exec_meta(&output);
     assert_eq!(meta["status"], "timeout");
     assert_eq!(meta["timed_out"], true);
-    let descendant_pid = std::fs::read_to_string(&pid_file)
-        .unwrap()
-        .trim()
-        .parse::<i32>()
-        .unwrap();
     assert_unix_process_exited(descendant_pid).await;
 }
 
