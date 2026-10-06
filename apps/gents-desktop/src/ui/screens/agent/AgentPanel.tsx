@@ -28,8 +28,6 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
       tags: deployment.principalConfig?.tags ?? [],
     },
     async (next) => {
-      if (!next.displayName.trim()) throw new Error("Display name is required");
-      if (!next.defaultBehaviorId) throw new Error("Default behavior is required");
       /* a new default lands with its enablement first; the principal's other
          fields then save against an already valid default */
       if (next.defaultBehaviorId !== agent.defaultBehaviorId)
@@ -46,6 +44,14 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
         },
       });
     },
+    {
+      problems: (next) => ({
+        displayName: next.displayName.trim() ? undefined : "Display name is required",
+        defaultBehaviorId: next.defaultBehaviorId
+          ? undefined
+          : "Default behavior is required",
+      }),
+    },
   );
 
   return (
@@ -58,6 +64,7 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
           description="How this agent is named across the desktop."
           value={d.draft.displayName}
           onChange={(v) => d.set("displayName", v)}
+          error={d.problems.displayName}
         />
         <RefRow
           id="agent-default"
@@ -65,6 +72,7 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
           description="Used when a session does not choose one."
           value={d.draft.defaultBehaviorId}
           onChange={(v) => d.set("defaultBehaviorId", v)}
+          error={d.problems.defaultBehaviorId}
           items={behaviors}
           createLabel="New behavior…"
           openRoute={(behaviorId) => ({
@@ -89,7 +97,10 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
           onChange={(v) => d.set("tags", v)}
         />
       </Group>
-      <DraftActions draft={d} />
+      <DraftActions
+        draft={d}
+        fields={{ displayName: "agent-name", defaultBehaviorId: "agent-default" }}
+      />
 
       <Group title="Identity">
         <Row

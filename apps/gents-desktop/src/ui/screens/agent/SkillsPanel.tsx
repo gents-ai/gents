@@ -14,9 +14,8 @@ import {
   TagsRow,
   PathRow,
 } from "./editors";
-import { useDraft } from "./draft";
 import { DeleteButton, ListDetail } from "./ListDetail";
-import { newId } from "./draft";
+import { newId, problemOf, useDraft } from "./draft";
 import { Group } from "./rows";
 import { RowMenu } from "./RowMenu";
 import { useApp } from "@/app/AppContext";
@@ -45,32 +44,35 @@ function SkillEditor({
     interfaceJson: skill.interfaceJson ?? "",
     tags: skill.tags,
   };
-  const d = useDraft(saved, async (next) => {
-    if (!next.name.trim()) throw new Error("Name is required");
-    if (next.interfaceJson.trim()) {
-      try {
-        JSON.parse(next.interfaceJson);
-      } catch {
-        throw new Error("Interface JSON must be valid JSON");
-      }
-    }
-    await changeConfig("saveSkillConfig", {
-      document: {
-        skill_id: skill.skillId,
-        agent_did: deployment.agentDid,
-        name: next.name.trim(),
-        description: next.description || null,
-        instructions: next.instructions,
-        source_directory: next.sourceDirectory || null,
-        tool_refs: next.toolRefs.length ? next.toolRefs : null,
-        display_name: next.displayName || null,
-        interface_json: next.interfaceJson || null,
-        enabled: next.enabled,
-        created_at: skill.createdAt,
-        tags: next.tags.length ? next.tags : null,
-      },
-    });
-  });
+  const d = useDraft(
+    saved,
+    async (next) =>
+      changeConfig("saveSkillConfig", {
+        document: {
+          skill_id: skill.skillId,
+          agent_did: deployment.agentDid,
+          name: next.name.trim(),
+          description: next.description || null,
+          instructions: next.instructions,
+          source_directory: next.sourceDirectory || null,
+          tool_refs: next.toolRefs.length ? next.toolRefs : null,
+          display_name: next.displayName || null,
+          interface_json: next.interfaceJson || null,
+          enabled: next.enabled,
+          created_at: skill.createdAt,
+          tags: next.tags.length ? next.tags : null,
+        },
+      }),
+    {
+      problems: (next) => ({
+        name: next.name.trim() ? undefined : "Name is required",
+        interfaceJson:
+          next.interfaceJson.trim() && problemOf(() => JSON.parse(next.interfaceJson))
+            ? "Interface JSON must be valid JSON"
+            : undefined,
+      }),
+    },
+  );
   const id = (f: string) => `${skill.skillId}-${f}`;
   return (
     <>
@@ -83,6 +85,7 @@ function SkillEditor({
           label="Name"
           value={d.draft.name}
           onChange={(v) => d.set("name", v)}
+          error={d.problems.name}
         />
         <PathRow
           id={id("sourceDirectory")}
@@ -134,6 +137,7 @@ function SkillEditor({
           description="Optional structured interface metadata. Must be valid JSON."
           value={d.draft.interfaceJson}
           onChange={(v) => d.set("interfaceJson", v)}
+          error={d.problems.interfaceJson}
           rows={4}
           mono
           stacked
@@ -145,7 +149,10 @@ function SkillEditor({
           onChange={(v) => d.set("tags", v)}
         />
       </Group>
-      <DraftActions draft={d} />
+      <DraftActions
+        draft={d}
+        fields={{ name: id("name"), interfaceJson: id("interface") }}
+      />
       <DeleteButton
         label={skill.name ?? skill.skillId}
         warning={dependentsWarning(deployment, "skill", skill.skillId)}
