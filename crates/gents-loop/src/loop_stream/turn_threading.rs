@@ -1,24 +1,12 @@
 use super::*;
 
-pub(super) fn add_usage_saturating(aggregate: &mut Usage, usage: Usage) {
-    aggregate.input_tokens = aggregate.input_tokens.saturating_add(usage.input_tokens);
-    aggregate.output_tokens = aggregate.output_tokens.saturating_add(usage.output_tokens);
-    aggregate.total_tokens = aggregate.total_tokens.saturating_add(usage.total_tokens);
-    aggregate.cached_input_tokens = aggregate
-        .cached_input_tokens
-        .saturating_add(usage.cached_input_tokens);
-    aggregate.cache_creation_input_tokens = aggregate
-        .cache_creation_input_tokens
-        .saturating_add(usage.cache_creation_input_tokens);
-}
-
-pub(super) fn close_streaming_turn<R>(
+pub(super) fn close_streaming_turn(
     new_messages: &mut Vec<TaggedMessage>,
     accumulator: &mut AssistantTurnAccumulator,
     message_id: Option<String>,
     assistant_source: Option<crate::claude_messages_body::ReplayTag>,
     pending_results: Vec<(ToolCall, String, String)>,
-) -> Vec<LoopStreamItem<R>> {
+) -> Vec<LoopStreamItem> {
     // Thread the assistant turn (text + reasoning + tool calls) ahead of its
     // tool results, matching rig's history ordering. Carry the provider
     // message id (captured into `stream.message_id` from the stream's
@@ -58,12 +46,10 @@ pub(super) fn close_streaming_turn<R>(
                 call_id: tool_call.call_id.clone(),
                 content,
             };
-            LoopStreamItem::Item(MultiTurnStreamItem::StreamUserItem(
-                StreamedUserContent::ToolResult {
-                    tool_result: rig_compat::to_rig_tool_result(&tool_result),
-                    internal_call_id,
-                },
-            ))
+            LoopStreamItem::ToolResult {
+                tool_result,
+                internal_call_id,
+            }
         })
         .collect()
 }

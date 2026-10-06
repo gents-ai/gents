@@ -1,13 +1,12 @@
 use std::sync::Arc;
 
 use crate::llm::message::Message;
+use crate::llm::rig_compat::{ProviderClient, ProviderModel};
 use crate::llm::tool::ToolDyn;
 use anyhow::{anyhow, Context, Result};
 use defra_node::EmbeddedNode;
 use gents_loop::loop_stream::TaggedMessage;
 use gents_loop::output_obligation::OutputObligationCheck;
-use rig::client::CompletionClient;
-use rig::completion::CompletionModel;
 
 use crate::agent::stream_processor::{StreamAction, StreamProcessor};
 use crate::completion_factory::loop_config;
@@ -106,9 +105,7 @@ async fn run_oneshot_with_completion_client<C>(
     client: C,
 ) -> Result<OneshotRunResult>
 where
-    C: CompletionClient,
-    C::CompletionModel: 'static,
-    <C::CompletionModel as CompletionModel>::StreamingResponse: 'static,
+    C: ProviderClient,
 {
     // exemption: one-shot does not wrap `model` in the daemon's
     // `AdmissionRegistry`. Admission enforces a per-backend concurrency
@@ -175,7 +172,7 @@ async fn persist_oneshot_failure(lifecycle: &mut RequestLifecycle, reason: &str)
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn run_oneshot_owned<M: CompletionModel + 'static>(
+async fn run_oneshot_owned<M: ProviderModel>(
     node: Arc<EmbeddedNode>,
     behavior: &ResolvedBehavior,
     provider_family: Option<String>,
@@ -187,10 +184,7 @@ async fn run_oneshot_owned<M: CompletionModel + 'static>(
     output_obligations: &[(String, crate::document_config::WriteToolOutputObligation)],
     background_tool_registry: BackgroundToolRegistry,
     lsp_pool: crate::toolset::lsp::LspPool,
-) -> Result<OneshotRunResult>
-where
-    M::StreamingResponse: 'static,
-{
+) -> Result<OneshotRunResult> {
     let mut lifecycle = RequestLifecycle::materialize_pending_with_execution_binding(
         node.clone(),
         &behavior.behavior_id,

@@ -283,7 +283,11 @@ impl TitleFixture {
         }
     }
 
-    fn task<M: CompletionModel>(&self, model: M, capture: bool) -> TitleTask<M> {
+    fn task<M: crate::llm::rig_compat::ProviderModel>(
+        &self,
+        model: M,
+        capture: bool,
+    ) -> TitleTask<M> {
         TitleTask {
             node: self.node.clone(),
             behavior: self.behavior.clone(),
@@ -1500,10 +1504,10 @@ async fn a_usage_limited_title_falls_back_without_failing_the_turn() {
         resets_at.timestamp()
     ));
     let calls = provider.calls.clone();
-    let model = crate::admission::AdmittedCompletionModel::for_test(
+    let model = crate::admission::AdmittedCompletionModel::new(
         provider,
         registry,
-        &format!("{backend}:connection"),
+        format!("{backend}:connection"),
     );
     let parent_state = |node: Arc<EmbeddedNode>, doc: String| async move {
         let doc = crate::graphql::escape_graphql_string(&doc);

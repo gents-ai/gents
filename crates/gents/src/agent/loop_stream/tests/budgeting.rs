@@ -459,11 +459,11 @@ async fn per_turn_compaction_preserves_canonical_budget_exhaustion() {
     loop_config.turn_compactor = Some(Arc::new(move |_request| {
         Box::pin(async move {
             Err(
-                anyhow::Error::new(StreamingError::Completion(CompletionError::ProviderError(
-                    format!(
+                anyhow::Error::new(rig_compat::loop_stream_error(StreamingError::Completion(
+                    CompletionError::ProviderError(format!(
                         "{AGGREGATE_TOKEN_BUDGET_EXHAUSTED_PREFIX}limit=10000, used=9000, \
                      estimated_input_tokens=2000, remaining=1000"
-                    ),
+                    )),
                 )))
                 .context("guided compaction exhausted the request token budget"),
             )
@@ -803,11 +803,23 @@ async fn reduction_cannot_fit_is_typed_and_never_dispatched() {
         .expect("cannot-fit produces one terminal error")
         .expect_err("cannot-fit cannot reach provider dispatch");
 
-    let StreamingError::Completion(CompletionError::RequestError(source)) = error else {
-        panic!("expected typed request error, got {error}");
-    };
+    assert!(
+        matches!(
+            error.cause(),
+            crate::error::LoopFailureCause::Completion {
+                failure: crate::error::CompletionFailure::Request,
+                ..
+            }
+        ),
+        "expected typed request error, got {error}"
+    );
+    let reduction = std::iter::successors(
+        Some(&error as &(dyn std::error::Error + 'static)),
+        |cause| cause.source(),
+    )
+    .find_map(|cause| cause.downcast_ref::<crate::compaction::ReductionError>());
     assert!(matches!(
-        source.downcast_ref::<crate::compaction::ReductionError>(),
+        reduction,
         Some(crate::compaction::ReductionError::CannotFit)
     ));
     assert_eq!(capture_calls.load(Ordering::SeqCst), 0);

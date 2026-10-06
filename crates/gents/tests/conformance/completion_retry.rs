@@ -5,7 +5,8 @@ use gents::agent::completion_retry::{
     failure_class, retry_wake_fits_deadline, CompletionRetryPolicy, CompletionRetryState,
     FailureClass, MidStreamDirective, PreStreamDirective, RetryKind,
 };
-use gents::error::{classify_completion_error, InferenceError};
+use gents::error::InferenceError;
+use gents::llm::rig_compat::classify_completion_error;
 
 use crate::lean_vocab_test::{
     assert_lean_contract_vocabulary_matches, lean_completion_retry_cases, LeanCompletionRetryCase,

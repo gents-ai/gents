@@ -20,13 +20,11 @@ async fn single_turn_no_tools_yields_text_then_final() {
     let mut final_text = None;
     while let Some(item) = stream.next().await {
         match item.expect("loop item should be Ok") {
-            LoopStreamItem::Item(MultiTurnStreamItem::StreamAssistantItem(
-                StreamedAssistantContent::Text(text),
-            )) => {
-                texts.push(text.text);
+            LoopStreamItem::Text(text) => {
+                texts.push(text);
             }
-            LoopStreamItem::Item(MultiTurnStreamItem::FinalResponse(final_response)) => {
-                final_text = Some(final_response.response().to_string());
+            LoopStreamItem::Final { text } => {
+                final_text = Some(text);
             }
             _ => {}
         }
@@ -84,10 +82,8 @@ async fn unmet_output_obligation_blocks_terminal_and_continues_with_runtime_remi
                 saw_pending = true;
                 assert!(format!("{reminder:?}").contains("write_result"));
             }
-            LoopStreamItem::Item(MultiTurnStreamItem::FinalResponse(_)) => saw_final = true,
-            LoopStreamItem::Item(MultiTurnStreamItem::StreamAssistantItem(
-                StreamedAssistantContent::Text(text),
-            )) if saw_pending && text.text == "continuing" => break,
+            LoopStreamItem::Final { .. } => saw_final = true,
+            LoopStreamItem::Text(text) if saw_pending && text == "continuing" => break,
             _ => {}
         }
     }
@@ -125,21 +121,17 @@ async fn exceeding_max_turns_terminates_with_error() {
 
     let last = items.last().expect("stream should yield at least one item");
     assert!(last.is_err(), "expected a terminal error; got {last:?}");
-    // Permanent `StreamingError::Prompt(MaxTurnsError)` (rig's variant), not a
-    // retryable `Completion(ResponseError)` — turn exhaustion must not retry.
+    // Turn exhaustion, not a retryable response error, must not retry.
     let error = last.as_ref().err().unwrap();
-    assert!(
-        matches!(
-            error,
-            rig::agent::StreamingError::Prompt(prompt_error)
-                if matches!(**prompt_error, rig::completion::PromptError::MaxTurnsError { .. })
-        ),
+    assert_eq!(
+        error.cause(),
+        &crate::error::LoopFailureCause::MaxTurns,
         "expected a max-turns Prompt error; got {last:?}"
     );
     // And it must classify as a permanent failure: retrying turn exhaustion would
     // re-run the loop (and its tools) to no purpose.
     assert!(
-        !crate::error::classify_completion_error(error).is_retryable(),
+        !error.classify().is_retryable(),
         "max-turns exhaustion must be non-retryable; got {last:?}"
     );
     // The Harbor adapter (scripts/harbor/run_gents.sh) classifies budget

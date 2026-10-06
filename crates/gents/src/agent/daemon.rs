@@ -2,8 +2,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::llm::rig_compat::ProviderModel;
 use anyhow::Result;
-use rig::completion::CompletionModel;
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::{JoinError, JoinSet};
 use tracing::Instrument;
@@ -131,7 +131,7 @@ pub(crate) async fn verify_request_at_claim_boundary(
     }
 }
 
-pub(super) struct BehaviorDaemon<M: CompletionModel> {
+pub(super) struct BehaviorDaemon<M: ProviderModel> {
     node: Arc<defra_node::EmbeddedNode>,
     behavior: Arc<ResolvedBehavior>,
     provider_family: Option<String>,
@@ -178,7 +178,7 @@ fn title_task_join_result(joined: std::result::Result<Result<()>, JoinError>) ->
     }
 }
 
-impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
+impl<M: ProviderModel> BehaviorDaemon<M> {
     pub(super) fn new(
         node: Arc<defra_node::EmbeddedNode>,
         behavior: Arc<ResolvedBehavior>,

@@ -12,14 +12,11 @@ use std::time::Duration;
 use bytes::Bytes;
 use futures::StreamExt;
 use gents_protocol::message::Message;
-use rig::agent::MultiTurnStreamItem;
 use rig::completion::{CompletionError, CompletionModel, CompletionRequest, CompletionResponse};
 use rig::http_client::{
     self, HttpClientExt, LazyBody, MultipartForm, Request, Response, StreamingResponse,
 };
-use rig::streaming::{
-    RawStreamingChoice, RawStreamingToolCall, StreamedAssistantContent, StreamingCompletionResponse,
-};
+use rig::streaming::{RawStreamingChoice, RawStreamingToolCall, StreamingCompletionResponse};
 use rig::wasm_compat::WasmCompatSend;
 
 use crate::backend_provider::BackendProviderKind;
@@ -369,15 +366,9 @@ async fn run(attempts: Vec<WireAttempt>, policy: CompletionRetryPolicy) -> Run {
         while let Some(item) = stream.next().await {
             let bodies_dropped = dropped.load(Ordering::SeqCst);
             match item {
-                Ok(LoopStreamItem::Item(MultiTurnStreamItem::StreamAssistantItem(
-                    StreamedAssistantContent::Text(text),
-                ))) => observed.push(Observed::Text(text.text)),
-                Ok(LoopStreamItem::Item(MultiTurnStreamItem::StreamAssistantItem(
-                    StreamedAssistantContent::ToolCall { .. },
-                ))) => observed.push(Observed::ToolCall),
-                Ok(LoopStreamItem::Item(MultiTurnStreamItem::FinalResponse(response))) => {
-                    observed.push(Observed::Final(response.response().to_string()))
-                }
+                Ok(LoopStreamItem::Text(text)) => observed.push(Observed::Text(text)),
+                Ok(LoopStreamItem::ToolCall { .. }) => observed.push(Observed::ToolCall),
+                Ok(LoopStreamItem::Final { text }) => observed.push(Observed::Final(text)),
                 Ok(LoopStreamItem::AttemptFailed {
                     attempt,
                     error,

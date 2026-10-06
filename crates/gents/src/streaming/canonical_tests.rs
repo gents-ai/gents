@@ -183,7 +183,7 @@ async fn owned_input_handoff_publishes_context_and_prompt_once_before_provider_o
         );
         for _ in 0..2 {
             processor
-                .process_item::<()>(Ok(LoopStreamItem::AuthoredInputReady {
+                .process_item(Ok(LoopStreamItem::AuthoredInputReady {
                     context: Some(context.clone()),
                     prompt: prompt.clone(),
                 }))

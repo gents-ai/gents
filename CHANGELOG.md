@@ -6,6 +6,16 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- Rig's completion-model and client traits, usage and error types no longer
+  leak into the daemon, one-shot, title, compaction or backend admission code:
+  those owners use native `ProviderModel`/`ProviderClient` handles and admission
+  errors and usage, and a structure test keeps Rig paths behind their owners
+  (#438). No behavior change.
+- The owned loop's output stream is native: `LoopStreamItem` carries native
+  text, reasoning, tool-call, tool-result and final items, and stream failures
+  are `LoopStreamError` with a `LoopFailureCause`, so error classification,
+  retry and stream processing no longer name Rig (#438). Failure messages are
+  unchanged.
 - iOS builds again: the DB Explorer window keeps its desktop-only title, size and
   focus calls off mobile targets, and CI checks the iOS simulator build on main.
 

@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
+use crate::rig_compat::ProviderModel;
 use anyhow::{Context, Result};
 use futures::future::BoxFuture;
 use gents_protocol::message::Message;
-use rig::completion::CompletionModel;
 use serde::{Deserialize, Serialize};
 
 use crate::provider_input::ProviderInputProfile;
@@ -430,7 +430,7 @@ pub trait ReductionEngine: Send + Sync {
 }
 
 #[derive(Clone)]
-pub struct ProviderReductionEngine<M: CompletionModel> {
+pub struct ProviderReductionEngine<M: ProviderModel> {
     model: Arc<M>,
     config: crate::loop_stream::LoopConfig,
     source_input_counter: Option<Arc<crate::provider_input::ProviderInputCounter>>,
@@ -438,7 +438,7 @@ pub struct ProviderReductionEngine<M: CompletionModel> {
     now: Arc<dyn Fn() -> chrono::DateTime<chrono::Utc> + Send + Sync>,
 }
 
-impl<M: CompletionModel> ProviderReductionEngine<M> {
+impl<M: ProviderModel> ProviderReductionEngine<M> {
     pub fn new(model: Arc<M>, mut config: crate::loop_stream::LoopConfig) -> Self {
         // Compaction is an internal, non-persisting sub-completion, not a user
         // execution origin; it must not inherit the parent's retry ladder (which
@@ -505,7 +505,7 @@ impl<M: CompletionModel> ProviderReductionEngine<M> {
     }
 }
 
-impl<M: CompletionModel + 'static> ReductionEngine for ProviderReductionEngine<M> {
+impl<M: ProviderModel> ReductionEngine for ProviderReductionEngine<M> {
     fn retention_target(
         &self,
         configured: usize,
@@ -754,7 +754,7 @@ impl<M: CompletionModel + 'static> ReductionEngine for ProviderReductionEngine<M
     }
 }
 
-async fn largest_fitting_summary_chunk<M: CompletionModel>(
+async fn largest_fitting_summary_chunk<M: ProviderModel>(
     model: &M,
     remaining: &[Message],
     prior_summary: Option<&str>,
@@ -851,7 +851,7 @@ async fn largest_fitting_summary_chunk<M: CompletionModel>(
     .into())
 }
 
-async fn summary_candidate_tokens<M: CompletionModel>(
+async fn summary_candidate_tokens<M: ProviderModel>(
     model: &M,
     chunk: &[Message],
     prior_summary: Option<&str>,
@@ -880,7 +880,7 @@ async fn summary_candidate_tokens<M: CompletionModel>(
         .context("projecting rolling compaction summary request")
 }
 
-async fn summarize_checkpoint<M: CompletionModel + 'static>(
+async fn summarize_checkpoint<M: ProviderModel>(
     model: &M,
     prepared_history: Vec<Message>,
     summary_config: crate::loop_stream::LoopConfig,

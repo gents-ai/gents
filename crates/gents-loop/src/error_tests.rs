@@ -1,4 +1,5 @@
 use super::*;
+use crate::rig_compat::classify_completion_error;
 
 #[test]
 fn inference_error_retryability() {
