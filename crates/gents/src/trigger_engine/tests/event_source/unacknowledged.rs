@@ -145,15 +145,19 @@ impl Delivery {
         emitted
     }
 
-    async fn trigger_error(&self) -> serde_json::Value {
+    async fn trigger_status(&self, status: &str) -> serde_json::Value {
         for _ in 0..100 {
             let trigger = observed_trigger(self.node.as_ref(), "ping-trigger").await;
-            if trigger["last_status"].as_str() == Some("error") {
+            if trigger["last_status"].as_str() == Some(status) {
                 return trigger;
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        panic!("the refused fire never became visible on its Trigger");
+        panic!("the fire never became visible as {status} on its Trigger");
+    }
+
+    async fn trigger_error(&self) -> serde_json::Value {
+        self.trigger_status("error").await
     }
 }
 
@@ -253,6 +257,52 @@ async fn transient_fire_failure_retries_on_a_bounded_backoff() {
         .await;
     assert!((2..=6).contains(&retries), "retried {retries} times");
     delivery.trigger_error().await;
+    assert_eq!(delivery.cursor().await, before);
+    assert_eq!(
+        delivery.pending_documents().await,
+        vec![delivery.doc_id.clone()]
+    );
+}
+
+/// A fire whose result never reaches the acknowledgment channel records the
+/// reason on its `Trigger` instead of parking silently, keeps the arrival
+/// pending, and is still retried only on the capped backoff — its own
+/// `Trigger` write must not re-drive it without bound.
+#[tokio::test]
+async fn an_unacknowledged_fire_records_its_reason_on_the_trigger() {
+    let (mut delivery, intent) = first_delivery(false).await;
+    let before = delivery.cursor().await;
+    // Dropping the intent drops its `on_result` sender, which is exactly the
+    // production path: nothing acked the fire before the channel closed.
+    drop(intent);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    let mut redrives = 0;
+    while let Ok(Some(retried)) =
+        tokio::time::timeout_at(deadline, delivery.source.next_fire()).await
+    {
+        redrives += 1;
+        drop(retried);
+    }
+    assert!(
+        (1..=8).contains(&redrives),
+        "the unacknowledged arrival was re-driven {redrives} times"
+    );
+
+    let trigger = delivery
+        .trigger_status(crate::trigger_engine::UNACKNOWLEDGED_STATUS)
+        .await;
+    assert!(
+        trigger["last_error"]
+            .as_str()
+            .is_some_and(|error| error.contains("acknowledgment channel closed")),
+        "{trigger}"
+    );
+    assert_eq!(trigger["fire_count"].as_i64().unwrap_or(0), 0);
+    assert_eq!(
+        trigger["last_fired_source_doc_id"].as_str(),
+        Some(delivery.doc_id.as_str()),
+        "{trigger}"
+    );
     assert_eq!(delivery.cursor().await, before);
     assert_eq!(
         delivery.pending_documents().await,

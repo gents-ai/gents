@@ -1454,10 +1454,13 @@ fn provider_reason(
 ///
 /// The pack under evaluation owns its triggers and the task templates they
 /// render, so the subject can cause the error and it counts against it as
-/// [`OutcomeKind::Runtime`]. A status that could not be read leaves the pass
-/// unproven, which is the harness failing: [`OutcomeKind::Infrastructure`].
+/// [`OutcomeKind::Runtime`]. A fire that was never acknowledged — the harness
+/// lost its result before the arrival checkpoint could read it — and a status
+/// that could not be read both leave the pass unproven, which is the harness
+/// failing: [`OutcomeKind::Infrastructure`]. A subject-causable error is never
+/// downgraded by an unacknowledged fire recorded alongside it.
 ///
-/// Only errors attempted since `since` (the stage's start, in the trigger
+/// Only failures attempted since `since` (the stage's start, in the trigger
 /// writers' whole-second RFC 3339 form) count. A trigger writes its status
 /// asynchronously after the fire, so an error recorded after the stage is read
 /// is attributed to the next stage, and one recorded after the final stage is
@@ -1474,6 +1477,7 @@ async fn trigger_failure(
 ) -> Option<OutcomeKind> {
     let agent_did = escape_graphql_string(agent_did);
     let since = escape_graphql_string(since);
+    let unacknowledged = crate::trigger_engine::UNACKNOWLEDGED_STATUS;
     let source_filter = source_doc_id.map_or_else(String::new, |doc_id| {
         format!(
             r#", last_fired_source_doc_id: {{ _eq: "{}" }}"#,
@@ -1481,9 +1485,9 @@ async fn trigger_failure(
         )
     });
     let query = format!(
-        r#"{{ Trigger(filter: {{ agent_did: {{ _eq: "{agent_did}" }}, last_status: {{ _eq: "error" }}, last_attempt_at: {{ _geq: "{since}" }}{source_filter} }}) {{ trigger_id last_attempt_at last_fired_source_doc_id last_status last_error }} }}"#
+        r#"{{ Trigger(filter: {{ agent_did: {{ _eq: "{agent_did}" }}, last_status: {{ _in: ["error", "{unacknowledged}"] }}, last_attempt_at: {{ _geq: "{since}" }}{source_filter} }}) {{ trigger_id last_attempt_at last_fired_source_doc_id last_status last_error }} }}"#
     );
-    let errored = match graphql_with_transaction_retry(node, &query, "eval trial trigger status")
+    let failing = match graphql_with_transaction_retry(node, &query, "eval trial trigger status")
         .await
     {
         Ok(response) => match errored_triggers(response.data.as_ref()) {
@@ -1507,16 +1511,25 @@ async fn trigger_failure(
             return Some(OutcomeKind::Infrastructure);
         }
     };
-    if errored.is_empty() {
+    if failing.is_empty() {
         return None;
     }
+    let kind = if failing
+        .iter()
+        .any(|trigger| trigger.last_status.as_deref() == Some("error"))
+    {
+        OutcomeKind::Runtime
+    } else {
+        OutcomeKind::Infrastructure
+    };
     tracing::warn!(
-        triggers = ?errored,
+        triggers = ?failing,
+        outcome = kind.as_str(),
         trial_id = %trial_id,
         stage_id = %stage_id,
-        "an eval trial trigger errored; the stage fails"
+        "an eval trial trigger recorded a failed fire; the stage fails"
     );
-    Some(OutcomeKind::Runtime)
+    Some(kind)
 }
 
 /// The `Trigger` rows of a status read, or `None` when the response holds no
@@ -3267,20 +3280,33 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_seed_ignores_unrelated_and_stale_trigger_errors() {
+    async fn a_seed_ignores_unrelated_and_stale_trigger_failures() {
         let home = EmbeddedHome::create_temp("seed-trigger-scope")
             .await
             .unwrap();
         let since = "2026-06-01T00:00:00Z";
         let source = "seed-\"current";
-        for (trigger_id, doc_id, attempted) in [
-            ("unrelated", "another-seed", since),
-            ("stale", source, "2026-01-01T00:00:00Z"),
+        let unacknowledged = crate::trigger_engine::UNACKNOWLEDGED_STATUS;
+        for (trigger_id, status, doc_id, attempted) in [
+            ("unrelated", "error", "another-seed", since),
+            ("stale", "error", source, "2026-01-01T00:00:00Z"),
+            (
+                "unrelated-unacknowledged",
+                unacknowledged,
+                "another-seed",
+                since,
+            ),
+            (
+                "stale-unacknowledged",
+                unacknowledged,
+                source,
+                "2026-01-01T00:00:00Z",
+            ),
         ] {
             seed_trigger(
                 &home,
                 trigger_id,
-                "error",
+                status,
                 Some("unrelated failure"),
                 attempted,
             )
@@ -3299,7 +3325,8 @@ mod tests {
         }
         assert_eq!(
             trigger_failure(&home.node, home.did(), since, Some(source), "t1", "seed").await,
-            None
+            None,
+            "another document's fire, and one attempted before the stage, is not this stage's"
         );
         crate::document_config::update_trigger_runtime_fields(
             &home.node,
@@ -3338,6 +3365,84 @@ mod tests {
             OutcomeKind::Infrastructure,
             crate::eval::EvidenceClass::NotEvidence,
         );
+    }
+
+    /// A fire the harness never acknowledged left the pass unproven, so the
+    /// seed wait ends on the recorded reason instead of spending its deadline
+    /// and classifying the slot on no evidence at all.
+    #[tokio::test]
+    async fn a_seed_unacknowledged_trigger_is_infrastructure() {
+        let home = EmbeddedHome::create_temp("seed-trigger-unacknowledged")
+            .await
+            .unwrap();
+        let since = "2026-06-01T00:00:00Z";
+        let source = "seed-current";
+        seed_trigger(
+            &home,
+            "unacknowledged",
+            crate::trigger_engine::UNACKNOWLEDGED_STATUS,
+            Some("acknowledgment channel closed"),
+            since,
+        )
+        .await;
+        crate::document_config::update_trigger_runtime_fields(
+            &home.node,
+            home.did(),
+            "unacknowledged",
+            crate::document_config::TriggerRuntimeUpdate {
+                last_fired_source_doc_id: Some(source.into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_failure_class(
+            trigger_failure(&home.node, home.did(), since, Some(source), "t1", "seed").await,
+            OutcomeKind::Infrastructure,
+            crate::eval::EvidenceClass::NotEvidence,
+        );
+        home.node.shutdown().await;
+    }
+
+    /// An error the subject can cause outranks an unacknowledged fire recorded
+    /// on another trigger for the same seed document.
+    #[tokio::test]
+    async fn an_unacknowledged_seed_fire_does_not_downgrade_a_recorded_error() {
+        let home = EmbeddedHome::create_temp("seed-trigger-precedence")
+            .await
+            .unwrap();
+        let since = "2026-06-01T00:00:00Z";
+        let source = "seed-current";
+        for (trigger_id, status) in [
+            ("lost", crate::trigger_engine::UNACKNOWLEDGED_STATUS),
+            ("caused", "error"),
+        ] {
+            seed_trigger(
+                &home,
+                trigger_id,
+                status,
+                Some("recorded alongside the other"),
+                since,
+            )
+            .await;
+            crate::document_config::update_trigger_runtime_fields(
+                &home.node,
+                home.did(),
+                trigger_id,
+                crate::document_config::TriggerRuntimeUpdate {
+                    last_fired_source_doc_id: Some(source.into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        }
+        assert_failure_class(
+            trigger_failure(&home.node, home.did(), since, Some(source), "t1", "seed").await,
+            OutcomeKind::Runtime,
+            crate::eval::EvidenceClass::Fail,
+        );
+        home.node.shutdown().await;
     }
 
     #[tokio::test]

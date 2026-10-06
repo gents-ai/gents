@@ -190,6 +190,12 @@ impl EventSource {
                 Err(error) => {
                     tracing::warn!(trigger_id = %pending.trigger_id, source_doc_id = %pending.source_doc_id,
                         %error, "event trigger acknowledgment channel closed; preserving arrival for retry");
+                    Self::spawn_unacknowledged_field_write(
+                        self.node.clone(),
+                        pending.owner.clone(),
+                        pending.trigger_id.clone(),
+                        pending.source_doc_id.clone(),
+                    );
                 }
                 _ => {}
             }

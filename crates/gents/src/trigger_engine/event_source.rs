@@ -1753,6 +1753,44 @@ impl EventSource {
         });
     }
 
+    /// A fire whose result never reached the acknowledgment channel has no
+    /// `on_result` writer of its own, so its park would otherwise leave no
+    /// durable reason and a seed wait would spend its whole deadline on it.
+    pub(super) fn spawn_unacknowledged_field_write(
+        node: Arc<EmbeddedNode>,
+        agent_did: String,
+        trigger_id: String,
+        source_doc_id: String,
+    ) {
+        tokio::spawn(async move {
+            let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+            let update = crate::document_config::TriggerRuntimeUpdate {
+                last_attempt_at: Some(now),
+                last_fired_source_doc_id: Some(source_doc_id),
+                last_status: Some(crate::trigger_engine::UNACKNOWLEDGED_STATUS.to_string()),
+                last_error: Some(
+                    "the fire produced no result before its acknowledgment channel closed"
+                        .to_string(),
+                ),
+                ..Default::default()
+            };
+            if let Err(error) = crate::document_config::update_trigger_runtime_fields(
+                &node,
+                &agent_did,
+                &trigger_id,
+                update,
+            )
+            .await
+            {
+                tracing::warn!(
+                    trigger_id = %trigger_id,
+                    %error,
+                    "event trigger runtime-field update failed"
+                );
+            }
+        });
+    }
+
     /// Build a `FireIntent` for every active event-source trigger whose
     /// `source_collection` matches `collection_name` AND `event_kind` matches
     /// `kind`. Each candidate's operator-authored filter is probed against

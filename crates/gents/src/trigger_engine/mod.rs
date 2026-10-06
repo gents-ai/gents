@@ -131,6 +131,12 @@ pub(crate) fn fire_result_from_materialize(result: anyhow::Result<String>) -> Fi
 
 pub(crate) const SERIAL_BUSY: &str = "serial: prior fire still in-flight";
 
+/// Recorded when a fire's result never reaches the acknowledgment channel, so
+/// the park's own `on_result` writer cannot run. The eval runner reads this
+/// status and classes the slot as a harness fault instead of waiting out the
+/// stage deadline on no evidence.
+pub(crate) const UNACKNOWLEDGED_STATUS: &str = "unacknowledged";
+
 #[derive(Debug, Clone)]
 pub enum FireResult {
     Duplicate {
