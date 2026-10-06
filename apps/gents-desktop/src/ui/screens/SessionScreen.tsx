@@ -1314,7 +1314,7 @@ export function SessionScreen() {
       acceptsComposeIntent,
       captureComposeIntent,
       loadOlderSessionTimeline,
-      refreshSnapshot,
+      renameSession,
       retryMessage,
       selectAgent,
       sendMessage,
@@ -1731,12 +1731,7 @@ export function SessionScreen() {
                         key={session.sessionId + (session.title ?? "")}
                         title={session.title ?? "Untitled session"}
                         onRename={async (title) => {
-                          await api.renameSession({
-                            agentDid: selectedAgentDid ?? session.agentDid ?? "",
-                            sessionId: session.sessionId,
-                            title,
-                          });
-                          await refreshSnapshot();
+                          await renameSession(session.sessionId, title);
                           toast("Renamed");
                         }}
                       />
@@ -1772,12 +1767,7 @@ export function SessionScreen() {
                       key={session.sessionId + (session.title ?? "")}
                       title={session.title ?? "Untitled session"}
                       onRename={async (title) => {
-                        await api.renameSession({
-                          agentDid: selectedAgentDid ?? session.agentDid ?? "",
-                          sessionId: session.sessionId,
-                          title,
-                        });
-                        await refreshSnapshot();
+                        await renameSession(session.sessionId, title);
                         toast("Renamed");
                       }}
                     />

@@ -70,16 +70,20 @@ function screenApp({
   sendChatMessage = vi
     .fn()
     .mockResolvedValue({ sessionId: "session", requestId: "accepted" }),
+  api = {},
 }: {
   session?: DesktopSessionSnapshot | null;
   nodeOverrides?: Record<string, unknown>;
   sendChatMessage?: ReturnType<typeof vi.fn>;
+  /** more of the bridge, for what a test asks of it */
+  api?: Record<string, unknown>;
 } = {}) {
   const app = testApp({
     api: {
       sendChatMessage,
       sessionProvenance: vi.fn().mockResolvedValue(null),
       fetchOperationsSnapshot: vi.fn().mockResolvedValue(null),
+      ...api,
     },
     deployments: [node(nodeOverrides)],
     session,
@@ -363,5 +367,44 @@ describe("SessionScreen goal label", () => {
     });
     renderScreen(app);
     expect(screen.getByText("Goal met")).toBeInTheDocument();
+  });
+});
+
+describe("renaming a session", () => {
+  it("renames through its action, then reads the session again", async () => {
+    const renameSession = vi.fn().mockResolvedValue(undefined);
+    const fetchSessionSnapshot = vi.fn().mockResolvedValue(null);
+    const { app } = screenApp({
+      session: heldSession(),
+      api: {
+        renameSession,
+        fetchSessionSnapshot,
+        fetchDesktopSnapshot: vi
+          .fn()
+          .mockResolvedValue({ bootstrap: {}, client: null }),
+      },
+    });
+    renderScreen(app);
+    const user = userEvent.setup();
+    await user.click(screen.getAllByRole("button", { name: "Rename Session" })[0]!);
+    const input = screen.getByRole("textbox", { name: "Rename Session" });
+    await user.clear(input);
+    await user.type(input, "Renamed session{Enter}");
+    await vi.waitFor(() =>
+      expect(renameSession).toHaveBeenCalledWith({
+        agentDid: AGENT,
+        sessionId: "session",
+        title: "Renamed session",
+      }),
+    );
+    /* the title shown is the held session's, so it is read again */
+    await vi.waitFor(() =>
+      expect(fetchSessionSnapshot).toHaveBeenCalledWith(
+        "session",
+        AGENT,
+        null,
+        expect.objectContaining({ limit: expect.any(Number) }),
+      ),
+    );
   });
 });
