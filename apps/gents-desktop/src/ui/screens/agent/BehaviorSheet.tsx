@@ -1,6 +1,6 @@
 /* A new behavior drafted beside another page: nothing is saved until Save,
    and the page it came from gets the id. */
-import type { DeploymentView } from "@source-inc/gents-desktop-client";
+import type { NodeView } from "../../../hooks/fleetStore";
 import { BehaviorEditor, newBehaviorView } from "./BehaviorsPanel";
 import { EditorSheet } from "./EditorSheet";
 import { useState } from "react";
@@ -11,7 +11,7 @@ export function BehaviorSheet({
   onClose,
   enabled = false,
 }: {
-  deployment: DeploymentView;
+  deployment: NodeView;
   open: boolean;
   /* the new behavior's id, or null when discarded */
   onClose: (behaviorId: string | null) => void;

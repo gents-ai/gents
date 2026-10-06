@@ -1,15 +1,15 @@
 /* First-run is unfinished until a local agent can actually run inference.
    gents init writes a placeholder backend, so a non-empty backends list is
    not enough; a key, OAuth, env var, or a healthy probe is. */
+import type { NodeView } from "../../hooks/fleetStore";
 import type {
-  DeploymentView,
   DesktopClientSnapshot,
   InferenceBackendView,
 } from "@source-inc/gents-desktop-client";
 import { agentOf } from "./agents";
 
 export function isLocalAgent(
-  deployment: Pick<DeploymentView, "agentDid" | "source">,
+  deployment: Pick<NodeView, "agentDid" | "source">,
   initAgentDid?: string | null,
 ): boolean {
   const source = deployment.source ?? "";
@@ -21,7 +21,7 @@ export function isLocalAgent(
   );
 }
 
-export function inferenceIsConfigured(deployment: DeploymentView): boolean {
+export function inferenceIsConfigured(deployment: NodeView): boolean {
   const behavior = deployment.behaviorConfigs.find(
     (row) => row.behavior_id === deployment.agentPrincipal.defaultBehaviorId,
   );
@@ -47,7 +47,7 @@ export function backendIsConfigured(backend: InferenceBackendView): boolean {
 }
 
 export function shouldRebindSetupDefault(
-  deployment: DeploymentView,
+  deployment: NodeView,
   addingExtra: boolean,
 ): boolean {
   if (!addingExtra) return true;

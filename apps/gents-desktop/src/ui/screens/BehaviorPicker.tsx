@@ -5,7 +5,7 @@
    filters by name and description. Disabled behaviors are left out. */
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown, Plus, Search, X } from "lucide-react";
-import type { DeploymentView } from "@source-inc/gents-desktop-client";
+import type { NodeView } from "../../hooks/fleetStore";
 import { Button } from "@gents/ui/components/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@gents/ui/components/popover";
 import { cn } from "@gents/ui/lib/utils";
@@ -21,7 +21,7 @@ export function BehaviorPicker({
   behaviorId,
   onChange,
 }: {
-  deployment: DeploymentView | null;
+  deployment: NodeView | null;
   behaviorId: string | null;
   onChange: (behaviorId: string) => void;
 }) {
@@ -45,9 +45,9 @@ function MountedBehaviorPicker({
   chosen,
   onChange,
 }: {
-  deployment: DeploymentView;
-  behaviors: DeploymentView["behaviors"];
-  chosen: DeploymentView["behaviors"][number];
+  deployment: NodeView;
+  behaviors: NodeView["behaviors"];
+  chosen: NodeView["behaviors"][number];
   onChange: (behaviorId: string) => void;
 }) {
   const [query, setQuery] = useState("");

@@ -1,8 +1,8 @@
+import type { NodeView } from "../../../hooks/fleetStore";
 import { useEffect, useRef, useState } from "react";
 import { dependentsWarning } from "./dependents";
 import type {
   BackendProviderKind,
-  DeploymentView,
   ProviderAccountView,
   InferenceExecution,
   InferenceModelRecommendation,
@@ -80,7 +80,7 @@ function settingsForDraft(
    moved to its provider's default account (the first enabled one in the
    resolver order the list keeps), and its first model */
 export function newProfileDocument(
-  deployment: DeploymentView,
+  deployment: NodeView,
   backendId?: string,
   accounts: ProviderAccountView[] = [],
 ): InferenceProfile {
@@ -115,7 +115,7 @@ export function ProfileEditor({
   embedded = false,
   draft: draftMode,
 }: {
-  deployment: DeploymentView;
+  deployment: NodeView;
   /* in a sheet beside another page: no Danger zone */
   embedded?: boolean;
   profile: InferenceProfile;
@@ -896,7 +896,7 @@ export function ProfileEditor({
 }
 
 /* "claude-sonnet-5 · via Anthropic · 2 behaviors" */
-export function modelSentence(deployment: DeploymentView, p: InferenceProfile) {
+export function modelSentence(deployment: NodeView, p: InferenceProfile) {
   const backend = deployment.inferenceBackends.find(
     (b) => b.backendId === p.backend_id,
   );
@@ -913,7 +913,7 @@ export function modelSentence(deployment: DeploymentView, p: InferenceProfile) {
 }
 
 /* why a model cannot serve right now */
-function modelProblem(deployment: DeploymentView, p: InferenceProfile): string | null {
+function modelProblem(deployment: NodeView, p: InferenceProfile): string | null {
   const backend = deployment.inferenceBackends.find(
     (b) => b.backendId === p.backend_id,
   );
@@ -928,7 +928,7 @@ export function ProfilesPanel({
   deployment,
   item,
 }: {
-  deployment: DeploymentView;
+  deployment: NodeView;
   item?: string;
 }) {
   const { changeConfig } = useApp().actions;

@@ -1,10 +1,11 @@
 /* Tasks: TaskSaveRequest fields, the run facts, and a manual run with
    JSON args. */
+import type { NodeView } from "../../../hooks/fleetStore";
 import { setEnabled } from "./enabled";
 import { dependentsWarning } from "./dependents";
 import { useState } from "react";
 import { toast } from "sonner";
-import type { DeploymentView, TaskView } from "@source-inc/gents-desktop-client";
+import type { TaskView } from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
 import { Textarea } from "@gents/ui/components/textarea";
 import {
@@ -42,7 +43,7 @@ export function TaskEditor({
   task,
   embedded = false,
 }: {
-  deployment: DeploymentView;
+  deployment: NodeView;
   task: TaskView;
   /* in a sheet beside another page: no Danger zone */
   embedded?: boolean;
@@ -408,7 +409,7 @@ export function TaskEditor({
 }
 
 /* when a task runs, from its triggers, and the first reason it would not */
-function whenItRuns(deployment: DeploymentView, t: TaskView) {
+function whenItRuns(deployment: NodeView, t: TaskView) {
   const triggers = deployment.triggers.filter((x) => x.config.task_id === t.taskId);
   if (t.enabled === false) return { when: "Disabled", problem: "Task is disabled" };
   if (!triggers.length) return { when: "Runs when you run it", problem: null };
@@ -424,7 +425,7 @@ function whenItRuns(deployment: DeploymentView, t: TaskView) {
 }
 
 /* the canonical document for a task view, for row edits and copies */
-function taskDocument(deployment: DeploymentView, t: TaskView) {
+function taskDocument(deployment: NodeView, t: TaskView) {
   return {
     agent_did: deployment.agentDid,
     task_id: t.taskId,
@@ -446,7 +447,7 @@ export function TasksPanel({
   deployment,
   item,
 }: {
-  deployment: DeploymentView;
+  deployment: NodeView;
   item?: string;
 }) {
   const { changeConfig } = useApp().actions;

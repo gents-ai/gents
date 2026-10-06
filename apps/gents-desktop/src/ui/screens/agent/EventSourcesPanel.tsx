@@ -1,4 +1,5 @@
-import type { DeploymentView, EventSource } from "@source-inc/gents-desktop-client";
+import type { NodeView } from "../../../hooks/fleetStore";
+import type { EventSource } from "@source-inc/gents-desktop-client";
 import { dependentsWarning } from "./dependents";
 import { navigate } from "@/lib/router";
 import {
@@ -28,7 +29,7 @@ export function EventSourceEditor({
   source,
   embedded = false,
 }: {
-  deployment: DeploymentView;
+  deployment: NodeView;
   source: EventSource;
   /* in a sheet beside another page: no Danger zone */
   embedded?: boolean;
@@ -231,7 +232,7 @@ export function EventSourcesPanel({
   deployment,
   item,
 }: {
-  deployment: DeploymentView;
+  deployment: NodeView;
   item?: string;
 }) {
   const { changeConfig } = useApp().actions;

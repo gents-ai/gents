@@ -1,8 +1,5 @@
-import type {
-  DeploymentView,
-  Tools,
-  SubagentTargetDocument,
-} from "@source-inc/gents-desktop-client";
+import type { NodeView } from "../../../hooks/fleetStore";
+import type { Tools, SubagentTargetDocument } from "@source-inc/gents-desktop-client";
 import { dependentsWarning } from "./dependents";
 import { navigate } from "@/lib/router";
 import {
@@ -27,7 +24,7 @@ import { useCallback, useState } from "react";
 import { useApp } from "@/app/AppContext";
 
 /* the document a draft starts from: read-only files, no commands */
-export function newToolsDocument(deployment: DeploymentView): Tools {
+export function newToolsDocument(deployment: NodeView): Tools {
   return {
     tools_id: newId("tools"),
     agent_did: deployment.agentDid,
@@ -42,7 +39,7 @@ export function ToolsEditor({
   embedded = false,
   draft: draftMode,
 }: {
-  deployment: DeploymentView;
+  deployment: NodeView;
   /* in a sheet beside another page: no Danger zone */
   embedded?: boolean;
   tools: Tools;
@@ -437,7 +434,7 @@ export function ToolsPanel({
   deployment,
   item,
 }: {
-  deployment: DeploymentView;
+  deployment: NodeView;
   item?: string;
 }) {
   const { changeConfig } = useApp().actions;

@@ -1,7 +1,8 @@
+import type { NodeView } from "../../../hooks/fleetStore";
 import { useEffect, useState } from "react";
 import { dependentsWarning } from "./dependents";
 import { ArrowLeft } from "lucide-react";
-import type { AgentContext, DeploymentView } from "@source-inc/gents-desktop-client";
+import type { AgentContext } from "@source-inc/gents-desktop-client";
 import { href, type Route } from "@/lib/router";
 import {
   AreaRow,
@@ -33,7 +34,7 @@ function Editor({
   context,
   after,
 }: {
-  deployment: DeploymentView;
+  deployment: NodeView;
   context: AgentContext;
   after?: Route;
 }) {
@@ -252,7 +253,7 @@ export function ContextsPanel({
   deployment,
   item,
 }: {
-  deployment: DeploymentView;
+  deployment: NodeView;
   item?: string;
 }) {
   const { changeConfig } = useApp().actions;

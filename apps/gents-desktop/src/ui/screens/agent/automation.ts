@@ -1,9 +1,9 @@
 /* Automations in words. A trigger is a sentence, "Every weekday at 09:00 ·
    run Nightly audit with Implementer", and a readiness line that says why
    it will not fire. From the loaded documents and the bridge's readiness. */
+import type { NodeView } from "../../../hooks/fleetStore";
 import { behaviorReadiness } from "@/lib/behavior-readiness";
 import type {
-  DeploymentView,
   EventSource,
   Schedule,
   Tools,
@@ -63,10 +63,7 @@ export function eventInWords(e: EventSource): string {
   return `When ${article} ${e.source_collection} is ${kind}${e.filter ? " matching a filter" : ""}`;
 }
 
-export function sourceInWords(
-  deployment: DeploymentView,
-  t: TriggerView,
-): string | null {
+export function sourceInWords(deployment: NodeView, t: TriggerView): string | null {
   const src = t.config.source;
   if (src.kind === "schedule") {
     const s = deployment.schedules.find((x) => x.schedule_id === src.schedule_id);
@@ -85,10 +82,7 @@ export type Readiness =
    switch and references from the loaded documents, then the behavior's
    readiness as the bridge reports it. `ok` means nothing here blocks it;
    it is never shown as a promise that the run will succeed. */
-export function triggerReadiness(
-  deployment: DeploymentView,
-  t: TriggerView,
-): Readiness {
+export function triggerReadiness(deployment: NodeView, t: TriggerView): Readiness {
   const cfg = t.config;
   if (cfg.enabled === false) return { ok: false, reason: "Off" };
   if (sourceInWords(deployment, t) === null)
@@ -120,7 +114,7 @@ export function triggerReadiness(
 }
 
 /* the sentence's second half: what runs, and with whom */
-export function actionInWords(deployment: DeploymentView, t: TriggerView): string {
+export function actionInWords(deployment: NodeView, t: TriggerView): string {
   const task = deployment.tasks.find((x) => x.taskId === t.config.task_id);
   if (!task) return "run a missing task";
   const b = agentOf(deployment, task.behaviorId);
@@ -128,7 +122,7 @@ export function actionInWords(deployment: DeploymentView, t: TriggerView): strin
 }
 
 /* a profile by name, with its model beside it so the field reads as a model picker */
-export function profileLabel(deployment: DeploymentView, profileId: string) {
+export function profileLabel(deployment: NodeView, profileId: string) {
   const p = deployment.inferenceProfiles.find((x) => x.profile_id === profileId);
   if (!p) return profileId;
   const name = p.display_name ?? p.profile_id;

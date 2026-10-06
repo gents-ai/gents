@@ -1,4 +1,5 @@
-import type { DeploymentView, Tools } from "@source-inc/gents-desktop-client";
+import type { NodeView } from "../../../hooks/fleetStore";
+import type { Tools } from "@source-inc/gents-desktop-client";
 import { AreaRow, ChoiceRow, NumberRow, SwitchRow } from "./editors";
 import { DocumentSelection } from "./DocumentSelection";
 import { Group } from "./rows";
@@ -139,7 +140,7 @@ export function ToolGroupControls({
 }: {
   value: string;
   onChange: (value: string) => void;
-  deployment: DeploymentView;
+  deployment: NodeView;
   onCreateTarget: (behaviorId: string) => void;
   onInvalid: (id: string, label: string | null) => void;
 }) {

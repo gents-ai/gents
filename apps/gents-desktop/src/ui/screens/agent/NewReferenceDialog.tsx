@@ -5,12 +5,9 @@
    nothing behind. A new task starts disabled, and an event source has no
    default collection (watching AgentRequest would let a task trigger
    itself). */
+import type { NodeView } from "../../../hooks/fleetStore";
 import { useState } from "react";
-import type {
-  DeploymentView,
-  EventSource,
-  Schedule,
-} from "@source-inc/gents-desktop-client";
+import type { EventSource, Schedule } from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
 import {
   Dialog,
@@ -51,7 +48,7 @@ export function NewReferenceDialog({
   kind,
   onClose,
 }: {
-  deployment: DeploymentView;
+  deployment: NodeView;
   /* which document to draft; null when closed */
   kind: NewReference["kind"] | null;
   /* the drafted document, or null when cancelled */

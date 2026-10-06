@@ -1,7 +1,8 @@
+import type { NodeView } from "../../../hooks/fleetStore";
 import { useState } from "react";
 import { dependentsWarning } from "./dependents";
 import { toast } from "sonner";
-import type { DeploymentView, Schedule } from "@source-inc/gents-desktop-client";
+import type { Schedule } from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
 import { navigate } from "@/lib/router";
 import {
@@ -30,7 +31,7 @@ export function ScheduleEditor({
   schedule,
   embedded = false,
 }: {
-  deployment: DeploymentView;
+  deployment: NodeView;
   schedule: Schedule;
   /* in a sheet beside another page: no Danger zone */
   embedded?: boolean;
@@ -193,7 +194,7 @@ export function SchedulesPanel({
   deployment,
   item,
 }: {
-  deployment: DeploymentView;
+  deployment: NodeView;
   item?: string;
 }) {
   const { changeConfig } = useApp().actions;

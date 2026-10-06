@@ -5,11 +5,11 @@
    of it behind. A new trigger starts off unless the person turns it on
    here. Existing schedules, sources and tasks can be reused instead of
    made. */
+import type { NodeView } from "../../../hooks/fleetStore";
 import { behaviorReadiness } from "@/lib/behavior-readiness";
 import { useRef, useState } from "react";
 import type {
   ConfigComponentsApplyRequest,
-  DeploymentView,
   EventSource,
   Schedule,
   Trigger,
@@ -114,7 +114,7 @@ export function NewAutomationDialog({
   initialKind,
   onCreated,
 }: {
-  deployment: DeploymentView;
+  deployment: NodeView;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /* from Tasks: always a new task, which may run manually; lands on the task */

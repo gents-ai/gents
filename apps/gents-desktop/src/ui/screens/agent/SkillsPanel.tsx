@@ -1,8 +1,9 @@
 /* Skills: id (immutable after create),
    name, enabled, display name, description, instructions and tool
    dependencies, saved through SkillSaveRequest. */
+import type { NodeView } from "../../../hooks/fleetStore";
 import { dependentsWarning } from "./dependents";
-import type { DeploymentView, SkillView } from "@source-inc/gents-desktop-client";
+import type { SkillView } from "@source-inc/gents-desktop-client";
 import { navigate } from "@/lib/router";
 import {
   AreaRow,
@@ -24,7 +25,7 @@ function SkillEditor({
   deployment,
   skill,
 }: {
-  deployment: DeploymentView;
+  deployment: NodeView;
   skill: SkillView;
 }) {
   const { changeConfig } = useApp().actions;
@@ -161,7 +162,7 @@ function SkillEditor({
 }
 
 /* the canonical document for a skill view, for row edits and copies */
-function skillDocument(deployment: DeploymentView, s: SkillView) {
+function skillDocument(deployment: NodeView, s: SkillView) {
   return {
     skill_id: s.skillId,
     agent_did: deployment.agentDid,
@@ -182,7 +183,7 @@ export function SkillsPanel({
   deployment,
   item,
 }: {
-  deployment: DeploymentView;
+  deployment: NodeView;
   item?: string;
 }) {
   const { changeConfig } = useApp().actions;

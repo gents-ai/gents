@@ -3,6 +3,7 @@
    visible block on the behavior: pick one, see who else uses it, duplicate
    it or start empty, and edit its instructions and capabilities in place.
    Everything waits for one Save. */
+import type { NodeView } from "../../../hooks/fleetStore";
 import { setEnabled } from "./enabled";
 import { useExclusivePopover } from "@/hooks/useExclusivePopover";
 import { dependentsWarning } from "./dependents";
@@ -15,11 +16,7 @@ import {
   MoreHorizontal,
   Plus,
 } from "lucide-react";
-import type {
-  AgentContext,
-  BehaviorView,
-  DeploymentView,
-} from "@source-inc/gents-desktop-client";
+import type { AgentContext, BehaviorView } from "@source-inc/gents-desktop-client";
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -114,21 +111,21 @@ const contextFields = (c: AgentContext | null) => ({
 const nameOf = (c: AgentContext) => c.display_name ?? c.context_id;
 
 /* the behaviors that point at a context, as saved */
-const usersOf = (deployment: DeploymentView, contextId: string) =>
+const usersOf = (deployment: NodeView, contextId: string) =>
   deployment.behaviors.filter((b) => b.contextId === contextId);
 
 const listNames = (names: string[]) =>
   names.length <= 2 ? names.join(" and ") : `${names[0]} and ${names.length - 1} more`;
 
 /* a context name no other context has */
-function freshName(deployment: DeploymentView, base: string) {
+function freshName(deployment: NodeView, base: string) {
   const taken = new Set(deployment.contexts.map((c) => c.display_name));
   if (!taken.has(base)) return base;
   for (let n = 2; ; n++) if (!taken.has(`${base} ${n}`)) return `${base} ${n}`;
 }
 
 /* what stops a save, keyed by the field that shows it */
-function problems(deployment: DeploymentView, next: Draft, draft = false) {
+function problems(deployment: NodeView, next: Draft, draft = false) {
   const out: Partial<Record<keyof Draft, string>> = {};
   if (!next.displayName.trim()) out.displayName = "Give the behavior a name.";
   if (!next.contextChoice)
@@ -193,7 +190,7 @@ function ContextPicker({
   autoOpen = false,
 }: {
   id: string;
-  deployment: DeploymentView;
+  deployment: NodeView;
   value: string;
   invalid: boolean;
   labelFor: (value: string) => string;
@@ -276,7 +273,7 @@ function ContextPicker({
    rejects a disabled default, and it decides whether the behavior can run. */
 export async function saveDefault(
   changeConfig: ShellActions["changeConfig"],
-  deployment: DeploymentView,
+  deployment: NodeView,
   behaviorId: string,
 ) {
   await changeConfig("setDefaultBehavior", {
@@ -294,7 +291,7 @@ function RowControls({
   behavior,
   inEditor = false,
 }: {
-  deployment: DeploymentView;
+  deployment: NodeView;
   behavior: BehaviorView;
   /* at the top of the behavior's page: the switch says its state, and there is no Edit */
   inEditor?: boolean;
@@ -407,7 +404,7 @@ function RowControls({
 }
 
 /* the behavior a draft starts from: nothing saved, the default model */
-export function newBehaviorView(deployment: DeploymentView): BehaviorView {
+export function newBehaviorView(deployment: NodeView): BehaviorView {
   return {
     behaviorId: newId("behavior"),
     agentDid: deployment.agentDid,
@@ -439,7 +436,7 @@ export function BehaviorEditor({
   draft: draftMode,
   embedded = false,
 }: {
-  deployment: DeploymentView;
+  deployment: NodeView;
   behavior: BehaviorView;
   /* a new behavior that exists only on this page until Save */
   draft?: DraftMode;
@@ -1273,7 +1270,7 @@ export function BehaviorsPanel({
   deployment,
   behaviorId,
 }: {
-  deployment: DeploymentView;
+  deployment: NodeView;
   behaviorId?: string;
 }) {
   const base = {

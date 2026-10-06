@@ -3,7 +3,8 @@
    client snapshot carries are nodes. Every screen that needs a node's
    identity reads it through here, so the field rename from agent_did to
    node_did is one edit. */
-import type { DeploymentView, SessionSummary } from "@source-inc/gents-desktop-client";
+import type { NodeView } from "../../hooks/fleetStore";
+import type { SessionSummary } from "@source-inc/gents-desktop-client";
 import { isLocalAgent } from "./firstRun";
 
 export type NodeDid = string;
@@ -21,7 +22,7 @@ export const nodeOfSession = (session: SessionSummary): NodeDid => session.agent
    isLocalAgent owns that test. */
 /** What telling a node apart needs: a deployment, or a node as the fleet
     holds it. */
-export type NodeLike = Pick<DeploymentView, "agentDid" | "source">;
+export type NodeLike = Pick<NodeView, "agentDid" | "source">;
 export const isWorkingNode = (node: NodeLike, homeDid: string | null | undefined) =>
   isLocalAgent(node, homeDid);
 export const workingNode = <N extends NodeLike>(

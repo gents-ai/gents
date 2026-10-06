@@ -1,5 +1,5 @@
 /* A backend's full editor beside the page that references it. */
-import type { DeploymentView } from "@source-inc/gents-desktop-client";
+import type { NodeView } from "../../../hooks/fleetStore";
 import { EditorSheet } from "./EditorSheet";
 import { BackendEditor, useAccounts } from "./InferencePanel";
 
@@ -8,7 +8,7 @@ export function BackendSheet({
   backendId,
   onClose,
 }: {
-  deployment: DeploymentView;
+  deployment: NodeView;
   backendId: string | null;
   onClose: () => void;
 }) {

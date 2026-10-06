@@ -1,7 +1,7 @@
 /* A new Tools document drafted beside the page that needs it: the full
    editor, nothing saved until Create, and the caller gets the id. */
+import type { NodeView } from "../../../hooks/fleetStore";
 import { useState } from "react";
-import type { DeploymentView } from "@source-inc/gents-desktop-client";
 import { EditorSheet } from "./EditorSheet";
 import { ToolsEditor, newToolsDocument } from "./ToolsPanel";
 
@@ -10,7 +10,7 @@ export function ToolsSheet({
   open,
   onClose,
 }: {
-  deployment: DeploymentView;
+  deployment: NodeView;
   open: boolean;
   /* the new document's id, or null when discarded */
   onClose: (toolsId: string | null) => void;

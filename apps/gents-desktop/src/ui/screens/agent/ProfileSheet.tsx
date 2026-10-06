@@ -1,7 +1,7 @@
 /* A new model drafted beside the page that needs it: the full profile
    editor, nothing saved until Create, and the caller gets the id. */
+import type { NodeView } from "../../../hooks/fleetStore";
 import { useState } from "react";
-import type { DeploymentView } from "@source-inc/gents-desktop-client";
 import { EditorSheet } from "./EditorSheet";
 import { ProfileEditor, newProfileDocument } from "./ProfilesPanel";
 import { useAccounts } from "./InferencePanel";
@@ -12,7 +12,7 @@ export function ProfileSheet({
   onClose,
   backendId,
 }: {
-  deployment: DeploymentView;
+  deployment: NodeView;
   open: boolean;
   /* the new profile's id, or null when discarded */
   onClose: (profileId: string | null) => void;

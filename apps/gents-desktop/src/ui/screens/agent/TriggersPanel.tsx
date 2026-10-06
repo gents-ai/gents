@@ -1,14 +1,11 @@
 /* Triggers: each read as a sentence, with the task, schedule and event
    source it needs creatable in place. Tasks is the page people start on;
    this is the desktop's own tab. */
+import type { NodeView } from "../../../hooks/fleetStore";
 import { setEnabled } from "./enabled";
 import { useState } from "react";
 import { Timer, Zap } from "lucide-react";
-import type {
-  DeploymentView,
-  Trigger,
-  TriggerView,
-} from "@source-inc/gents-desktop-client";
+import type { Trigger, TriggerView } from "@source-inc/gents-desktop-client";
 import {
   AreaRow,
   ChoiceRow,
@@ -48,7 +45,7 @@ export function TriggerEditor({
   trigger,
   embedded = false,
 }: {
-  deployment: DeploymentView;
+  deployment: NodeView;
   trigger: TriggerView;
   /* in a sheet beside a task: no Danger zone */
   embedded?: boolean;
@@ -432,7 +429,7 @@ export function TriggersPanel({
   deployment,
   item,
 }: {
-  deployment: DeploymentView;
+  deployment: NodeView;
   item?: string;
 }) {
   const { changeConfig } = useApp().actions;

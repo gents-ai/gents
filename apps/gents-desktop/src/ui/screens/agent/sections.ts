@@ -3,12 +3,12 @@
    sidebar names its group, label and mark. A route that has no entry of its
    own (an older link, or a page reached from another section) names the
    entry it lights up instead. */
+import type { NodeView } from "../../../hooks/fleetStore";
 import type { ComponentType } from "react";
-import type { DeploymentView } from "@source-inc/gents-desktop-client";
 import { createRegistry } from "@/app/registry";
 
 export type SectionPanelProps = {
-  deployment: DeploymentView;
+  deployment: NodeView;
   /** the document the route opens, when it names one */
   item?: string;
 };
@@ -19,7 +19,7 @@ type Listed = {
   label: string;
   icon: ComponentType<{ className?: string }>;
   /** how many the sidebar shows beside the label */
-  count?: (deployment: DeploymentView) => number;
+  count?: (deployment: NodeView) => number;
 };
 
 export type AgentSection = {

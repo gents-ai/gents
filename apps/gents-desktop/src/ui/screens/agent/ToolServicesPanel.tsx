@@ -1,7 +1,5 @@
-import type {
-  DeploymentView,
-  ToolServiceRegistry,
-} from "@source-inc/gents-desktop-client";
+import type { NodeView } from "../../../hooks/fleetStore";
+import type { ToolServiceRegistry } from "@source-inc/gents-desktop-client";
 import { dependentsWarning } from "./dependents";
 import { Button } from "@gents/ui/components/button";
 import { toast } from "sonner";
@@ -25,7 +23,7 @@ function Editor({
   deployment,
   service,
 }: {
-  deployment: DeploymentView;
+  deployment: NodeView;
   service: ToolServiceRegistry;
 }) {
   const {
@@ -199,7 +197,7 @@ export function ToolServicesPanel({
   deployment,
   item,
 }: {
-  deployment: DeploymentView;
+  deployment: NodeView;
   item?: string;
 }) {
   const { changeConfig } = useApp().actions;

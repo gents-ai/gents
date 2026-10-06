@@ -3,6 +3,7 @@
    section. OpenAI-compatible and OpenRouter take a key or an env var;
    ChatGPT/Codex and Grok exist only through a subscription sign-in, so
    the account card sits in the row with connect, cancel and disconnect. */
+import type { NodeView } from "../../../hooks/fleetStore";
 import { setEnabled } from "./enabled";
 import { dependentsWarning } from "./dependents";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -14,7 +15,6 @@ import type {
   BackendProviderKind,
   BackendSaveRequest,
   BackendUsageView,
-  DeploymentView,
   InferenceBackend,
   InferenceBackendView,
   OpenAiWireApi,
@@ -340,7 +340,7 @@ export function profileBackend(
    turn, in the CLI's words, and for remove which backends go with it (an
    added account's backends that no profile uses, as the CLI's remove) */
 function accountWarnings(
-  deployment: DeploymentView,
+  deployment: NodeView,
   accounts: ProviderAccountView[],
   account: ProviderAccountView,
 ) {
@@ -383,7 +383,7 @@ function AccountDialogs({
   acting,
   onClose,
 }: {
-  deployment: DeploymentView;
+  deployment: NodeView;
   accounts: ProviderAccountView[];
   reload: () => Promise<void>;
   acting: AccountAction | null;
@@ -472,7 +472,7 @@ function AccountDialogs({
 
 async function removeAccount(
   api: DesktopApiAdapter,
-  deployment: DeploymentView,
+  deployment: NodeView,
   account: ProviderAccountView,
   reload: () => Promise<void>,
 ) {
@@ -488,7 +488,7 @@ function AccountRows({
   accounts,
   reload,
 }: {
-  deployment: DeploymentView;
+  deployment: NodeView;
   kind: string;
   accountRef: string | null;
   accounts: ProviderAccountView[];
@@ -630,7 +630,7 @@ export function BackendEditor({
   usage,
   embedded = false,
 }: {
-  deployment: DeploymentView;
+  deployment: NodeView;
   backend: InferenceBackendView;
   accounts: ProviderAccountView[];
   reload: () => Promise<void>;
@@ -1087,7 +1087,7 @@ export function InferencePanel({
   under,
   orphans = [],
 }: {
-  deployment: DeploymentView;
+  deployment: NodeView;
   item?: string;
   /* rows to nest under a configured backend: its models */
   under?: (b: InferenceBackendView) => ListRow[];

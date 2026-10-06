@@ -1,8 +1,8 @@
 /* A skill is content: a name and instructions you write, not settings you
    pick. So it opens as a sheet beside the behavior, with room to write,
    and resolves with the new skill's id once saved. */
+import type { NodeView } from "../../../hooks/fleetStore";
 import { useState } from "react";
-import type { DeploymentView } from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
 import {
   Field,
@@ -35,7 +35,7 @@ export function NewSkillSheet({
   open,
   onClose,
 }: {
-  deployment: DeploymentView;
+  deployment: NodeView;
   open: boolean;
   onClose: (skillId: string | null) => void;
 }) {

@@ -1,5 +1,5 @@
 /* The agent itself: editable principal fields and identity/runtime facts. */
-import type { DeploymentView } from "@source-inc/gents-desktop-client";
+import type { NodeView } from "../../../hooks/fleetStore";
 import { isLocalAgent } from "@/lib/firstRun";
 import { DraftActions, RefRow, SwitchRow, TagsRow, TextRow } from "./editors";
 import { useDraft } from "./draft";
@@ -10,7 +10,7 @@ import { saveDefault } from "./BehaviorsPanel";
 import { useApp } from "@/app/AppContext";
 import { useSnapshot } from "@/hooks/useClient";
 
-export function AgentPanel({ deployment }: { deployment: DeploymentView }) {
+export function AgentPanel({ deployment }: { deployment: NodeView }) {
   const snapshot = useSnapshot();
   const { changeConfig } = useApp().actions;
   const agent = deployment.agentPrincipal;
