@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
 import {
@@ -10,14 +10,6 @@ import {
   mergeOlderSessionTimelinePage,
   mergeSessionTipSnapshot,
 } from "../src/hooks/desktopTimelinePaging";
-
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((next) => {
-    resolve = next;
-  });
-  return { promise, resolve };
-}
 
 describe("desktopUpdateRefreshScope", () => {
   it("uses ordinary store wakes to probe the canonical live cursor", () => {
@@ -218,6 +210,7 @@ function session(
     turnState: "running",
     latestRequestId: "request-1",
     retryEligibility: { eligible: false, denialReason: "notFailed" },
+    latestRequestOutcome: null,
     pendingTurn: null,
     context: {
       estimatedDurableTokens: 0,
@@ -262,6 +255,7 @@ describe("session timeline page merging", () => {
         itemKey: "pending-r2",
         requestId: "r2",
         content: "repeat",
+        selectedSkillIds: [],
         lifecycleState: "pending",
         createdAt: null,
       },
@@ -300,6 +294,7 @@ describe("session timeline page merging", () => {
       itemKey: "pending-r",
       requestId: "r",
       content: "repeat",
+      selectedSkillIds: [],
       lifecycleState: "processing",
       createdAt: null,
     });
@@ -339,6 +334,7 @@ describe("session timeline page merging", () => {
         itemKey: "pending-r",
         requestId: "r",
         content: "same text",
+        selectedSkillIds: [],
         lifecycleState: "pending",
         createdAt: null,
       });

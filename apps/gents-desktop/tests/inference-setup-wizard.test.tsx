@@ -36,6 +36,12 @@ function renderWizard(
       isFedramp: false,
       accessTokenExpiresAt: "2026-08-01T00:00:00Z",
       enabled: true,
+      signIn: {
+        result: "added" as const,
+        label: "Personal",
+        accountRef: null,
+        hint: null,
+      },
     })),
     ...overrides,
   };
@@ -152,8 +158,9 @@ describe("InferenceSetupWizard", () => {
     expect(props.onCodexLogin).toHaveBeenCalledWith("did:key:z6MkAgent");
     // Login must land before the backend flips to Codex, or the agent would
     // point at a Codex backend with no credential.
-    const loginOrder = props.onCodexLogin.mock.invocationCallOrder[0];
-    const saveOrder = props.onPatchConfigComponents.mock.invocationCallOrder[0];
+    const loginOrder = vi.mocked(props.onCodexLogin).mock.invocationCallOrder[0]!;
+    const saveOrder = vi.mocked(props.onPatchConfigComponents).mock
+      .invocationCallOrder[0]!;
     expect(loginOrder).toBeLessThan(saveOrder);
   });
 });

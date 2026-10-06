@@ -6,6 +6,7 @@ import type {
   DesktopApiAdapter,
   DesktopClientSnapshot,
   DesktopClientUpdatedListenerFactory,
+  ManagedServerStatus,
 } from "@source-inc/gents-desktop-client";
 
 import App from "../src/App";
@@ -47,6 +48,9 @@ function snapshot(configured: boolean, running: boolean): DesktopClientSnapshot 
             connectedPeerCount: 1,
             replicatorCount: 1,
             consecutiveFailures: 0,
+            lastError: null,
+            lastOkAt: null,
+            lastFailureAt: null,
           },
           syncHealth: null,
           enrollmentRequests: [],
@@ -101,18 +105,7 @@ function bridge(
 
 describe("desktop startup screen", () => {
   it("names local-agent observation instead of misreporting a configuration read", async () => {
-    const status = deferred<{
-      state: "disabled";
-      autoStart: false;
-      agentName: null;
-      agentDid: null;
-      graphql: null;
-      effectiveToolCeiling: null;
-      effectiveToolRoot: null;
-      suggestedToolRoot: string;
-      pairingReady: false;
-      error: null;
-    }>();
+    const status = deferred<ManagedServerStatus>();
     const base = bridge(
       vi.fn(async () => snapshot(false, false)),
       vi.fn(async () => snapshot(false, true)),
@@ -149,6 +142,8 @@ describe("desktop startup screen", () => {
       effectiveToolRoot: null,
       suggestedToolRoot: "/Users/test",
       pairingReady: false,
+      approvalRequired: false,
+      runtimeBooting: false,
       error: null,
     });
     await waitFor(() => {
@@ -275,6 +270,8 @@ describe("desktop startup screen", () => {
       effectiveToolRoot: null,
       suggestedToolRoot: "/Users/test",
       pairingReady: false,
+      approvalRequired: false,
+      runtimeBooting: false,
       error: null,
     };
     const localOnly: DesktopClientSnapshot = {
@@ -325,6 +322,8 @@ describe("desktop startup screen", () => {
       effectiveToolRoot: null,
       suggestedToolRoot: "/Users/test",
       pairingReady: true,
+      approvalRequired: false,
+      runtimeBooting: false,
       error: null,
     };
     const started = deferred<DesktopClientSnapshot>();

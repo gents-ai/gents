@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { renderIn, testApp } from "./app-fixture";
@@ -36,7 +36,9 @@ vi.mock("@gents/ui/components/popover", async () => {
           props.onOpenChangeComplete?.(false);
         });
       }
-      return () => popoverControl.completions.delete(id);
+      return () => {
+        popoverControl.completions.delete(id);
+      };
     }, [id, mounted, props.open, props.onOpenChangeComplete]);
     return (
       <Context.Provider value={{ ...props, mounted }}>

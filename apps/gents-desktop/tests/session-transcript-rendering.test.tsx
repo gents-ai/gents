@@ -16,6 +16,16 @@ vi.mock("../src/ui/screens/Markdown", () => ({
 
 import { TranscriptPanel } from "../src/ui/screens/SessionScreen";
 import { renderIn, testApp } from "./app-fixture";
+import { assistantMessage } from "./timeline-fixture";
+import { NO_PARENT } from "../src/ui/screens/parentWork";
+import { NO_WORKERS } from "../src/ui/screens/workers";
+
+/* the props these cases are not about: no workers, no parent */
+const UNRELATED = {
+  workers: NO_WORKERS,
+  parentWork: NO_PARENT,
+  workerActions: { interrupt: () => {} },
+};
 
 function session(content: string): DesktopSessionSnapshot {
   return {
@@ -25,6 +35,7 @@ function session(content: string): DesktopSessionSnapshot {
     title: "Long session",
     previewText: content,
     status: "completed",
+    goal: null,
     turnState: "completed",
     latestRequestId: "request-1",
     retryEligibility: { eligible: false, denialReason: null },
@@ -36,6 +47,7 @@ function session(content: string): DesktopSessionSnapshot {
       contextWindow: 1,
       compactionThreshold: 0,
       compactionThresholdTokens: 0,
+      compactionStrategy: "StripThenSummarize",
       durableMessageCount: 1,
       providerMessageCount: 1,
       totalCompactedMessages: 0,
@@ -43,7 +55,7 @@ function session(content: string): DesktopSessionSnapshot {
       lastRequest: null,
     },
     timelineItems: [
-      {
+      assistantMessage({
         kind: "assistantMessage",
         itemKey: "assistant-1",
         sequence: 1,
@@ -51,7 +63,7 @@ function session(content: string): DesktopSessionSnapshot {
         reasoning: null,
         timestamp: null,
         reconstruction: { state: "ready" },
-      },
+      }),
     ],
   };
 }
@@ -66,8 +78,8 @@ describe("SessionScreen transcript render boundary", () => {
       retryEligibility: { eligible: true, denialReason: null },
     };
     const app = testApp();
-    const retry = vi.spyOn(app.actions, "retryMessage").mockResolvedValue(null);
-    const props = { inFlight: false, scroller: null };
+    const retry = vi.spyOn(app.actions, "retryMessage").mockResolvedValue(undefined);
+    const props = { ...UNRELATED, inFlight: false, scroller: null };
     const view = renderIn(app, <TranscriptPanel {...props} session={failed} />);
     expect(screen.getByText("The assistant could not finish this turn.")).toBeVisible();
     await act(async () =>
@@ -84,7 +96,7 @@ describe("SessionScreen transcript render boundary", () => {
   it("keeps unchanged rows out of unrelated session projection renders", () => {
     markdownRender.mockClear();
     const original = session("stable markdown");
-    const props = { inFlight: false, scroller: null };
+    const props = { ...UNRELATED, inFlight: false, scroller: null };
     const view = renderIn(testApp(), <TranscriptPanel {...props} session={original} />);
 
     expect(markdownRender).toHaveBeenCalledTimes(1);
@@ -120,13 +132,14 @@ describe("SessionScreen transcript render boundary", () => {
         oldestItemKey: "assistant-1",
         newestItemKey: "assistant-1",
       };
-      const older = session("older markdown").timelineItems[0]!;
+      const older = assistantMessage({
+        itemKey: "assistant-0",
+        sequence: 0,
+        content: "older markdown",
+      });
       const withOlder: DesktopSessionSnapshot = {
         ...original,
-        timelineItems: [
-          { ...older, itemKey: "assistant-0", sequence: 0 },
-          ...original.timelineItems,
-        ],
+        timelineItems: [older, ...original.timelineItems],
       };
       /* as the session owner does: the older page is set as state, then the
          load reports whether it added rows */
@@ -135,7 +148,12 @@ describe("SessionScreen transcript render boundary", () => {
         const [current, setCurrent] = useState(original);
         setSession = setCurrent;
         return (
-          <TranscriptPanel inFlight={false} scroller={viewport} session={current} />
+          <TranscriptPanel
+            {...UNRELATED}
+            inFlight={false}
+            scroller={viewport}
+            session={current}
+          />
         );
       }
       const app = testApp();

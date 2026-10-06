@@ -1,8 +1,7 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, afterAll, describe, expect, it, vi } from "vitest";
 import { renderIn, testApp } from "./app-fixture";
-import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 import { ToolsPanel } from "../src/ui/screens/agent/ToolsPanel";
 import { ContextsPanel } from "../src/ui/screens/agent/ContextsPanel";
 import { deployment } from "./config-panel-wiring/fixtures";

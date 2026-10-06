@@ -12,10 +12,12 @@ const enrollmentRequest: EnrollmentRequestView = {
   serverLabel: "Amy",
   ownerAgent: "did:key:z6MkAmy",
   state: "pending",
+  expiresAt: "2099-01-01T00:00:00Z",
 };
 
 function renderForm(overrides: Partial<AddPeerFormProps> = {}) {
   const props: AddPeerFormProps = {
+    addingPeer: false,
     disabled: false,
     localError: null,
     onRequestStatusEnrollment: vi.fn(async () => enrollmentRequest),

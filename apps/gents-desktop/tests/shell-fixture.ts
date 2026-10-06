@@ -7,12 +7,8 @@ import type {
 
 import { createClientLifecycle } from "../src/hooks/clientLifecycle";
 import { createChatStore, type ChatState } from "../src/hooks/chatStore";
-import { createClientStore, type ClientStore } from "../src/hooks/clientStore";
-import {
-  applyFleetSnapshot,
-  createFleetStore,
-  type FleetStore,
-} from "../src/hooks/fleetStore";
+import { createClientStore } from "../src/hooks/clientStore";
+import { applyFleetSnapshot, createFleetStore } from "../src/hooks/fleetStore";
 import {
   createSelectionStore,
   type SelectionState,

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import type { DeploymentView } from "@source-inc/gents-desktop-client";
 import { createDesktopShellSelectionActions } from "../src/hooks/desktopShellSelectionActions";

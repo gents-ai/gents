@@ -7,7 +7,6 @@ import type {
   DesktopClientSnapshot,
   DesktopSessionSnapshot,
 } from "@source-inc/gents-desktop-client";
-import { useStore } from "zustand";
 
 import { applyFleetSnapshot } from "../src/hooks/fleetStore";
 import { readSession, writeSession } from "../src/hooks/sessionStore";
@@ -53,7 +52,6 @@ function useHarness(
     client: { deployments },
   } as unknown as DesktopClientSnapshot);
   const current = useSelection(store);
-  const workflow = useStore(stores.chat, (state) => state.localWorkflow);
   const sendChatMessage = useRef(
     vi.fn(async () => ({
       agentDid: "agent",

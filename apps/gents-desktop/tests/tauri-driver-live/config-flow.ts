@@ -75,7 +75,7 @@ async function chooseField(driver: LiveDesktopDriver, id: string, option: RegExp
 }
 
 async function saveEditor(driver: LiveDesktopDriver) {
-  await driver.user.click(screen.getByRole("button", { name: "Save", exact: true }));
+  await driver.user.click(screen.getByRole("button", { name: "Save" }));
 }
 
 export async function createBackend({
@@ -292,7 +292,7 @@ export async function createBehavior({ runner, driver, ids }: ConfigFlowContext)
   );
   await chooseField(driver, `${ids.behaviorId}-tools`, /^Repo Audit Readonly Tools/);
   await chooseField(driver, `${ids.behaviorId}-profile`, /Desktop Live Profile/);
-  await driver.user.click(screen.getByRole("button", { name: "Create", exact: true }));
+  await driver.user.click(screen.getByRole("button", { name: "Create" }));
   await waitForDeploymentDocument(runner, (current) => {
     expect(
       current.behaviors.some((candidate) => candidate.behaviorId === ids.behaviorId),
@@ -332,7 +332,6 @@ export async function createTask({ runner, driver, ids }: ConfigFlowContext) {
   await driver.user.click(
     within(screen.getByRole("dialog", { name: "New task" })).getByRole("button", {
       name: "Create",
-      exact: true,
     }),
   );
   await waitForDeploymentDocument(runner, (current) => {
@@ -426,7 +425,6 @@ export async function createTriggerDocument({
   await driver.user.click(
     within(screen.getByRole("dialog", { name: "New trigger" })).getByRole("button", {
       name: "Create",
-      exact: true,
     }),
   );
   await waitForDeploymentDocument(runner, (current) => {

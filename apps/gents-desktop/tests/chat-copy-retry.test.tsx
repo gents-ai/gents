@@ -15,6 +15,7 @@ import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
 import { deployment } from "./config-panel-wiring/fixtures";
 import type { ShellProjection } from "../src/hooks/shellProjection";
 import { shellStores } from "./shell-fixture";
+import { assistantMessage, sessionSnapshot, userMessage } from "./timeline-fixture";
 
 /** chat actions on session s1 of `deployment`, admitted by the projections given */
 function chatActions(
@@ -63,6 +64,7 @@ function operationalStateFor(
     chatSafe: routeReady,
     behaviors: [
       {
+        ...deployment.behaviors[0]!,
         behaviorId,
         displayName: decision.kind === "unknown" ? behaviorId : decision.behaviorLabel,
         enabled: true,
@@ -138,12 +140,12 @@ describe("transcript copy actions", () => {
     render(
       <MessageList
         timelineItems={[
-          {
+          userMessage({
             kind: "userMessage",
             reconstruction: { state: "ready" },
             itemKey: "u1",
             content: "copy me please",
-          },
+          }),
         ]}
       />,
     );
@@ -159,12 +161,12 @@ describe("transcript copy actions", () => {
     render(
       <MessageList
         timelineItems={[
-          {
+          assistantMessage({
             kind: "assistantMessage",
             reconstruction: { state: "ready" },
             itemKey: "a1",
             content: "```rust\nfn main() {}\n```",
-          },
+          }),
         ]}
       />,
     );
@@ -179,21 +181,24 @@ describe("transcript copy actions", () => {
 });
 
 describe("error card retry", () => {
-  const session: DesktopSessionSnapshot = {
+  const session: DesktopSessionSnapshot = sessionSnapshot({
     sessionId: "s1",
     latestRequestId: "req-failed",
     turnState: "failed",
     retryEligibility: { eligible: true, denialReason: null },
-    latestRequestOutcome: { failureReason: "provider exploded" },
+    /* only the failure is read here */
+    latestRequestOutcome: {
+      failureReason: "provider exploded",
+    } as DesktopSessionSnapshot["latestRequestOutcome"],
     timelineItems: [
-      {
+      userMessage({
         kind: "userMessage",
         reconstruction: { state: "ready" },
         itemKey: "u1",
         content: "the failed ask",
-      },
+      }),
     ],
-  };
+  });
 
   it("summarizes the error, keeps raw text in a disclosure, and retries the failed content", () => {
     const onRetryMessage = vi.fn();
@@ -343,7 +348,7 @@ describe("error card retry", () => {
     const api = {
       sendChatMessage,
       retryRequest,
-    } as DesktopApiAdapter;
+    } as unknown as DesktopApiAdapter;
     const shellProjection = projectChatShell({
       clientAvailable: true,
       selectedAgentDid: deployment.agentDid,

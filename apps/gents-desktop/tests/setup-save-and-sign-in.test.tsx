@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderIn, testApp } from "./app-fixture";
@@ -289,7 +289,7 @@ describe("add another account", () => {
     provider: keyof typeof KIND,
     overrides: Partial<DesktopApiAdapter> = {},
   ) {
-    const { api, shell, app } = setup({
+    const { api, app } = setup({
       listProviderAccounts: vi.fn().mockResolvedValue([stored(KIND[provider])]),
       ...overrides,
     });
@@ -297,7 +297,6 @@ describe("add another account", () => {
     renderIn(
       app,
       <SetupScreen
-        shell={shell}
         initialStep="inference"
         purpose="add-backend"
         provider={provider}

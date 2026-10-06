@@ -46,7 +46,9 @@ vi.mock("@gents/ui/components/popover", async () => {
           props.onOpenChangeComplete?.(false);
         });
       }
-      return () => popoverControl.completions.delete(id);
+      return () => {
+        popoverControl.completions.delete(id);
+      };
     }, [id, mounted, props.open, props.onOpenChangeComplete]);
     const { open, onOpenChange } = props;
     React.useEffect(() => {
@@ -120,7 +122,6 @@ vi.stubGlobal(
   },
 );
 
-import { SyncHealth } from "../src/ui/app/SyncHealth";
 import { AppShell } from "../src/ui/app/AppShell";
 import { TooltipProvider } from "@gents/ui/components/tooltip";
 import { SessionScreen } from "../src/ui/screens/SessionScreen";

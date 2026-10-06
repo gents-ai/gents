@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BehaviorsPanel } from "../src/ui/screens/agent/BehaviorsPanel";
-import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
+import { deployment } from "./config-panel-wiring/fixtures";
 import { renderIn, testApp } from "./app-fixture";
 
 const toast = vi.hoisted(() => vi.fn());

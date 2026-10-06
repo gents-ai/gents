@@ -21,13 +21,17 @@ describe("live bridge runner startup/config adapter", () => {
     const request = { provider: "local", modelName: "test-model" };
 
     await adapter.discoverInferenceModels(
-      request as Parameters<typeof adapter.discoverInferenceModels>[0],
+      request as unknown as Parameters<typeof adapter.discoverInferenceModels>[0],
     );
     await adapter.getInferenceModelRecommendation(
-      request as Parameters<typeof adapter.getInferenceModelRecommendation>[0],
+      request as unknown as Parameters<
+        typeof adapter.getInferenceModelRecommendation
+      >[0],
     );
     await adapter.getInferenceBackendRecommendation(
-      request as Parameters<typeof adapter.getInferenceBackendRecommendation>[0],
+      request as unknown as Parameters<
+        typeof adapter.getInferenceBackendRecommendation
+      >[0],
     );
 
     expect(postJson).toHaveBeenNthCalledWith(
@@ -76,7 +80,7 @@ describe("live bridge runner startup/config adapter", () => {
     const adapter = createBridgeHttpAdapter({ getJson: vi.fn(), postJson });
     const request = {
       agentDid: "did:test:agent",
-      patches: [{ collection: "Context" as const, id: "context-a", changes: {} }],
+      patches: [{ collection: "AgentContext" as const, id: "context-a", changes: {} }],
     };
     await adapter.patchConfigComponents(request);
     expect(postJson).toHaveBeenCalledWith("/desktop/config/components/patch", request);

@@ -25,7 +25,6 @@ function fixture(runTask: () => Promise<unknown>, runSchedule = runTask) {
     ...effects,
     api: { runTask, runSchedule } as unknown as DesktopApiAdapter,
     store,
-    mutateSnapshot: async <T>(operation: () => Promise<T>) => operation(),
   });
   return {
     actions,

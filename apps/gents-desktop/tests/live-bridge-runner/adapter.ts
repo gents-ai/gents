@@ -39,11 +39,43 @@ export function createRunnerAdapter(runner: LiveBridgeRunner): DesktopApiAdapter
   });
 }
 
+/* an operation the bridge runner serves no route for: a live run that
+   reaches it fails saying so */
+const unsupported = (operation: string) => () =>
+  Promise.reject(new Error(`the live bridge runner has no route for ${operation}`));
+
 export function createBridgeHttpAdapter(
   client: BridgeHttpClient,
   observers: BridgeAdapterObservers = {},
 ): DesktopApiAdapter {
   return {
+    removePeer: unsupported("removePeer"),
+    renamePeer: unsupported("renamePeer"),
+    listWorkspace: unsupported("listWorkspace"),
+    fetchRequestTimeline: unsupported("fetchRequestTimeline"),
+    explainToolSurface: unsupported("explainToolSurface"),
+    fetchNetworkStatus: unsupported("fetchNetworkStatus"),
+    listMailbox: unsupported("listMailbox"),
+    startMailboxRequest: unsupported("startMailboxRequest"),
+    dismissMailboxItem: unsupported("dismissMailboxItem"),
+    resendRequest: unsupported("resendRequest"),
+    retryRequest: unsupported("retryRequest"),
+    saveSkillConfig: unsupported("saveSkillConfig"),
+    deleteSkillConfig: unsupported("deleteSkillConfig"),
+    deleteTaskConfig: unsupported("deleteTaskConfig"),
+    deleteBackendConfig: unsupported("deleteBackendConfig"),
+    deleteInferenceProfileConfig: unsupported("deleteInferenceProfileConfig"),
+    deleteToolServiceConfig: unsupported("deleteToolServiceConfig"),
+    deleteBehaviorConfig: unsupported("deleteBehaviorConfig"),
+    deleteContextConfig: unsupported("deleteContextConfig"),
+    probeInferenceEndpoint: unsupported("probeInferenceEndpoint"),
+    codexLogin: unsupported("codexLogin"),
+    cancelCodexLogin: unsupported("cancelCodexLogin"),
+    grokLogin: unsupported("grokLogin"),
+    cancelGrokLogin: unsupported("cancelGrokLogin"),
+    claudeLogin: unsupported("claudeLogin"),
+    cancelClaudeLogin: unsupported("cancelClaudeLogin"),
+
     fetchDesktopSnapshot: async () =>
       client.getJson<DesktopClientSnapshot>("/desktop/client/snapshot"),
     initLocalStandardRuntime: async () =>

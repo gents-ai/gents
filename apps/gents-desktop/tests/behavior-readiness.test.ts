@@ -51,7 +51,7 @@ function deployment(
     // Remote clients do not receive backend configuration. A ready runtime
     // projection remains sufficient without reconstructing backend state.
     inferenceBackends: [],
-  } as DeploymentView;
+  } as unknown as DeploymentView;
 }
 
 function unavailable(reason: BehaviorUnavailableReasonView): DeploymentView {

@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DesktopApp } from "../src/hooks/desktopApp";
@@ -10,7 +10,6 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 import {
   BridgeInvokeError,
-  type DesktopApiAdapter,
   type ManagedServerStatus,
 } from "@source-inc/gents-desktop-client";
 import { setupErrorMessage } from "../src/ui/lib/providerLogin";
@@ -261,9 +260,7 @@ describe("setup re-entry at the provider step", () => {
     expect(
       screen.queryByRole("button", { name: "Retry save" }),
     ).not.toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Find models", exact: true }),
-    ).toBeVisible();
+    expect(screen.getByRole("button", { name: "Find models" })).toBeVisible();
     expect(
       screen.queryByRole("button", { name: "Connect and find models" }),
     ).not.toBeInTheDocument();

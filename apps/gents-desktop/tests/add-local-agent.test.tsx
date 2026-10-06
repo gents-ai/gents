@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DesktopApp } from "../src/hooks/desktopApp";
@@ -8,7 +8,6 @@ const toast = vi.hoisted(() => vi.fn());
 vi.mock("sonner", () => ({ toast }));
 
 import type {
-  DesktopApiAdapter,
   DeploymentView,
   ManagedServerAuthorityInput,
   ManagedServerStatus,

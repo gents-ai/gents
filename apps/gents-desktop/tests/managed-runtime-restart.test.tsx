@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { renderIn, testApp } from "./app-fixture";
@@ -31,6 +31,8 @@ const running = (
   effectiveToolRoot: root,
   suggestedToolRoot: "/Users/test",
   pairingReady,
+  approvalRequired: false,
+  runtimeBooting: false,
   error: null,
 });
 
@@ -74,7 +76,7 @@ describe("managed runtime restart settings", () => {
     const previous = running("readwrite", "/Users/test", true);
     const restarted = running("meta-only", null, false);
     const managedServerStatus = vi
-      .fn<DesktopApiAdapter["managedServerStatus"]>()
+      .fn<NonNullable<DesktopApiAdapter["managedServerStatus"]>>()
       .mockResolvedValueOnce(previous)
       .mockRejectedValue(new Error("pairing probe failed"));
     const api = {

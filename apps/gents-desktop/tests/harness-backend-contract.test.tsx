@@ -3,7 +3,7 @@
    is a Vec<String> on the bridge, so it is always a list. Bombadil found the
    harness adding a backend with no tags, and the backend editor's Tags row
    then crashed on the Providers page. */
-import { render, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { renderIn, testApp } from "./app-fixture";
 import type { InferenceBackend } from "@source-inc/gents-desktop-client";
@@ -87,11 +87,7 @@ describe("harness backends keep the bridge's contract", () => {
       },
     });
     const deployment = (await api.fetchDesktopSnapshot()).client!.deployments[0]!;
-    const shell = { api } as unknown as Shell;
-    renderIn(
-      testApp({ api }),
-      <InferencePanel shell={shell} deployment={deployment} />,
-    );
+    renderIn(testApp({ api }), <InferencePanel deployment={deployment} />);
     const meta = screen.getByText(/Anthropic API key · key from ANTHROPIC_API_KEY/);
     expect(meta.textContent).not.toMatch(/signed in/);
   });

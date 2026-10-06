@@ -1,12 +1,9 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { renderIn, testApp } from "./app-fixture";
 
-import type {
-  DesktopApiAdapter,
-  InferenceModelRecommendation,
-} from "@source-inc/gents-desktop-client";
+import type { InferenceModelRecommendation } from "@source-inc/gents-desktop-client";
 import { ProfilesPanel } from "../src/ui/screens/agent/ProfilesPanel";
 import { deployment as fixture } from "./config-panel-wiring/fixtures";
 

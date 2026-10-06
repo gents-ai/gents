@@ -1,17 +1,10 @@
-import {
-  act,
-  render,
-  renderHook,
-  screen,
-  waitFor,
-  within,
-} from "@testing-library/react";
+import { act, renderHook, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { selection } from "../src/hooks/selectionStore";
 import { publishSnapshot, renderIn, testApp, withApp } from "./app-fixture";
 
-import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
+import type { DesktopClientSnapshot } from "@source-inc/gents-desktop-client";
 import { AgentPanel } from "../src/ui/screens/agent/AgentPanel";
 import {
   BehaviorEditor,
@@ -229,7 +222,7 @@ describe("configuration panels", () => {
     const user = userEvent.setup();
     await user.clear(screen.getByLabelText("Display name"));
     await user.type(screen.getByLabelText("Display name"), "Renamed profile");
-    await user.click(screen.getByRole("button", { name: "Save", exact: true }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(api.applyConfigComponents).toHaveBeenCalled());
     expect(
       api.applyConfigComponents.mock.calls[0]![0].document.inference_profiles[0]
@@ -279,7 +272,7 @@ describe("configuration panels", () => {
       const user = userEvent.setup();
       await user.clear(screen.getByLabelText("Display name"));
       await user.type(screen.getByLabelText("Display name"), "Renamed Grok");
-      await user.click(screen.getByRole("button", { name: "Save", exact: true }));
+      await user.click(screen.getByRole("button", { name: "Save" }));
       await waitFor(() => expect(api.applyConfigComponents).toHaveBeenCalled());
       const document = api.applyConfigComponents.mock.calls[0]![0].document;
       if (existingSampling) {
@@ -454,12 +447,12 @@ describe("configuration panels", () => {
     });
 
     it("never borrows another account for a backend in the list", async () => {
-      const { api, shell, app } = harness();
+      const { api, app } = harness();
       api.listProviderAccounts.mockResolvedValue([
         claudeAccount("cred-original", null, "original-identity", false),
         claudeAccount("cred-2", "acct-2", "second-identity"),
       ]);
-      renderIn(app, <InferencePanel shell={shell} deployment={claudeDeployment} />);
+      renderIn(app, <InferencePanel deployment={claudeDeployment} />);
       expect(await screen.findAllByText(/· signed in$/)).toHaveLength(1);
       expect(screen.getAllByText(/· disabled$/)).toHaveLength(1);
       expect(screen.getAllByText(/account not on this node/)).toHaveLength(1);
@@ -470,15 +463,12 @@ describe("configuration panels", () => {
       ["claude-2", "cred-2", "second-identity"],
     ] as const) {
       it(`shows and disconnects the account ${item} references`, async () => {
-        const { api, shell, app } = harness();
+        const { api, app } = harness();
         api.listProviderAccounts.mockResolvedValue([
           claudeAccount("cred-original", null, "original-identity"),
           claudeAccount("cred-2", "acct-2", "second-identity"),
         ]);
-        renderIn(
-          app,
-          <InferencePanel shell={shell} deployment={claudeDeployment} item={item} />,
-        );
+        renderIn(app, <InferencePanel deployment={claudeDeployment} item={item} />);
         expect(await screen.findByText(identity)).toBeVisible();
         const user = userEvent.setup();
         await user.click(screen.getByRole("button", { name: "Disconnect" }));
@@ -495,12 +485,9 @@ describe("configuration panels", () => {
       ["claude", { kind: "principal_oauth" }],
     ] as const) {
       it(`saving ${item} keeps its account reference`, async () => {
-        const { api, shell, app } = harness();
+        const { api, app } = harness();
         api.listProviderAccounts.mockResolvedValue([]);
-        renderIn(
-          app,
-          <InferencePanel shell={shell} deployment={claudeDeployment} item={item} />,
-        );
+        renderIn(app, <InferencePanel deployment={claudeDeployment} item={item} />);
         const user = await replace("Name", `${item} edited`);
         await user.click(screen.getByRole("button", { name: "Save" }));
         await waitFor(() => expect(api.patchConfigComponents).toHaveBeenCalledTimes(1));
@@ -510,14 +497,11 @@ describe("configuration panels", () => {
     }
 
     it("says a backend's account is not on this node and offers no reconnect", async () => {
-      const { api, shell, app } = harness();
+      const { api, app } = harness();
       api.listProviderAccounts.mockResolvedValue([
         claudeAccount("cred-original", null, "original-identity"),
       ]);
-      renderIn(
-        app,
-        <InferencePanel shell={shell} deployment={claudeDeployment} item="claude-3" />,
-      );
+      renderIn(app, <InferencePanel deployment={claudeDeployment} item="claude-3" />);
       expect(await screen.findByText(/account not on this node/)).toBeVisible();
       expect(
         screen.queryByRole("button", { name: /connect/i }),
@@ -635,9 +619,9 @@ describe("configuration panels", () => {
       });
 
       it("draws each row's label and state", async () => {
-        const { api, shell, app } = harness();
+        const { api, app } = harness();
         api.listProviderAccounts.mockResolvedValue(accounts);
-        renderIn(app, <InferencePanel shell={shell} deployment={rowsDeployment} />);
+        renderIn(app, <InferencePanel deployment={rowsDeployment} />);
         const claude = "Anthropic / Claude (subscription)";
         const grok = "Grok (subscription)";
         const chatgpt = "ChatGPT / Codex (subscription)";
@@ -657,12 +641,9 @@ describe("configuration panels", () => {
       });
 
       it("opens a lapsed token's row as connected, with its label", async () => {
-        const { api, shell, app } = harness();
+        const { api, app } = harness();
         api.listProviderAccounts.mockResolvedValue(accounts);
-        renderIn(
-          app,
-          <InferencePanel shell={shell} deployment={rowsDeployment} item="claude" />,
-        );
+        renderIn(app, <InferencePanel deployment={rowsDeployment} item="claude" />);
         expect(await screen.findByText("Connected")).toBeVisible();
         expect(screen.getByText("Personal")).toBeVisible();
         expect(screen.queryByText("Expired")).not.toBeInTheDocument();
@@ -671,7 +652,7 @@ describe("configuration panels", () => {
       });
 
       it("offers Add another on every subscription row", async () => {
-        const { api, shell, app } = harness();
+        const { api, app } = harness();
         api.listProviderAccounts.mockResolvedValue(accounts);
         api.getInferenceSetupCatalog = vi.fn().mockResolvedValue({
           providers: [
@@ -680,7 +661,7 @@ describe("configuration panels", () => {
             { id: "grok", displayName: "Grok" },
           ],
         });
-        renderIn(app, <InferencePanel shell={shell} deployment={rowsDeployment} />);
+        renderIn(app, <InferencePanel deployment={rowsDeployment} />);
         const user = userEvent.setup();
         for (const [row, item] of [
           ["Claude", "Add another Anthropic"],
@@ -696,12 +677,9 @@ describe("configuration panels", () => {
       });
 
       it("opens a disabled account's row with its identity and Reconnect", async () => {
-        const { api, shell, app } = harness();
+        const { api, app } = harness();
         api.listProviderAccounts.mockResolvedValue(accounts);
-        renderIn(
-          app,
-          <InferencePanel shell={shell} deployment={rowsDeployment} item="grok-side" />,
-        );
+        renderIn(app, <InferencePanel deployment={rowsDeployment} item="grok-side" />);
         expect(await screen.findByText("Disabled")).toBeVisible();
         expect(screen.getByText("Side-identity")).toBeVisible();
         expect(screen.getByRole("button", { name: "Reconnect" })).toBeVisible();
@@ -728,14 +706,11 @@ describe("configuration panels", () => {
           ],
         };
         const setup = (item?: string) => {
-          const { api, shell, app } = harness();
+          const { api, app } = harness();
           api.listProviderAccounts.mockResolvedValue(accounts);
           api.renameProviderAccount = vi.fn().mockResolvedValue(undefined);
           api.removeProviderAccount = vi.fn().mockResolvedValue(undefined);
-          renderIn(
-            app,
-            <InferencePanel shell={shell} deployment={usedDeployment} item={item} />,
-          );
+          renderIn(app, <InferencePanel deployment={usedDeployment} item={item} />);
           return { api, user: userEvent.setup() };
         };
         const openMenu = async (
@@ -931,41 +906,36 @@ describe("configuration panels", () => {
           view_("grok-side", { windows: [window("5h", 50)] }),
         ];
         const setup = (item?: string) => {
-          const { api, shell, app } = harness();
+          const { api, app } = harness();
           api.listProviderAccounts.mockResolvedValue(accounts);
           api.readProviderUsage = vi.fn().mockResolvedValue(usage());
           const view = renderIn(
             app,
-            <InferencePanel shell={shell} deployment={rowsDeployment} item={item} />,
+            <InferencePanel deployment={rowsDeployment} item={item} />,
           );
-          return { api, shell, view, user: userEvent.setup() };
+          return { api, app, view, user: userEvent.setup() };
         };
 
         it("reads usage once on open and not on a snapshot change", async () => {
-          const { api, shell, view } = setup();
+          const { api, app } = setup();
           await waitFor(() => expect(api.readProviderUsage).toHaveBeenCalledTimes(1));
           expect(api.readProviderUsage).toHaveBeenCalledWith(
             deployment.agentDid,
             false,
             null,
           );
-          view.rerender(
-            <InferencePanel
-              shell={{ ...shell, snapshot: { bootstrap } } as Shell}
-              deployment={rowsDeployment}
-            />,
+          await act(async () =>
+            publishSnapshot(app, { bootstrap } as unknown as DesktopClientSnapshot),
           );
-          await act(async () => {});
           expect(api.readProviderUsage).toHaveBeenCalledTimes(1);
         });
 
         it("drops the previous agent's usage when the agent changes", async () => {
-          const { api, shell, view } = setup();
+          const { api, view } = setup();
           expect(await screen.findByText("5h 81%")).toBeVisible();
           api.readProviderUsage.mockRejectedValue(new Error("agent not running"));
           view.rerender(
             <InferencePanel
-              shell={shell}
               deployment={{ ...rowsDeployment, agentDid: "did:key:z6MkTestOther" }}
             />,
           );
@@ -975,17 +945,14 @@ describe("configuration panels", () => {
         });
 
         it("keeps a Refresh result over an open read that lands later", async () => {
-          const { api, shell, app } = harness();
+          const { api, app } = harness();
           api.listProviderAccounts.mockResolvedValue(accounts);
           let land: (views: unknown) => void = () => {};
           api.readProviderUsage = vi
             .fn()
             .mockReturnValueOnce(new Promise((resolve) => (land = resolve)))
             .mockResolvedValueOnce([view_("claude", { windows: [window("5h", 12)] })]);
-          renderIn(
-            app,
-            <InferencePanel shell={shell} deployment={rowsDeployment} item="claude" />,
-          );
+          renderIn(app, <InferencePanel deployment={rowsDeployment} item="claude" />);
           const user = userEvent.setup();
           await user.click(await screen.findByRole("button", { name: "Refresh" }));
           expect(await screen.findByText(/^12% used/)).toBeVisible();
@@ -1081,12 +1048,11 @@ describe("configuration panels", () => {
           ],
         };
         const editProfileOn = (backendId: string) => {
-          const { api, shell, app } = harness();
+          const { api, app } = harness();
           api.listProviderAccounts.mockResolvedValue(accounts);
           renderIn(
             app,
             <ProfileEditor
-              shell={shell}
               deployment={pickDeployment}
               profile={{ ...deployment.inferenceProfiles[0]!, backend_id: backendId }}
             />,
@@ -1147,15 +1113,10 @@ describe("configuration panels", () => {
         });
 
         it("a new profile sheet drafts from the accounts loaded before it opens", async () => {
-          const { api, shell, app } = harness();
+          const { api, app } = harness();
           api.listProviderAccounts.mockResolvedValue(personalOff);
           const sheet = (open: boolean) => (
-            <ProfileSheet
-              shell={shell}
-              deployment={rowsDeployment}
-              open={open}
-              onClose={vi.fn()}
-            />
+            <ProfileSheet deployment={rowsDeployment} open={open} onClose={vi.fn()} />
           );
           const view = renderIn(app, sheet(false));
           await waitFor(() => expect(api.listProviderAccounts).toHaveBeenCalled());
@@ -1203,14 +1164,13 @@ describe("configuration panels", () => {
   });
 
   it("says off for a switched-off backend whose account is signed in", async () => {
-    const { api, shell, app } = harness();
+    const { api, app } = harness();
     api.listProviderAccounts.mockResolvedValue([
       { provider: "xai-oauth", enabled: true, credentialId: "signed-in-credential" },
     ]);
     renderIn(
       app,
       <InferencePanel
-        shell={shell}
         deployment={{
           ...deployment,
           inferenceBackends: [

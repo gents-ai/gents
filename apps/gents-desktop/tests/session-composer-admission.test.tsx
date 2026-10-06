@@ -224,7 +224,7 @@ describe("SessionScreen canonical composer admission", () => {
           ],
         },
         sessions: [],
-      } as DeploymentView;
+      } as unknown as DeploymentView;
       return projectChatShell({
         clientAvailable: true,
         selectedAgentDid: deployment.agentDid,
