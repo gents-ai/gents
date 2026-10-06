@@ -138,7 +138,6 @@ import {
   useNodeCount,
   useSelectedBehaviorId,
   useSelectedNode,
-  useSelectedSessionId,
   useSessionLoad,
 } from "@/hooks/useClient";
 
@@ -1339,7 +1338,7 @@ export function SessionScreen() {
   const sendStatus = useView((view) => view.shellProjection.nonEmptyContentSendStatus);
   const selectedAgentDid = useSelectedAgentDid();
   const deployment = useSelectedNode();
-  const selectedSessionId = useSelectedSessionId();
+  const selectedSessionId = stores.selection.use.sessionId();
   const sending = stores.chat.use.sending();
   const sessionLoad = useSessionLoad();
   const session = useSelectedSessionFields(selectScreenFacts);

@@ -26,11 +26,6 @@ import {
 } from "../lib/scope";
 import { useFleet } from "./useFleet";
 
-/** The client as last read. */
-export function useSnapshot() {
-  return useApp().stores.client.use.snapshot();
-}
-
 /** What the home was set up with, as last read; the same object while it
     is unchanged. */
 export function useBootstrap() {
@@ -135,10 +130,6 @@ export function useMailboxCount() {
 /** The newest sessions in the recents' default scope. */
 export function useRecentSessions(limit: number) {
   return useInScope((ctx) => recentInScope(defaultScope("recents"), ctx, limit));
-}
-
-export function useSelectedSessionId() {
-  return useApp().stores.selection.use.sessionId();
 }
 
 /** The behavior a message goes to: the selection's, settled against the node. */

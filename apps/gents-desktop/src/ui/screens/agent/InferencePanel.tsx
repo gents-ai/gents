@@ -64,7 +64,6 @@ import { ProviderLogo } from "../ProviderLogo";
 import { RenameDialog } from "../AgentsScreen";
 import { useApp } from "@/app/AppContext";
 import { toastFailure } from "@/lib/failure";
-import { useSnapshot } from "@/hooks/useClient";
 
 export function backendSave(
   agentDid: string,
@@ -163,8 +162,8 @@ const SUBSCRIPTION: Record<
 const NO_ACCOUNTS: ProviderAccountView[] = [];
 
 export function useAccounts(agentDid: string) {
-  const { api } = useApp();
-  const snapshot = useSnapshot();
+  const { api, stores } = useApp();
+  const snapshot = stores.client.use.snapshot();
   /* held with the agent they were read for: another agent's never show */
   const [held, setHeld] = useState<{
     agentDid: string;

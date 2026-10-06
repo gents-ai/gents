@@ -5,7 +5,7 @@ import { cn } from "@gents/ui/lib/utils";
 import { navigate } from "@/lib/router";
 import { toastFailure } from "@/lib/failure";
 import { useApp, useView } from "@/app/AppContext";
-import { useSelectedAgentDid, useSelectedSessionId } from "@/hooks/useClient";
+import { useSelectedAgentDid } from "@/hooks/useClient";
 
 const LABEL = {
   retryLocal: "Try again",
@@ -20,9 +20,12 @@ const BUSY = {
 
 export function LoadingStatus() {
   const status = useView((view) => view.loadingStatus);
-  const { refreshSnapshot, retrySessionHydration } = useApp().actions;
+  const {
+    stores,
+    actions: { refreshSnapshot, retrySessionHydration },
+  } = useApp();
   const agentDid = useSelectedAgentDid();
-  const selectedSessionId = useSelectedSessionId();
+  const selectedSessionId = stores.selection.use.sessionId();
   const [busy, setBusy] = useState(false);
   if (!status) return null;
   const act = async () => {

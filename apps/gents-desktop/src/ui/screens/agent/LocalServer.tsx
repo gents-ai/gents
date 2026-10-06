@@ -24,15 +24,16 @@ import {
 } from "../../../lib/managedServerStartup";
 import { Fact, Group, Row } from "./rows";
 import { useApp } from "@/app/AppContext";
-import { useSnapshot, useStartup } from "@/hooks/useClient";
+import { useStartup } from "@/hooks/useClient";
 
 export function LocalServer() {
   const {
     api,
+    stores,
     actions: { refreshSnapshot },
   } = useApp();
   const { incompatibleHome } = useStartup();
-  const snapshot = useSnapshot();
+  const snapshot = stores.client.use.snapshot();
   const [status, setStatus] = useState<ManagedServerStatus | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
