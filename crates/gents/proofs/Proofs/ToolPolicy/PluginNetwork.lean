@@ -3,7 +3,8 @@
 A plugin never holds a socket: WASI preview 1 has none, and the host strips the
 `net` axis from the manifold the guest runs under. A plugin whose recorded grant
 carries an outbound-HTTP allow-list asks the host for requests, and the host
-admits each one, and each redirect hop, through `allowed`. Hostname entries
+admits each one through `allowed`. The host follows no redirect: a 3xx goes
+back to the plugin, whose next request is admitted afresh. Hostname entries
 reach public addresses only, checked on the addresses the connection actually
 uses, so a name that resolves (or later re-resolves) to an internal address is
 refused. Only an entry naming an IP literal grants a non-public address. -/

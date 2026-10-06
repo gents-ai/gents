@@ -47,9 +47,6 @@ impl Server {
             }
             match path.as_str() {
                 "hello" => (StatusCode::OK, [("x-served", "yes")], "hello").into_response(),
-                "loop" => {
-                    (StatusCode::FOUND, [("location", "/loop")], String::new()).into_response()
-                }
                 "big" => "x".repeat(MAX_RESPONSE_BYTES + 1).into_response(),
                 "slow" => {
                     tokio::time::sleep(Duration::from_secs(5)).await;
@@ -454,44 +451,38 @@ async fn a_rebinding_name_is_checked_on_the_addresses_the_connection_uses() {
     assert!(server.hits().is_empty());
 }
 
+/// The host never follows a redirect: the plugin gets the 3xx and its
+/// location, and following it is a new request under the same admission.
 #[tokio::test]
-async fn a_redirect_is_admitted_again_at_every_hop() {
+async fn a_redirect_comes_back_to_the_plugin() {
     let server = Server::start().await;
     let port = server.port;
     let (mut session, _) = session_resolving(
         &[server.literal(), format!("http://internal.test:{port}")],
         vec!["127.0.0.1".parse().unwrap()],
     );
+    let moved = format!("redirect/http/internal.test:{port}/hello");
+    let results = ask(
+        &mut session,
+        json!([{"id": "moved", "url": server.url(&moved), "method": "POST", "body": "x"}]),
+    )
+    .await;
+    assert_eq!(results["moved"]["status"], 302, "{}", results["moved"]);
+    let location = results["moved"]["headers"]["location"].as_str().unwrap();
+    assert_eq!(location, format!("http://internal.test:{port}/hello"));
+
     let results = ask(
         &mut session,
         json!([
-            {"id": "followed", "url": server.url(&format!("redirect/http/127.0.0.1:{port}/hello"))},
-            {"id": "to_private_name", "url": server.url(&format!("redirect/http/internal.test:{port}/hello"))},
-            {"id": "to_private_literal", "url": server.url("redirect/http/10.0.0.1/hello")},
-            {"id": "loop", "url": server.url("loop")},
+            {"id": "to_private_name", "url": location},
+            {"id": "to_unlisted", "url": "http://10.0.0.1/hello"},
         ]),
     )
     .await;
-    assert_eq!(
-        results["followed"]["status"], 200,
-        "{}",
-        results["followed"]
-    );
-    assert_eq!(results["followed"]["url"], server.url("hello"));
     assert!(error(&results, "to_private_name")
         .contains("internal.test resolves to the internal address"));
-    assert!(error(&results, "to_private_literal").contains("not in plugin"));
-    assert!(error(&results, "loop").contains("redirected more than"));
-    let hits = server.hits();
-    assert_eq!(
-        hits.iter().filter(|hit| *hit == "hello").count(),
-        1,
-        "{hits:?}"
-    );
-    assert_eq!(
-        hits.iter().filter(|hit| *hit == "loop").count(),
-        MAX_REDIRECTS + 1
-    );
+    assert!(error(&results, "to_unlisted").contains("not in plugin"));
+    assert_eq!(server.hits(), [moved]);
 }
 
 #[tokio::test]

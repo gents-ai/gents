@@ -12,10 +12,11 @@ source consistency checks, not a separate runtime compatibility version.
   resumes it with `http_results`, for model tools and graph stages alike.
   Entries are hosts, `*.domain`, or IP literals, with optional `http://` and
   `:port`. Hostname entries reach public addresses only, checked on the
-  addresses each connection resolves, and every redirect hop is admitted again.
-  Only a literal IP entry grants an internal address. Requests carry no host
-  proxy, cookies or credentials. Rounds, requests, body bytes, redirects and
-  per-request time are capped. The guest never runs with `net`, and a pack
+  addresses each connection resolves. The host follows no redirect; a 3xx
+  goes back to the plugin, whose next request is admitted afresh. Only a
+  literal IP entry grants an internal address. Requests carry no host proxy,
+  cookies or credentials. Rounds, requests, body bytes and per-request time
+  are capped. The guest never runs with `net`, and a pack
   declaring `OutboundFull` or a malformed entry is refused. Granting still
   goes through `--grant-authority`.
 

@@ -10,10 +10,10 @@
 //! The wire:
 //!
 //! - input: the caller's input plus `"http_calls": true`, then on later
-//!   rounds `"http_results": {id: {"status", "url", "headers": {name: value},
+//!   rounds `"http_results": {id: {"status", "headers": {name: value},
 //!   "body" | "body_base64"} | {"error": ...}}` and the `"state"` the plugin
-//!   last returned. `url` is the final URL after redirects; `body` is used
-//!   when the response is UTF-8, `body_base64` otherwise.
+//!   last returned. `body` is used when the response is UTF-8, `body_base64`
+//!   otherwise.
 //! - output: `{"http_calls": {"requests": [{"id", "method", "url", "headers":
 //!   {name: value}, "body" | "body_base64"}], "state": ...}}`.
 //!
@@ -23,17 +23,19 @@
 //! the scheme's default port. A grant of any host (`OutboundHttp(null)`)
 //! admits any public host over HTTPS on port 443. The admission rule is
 //! `ToolPolicy.PluginNetwork.allowed`, bound by
-//! `generated_plugin_network_cases_drive_admission`. Every redirect hop is
-//! admitted again; a request carries only what the plugin put in it (no
-//! proxy, cookie store or credentials of the host's).
+//! `generated_plugin_network_cases_drive_admission`. The host never follows
+//! a redirect: a 3xx comes back to the plugin with its `location` header, and
+//! following it is a new request, admitted like any other. A request carries
+//! only what the plugin put in it (no proxy, cookie store or credentials of
+//! the host's).
 //!
 //! Bounds beyond the round loop's: [`MAX_REQUESTS_PER_ROUND`] requests a
 //! round, [`MAX_IN_FLIGHT`] of them at once, [`MAX_REQUESTS_PER_CALL`]
 //! requests and [`MAX_RESPONSE_BYTES_PER_CALL`] response bytes over the call
 //! (charged as they are read, whether or not the response is then refused;
 //! a request past either gets an error result), [`MAX_REQUEST_BODY_BYTES`]
-//! a request body, [`MAX_RESPONSE_BYTES`] a response body,
-//! [`MAX_REDIRECTS`] redirects a request, and [`REQUEST_TIMEOUT`] a request
+//! a request body, [`MAX_RESPONSE_BYTES`] a response body, and
+//! [`REQUEST_TIMEOUT`] a request
 //! (lowered by the manifold's `http_timeout_ms`, which a manifest may not
 //! set to 0), inside the call's wall clock.
 
@@ -56,7 +58,7 @@ use serde_json::{json, Map, Value};
 pub const MAX_REQUESTS_PER_ROUND: usize = 16;
 /// Requests of one round in flight at once.
 pub const MAX_IN_FLIGHT: usize = 8;
-/// Requests one call may send over all its rounds, redirects not counted.
+/// Requests one call may send over all its rounds.
 pub const MAX_REQUESTS_PER_CALL: usize = 256;
 /// Bytes of one request body.
 pub const MAX_REQUEST_BODY_BYTES: usize = 1024 * 1024;
@@ -64,9 +66,7 @@ pub const MAX_REQUEST_BODY_BYTES: usize = 1024 * 1024;
 pub const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 /// Response bytes one call may take in over all its rounds.
 pub const MAX_RESPONSE_BYTES_PER_CALL: usize = 16 * 1024 * 1024;
-/// Redirects followed for one request.
-pub const MAX_REDIRECTS: usize = 5;
-/// Longest one request may take, redirects included.
+/// Longest one request may take.
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -328,7 +328,8 @@ pub(crate) fn addresses_allowed(explicit: bool, addrs: &[IpAddr]) -> bool {
 fn internal_refusal(host: &str, ip: &IpAddr) -> String {
     format!(
         "{host} resolves to the internal address {ip}; a hostname grant reaches public \
-         addresses only, so grant the IP literal itself to allow it"
+         addresses only, so to reach it, name the IP literal in the request URL and grant \
+         that literal"
     )
 }
 
@@ -650,98 +651,70 @@ impl Session {
 
     async fn exchange(&self, request: Request) -> Result<Value, String> {
         let Request {
-            mut method,
-            mut url,
-            mut headers,
-            mut body,
+            method,
+            url,
+            headers,
+            body,
             ..
         } = request;
-        let mut redirects = 0;
-        loop {
-            self.check(&url)?;
-            let mut call = self.client.request(method.clone(), url.clone());
-            for (name, value) in &headers {
-                call = call.header(name, value);
-            }
-            if let Some(body) = &body {
-                call = call.body(body.clone());
-            }
-            let mut response = call
-                .send()
-                .await
-                .map_err(|error| send_error(&url, &error))?;
-            let status = response.status();
-            let location = response.headers().get(reqwest::header::LOCATION);
-            if matches!(status.as_u16(), 301 | 302 | 303 | 307 | 308) && location.is_some() {
-                if redirects == MAX_REDIRECTS {
-                    return Err(format!(
-                        "the request was redirected more than {MAX_REDIRECTS} times"
-                    ));
-                }
-                let next = location
-                    .and_then(|location| location.to_str().ok())
-                    .and_then(|location| url.join(location).ok())
-                    .ok_or("the redirect location is not a URL")?;
-                if status.as_u16() == 303 || (status.as_u16() <= 302 && method == Method::POST) {
-                    method = Method::GET;
-                    body = None;
-                }
-                if next.origin() != url.origin() {
-                    headers.retain(|(name, _)| {
-                        name != reqwest::header::AUTHORIZATION && name != reqwest::header::COOKIE
-                    });
-                }
-                url = next;
-                redirects += 1;
-                continue;
-            }
-            let mut bytes = Vec::new();
-            while let Some(chunk) = response
-                .chunk()
-                .await
-                .map_err(|_| "the http response was cut off".to_owned())?
-            {
-                let charged = self
-                    .response_bytes
-                    .fetch_add(chunk.len(), Ordering::Relaxed);
-                if charged + chunk.len() > self.max_response_bytes {
-                    return Err("this call used up its http response budget".to_owned());
-                }
-                bytes.extend_from_slice(&chunk);
-                if bytes.len() > MAX_RESPONSE_BYTES {
-                    return Err(format!(
-                        "the http response body is larger than {MAX_RESPONSE_BYTES} bytes"
-                    ));
-                }
-            }
-            let mut names = Map::new();
-            for (name, value) in response.headers() {
-                let Ok(value) = value.to_str() else { continue };
-                match names.get_mut(name.as_str()) {
-                    Some(Value::String(joined)) => {
-                        joined.push_str(", ");
-                        joined.push_str(value);
-                    }
-                    _ => {
-                        names.insert(name.as_str().to_owned(), Value::String(value.to_owned()));
-                    }
-                }
-            }
-            let mut answer = json!({
-                "status": status.as_u16(),
-                "url": url.as_str(),
-                "headers": names,
-            });
-            match String::from_utf8(bytes) {
-                Ok(text) => answer["body"] = Value::String(text),
-                Err(error) => {
-                    answer["body_base64"] = Value::String(
-                        base64::engine::general_purpose::STANDARD.encode(error.into_bytes()),
-                    )
-                }
-            }
-            return Ok(answer);
+        self.check(&url)?;
+        let mut call = self.client.request(method, url.clone());
+        for (name, value) in headers {
+            call = call.header(name, value);
         }
+        if let Some(body) = body {
+            call = call.body(body);
+        }
+        let mut response = call
+            .send()
+            .await
+            .map_err(|error| send_error(&url, &error))?;
+        let status = response.status();
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|_| "the http response was cut off".to_owned())?
+        {
+            let charged = self
+                .response_bytes
+                .fetch_add(chunk.len(), Ordering::Relaxed);
+            if charged + chunk.len() > self.max_response_bytes {
+                return Err("this call used up its http response budget".to_owned());
+            }
+            bytes.extend_from_slice(&chunk);
+            if bytes.len() > MAX_RESPONSE_BYTES {
+                return Err(format!(
+                    "the http response body is larger than {MAX_RESPONSE_BYTES} bytes"
+                ));
+            }
+        }
+        let mut names = Map::new();
+        for (name, value) in response.headers() {
+            let Ok(value) = value.to_str() else { continue };
+            match names.get_mut(name.as_str()) {
+                Some(Value::String(joined)) => {
+                    joined.push_str(", ");
+                    joined.push_str(value);
+                }
+                _ => {
+                    names.insert(name.as_str().to_owned(), Value::String(value.to_owned()));
+                }
+            }
+        }
+        let mut answer = json!({
+            "status": status.as_u16(),
+            "headers": names,
+        });
+        match String::from_utf8(bytes) {
+            Ok(text) => answer["body"] = Value::String(text),
+            Err(error) => {
+                answer["body_base64"] = Value::String(
+                    base64::engine::general_purpose::STANDARD.encode(error.into_bytes()),
+                )
+            }
+        }
+        Ok(answer)
     }
 }
 
