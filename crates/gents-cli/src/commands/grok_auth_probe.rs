@@ -139,6 +139,12 @@ async fn probe_account(
             );
             bail!("models request failed with HTTP {status}: {body}\n{guidance}");
         }
+        if status.as_u16() == 426 {
+            bail!(
+                "models request failed with HTTP {status}: {body}\n{}",
+                gents::xai_grok_oauth::grok_client_version_gate_guidance()
+            );
+        }
         bail!("models request failed with HTTP {status}: {body}");
     }
     let rendered = rendered_model_names(&body)?;
