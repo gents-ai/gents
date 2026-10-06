@@ -6,7 +6,6 @@ import { placeholderFor } from "@/lib/send-status";
 import {
   Fragment,
   useCallback,
-  useEffect,
   useMemo,
   useRef,
   useState,
@@ -18,10 +17,11 @@ import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
 import type { SendStatus } from "@source-inc/gents-desktop-chat";
 import { Button } from "@gents/ui/components/button";
 import { cn } from "@gents/ui/lib/utils";
-import { scrollParent, Composer } from "@gents/ui/conversation";
+import { Composer } from "@gents/ui/conversation";
 import type { ShellView } from "@/../hooks/shellView";
 import { ChatFolderPicker } from "./ChatFolderPicker";
-import { distanceFromFoot, useFollowTail, useScroller } from "@/lib/scroll";
+import { useFollowTail, useScroller } from "@/lib/scroll";
+import { useComposerRoom, useHeaderScrolledOut } from "./sessionLayout";
 import { href, navigate } from "@/lib/router";
 import {
   DropdownMenu,
@@ -248,65 +248,12 @@ export function SessionScreen() {
   /* away from the bottom, a button offers the way back; scrolling is the cue */
   const { atBottom, toBottom } = useFollowTail(scroller, selectedSessionId);
   /* once the full header scrolls out, a condensed one sticks to the top */
-  const headerEnd = useRef<HTMLDivElement>(null);
-  const [condensed, setCondensed] = useState(false);
-  useEffect(() => {
-    const el = headerEnd.current;
-    const root = scroller;
-    if (!el || !root) return;
-    const io = new IntersectionObserver(([e]) => setCondensed(!e!.isIntersecting), {
-      root,
-    });
-    io.observe(el);
-    return () => io.disconnect();
-    /* the loader shows first and the marker mounts with the session, after
-       this effect has already run once and found nothing: run again then */
-  }, [selectedSessionId, session, scroller]);
+  const [condensed, headerEnd] = useHeaderScrolledOut(scroller);
   const choice = useBehaviorChoice();
   const provenance = useSessionProvenance();
   const workers = useWorkers(provenance);
   const parentWork = useParentWork(provenance);
-  /* the composer mounts with the session, not with the screen, so this
-     measures from a callback ref rather than an effect that would run once
-     while it was still absent. The height goes on the column, not the
-     composer: a custom property inherits down, and the blocks that need to
-     clear it are the composer's siblings. */
-  const composerCleanup = useRef<(() => void) | null>(null);
-  const composer = useCallback((el: HTMLDivElement | null) => {
-    composerCleanup.current?.();
-    composerCleanup.current = null;
-    if (!el) return;
-    /* what a block sticking to the foot needs is not the composer's height
-       but how far its top sits above the scrollport's bottom edge. The two
-       coincide only when the scroller ends where the window does, which is
-       not true once the app is drawn inside a window frame. */
-    const publish = () => {
-      const scroller = scrollParent(el);
-      const floor = scroller
-        ? scroller.getBoundingClientRect().bottom
-        : window.innerHeight;
-      const gap = Math.max(0, Math.round(floor - el.getBoundingClientRect().top));
-      /* the transcript pins itself to the foot when a session opens, and
-         this measurement arrives after that: the room it reserves appears
-         underneath a view that has already stopped, leaving it exactly a
-         composer short of the end. A reader at the foot stays at the foot. */
-      const was = scroller && distanceFromFoot(scroller);
-      column.current?.style.setProperty("--composer-h", `${gap}px`);
-      if (scroller && was !== null && was < 4)
-        requestAnimationFrame(() => {
-          scroller.scrollTop = scroller.scrollHeight;
-        });
-    };
-    publish();
-    const size = new ResizeObserver(publish);
-    size.observe(el);
-    /* the frame around the app resizes without the composer changing size */
-    window.addEventListener("resize", publish);
-    composerCleanup.current = () => {
-      size.disconnect();
-      window.removeEventListener("resize", publish);
-    };
-  }, []);
+  const composer = useComposerRoom(column);
   /* a person stopping a subagent from here: the canonical interrupt of the
      one request that row's call caused; the row settles when that request
      is terminal */
