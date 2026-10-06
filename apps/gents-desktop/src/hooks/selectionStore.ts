@@ -149,8 +149,11 @@ export const selection = {
   },
 
   /** the item was answered, dismissed or put down: the next message is an
-      ordinary one */
-  releaseMailboxRoute(store: SelectionStore) {
+      ordinary one. Given an item, only a route opened for that item is let
+      go, so one opened since for another item stays. */
+  releaseMailboxRoute(store: SelectionStore, itemId?: string) {
+    const route = store.getState().mailboxRoute;
+    if (itemId !== undefined && route?.itemId !== itemId) return;
     commit(store, { mailboxRoute: null, composingFor: null });
   },
 

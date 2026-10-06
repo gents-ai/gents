@@ -3,11 +3,7 @@ import type {
   MailboxItemView,
   MailboxQuestionAnswer,
 } from "@source-inc/gents-desktop-client";
-import {
-  actionFailure,
-  dismissMailboxItemAndClearMatchingRoute,
-  shownFailure,
-} from "./desktopShellRuntime";
+import { actionFailure, shownFailure } from "./desktopShellRuntime";
 import { selection } from "./selectionStore";
 import { writeSession } from "./sessionStore";
 import type { ShellStores } from "./shellProjection";
@@ -52,12 +48,8 @@ export function createDesktopShellMailboxActions({
 
   async function dismissMailboxItem(itemId: string) {
     try {
-      await dismissMailboxItemAndClearMatchingRoute(
-        itemId,
-        (dismissedItemId) => api.dismissMailboxItem(dismissedItemId),
-        () => store.getState().mailboxRoute?.itemId ?? null,
-        () => selection.releaseMailboxRoute(store),
-      );
+      await api.dismissMailboxItem(itemId);
+      selection.releaseMailboxRoute(store, itemId);
       await refreshSnapshot();
     } catch (error) {
       reportFailure(actionFailure("dismiss the item", error));
@@ -80,9 +72,7 @@ export function createDesktopShellMailboxActions({
       });
       /* the reply consumed the item, so a compose route opened on it must
          not carry it as the next message's source */
-      if (store.getState().mailboxRoute?.itemId === item.itemId) {
-        selection.releaseMailboxRoute(store);
-      }
+      selection.releaseMailboxRoute(store, item.itemId);
       await refreshSnapshot();
     } catch (error) {
       reportFailure(actionFailure("send the answer", error));
