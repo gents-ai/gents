@@ -736,25 +736,8 @@ pub(crate) async fn next_append_sequence_in_transaction(
     agent_did: &str,
     session_id: &str,
 ) -> Result<u32> {
-    let escaped_agent_did = escape_graphql_string(agent_did);
-    let escaped_session_id = escape_graphql_string(session_id);
     let response = txn
-        .execute(&format!(
-            r#"{{
-                AgentMessage(
-                    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }}, agent_did: {{ _eq: "{escaped_agent_did}" }} }},
-                    order: {{ sequence: DESC }},
-                    limit: 1
-                ) {{ sequence }}
-                AgentToolCall(
-                    filter: {{
-                        session_id: {{ _eq: "{escaped_session_id}" }},
-                        agent_did: {{ _eq: "{escaped_agent_did}" }},
-                        await_mode: {{ _eq: "background" }}
-                    }}
-                ) {{ message_sequence }}
-            }}"#
-        ))
+        .execute(&append_sequence_query(agent_did, session_id))
         .await?;
     let message_max = response["data"]["AgentMessage"]
         .as_array()
@@ -778,6 +761,27 @@ pub(crate) async fn next_append_sequence_in_transaction(
         .max()
         .unwrap_or(0);
     Ok(message_max.max(reserved_max) + 1)
+}
+
+pub(super) fn append_sequence_query(agent_did: &str, session_id: &str) -> String {
+    let escaped_agent_did = escape_graphql_string(agent_did);
+    let escaped_session_id = escape_graphql_string(session_id);
+    format!(
+        r#"{{
+                AgentMessage(
+                    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }}, agent_did: {{ _eq: "{escaped_agent_did}" }} }},
+                    order: [{{ agent_did: DESC }}, {{ session_id: DESC }}, {{ sequence: DESC }}],
+                    limit: 1
+                ) {{ sequence }}
+                AgentToolCall(
+                    filter: {{
+                        session_id: {{ _eq: "{escaped_session_id}" }},
+                        agent_did: {{ _eq: "{escaped_agent_did}" }},
+                        await_mode: {{ _eq: "background" }}
+                    }}
+                ) {{ message_sequence }}
+            }}"#
+    )
 }
 
 pub(super) fn transaction_created_doc_id(response: &Value, collection: &str) -> Result<String> {
