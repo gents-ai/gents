@@ -218,6 +218,37 @@ describe("setup provider sign-in", () => {
   });
 });
 
+describe("the provider catalog", () => {
+  it("offers to read the catalog again after a failed read, and then goes on", async () => {
+    const harness = createDesktopUiHarness({ scenario: "empty-fleet" });
+    const read = harness.adapter.getInferenceSetupCatalog.bind(harness.adapter);
+    const { app } = setup(
+      {
+        getInferenceSetupCatalog: vi
+          .fn()
+          .mockRejectedValueOnce(new Error("catalog offline"))
+          .mockImplementation(read),
+      },
+      harness,
+    );
+    renderIn(
+      app,
+      <SetupScreen
+        initialStep="inference"
+        purpose="add-backend"
+        provider="anthropic"
+        agentDid={AGENT}
+        onCancel={vi.fn()}
+        onDone={vi.fn()}
+      />,
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent("catalog offline");
+    expect(screen.queryByText("Loading provider options…")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByText("Account connected")).toBeVisible();
+  });
+});
+
 describe("add another account", () => {
   const KIND = {
     openai: "chatgpt-codex",
@@ -374,6 +405,31 @@ describe("add another account", () => {
     ).not.toBeInTheDocument();
     expect(onDone).not.toHaveBeenCalled();
     expect(api.applyConfigComponents).not.toHaveBeenCalled();
+  });
+
+  it("offers no Cancel while Retry save runs: Cancel stops a sign-in", async () => {
+    let finish = (_: unknown) => {};
+    const work = {
+      ...stored(KIND.anthropic),
+      credentialId: "credential-work",
+      label: "Work",
+    };
+    const { api } = addForm("anthropic", {
+      listProviderAccounts: vi
+        .fn()
+        .mockResolvedValue([stored(KIND.anthropic), { ...work, pendingSave: true }]),
+      retrySaveProviderAccount: vi.fn(
+        () => new Promise((resolve) => (finish = resolve)),
+      ) as DesktopApiAdapter["retrySaveProviderAccount"],
+      cancelClaudeLogin: vi.fn(),
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "Retry save" }));
+    expect(await screen.findByRole("button", { name: /Saving…/ })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+    expect(screen.queryByText("Waiting…")).toBeNull();
+    finish({ ...work, accountRef: "acct-2" });
+    await waitFor(() => expect(api.retrySaveProviderAccount).toHaveBeenCalledOnce());
+    expect(api.cancelClaudeLogin).not.toHaveBeenCalled();
   });
 
   it("refuses a label another account of the provider shows", async () => {

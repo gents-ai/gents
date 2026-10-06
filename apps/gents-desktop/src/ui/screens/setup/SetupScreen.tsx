@@ -417,6 +417,9 @@ export function SetupScreen({
   );
   const [authorityError, setAuthorityError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /* which account operation holds busy, so its controls say what is running
+     and Cancel only ever cancels a sign-in */
+  const [accountOp, setAccountOp] = useState<"signIn" | "retrySave" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [phase, setPhase] = useState<Exclude<DesktopStartupPhase, "ready">>(
     "checking-managed-server",
@@ -435,6 +438,9 @@ export function SetupScreen({
     return () => window.clearTimeout(timer);
   }, [provisionedAt]);
   const [catalog, setCatalog] = useState<InferenceSetupCatalog | null>(null);
+  /* a failed catalog read, kept apart from the form's error; clearing it
+     reads the catalog again */
+  const [catalogFailure, setCatalogFailure] = useState<string | null>(null);
   const [provider, setProvider] = useState<ProviderId>(fixedProvider ?? "openai");
   const [connections, setConnections] = useState<
     Partial<Record<ProviderId, ConnectionDraft>>
@@ -586,7 +592,7 @@ export function SetupScreen({
   };
 
   useEffect(() => {
-    if (step !== "inference" || catalog) return;
+    if (step !== "inference" || catalog || catalogFailure) return;
     void api
       .getInferenceSetupCatalog()
       .then((next) => {
@@ -604,8 +610,8 @@ export function SetupScreen({
         });
         if (next.providers[0] && !fixedProvider) setProvider(next.providers[0].id);
       })
-      .catch((cause) => setError(setupErrorMessage(cause)));
-  }, [api, catalog, step]);
+      .catch((cause) => setCatalogFailure(setupErrorMessage(cause)));
+  }, [api, catalog, catalogFailure, step]);
 
   const createAgent = async () => {
     const requestedName = agentName.trim();
@@ -714,6 +720,7 @@ export function SetupScreen({
       return;
     }
     setBusy(true);
+    setAccountOp("signIn");
     setError(null);
     setAuthUrl(null);
     setSignInHint(null);
@@ -763,6 +770,7 @@ export function SetupScreen({
     } finally {
       unlisten();
       setBusy(false);
+      setAccountOp(null);
     }
   };
 
@@ -775,6 +783,7 @@ export function SetupScreen({
        retry returning no reference refreshed the original account */
     const hadStored = accountsOf(oauthProvider).length > 0;
     setBusy(true);
+    setAccountOp("retrySave");
     setError(null);
     try {
       if (requiresManagedRuntime) {
@@ -806,6 +815,7 @@ export function SetupScreen({
       setError(setupErrorMessage(cause));
     } finally {
       setBusy(false);
+      setAccountOp(null);
     }
   };
 
@@ -1362,23 +1372,30 @@ export function SetupScreen({
                     {authLabel(connection!.authMethod)}
                   </p>
                   <span className="flex gap-2">
-                    {busy ? (
+                    {accountOp === "signIn" && (
                       <Button variant="outline" onClick={cancelSignIn}>
                         Cancel
                       </Button>
-                    ) : null}
-                    {!busy && pendingSave[provider] && api.retrySaveProviderAccount ? (
-                      <Button variant="brand" onClick={retrySaveSignIn}>
-                        Retry save
-                      </Button>
-                    ) : null}
+                    )}
+                    {accountOp !== "signIn" &&
+                      pendingSave[provider] &&
+                      api.retrySaveProviderAccount && (
+                        <Button
+                          variant="brand"
+                          disabled={busy}
+                          onClick={retrySaveSignIn}
+                        >
+                          {accountOp === "retrySave" && <Spinner />}
+                          {accountOp === "retrySave" ? "Saving…" : "Retry save"}
+                        </Button>
+                      )}
                     <Button
                       variant={pendingSave[provider] && !busy ? "outline" : "brand"}
                       disabled={busy}
                       onClick={signIn}
                     >
-                      {busy ? <Spinner /> : null}
-                      {busy ? "Waiting…" : "Sign in"}
+                      {accountOp === "signIn" && <Spinner />}
+                      {accountOp === "signIn" ? "Waiting…" : "Sign in"}
                     </Button>
                   </span>
                 </div>
@@ -1658,14 +1675,24 @@ export function SetupScreen({
         </div>
       ) : (
         <div className="grid gap-3">
-          <p className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Spinner /> Loading provider options…
-          </p>
-          {error ? (
-            <p role="alert" className="text-sm text-destructive">
-              {error}
+          {catalogFailure ? (
+            <>
+              <p role="alert" className="text-sm text-destructive">
+                {catalogFailure}
+              </p>
+              <Button
+                variant="outline"
+                className="justify-self-start"
+                onClick={() => setCatalogFailure(null)}
+              >
+                Try again
+              </Button>
+            </>
+          ) : (
+            <p className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Spinner /> Loading provider options…
             </p>
-          ) : null}
+          )}
         </div>
       )}
       {!fixedProvider && (
