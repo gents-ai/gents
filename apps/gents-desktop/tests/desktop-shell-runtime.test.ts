@@ -279,6 +279,133 @@ function session(
 }
 
 describe("session timeline page merging", () => {
+  it("keeps distinct requests with identical content across older pages", () => {
+    const page = {
+      totalItems: 2,
+      pageItems: 1,
+      hasOlder: true,
+      hasNewer: false,
+      oldestItemKey: "k2",
+      newestItemKey: "k2",
+    };
+    const current = session(["k2"], page);
+    current.timelineItems = [
+      {
+        kind: "pendingUserTurn",
+        itemKey: "pending-r2",
+        requestId: "r2",
+        content: "repeat",
+        lifecycleState: "pending",
+        createdAt: null,
+      },
+    ];
+    const older = session(["k1"], { ...page, hasOlder: false });
+    older.timelineItems = [
+      {
+        kind: "userMessage",
+        itemKey: "authored-r1",
+        requestId: "r1",
+        sequence: 1,
+        content: "repeat",
+        timestamp: null,
+        reconstruction: { state: "ready" },
+      },
+    ];
+    expect(
+      mergeOlderSessionTimelinePage(current, older).timelineItems.map(
+        (item) => item.itemKey,
+      ),
+    ).toEqual(["authored-r1", "pending-r2"]);
+  });
+
+  it("removes the current pending row when its durable owner arrives in older history", () => {
+    const page = {
+      totalItems: 2,
+      pageItems: 1,
+      hasOlder: true,
+      hasNewer: false,
+      oldestItemKey: "k2",
+      newestItemKey: "k2",
+    };
+    const current = session(["k2"], page);
+    current.timelineItems.push({
+      kind: "pendingUserTurn",
+      itemKey: "pending-r",
+      requestId: "r",
+      content: "repeat",
+      lifecycleState: "processing",
+      createdAt: null,
+    });
+    const older = session(["k1"], { ...page, hasOlder: false });
+    older.timelineItems = [
+      {
+        kind: "userMessage",
+        itemKey: "authored-r",
+        requestId: "r",
+        sequence: 1,
+        content: "repeat",
+        timestamp: null,
+        reconstruction: { state: "ready" },
+      },
+    ];
+    expect(
+      mergeOlderSessionTimelinePage(current, older).timelineItems.map(
+        (item) => item.itemKey,
+      ),
+    ).toEqual(["authored-r", "k2"]);
+  });
+
+  it.each(["older", "tip"] as const)(
+    "replaces a queued input with its durable owner when the %s page arrives",
+    (direction) => {
+      const page = {
+        totalItems: 3,
+        pageItems: 2,
+        hasOlder: true,
+        hasNewer: false,
+        oldestItemKey: "k1",
+        newestItemKey: "k2",
+      };
+      const current = session(["k1", "k2"], page);
+      current.timelineItems.unshift({
+        kind: "pendingUserTurn",
+        itemKey: "pending-r",
+        requestId: "r",
+        content: "same text",
+        lifecycleState: "pending",
+        createdAt: null,
+      });
+      const incoming = session(["k1", "k2"], page);
+      incoming.timelineItems.push({
+        kind: "userMessage",
+        itemKey: "authored-r",
+        requestId: "r",
+        sequence: 3,
+        content: "same text",
+        timestamp: null,
+        reconstruction: { state: "ready" },
+      });
+      const merged =
+        direction === "tip"
+          ? mergeSessionTipSnapshot(current, incoming)
+          : mergeOlderSessionTimelinePage(incoming, current);
+      expect(
+        merged.timelineItems
+          .filter(
+            (item) =>
+              (item.kind === "userMessage" || item.kind === "pendingUserTurn") &&
+              item.requestId === "r",
+          )
+          .map((item) => item.kind),
+      ).toEqual(["userMessage"]);
+      expect(merged.timelineItems.map((item) => item.itemKey)).toEqual([
+        "k1",
+        "k2",
+        "authored-r",
+      ]);
+    },
+  );
+
   it.each(["userMessage", "assistantMessage"] as const)(
     "updates %s reconstruction when blank content is unchanged",
     (kind) => {
