@@ -42,7 +42,7 @@ impl ToolCallLifecycle {
         requester_did: Option<&str>,
         require_complete: bool,
     ) -> Result<AcceptedToolCall> {
-        ConfigAccess::transact_local(node, None, "tool_call.load_direct_admission", |txn| {
+        ConfigAccess::transact_local_readonly(node, None, "tool_call.load_direct_admission", |txn| {
             Box::pin(async move {
                 let scope =
                     crate::session::session_scope_filter(agent_did, session_id, requester_did);
