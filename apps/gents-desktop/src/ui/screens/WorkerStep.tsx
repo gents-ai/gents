@@ -9,7 +9,6 @@ import type { RenderedToolCallView } from "@source-inc/gents-desktop-client";
 import { Spinner } from "@gents/ui/components/spinner";
 import { BehaviorAvatar } from "./parts";
 import { behaviorName } from "./behavior";
-import { useDeployment } from "./deployment-context";
 import { useExclusiveStep } from "@gents/ui/conversation";
 import {
   Collapsible,
@@ -18,6 +17,7 @@ import {
 } from "@gents/ui/components/collapsible";
 import { cn } from "@gents/ui/lib/utils";
 import { href } from "@/lib/router";
+import { useSelectedNode } from "@/hooks/useClient";
 import { ToolBody } from "./tool-views";
 import { duration } from "./tool-summary";
 import { when } from "./time";
@@ -223,7 +223,7 @@ export function WorkerStep({
   tool: RenderedToolCallView;
   workers: Workers;
 }) {
-  const deployment = useDeployment();
+  const deployment = useSelectedNode();
   const p = tool.presentation;
   if (p.kind === "process") {
     const bg = workers.background(tool);
@@ -323,7 +323,7 @@ export const subagentName = (subagent: Subagent | null, target?: string | null) 
 /* The sessions this one started, each as the session it is: where it got
    to and a way in. Stopping is a row's business: it names the call. */
 export function SubagentList({ workers }: { workers: Workers }) {
-  const deployment = useDeployment();
+  const deployment = useSelectedNode();
   if (workers.all.length === 0) return null;
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">

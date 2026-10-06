@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { render, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
+import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 import type {
   CausedRequestView,
@@ -18,6 +19,11 @@ import {
   type Workers,
 } from "../src/ui/screens/workers";
 import { WorkerActionsContext } from "../src/ui/screens/WorkerActions";
+import { node, renderIn, testApp } from "./app-fixture";
+import { deployment } from "./config-panel-wiring/fixtures";
+
+/* the rows read the selected node from the app */
+const render = (ui: ReactElement) => renderIn(testApp(), ui);
 
 const call = (
   statusKind = "running",
@@ -249,6 +255,31 @@ describe("subagent list", () => {
     );
     expect(screen.getByText("Subagents")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Reviewer/ })).toBeInTheDocument();
+  });
+
+  it("names each subagent's behavior from the selected node, outside the transcript", () => {
+    const named = subagent("completed");
+    named.summary = { ...named.summary!, behaviorId: "reviewer" };
+    const app = testApp({
+      deployments: [
+        node({
+          behaviors: [
+            {
+              ...deployment.behaviors[0],
+              behaviorId: "reviewer",
+              displayName: "Code Reviewer",
+            },
+          ],
+        }),
+      ],
+    });
+    renderIn(
+      app,
+      <SubagentList
+        workers={workersWith(reached(caused("child-req", "completed"), named))}
+      />,
+    );
+    expect(screen.getByText("Cr")).toBeInTheDocument();
   });
 
   it("renders nothing for a session that started no other session", () => {

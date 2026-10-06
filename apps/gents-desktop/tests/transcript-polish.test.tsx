@@ -1,4 +1,5 @@
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, screen, within } from "@testing-library/react";
+import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import type {
@@ -18,6 +19,10 @@ import { diffText, lineCount, toolSummary } from "../src/ui/screens/tool-summary
 import { activityStatus, isStopping } from "../src/ui/screens/activity-status";
 import { NO_WORKERS } from "../src/ui/screens/workers";
 import { NO_PARENT } from "../src/ui/screens/parentWork";
+import { renderIn, testApp } from "./app-fixture";
+
+/* the rows read the selected node from the app */
+const render = (ui: ReactElement) => renderIn(testApp(), ui);
 
 function tool(
   presentation: RenderedToolCallView["presentation"],

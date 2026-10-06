@@ -31,7 +31,6 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import type {
-  DeploymentView,
   DerivedCancelCauseView,
   RenderedToolCallView,
   DesktopSessionSnapshot,
@@ -94,7 +93,6 @@ import { StreamContext, StreamText } from "./StreamText";
 import { createHandoff, holdLive, type HeldLive } from "./stream-reveal";
 import { ToolBody } from "./tool-views";
 import { foldWorkers, workerStory } from "./tool-runs";
-import { DeploymentContext, useDeployment } from "./deployment-context";
 import { SubagentList, WorkerStep, isWorkerStep } from "./WorkerStep";
 import { NO_WORKERS, useSessionProvenance, useWorkers, type Workers } from "./workers";
 import { useParentWork, type ParentWork } from "./parentWork";
@@ -138,6 +136,7 @@ import {
   useSelectedAgentDid,
   useSelectedBehaviorId,
   useSelectedDeployment,
+  useSelectedNode,
   useSelectedSessionId,
   useSessionLoad,
 } from "@/hooks/useClient";
@@ -583,7 +582,7 @@ function WorkerRunStep({
   tools: RenderedToolCallView[];
   workers: Workers;
 }) {
-  const deployment = useDeployment();
+  const deployment = useSelectedNode();
   const first = tools[0]!;
   const p = first.presentation;
   const reached = workers.byToolCall(first);
@@ -1080,7 +1079,6 @@ export const TranscriptPanel = memo(function TranscriptPanel({
   workers,
   parentWork,
   workerActions,
-  deployment,
 }: {
   actionsRef: RefObject<TranscriptActions>;
   inFlight: boolean;
@@ -1091,7 +1089,6 @@ export const TranscriptPanel = memo(function TranscriptPanel({
   workers: Workers;
   parentWork: ParentWork;
   workerActions: WorkerActions;
-  deployment: DeploymentView | null;
 }) {
   const loadingOlder = useOlderPages(
     scroller,
@@ -1233,42 +1230,40 @@ export const TranscriptPanel = memo(function TranscriptPanel({
         </div>
       )}
       <StreamContext.Provider value={stream}>
-        <DeploymentContext.Provider value={deployment}>
-          <WorkersContext.Provider value={workers}>
-            <WorkerActionsContext.Provider value={workerActions}>
-              <ParentContext.Provider value={parentWork}>
-                <GroupStateContext.Provider value={groupState}>
-                  {entries.map((entry) =>
-                    entry.kind === "item" ? (
-                      /* keyed for the pager, which holds the reader's place
+        <WorkersContext.Provider value={workers}>
+          <WorkerActionsContext.Provider value={workerActions}>
+            <ParentContext.Provider value={parentWork}>
+              <GroupStateContext.Provider value={groupState}>
+                {entries.map((entry) =>
+                  entry.kind === "item" ? (
+                    /* keyed for the pager, which holds the reader's place
                          by the row under their eye while older pages land */
-                      <div
-                        key={entry.key}
-                        data-timeline-key={entry.key}
-                        className="group/response"
-                      >
-                        <TranscriptItem
-                          item={entry.item}
-                          status={entry.item.kind === "liveAssistant" ? status : null}
-                          final={finalKeys.has(entry.key)}
-                        />
-                      </div>
-                    ) : (
-                      <ActivityGroup key={entry.key} entry={entry} workers={workers} />
-                    ),
-                  )}
-                </GroupStateContext.Provider>
-                {continuing && showError && <FailedEarlier message={responseError} />}
-                {continuing &&
-                  session?.timelineItems
-                    .filter((item) => item.kind === "liveAssistant")
-                    .map((item) => (
-                      <TranscriptItem key={item.itemKey} item={item} status={status} />
-                    ))}
-              </ParentContext.Provider>
-            </WorkerActionsContext.Provider>
-          </WorkersContext.Provider>
-        </DeploymentContext.Provider>
+                    <div
+                      key={entry.key}
+                      data-timeline-key={entry.key}
+                      className="group/response"
+                    >
+                      <TranscriptItem
+                        item={entry.item}
+                        status={entry.item.kind === "liveAssistant" ? status : null}
+                        final={finalKeys.has(entry.key)}
+                      />
+                    </div>
+                  ) : (
+                    <ActivityGroup key={entry.key} entry={entry} workers={workers} />
+                  ),
+                )}
+              </GroupStateContext.Provider>
+              {continuing && showError && <FailedEarlier message={responseError} />}
+              {continuing &&
+                session?.timelineItems
+                  .filter((item) => item.kind === "liveAssistant")
+                  .map((item) => (
+                    <TranscriptItem key={item.itemKey} item={item} status={status} />
+                  ))}
+            </ParentContext.Provider>
+          </WorkerActionsContext.Provider>
+        </WorkersContext.Provider>
       </StreamContext.Provider>
       {wasInterrupted && !inFlight && (
         <StoppedNotice cause={session?.latestRequestOutcome?.cancelCause ?? null} />
@@ -1827,7 +1822,6 @@ export function SessionScreen() {
 
               <div ref={headerEnd} aria-hidden="true" />
               <SelectedTranscript
-                deployment={deployment}
                 actionsRef={transcriptActions}
                 inFlight={inFlight}
                 stopping={stopping}
