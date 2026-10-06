@@ -8,7 +8,7 @@ import { installExternalLinkGuard } from "../../lib/externalLinks";
 import { startNativeSimulatorE2e } from "../../lib/nativeSimulatorE2e";
 import { applyShellPlatform, isMacTauriShell } from "../../lib/shellPlatform";
 import { useSelectedSessionValue } from "../hooks/useSelectedSession";
-import { useSelectedDeployment } from "../hooks/useClient";
+import { useSelectedNode } from "../hooks/useClient";
 import type { Route } from "../lib/router";
 import { applyChosenTheme } from "../preferences";
 
@@ -32,7 +32,7 @@ const TITLES: Partial<Record<Route["name"], string>> = {
 
 /** The macOS window title: the screen, then the selected agent. */
 export function useWindowTitle(route: Route) {
-  const agent = useSelectedDeployment()?.agentPrincipal.displayName ?? null;
+  const agent = useSelectedNode()?.agentPrincipal.displayName ?? null;
   const sessionTitle = useSelectedSessionValue((s) => s?.title ?? null);
   useEffect(() => {
     if (!isMacTauriShell()) return;

@@ -9,7 +9,11 @@ import { TooltipProvider } from "@gents/ui/components/tooltip";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { IncompatibleHomeScreen } from "./components/IncompatibleHomeScreen";
 import { StartupScreen } from "./components/StartupScreen";
-import { createDesktopApp, type DesktopBridge } from "./hooks/desktopApp";
+import {
+  createDesktopApp,
+  type DesktopApp,
+  type DesktopBridge,
+} from "./hooks/desktopApp";
 import { useDesktopRuntime } from "./hooks/useDesktopRuntime";
 import { useManagedServerTrayControls } from "./hooks/useManagedServerTrayControls";
 import { useMobileBackSwipe } from "./hooks/useMobileBackSwipe";
@@ -88,15 +92,26 @@ function AppHost({ bridge: given }: { bridge?: DesktopBridge }) {
   const [bridge] = useState(() => given ?? defaultBridge());
   /* a failed action is reported once, as a toast where the person is */
   const [app] = useState(() => createDesktopApp({ reportFailure: toast, ...bridge }));
-  useDesktopRuntime(app, bridge.listenToUpdates);
-  useMobileVisualViewport();
-  usePlatformSetup();
-  useManagedServerTrayControls(bridge.api);
   return (
     <AppProvider value={app}>
+      <AppReactions app={app} bridge={bridge} />
       <AppBody />
     </AppProvider>
   );
+}
+
+/* What the app does on its own. Its hooks follow the stores, so they live
+   in a leaf that draws nothing: their re-renders stop here instead of
+   redrawing every screen. */
+function AppReactions({ app, bridge }: { app: DesktopApp; bridge: DesktopBridge }) {
+  const route = useRoute();
+  useDesktopRuntime(app, bridge.listenToUpdates);
+  useFollowRoute(route);
+  useWindowTitle(route);
+  useMobileVisualViewport();
+  usePlatformSetup();
+  useManagedServerTrayControls(bridge.api);
+  return null;
 }
 
 function AppBody() {
@@ -109,8 +124,6 @@ function AppBody() {
   useEffect(() => workspace.visit(scope), [scope]);
   useHistoryInputs(history);
   useSwipeNav(history);
-  useFollowRoute(route);
-  useWindowTitle(route);
 
   const startup = useStartup();
   const firstRun = useFirstRun(
