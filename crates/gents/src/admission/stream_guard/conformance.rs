@@ -4,15 +4,13 @@
 use std::{sync::Arc, time::Duration};
 
 use futures::{future::BoxFuture, StreamExt};
-use rig::{
-    completion::CompletionError,
-    streaming::{RawStreamingChoice, StreamingCompletionResponse},
-};
+use rig::streaming::{RawStreamingChoice, StreamingCompletionResponse};
 use serde::Deserialize;
 use tokio::sync::{oneshot, Mutex};
 
-use super::{hold_stream_guard, StreamGuardLifecycle};
+use super::StreamGuardLifecycle;
 use crate::config_client::ConfigAccess;
+use crate::llm::rig_compat::hold_stream_guard;
 
 #[derive(Deserialize)]
 struct Case {
@@ -29,7 +27,7 @@ struct Finalizer {
 }
 
 impl StreamGuardLifecycle for Finalizer {
-    fn finish_stream(self) -> BoxFuture<'static, Result<(), CompletionError>> {
+    fn finish_stream(self) -> BoxFuture<'static, Result<(), crate::admission::AdmissionError>> {
         Box::pin(async move {
             let _guard = self.gate.lock().await;
             let _ = self.entered.send(());
@@ -100,7 +98,7 @@ struct NativeFinalizer {
 }
 
 impl StreamGuardLifecycle for NativeFinalizer {
-    fn finish_stream(self) -> BoxFuture<'static, Result<(), CompletionError>> {
+    fn finish_stream(self) -> BoxFuture<'static, Result<(), crate::admission::AdmissionError>> {
         Box::pin(async move {
             ConfigAccess::transact_local(
                 &self.node,
@@ -121,7 +119,7 @@ impl StreamGuardLifecycle for NativeFinalizer {
                 },
             )
             .await
-            .map_err(|error| CompletionError::ProviderError(error.to_string()))
+            .map_err(|error| crate::admission::AdmissionError(error.to_string()))
         })
     }
 }

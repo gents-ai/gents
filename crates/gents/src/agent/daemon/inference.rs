@@ -117,7 +117,7 @@ where
     }
 }
 
-impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
+impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn run_inference(
         &mut self,

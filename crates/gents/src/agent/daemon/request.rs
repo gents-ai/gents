@@ -11,7 +11,7 @@ use gents_loop::loop_stream::{provider_messages, provider_view_tagged, TaggedMes
 
 const CANCELLATION_GRACE_PERIOD: std::time::Duration = std::time::Duration::from_millis(100);
 
-impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
+impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
     /// Size the exact first-turn provider request for session-compaction
     /// admission through the owned loop's assembly owner, including its
     /// reasoning replay selection. The loop rebuilds the request at dispatch
