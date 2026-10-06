@@ -2011,6 +2011,24 @@ describe("configuration panels", () => {
     );
   });
 
+  it("says a schedule's problem at its field, and Save goes there instead of saving", async () => {
+    const { api, app } = harness();
+    renderIn(app, <SchedulesPanel deployment={deployment} item="timer-a" />);
+    const user = await replace("Interval seconds", "ninety");
+
+    /* said where it is, before any Save */
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Interval seconds must be a whole number",
+    );
+    expect(screen.getByLabelText("Interval seconds")).toHaveAttribute(
+      "aria-invalid",
+      "true",
+    );
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(screen.getByLabelText("Interval seconds")).toHaveFocus();
+    expect(api.saveScheduleConfig).not.toHaveBeenCalled();
+  });
+
   it("runs a configured schedule through the typed bridge command", async () => {
     const { api, app } = harness();
     renderIn(app, <SchedulesPanel deployment={deployment} item="timer-a" />);
