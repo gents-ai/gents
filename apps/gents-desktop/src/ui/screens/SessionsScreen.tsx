@@ -21,6 +21,7 @@ import { href, navigate } from "@/lib/router";
 import { when } from "./time";
 import {
   defaultScope,
+  knownNodeIds,
   nodesInScope,
   scopeContextOf,
   sessionsInScope,
@@ -63,13 +64,17 @@ export function SessionsScreen({
      chips choose; none chosen means every node */
   const ctx = scopeContextOf(shell);
   const defaultNodeIds = nodesInScope(defaultScope("sessions"), ctx).map(nodeDidOf);
-  const [nodeIds, setNodeIds] = useStoredStrings(
+  const [storedNodeIds, setNodeIds] = useStoredStrings(
     "gents-prototype-sessions-nodes",
     defaultNodeIds,
   );
   useEffect(() => {
     if (nodeDid) setNodeIds([nodeDid]);
   }, [nodeDid, setNodeIds]);
+  /* a pick whose nodes are all gone starts over at the working node */
+  const knownIds = knownNodeIds(storedNodeIds, ctx);
+  const nodeIds =
+    storedNodeIds.length > 0 && knownIds.length === 0 ? defaultNodeIds : knownIds;
   /* the working node is where the list starts, not a filter to clear */
   const nodesPicked =
     nodeIds.length !== defaultNodeIds.length ||
@@ -80,6 +85,12 @@ export function SessionsScreen({
     shell.deployments.map((n) => [nodeDidOf(n), n.sessions.length]),
   );
   const conversations = filterSessions(inScope, filter, held, query);
+  /* an empty list says "yet" only when no node has a session; otherwise
+     something narrowed it, the node chips included */
+  const narrowed =
+    Boolean(query) ||
+    hasFilter(filter) ||
+    shell.deployments.some((n) => n.sessions.length > 0);
   /* the session whose latest request spawned this one, by provenance */
   const parentOf = (c: SessionSummary) => parentOfSession(c, shell.deployments);
 
@@ -390,12 +401,12 @@ export function SessionsScreen({
               </li>
             ),
           )}
-          {conversations.length === 0 && (query || hasFilter(filter)) && (
+          {conversations.length === 0 && narrowed && (
             <li className="py-8 text-center text-sm text-muted-foreground">
               No sessions match.
             </li>
           )}
-          {conversations.length === 0 && !query && !hasFilter(filter) && (
+          {conversations.length === 0 && !narrowed && (
             <li className="grid min-h-[50vh] place-items-center animate-in fade-in-0 slide-in-from-bottom-2 duration-300 ease-out fill-mode-both motion-reduce:animate-none">
               <div className="text-center">
                 <MessageSquare className="mx-auto size-6 text-muted-foreground" />
