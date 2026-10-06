@@ -16,7 +16,7 @@ import type {
 import { Badge } from "@gents/ui/components/badge";
 import { Button } from "@gents/ui/components/button";
 import { setupErrorMessage } from "@/lib/providerLogin";
-import { optionalInteger, requiredHttpUrl, str, useDraft } from "./draft";
+import { optionalInteger, requiredHttpUrl, str, useDraft, problemOf } from "./draft";
 import {
   ChoiceRow,
   DraftActions,
@@ -124,62 +124,85 @@ export function BackendEditor({
     enabled: backend.enabled ?? true,
     tags: backend.tags,
   };
-  const d = useDraft(saved, async (next) => {
-    const name = next.name.trim();
-    if (!name) throw new Error("Name is required");
-    const endpoint =
+  /* each field's value as the patch takes it; each throws its problem */
+  const fieldsOf = (next: typeof saved) => ({
+    name: () => {
+      const name = next.name.trim();
+      if (!name) throw new Error("Name is required");
+      return name;
+    },
+    endpoint: () =>
       next.providerKind === "ClaudeCliSubscription" &&
       next.endpoint === "claude-cli://subscription"
         ? next.endpoint
-        : requiredHttpUrl("Endpoint", next.endpoint);
-    if (next.apiKey.trim() && next.apiKeyEnvVar.trim())
-      throw new Error("Choose an API key or an environment variable, not both");
-    const maxConcurrent = optionalInteger("Max concurrent", next.maxConcurrent, {
-      min: 1,
-    });
-    const maxQueueDepth = optionalInteger("Max queue depth", next.maxQueueDepth, {
-      min: 0,
-    });
-    const connectTimeoutSecs = optionalInteger(
-      "Connect timeout",
-      next.connectTimeoutSecs,
-      { min: 1 },
-    );
-    const discoveryTimeoutSecs = optionalInteger(
-      "Discovery timeout",
-      next.discoveryTimeoutSecs,
-      { min: 1 },
-    );
-    let auth: InferenceBackend["auth"] | undefined;
-    if (isSubscriptionKind(next.providerKind))
-      auth = {
-        kind: "principal_oauth",
-        ...(backend.accountRef ? { account_ref: backend.accountRef } : {}),
-      };
-    else if (next.apiKey.trim()) auth = { kind: "api_key", key: next.apiKey };
-    else if (next.apiKeyEnvVar.trim())
-      auth = { kind: "environment", variable: next.apiKeyEnvVar.trim() };
-    else if (!backend.apiKeyConfigured || isSubscriptionKind(saved.providerKind))
-      auth = { kind: "unauthenticated" };
-
-    const changes: Partial<Omit<InferenceBackend, "agent_did" | "backend_id">> = {
-      name,
-      provider_kind: next.providerKind as BackendProviderKind,
-      openai_wire_api: (next.openaiWireApi as OpenAiWireApi) || null,
-      endpoint,
-      connect_timeout_secs: connectTimeoutSecs,
-      discovery_timeout_secs: discoveryTimeoutSecs,
-      max_concurrent: maxConcurrent,
-      max_queue_depth: maxQueueDepth,
-      enabled: next.enabled,
-      tags: next.tags.length ? next.tags : null,
-    };
-    if (auth) changes.auth = auth;
-    await changeConfig("patchConfigComponents", {
-      agentDid: deployment.agentDid,
-      patches: [{ collection: "InferenceBackend", id: backend.backendId, changes }],
-    });
+        : requiredHttpUrl("Endpoint", next.endpoint),
+    apiKeyEnvVar: () => {
+      if (next.apiKey.trim() && next.apiKeyEnvVar.trim())
+        throw new Error("Choose an API key or an environment variable, not both");
+    },
+    maxConcurrent: () =>
+      optionalInteger("Max concurrent", next.maxConcurrent, { min: 1 }),
+    maxQueueDepth: () =>
+      optionalInteger("Max queue depth", next.maxQueueDepth, { min: 0 }),
+    connectTimeoutSecs: () =>
+      optionalInteger("Connect timeout seconds", next.connectTimeoutSecs, { min: 1 }),
+    discoveryTimeoutSecs: () =>
+      optionalInteger("Discovery timeout seconds", next.discoveryTimeoutSecs, {
+        min: 1,
+      }),
   });
+  const d = useDraft(
+    saved,
+    async (next) => {
+      const value = fieldsOf(next);
+      const name = value.name();
+      const endpoint = value.endpoint();
+      const maxConcurrent = value.maxConcurrent();
+      const maxQueueDepth = value.maxQueueDepth();
+      const connectTimeoutSecs = value.connectTimeoutSecs();
+      const discoveryTimeoutSecs = value.discoveryTimeoutSecs();
+      let auth: InferenceBackend["auth"] | undefined;
+      if (isSubscriptionKind(next.providerKind))
+        auth = {
+          kind: "principal_oauth",
+          ...(backend.accountRef ? { account_ref: backend.accountRef } : {}),
+        };
+      else if (next.apiKey.trim()) auth = { kind: "api_key", key: next.apiKey };
+      else if (next.apiKeyEnvVar.trim())
+        auth = { kind: "environment", variable: next.apiKeyEnvVar.trim() };
+      else if (!backend.apiKeyConfigured || isSubscriptionKind(saved.providerKind))
+        auth = { kind: "unauthenticated" };
+
+      const changes: Partial<Omit<InferenceBackend, "agent_did" | "backend_id">> = {
+        name,
+        provider_kind: next.providerKind as BackendProviderKind,
+        openai_wire_api: (next.openaiWireApi as OpenAiWireApi) || null,
+        endpoint,
+        connect_timeout_secs: connectTimeoutSecs,
+        discovery_timeout_secs: discoveryTimeoutSecs,
+        max_concurrent: maxConcurrent,
+        max_queue_depth: maxQueueDepth,
+        enabled: next.enabled,
+        tags: next.tags.length ? next.tags : null,
+      };
+      if (auth) changes.auth = auth;
+      await changeConfig("patchConfigComponents", {
+        agentDid: deployment.agentDid,
+        patches: [{ collection: "InferenceBackend", id: backend.backendId, changes }],
+      });
+    },
+    {
+      problems: (next) => {
+        const fields = fieldsOf(next);
+        return Object.fromEntries(
+          (Object.keys(fields) as (keyof typeof fields)[]).map((field) => [
+            field,
+            problemOf(fields[field]),
+          ]),
+        );
+      },
+    },
+  );
   const [probe, setProbe] = useState<string | null>(null);
   const [discoveredModels, setDiscoveredModels] = useState<string[] | null>(null);
   const discoveryRevision = useRef(0);
@@ -282,6 +305,7 @@ export function BackendEditor({
           id={id("name")}
           label="Name"
           value={d.draft.name}
+          error={d.problems.name}
           onChange={(v) => d.set("name", v)}
         />
         <ChoiceRow
@@ -329,6 +353,7 @@ export function BackendEditor({
               label="API key env var"
               description="Read from the environment at start."
               value={d.draft.apiKeyEnvVar}
+              error={d.problems.apiKeyEnvVar}
               onChange={(v) => d.set("apiKeyEnvVar", v)}
               placeholder="OPENAI_API_KEY"
               mono
@@ -399,6 +424,7 @@ export function BackendEditor({
           id={id("endpoint")}
           label="Endpoint"
           value={d.draft.endpoint}
+          error={d.problems.endpoint}
           onChange={(v) => d.set("endpoint", v)}
           placeholder="https://…/v1"
           mono
@@ -425,6 +451,7 @@ export function BackendEditor({
           label="Connect timeout seconds"
           description="Positive whole number, or blank for the runtime default."
           value={d.draft.connectTimeoutSecs}
+          error={d.problems.connectTimeoutSecs}
           placeholder="Runtime default (10)"
           onChange={(v) => d.set("connectTimeoutSecs", v)}
         />
@@ -433,6 +460,7 @@ export function BackendEditor({
           label="Discovery timeout seconds"
           description="Positive whole number, or blank for the runtime default."
           value={d.draft.discoveryTimeoutSecs}
+          error={d.problems.discoveryTimeoutSecs}
           placeholder="Runtime default (10)"
           onChange={(v) => d.set("discoveryTimeoutSecs", v)}
         />
@@ -441,6 +469,7 @@ export function BackendEditor({
           label="Max concurrent"
           description="Whole number of 1 or more."
           value={d.draft.maxConcurrent}
+          error={d.problems.maxConcurrent}
           onChange={(v) => d.set("maxConcurrent", v)}
         />
         <NumberRow
@@ -448,6 +477,7 @@ export function BackendEditor({
           label="Max queue depth"
           description="Whole number of 0 or more; 0 disables queueing."
           value={d.draft.maxQueueDepth}
+          error={d.problems.maxQueueDepth}
           onChange={(v) => d.set("maxQueueDepth", v)}
         />
         <SwitchRow
@@ -463,7 +493,18 @@ export function BackendEditor({
           onChange={(v) => d.set("tags", v)}
         />
       </Group>
-      <DraftActions draft={d} />
+      <DraftActions
+        draft={d}
+        fields={{
+          name: id("name"),
+          apiKeyEnvVar: id("env"),
+          endpoint: id("endpoint"),
+          connectTimeoutSecs: id("connect-timeout"),
+          discoveryTimeoutSecs: id("discovery-timeout"),
+          maxConcurrent: id("conc"),
+          maxQueueDepth: id("queue"),
+        }}
+      />
       {!embedded && removable && (
         <DeleteButton
           label={removable.label}

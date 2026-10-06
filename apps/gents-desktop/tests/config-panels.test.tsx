@@ -1715,9 +1715,13 @@ describe("configuration panels", () => {
     const user = await replace("Endpoint", "file:///tmp/model");
     await replace("Max concurrent", "0");
     await user.click(screen.getByRole("button", { name: "Save" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent(
+    /* each problem at its own field, and Save at the first of them */
+    const alerts = screen.getAllByRole("alert").map((alert) => alert.textContent);
+    expect(alerts).toEqual([
       "Endpoint must use http or https",
-    );
+      "Max concurrent must be 1 or more",
+    ]);
+    expect(screen.getByLabelText("Endpoint")).toHaveFocus();
     expect(api.patchConfigComponents).not.toHaveBeenCalled();
   });
 
