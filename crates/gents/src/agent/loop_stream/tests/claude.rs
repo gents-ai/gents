@@ -124,15 +124,23 @@ async fn signed_claude_tool_round_trip_with_scope(
 
     // Canonical admission works terminal too: the completed row still resolves
     // its immutable accepted binding.
-    let accepted = crate::tool_call_lifecycle::ToolCallLifecycle::load_accepted_for_dispatch(
-        &node,
-        &tool_doc_id,
-        "did:test:test",
-        &session_id,
-        None,
+    let held = crate::config_client::ConfigApplyTxn::begin_local(&node, None)
+        .await
+        .unwrap();
+    let accepted = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        crate::tool_call_lifecycle::ToolCallLifecycle::load_accepted_for_dispatch(
+            &node,
+            &tool_doc_id,
+            "did:test:test",
+            &session_id,
+            None,
+        ),
     )
     .await
+    .expect("immutable admission lookup must not wait for the mutation gate")
     .expect("canonical admission binding for the completed echo call");
+    held.discard().await.unwrap();
     assert_eq!(accepted.tool_name, "echo");
     assert_eq!(
         accepted.request_doc_id, request_doc_id,

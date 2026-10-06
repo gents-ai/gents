@@ -57,6 +57,48 @@ async fn bind_default_behavior_backend(
 }
 
 #[tokio::test]
+async fn existing_document_runtime_view_does_not_wait_for_mutation_gate() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let owner = "did:key:runtime-view-reader";
+    let principal = crate::document_config::ensure_agent_principal(node.as_ref(), owner)
+        .await
+        .unwrap();
+    let response = crate::config_client::ConfigAccess::write_local_response(
+        node.as_ref(),
+        "test.runtime_view_skill",
+        &format!(
+            r#"mutation {{ create_Skill(input: {{
+            skill_id: "runtime-skill", agent_did: "{}",
+            name: "Runtime skill", instructions: "Loaded through the snapshot.", enabled: true
+        }}) {{ _docID }} }}"#,
+            escape_graphql_string(owner)
+        ),
+    )
+    .await
+    .unwrap();
+    let skill_doc_id = created_skill_doc_id(response.data.as_ref()).unwrap();
+    let held = crate::config_client::ConfigApplyTxn::begin_local(node.as_ref(), None)
+        .await
+        .unwrap();
+    let view = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        load_document_runtime_view(node.as_ref(), owner),
+    )
+    .await
+    .expect("runtime configuration reads must not wait for the mutation gate")
+    .expect("existing principal runtime view");
+    assert_eq!(view.principal.value, principal);
+    assert_eq!(view.skills["runtime-skill"].doc_id, skill_doc_id);
+    assert_eq!(
+        view.skills["runtime-skill"].value.name.as_deref(),
+        Some("Runtime skill")
+    );
+    held.discard().await.unwrap();
+    node.shutdown().await;
+}
+
+#[tokio::test]
 async fn load_document_runtime_view_includes_referenced_documents() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
