@@ -18,11 +18,90 @@ import {
   requiredGraphqlName,
   str,
   useDraft,
+  problemOf,
+  type Problems,
 } from "./draft";
 import { DeleteButton, ListDetail } from "./ListDetail";
 import { Group } from "./rows";
 import { RowMenu } from "./RowMenu";
 import { useApp } from "@/app/AppContext";
+
+type EventSourceDraft = {
+  displayName: string;
+  sourceCollection: string;
+  eventKind: string;
+  filter: string;
+  correlationField: string;
+  expectedCount: string;
+  expectedCountField: string;
+  timeoutSecs: string;
+  minCount: string;
+  workspaceAuthority: string;
+  tags: string[];
+};
+
+/* each field's value as the document takes it; each throws its problem */
+function eventSourceFields(next: EventSourceDraft) {
+  return {
+    sourceCollection: () =>
+      requiredGraphqlCollection("Source collection", next.sourceCollection),
+    eventKind: () => {
+      const kind = next.eventKind.trim() || "created";
+      if (kind !== "created")
+        throw new Error("Event kind currently supports only created");
+      return kind;
+    },
+    filter: () => optionalGraphqlFilter("Filter", next.filter),
+    correlationField: () =>
+      next.correlationField.trim()
+        ? requiredGraphqlName("Correlation field", next.correlationField)
+        : null,
+    expectedCountField: () =>
+      next.expectedCountField.trim()
+        ? requiredGraphqlName("Expected count source field", next.expectedCountField)
+        : null,
+    expectedCount: () =>
+      optionalInteger("Expected count", next.expectedCount, { min: 1, max: 256 }),
+    timeoutSecs: () => optionalInteger("Timeout seconds", next.timeoutSecs, { min: 1 }),
+    minCount: () =>
+      optionalInteger("Minimum count", next.minCount, { min: 1, max: 256 }),
+  };
+}
+
+/**
+ * What is wrong with an event source draft, at its fields: each field's
+ * own parse, then the grouping rules, each at the field that resolves it.
+ */
+export function eventSourceProblems(
+  next: EventSourceDraft,
+): Problems<EventSourceDraft> {
+  const fields = eventSourceFields(next);
+  const out: Problems<EventSourceDraft> = {};
+  for (const field of Object.keys(fields) as (keyof typeof fields)[])
+    out[field] = problemOf(fields[field]);
+  /* the rules read only fields that parsed */
+  const value = <K extends keyof typeof fields>(field: K) =>
+    out[field] ? undefined : (fields[field]() as ReturnType<(typeof fields)[K]>);
+  const expectedCount = value("expectedCount");
+  const expectedCountField = value("expectedCountField");
+  const timeoutSecs = value("timeoutSecs");
+  const minCount = value("minCount");
+  if (expectedCount != null && expectedCountField)
+    out.expectedCountField ??=
+      "Choose a fixed expected count or a source field, not both";
+  const grouped =
+    expectedCount != null ||
+    Boolean(expectedCountField) ||
+    timeoutSecs != null ||
+    minCount != null;
+  if (grouped && !next.correlationField.trim())
+    out.correlationField ??= "Grouped events require a correlation field";
+  if (grouped && expectedCount == null && !expectedCountField && timeoutSecs == null)
+    out.expectedCount ??= "Grouped events require an expected count or timeout";
+  if (expectedCount != null && minCount != null && minCount > expectedCount)
+    out.minCount ??= "Minimum count cannot exceed expected count";
+  return out;
+}
 
 export function EventSourceEditor({
   deployment,
@@ -59,66 +138,48 @@ export function EventSourceEditor({
     workspaceAuthority: source.workspace_authority ?? "",
     tags: source.tags ?? [],
   };
-  const d = useDraft(saved, async (next) => {
-    const sourceCollection = requiredGraphqlCollection(
-      "Source collection",
-      next.sourceCollection,
-    );
-    const eventKind = next.eventKind.trim() || "created";
-    if (eventKind !== "created")
-      throw new Error("Event kind currently supports only created");
-    const filter = optionalGraphqlFilter("Filter", next.filter);
-    const correlationField = next.correlationField.trim()
-      ? requiredGraphqlName("Correlation field", next.correlationField)
-      : null;
-    const expectedCountField = next.expectedCountField.trim()
-      ? requiredGraphqlName("Expected count source field", next.expectedCountField)
-      : null;
-    const expectedCount = optionalInteger("Expected count", next.expectedCount, {
-      min: 1,
-      max: 256,
-    });
-    const timeoutSecs = optionalInteger("Group timeout", next.timeoutSecs, { min: 1 });
-    const minCount = optionalInteger("Minimum count", next.minCount, {
-      min: 1,
-      max: 256,
-    });
-    if (expectedCount != null && expectedCountField)
-      throw new Error("Choose a fixed expected count or a source field, not both");
-    const grouped =
-      expectedCount != null ||
-      Boolean(expectedCountField) ||
-      timeoutSecs != null ||
-      minCount != null;
-    if (grouped && !correlationField)
-      throw new Error("Grouped events require a correlation field");
-    if (grouped && expectedCount == null && !expectedCountField && timeoutSecs == null)
-      throw new Error("Grouped events require an expected count or timeout");
-    if (expectedCount != null && minCount != null && minCount > expectedCount)
-      throw new Error("Minimum count cannot exceed expected count");
-    await changeConfig("saveEventSourceConfig", {
-      document: {
-        ...source,
-        display_name: next.displayName.trim() || null,
-        source_collection: sourceCollection,
-        event_kind: eventKind,
-        filter,
-        correlation_field: correlationField,
-        group: grouped
-          ? {
-              expected_count:
-                expectedCount ??
-                (expectedCountField ? { source_field: expectedCountField } : null),
-              timeout_secs: timeoutSecs,
-              min_count: minCount,
-            }
-          : null,
-        workspace_authority: (next.workspaceAuthority || null) as
-          "readOnly" | "readWrite" | "integrate" | null,
-        tags: next.tags.length ? next.tags : null,
-      },
-    });
-  });
+  const d = useDraft(
+    saved,
+    async (next) => {
+      const value = eventSourceFields(next);
+      const sourceCollection = value.sourceCollection();
+      const eventKind = value.eventKind();
+      const filter = value.filter();
+      const correlationField = value.correlationField();
+      const expectedCountField = value.expectedCountField();
+      const expectedCount = value.expectedCount();
+      const timeoutSecs = value.timeoutSecs();
+      const minCount = value.minCount();
+      const grouped =
+        expectedCount != null ||
+        Boolean(expectedCountField) ||
+        timeoutSecs != null ||
+        minCount != null;
+      await changeConfig("saveEventSourceConfig", {
+        document: {
+          ...source,
+          display_name: next.displayName.trim() || null,
+          source_collection: sourceCollection,
+          event_kind: eventKind,
+          filter,
+          correlation_field: correlationField,
+          group: grouped
+            ? {
+                expected_count:
+                  expectedCount ??
+                  (expectedCountField ? { source_field: expectedCountField } : null),
+                timeout_secs: timeoutSecs,
+                min_count: minCount,
+              }
+            : null,
+          workspace_authority: (next.workspaceAuthority || null) as
+            "readOnly" | "readWrite" | "integrate" | null,
+          tags: next.tags.length ? next.tags : null,
+        },
+      });
+    },
+    { problems: eventSourceProblems },
+  );
   const id = (f: string) => `${source.event_source_id}-${f}`;
   return (
     <>
@@ -138,18 +199,21 @@ export function EventSourceEditor({
           id={id("collection")}
           label="Source collection"
           value={d.draft.sourceCollection}
+          error={d.problems.sourceCollection}
           onChange={(v) => d.set("sourceCollection", v)}
         />
         <TextRow
           id={id("kind")}
           label="Event kind"
           value={d.draft.eventKind}
+          error={d.problems.eventKind}
           onChange={(v) => d.set("eventKind", v)}
         />
         <TextRow
           id={id("filter")}
           label="Filter"
           value={d.draft.filter}
+          error={d.problems.filter}
           onChange={(v) => d.set("filter", v)}
         />
         <TextRow
@@ -157,6 +221,7 @@ export function EventSourceEditor({
           label="Correlation field"
           description="Required when events are grouped."
           value={d.draft.correlationField}
+          error={d.problems.correlationField}
           onChange={(v) => d.set("correlationField", v)}
         />
         <ChoiceRow
@@ -177,24 +242,28 @@ export function EventSourceEditor({
           id={id("expected-count")}
           label="Expected count"
           value={d.draft.expectedCount}
+          error={d.problems.expectedCount}
           onChange={(v) => d.set("expectedCount", v)}
         />
         <TextRow
           id={id("expected-field")}
           label="Expected count source field"
           value={d.draft.expectedCountField}
+          error={d.problems.expectedCountField}
           onChange={(v) => d.set("expectedCountField", v)}
         />
         <NumberRow
           id={id("timeout")}
           label="Timeout seconds"
           value={d.draft.timeoutSecs}
+          error={d.problems.timeoutSecs}
           onChange={(v) => d.set("timeoutSecs", v)}
         />
         <NumberRow
           id={id("min-count")}
           label="Minimum count"
           value={d.draft.minCount}
+          error={d.problems.minCount}
           onChange={(v) => d.set("minCount", v)}
         />
       </Group>
@@ -206,7 +275,19 @@ export function EventSourceEditor({
           onChange={(v) => d.set("tags", v)}
         />
       </Group>
-      <DraftActions draft={d} />
+      <DraftActions
+        draft={d}
+        fields={{
+          sourceCollection: id("collection"),
+          eventKind: id("kind"),
+          filter: id("filter"),
+          correlationField: id("correlation"),
+          expectedCount: id("expected-count"),
+          expectedCountField: id("expected-field"),
+          timeoutSecs: id("timeout"),
+          minCount: id("min-count"),
+        }}
+      />
       {!embedded && (
         <DeleteButton
           label={source.display_name ?? source.event_source_id}
