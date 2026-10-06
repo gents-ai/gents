@@ -12,6 +12,14 @@ use super::acp::{internal_method, AcpRequest, AcpService};
 use super::server::{AcpDelegate, AcpOutbound, Registration};
 use super::AcpDelegateFactoryInputs;
 
+/// Stock Grok sends its built-in agents' `agent_type` (e.g. `grok-build`,
+/// `grok-build-plan`) as `_meta.agentProfile` even without `--agent`; those
+/// names are Grok's own, not Gents behavior ids, so they resolve to the
+/// default and cannot select a principal behavior of the same name.
+pub(super) fn grok_built_in_agent_profile(name: &str) -> bool {
+    name == "grok-build" || name.starts_with("grok-build-")
+}
+
 #[derive(Default)]
 struct Binding {
     selected: Option<(String, Arc<AcpService>)>,
@@ -54,7 +62,8 @@ impl BehaviorConnection {
             None
         };
         let profile = profile.map(|name| match name {
-            "default" | "grok-build" => self.inputs.behavior_id.as_str(),
+            "default" => self.inputs.behavior_id.as_str(),
+            built_in if grok_built_in_agent_profile(built_in) => self.inputs.behavior_id.as_str(),
             name => name,
         });
         let mut binding = self.binding.lock().await;
