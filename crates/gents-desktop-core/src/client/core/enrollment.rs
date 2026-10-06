@@ -879,7 +879,7 @@ pub(super) async fn reconcile_status_enrollment_approvals(
         let address = match authentication {
             Ok(address) => address,
             Err(error) => {
-                tracing::warn!(peer_id, request_id = %approval.request_digest, error = %error, "enrollment peer is temporarily unavailable");
+                tracing::warn!(peer_id, request_id = %approval.request_id, error = %error, "enrollment peer is temporarily unavailable");
                 demote_enrollment_peer(sync_state, &peer_id).await;
                 continue;
             }
@@ -935,12 +935,17 @@ async fn authenticate_enrolled_server(
     approval: &ApprovedStatusEnrollment,
     known: Option<&super::super::peer_directory::PeerRecord>,
 ) -> Result<String> {
-    timeout(P2P_OPERATION_TIMEOUT, async {
+    let started = std::time::Instant::now();
+    let mut stage = "discovering enrolled server address";
+    let result = timeout(P2P_OPERATION_TIMEOUT, async {
         let address = enrolled_server_address(approval, known).await?;
         let peer = TransportPeerId::new(approval.server_peer.clone()).map_err(map_p2p_error)?;
+        stage = "checking enrolled server connection";
         if !super::bootstrap::is_connected_peer(p2p, peer.as_str()).await? {
+            stage = "connecting to enrolled server";
             p2p.connect_peer(&address).await.map_err(map_p2p_error)?;
         }
+        stage = "resolving enrolled server identity";
         let resolved = p2p
             .resolve_peer_identity(&peer)
             .await
@@ -949,8 +954,13 @@ async fn authenticate_enrolled_server(
         validate_authenticated_server_did(&approval.admin_did, &resolved.to_string())?;
         Ok(address)
     })
-    .await
-    .context("timed out re-authenticating enrolled server")?
+    .await;
+    result.with_context(|| {
+        format!(
+            "timed out re-authenticating enrolled server while {stage} after {} ms",
+            started.elapsed().as_millis()
+        )
+    })?
 }
 
 /// A co-hosted runtime can change its socket address while retaining its
