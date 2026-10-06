@@ -33,6 +33,13 @@ source consistency checks, not a separate runtime compatibility version.
 - iOS builds again: the DB Explorer window keeps its desktop-only title, size and
   focus calls off mobile targets, and CI checks the iOS simulator build on main.
 
+- Pack scenarios can allow folders for plugins (#2303). `experiment.json`
+  takes `allowed_folders: [{"path", "access"}]`. Each path is relative to
+  `init.tool_root`, stays inside it, and is created when missing. The folders
+  are written to the run's home the way `gents plugin dirs add` writes them,
+  before the server starts. A graph stage, which binds with no working folder,
+  can then write where the scenario allows `read_write`, such as a data_tables
+  export or a charts `chart-save` node.
 - One plugin can read and write (#2301). `bind_dir.access` is now the most a
   plugin may use, and `bind_dir.write_fields` names the inputs that make a call
   write. A call that sets none of them asks only for `read`: it binds under a
