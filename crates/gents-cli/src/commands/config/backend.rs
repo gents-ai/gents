@@ -116,6 +116,15 @@ pub(super) async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> 
             anyhow::bail!("{error:#}\n{guidance}");
         }
         Err(error)
+            if target.provider_kind == BackendProviderKind::XaiGrokOAuth
+                && discovery_error_is_client_version_gate(&error) =>
+        {
+            anyhow::bail!(
+                "{error:#}\n{}",
+                gents::xai_grok_oauth::grok_client_version_gate_guidance()
+            );
+        }
+        Err(error)
             if target.provider_kind == BackendProviderKind::ClaudeCliSubscription
                 && discovery_error_is_auth(&error) =>
         {
@@ -189,6 +198,17 @@ fn discovery_error_is_auth(error: &anyhow::Error) -> bool {
         cause
             .downcast_ref::<gents::backend_provider::ModelDiscoveryHttpError>()
             .is_some_and(|http| http.is_auth())
+    })
+}
+
+/// Whether a model-discovery error is the provider's client-version gate (HTTP 426), so Grok
+/// discovery can append the advertised-version guidance the bare error omits. Inspects the typed
+/// status carried by [`ModelDiscoveryHttpError`] rather than scraping the rendered message.
+fn discovery_error_is_client_version_gate(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<gents::backend_provider::ModelDiscoveryHttpError>()
+            .is_some_and(|http| http.is_client_version_gate())
     })
 }
 

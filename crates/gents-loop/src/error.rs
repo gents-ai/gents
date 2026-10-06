@@ -130,6 +130,13 @@ pub enum HookError {
     SessionNotInitialized,
 }
 
+/// HTTP statuses an identical retry cannot fix: request-shape and auth
+/// failures, plus 426 Upgrade Required, where the provider demands a newer
+/// client (Grok's subscription proxy gates on `x-grok-client-version`) and
+/// resending the same request re-fails. Rate limits and usage caps are
+/// classified earlier, above this list.
+const PERMANENT_HTTP_STATUSES: &[u16] = &[400, 401, 403, 404, 422, 426];
+
 pub fn classify_completion_error(error: &rig::agent::StreamingError) -> InferenceError {
     let msg = strip_provider_limit_marker(&error.to_string()).to_string();
 
@@ -158,12 +165,7 @@ pub fn classify_completion_error(error: &rig::agent::StreamingError) -> Inferenc
             let reason = strip_provider_limit_marker(&reason).to_string();
             match completion_err {
                 rig::completion::CompletionError::HttpError(_) => {
-                    if error_message_has_status(&reason, 400)
-                        || error_message_has_status(&reason, 401)
-                        || error_message_has_status(&reason, 403)
-                        || error_message_has_status(&reason, 404)
-                        || error_message_has_status(&reason, 422)
-                    {
+                    if message_has_any_status(&reason, PERMANENT_HTTP_STATUSES) {
                         InferenceError::PermanentFailure { reason }
                     } else {
                         InferenceError::TransientFailure { reason }
@@ -173,10 +175,8 @@ pub fn classify_completion_error(error: &rig::agent::StreamingError) -> Inferenc
                     let provider_msg_lower = provider_msg.to_ascii_lowercase();
                     if provider_message_is_tool_call_json_parse_failure(provider_msg) {
                         InferenceError::TransientFailure { reason }
-                    } else if provider_message_has_any_status(
-                        provider_msg,
-                        &[400, 401, 403, 404, 422],
-                    ) || provider_msg_lower.contains("invalid_api_key")
+                    } else if message_has_any_status(provider_msg, PERMANENT_HTTP_STATUSES)
+                        || provider_msg_lower.contains("invalid_api_key")
                         || provider_msg_lower.contains("invalid api key")
                         || provider_msg_lower.contains("authentication")
                         || provider_msg_lower.contains("unauthorized")
@@ -214,7 +214,7 @@ fn error_message_has_status(message: &str, status: u16) -> bool {
         || message.contains(&format!("HTTP status {status}"))
 }
 
-fn provider_message_has_any_status(message: &str, statuses: &[u16]) -> bool {
+fn message_has_any_status(message: &str, statuses: &[u16]) -> bool {
     statuses
         .iter()
         .any(|status| error_message_has_status(message, *status))
