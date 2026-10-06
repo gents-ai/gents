@@ -1449,8 +1449,8 @@ fn provider_reason(
         .find_map(provider_reason_from_failure)
 }
 
-/// A trigger in the trial home whose last fire errored fails a stage that
-/// otherwise completed.
+/// A trigger in the trial home whose last fire was a failure — errored, or
+/// never acknowledged — fails a stage that otherwise completed.
 ///
 /// The pack under evaluation owns its triggers and the task templates they
 /// render, so the subject can cause the error and it counts against it as

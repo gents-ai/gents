@@ -272,22 +272,11 @@ async fn transient_fire_failure_retries_on_a_bounded_backoff() {
 async fn an_unacknowledged_fire_records_its_reason_on_the_trigger() {
     let (mut delivery, intent) = first_delivery(false).await;
     let before = delivery.cursor().await;
-    // Dropping the intent drops its `on_result` sender, which is exactly the
-    // production path: nothing acked the fire before the channel closed.
+    // The guard the intent carries owns the write. Dropping the intent
+    // unacknowledged is the state a driver that dies before any result
+    // leaves behind, so the reason is recorded without the source ever
+    // being polled again.
     drop(intent);
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
-    let mut redrives = 0;
-    while let Ok(Some(retried)) =
-        tokio::time::timeout_at(deadline, delivery.source.next_fire()).await
-    {
-        redrives += 1;
-        drop(retried);
-    }
-    assert!(
-        (1..=8).contains(&redrives),
-        "the unacknowledged arrival was re-driven {redrives} times"
-    );
-
     let trigger = delivery
         .trigger_status(crate::trigger_engine::UNACKNOWLEDGED_STATUS)
         .await;
@@ -303,11 +292,134 @@ async fn an_unacknowledged_fire_records_its_reason_on_the_trigger() {
         Some(delivery.doc_id.as_str()),
         "{trigger}"
     );
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    let mut redrives = 0;
+    while let Ok(Some(retried)) =
+        tokio::time::timeout_at(deadline, delivery.source.next_fire()).await
+    {
+        redrives += 1;
+        drop(retried);
+    }
+    assert!(
+        (1..=8).contains(&redrives),
+        "the unacknowledged arrival was re-driven {redrives} times"
+    );
     assert_eq!(delivery.cursor().await, before);
     assert_eq!(
         delivery.pending_documents().await,
         vec![delivery.doc_id.clone()]
     );
+}
+
+/// A driver that dies between emitting the intent and seeing it answered —
+/// here a panic inside dispatch — is the loss mode no live owner can report;
+/// the guard dropped during the unwind still records the fire's reason.
+#[tokio::test]
+async fn a_driver_that_dies_mid_dispatch_records_the_fire_as_unacknowledged() {
+    let (delivery, intent) = first_delivery(false).await;
+    let engine = TriggerEngine::new(
+        delivery.snapshot_tx.subscribe(),
+        Arc::new(PanicMaterializer),
+    );
+    let previous_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let driver = tokio::spawn(async move {
+        engine.dispatch(intent).await;
+    });
+    let joined = driver.await;
+    std::panic::set_hook(previous_hook);
+    joined.expect_err("the materializer must have killed the driver");
+    let trigger = delivery
+        .trigger_status(crate::trigger_engine::UNACKNOWLEDGED_STATUS)
+        .await;
+    assert_eq!(
+        trigger["last_fired_source_doc_id"].as_str(),
+        Some(delivery.doc_id.as_str()),
+        "{trigger}"
+    );
+}
+
+/// A fire that is acknowledged disarms the guard: its `on_result` writer is
+/// the only `Trigger` write the fire produces.
+#[tokio::test]
+async fn an_acknowledged_fire_records_no_unacknowledged_status() {
+    let (delivery, intent) = first_delivery(false).await;
+    (intent.on_result)(FireResult::Errored {
+        error: "acknowledged transient failure".into(),
+    });
+    let trigger = delivery.trigger_status("error").await;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    let settled = observed_trigger(delivery.node.as_ref(), "ping-trigger").await;
+    assert_ne!(
+        settled["last_status"].as_str(),
+        Some(crate::trigger_engine::UNACKNOWLEDGED_STATUS),
+        "{settled}"
+    );
+    assert!(
+        trigger["last_error"]
+            .as_str()
+            .is_some_and(|error| error.contains("acknowledged transient failure")),
+        "{trigger}"
+    );
+}
+
+/// Kills the driver inside dispatch, the one production loss mode the guard
+/// exists for.
+struct PanicMaterializer;
+
+impl MaterializerHandle for PanicMaterializer {
+    fn materialize(
+        &self,
+        _task: &crate::runtime_snapshot::ResolvedTask,
+        _trigger_id: Option<&str>,
+        _trigger_kind: TriggerKind,
+        _trigger_doc_id: Option<&str>,
+        _source_doc_id: Option<&str>,
+        _correlation: Option<&str>,
+        _trigger_context: Option<&str>,
+        _rendered_prompt: &str,
+        _rendered_goal_objective: Option<&str>,
+        _durable_fire_key: &str,
+        _delivery: Option<&crate::trigger_engine::durable::PreparedFire>,
+        _prepared_ids: Option<(&str, &str)>,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<String>> + Send + '_>> {
+        Box::pin(async { panic!("injected materializer panic") })
+    }
+
+    fn has_active_runtime_request_for_trigger(
+        &self,
+        _agent_did: &str,
+        _trigger_id: &str,
+        _excluded_request_id: Option<&str>,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<bool>> + Send + '_>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    fn supersede_active_runtime_requests_for_trigger(
+        &self,
+        _agent_did: &str,
+        _trigger_id: &str,
+        _excluded_request_id: Option<&str>,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<usize>> + Send + '_>> {
+        Box::pin(async { Ok(0) })
+    }
+
+    fn recover_goal_task_fire(
+        &self,
+        _task: &crate::runtime_snapshot::ResolvedTask,
+        _durable_fire_key: &str,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<Option<String>>> + Send + '_>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    fn has_materialized_group_request(
+        &self,
+        _agent_did: &str,
+        _trigger_id: &str,
+        _durable_fire_key: &str,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<bool>> + Send + '_>> {
+        Box::pin(async { Ok(false) })
+    }
 }
 
 /// A refusal decided by the source document is retried when that document is
