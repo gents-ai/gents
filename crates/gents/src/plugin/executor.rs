@@ -53,10 +53,15 @@ impl BindContext<'_> {
     }
 }
 
-/// The refusal sentence for a path no folder covers and nobody approved.
+/// The refusal sentence for a path no folder covers for this call's `access`
+/// and nobody approved. It names the next call: the folder grant that admits
+/// it, and for a writing call under a read-only grant, the reading call that
+/// already would.
 fn not_allowed(
     resolved: &allowed::Resolved,
     access: crate::pack::BindAccess,
+    granted: Option<crate::pack::BindAccess>,
+    write_field: Option<&str>,
     context: &BindContext<'_>,
 ) -> String {
     let flag = match access {
@@ -68,12 +73,25 @@ fn not_allowed(
     } else {
         ""
     };
-    format!(
-        "{} is outside the folders this call may {} ({asked}allow it with `gents plugin dirs add {}{flag}`)",
-        resolved.target.display(),
-        access.as_str().replace('_', " and "),
+    let allow = format!(
+        "allow it with `gents plugin dirs add {}{flag}`",
         resolved.folder().display()
-    )
+    );
+    match (granted, write_field) {
+        (Some(crate::pack::BindAccess::Read), Some(field)) => format!(
+            "{} is allowed read-only and this call writes because it sets {field:?} ({asked}{allow}, or call again without {field:?} to only read)",
+            resolved.target.display(),
+        ),
+        (Some(crate::pack::BindAccess::Read), None) => format!(
+            "{} is allowed read-only and this plugin writes on every call ({asked}{allow})",
+            resolved.target.display(),
+        ),
+        _ => format!(
+            "{} is outside the folders this call may {} ({asked}{allow})",
+            resolved.target.display(),
+            access.as_str().replace('_', " and "),
+        ),
+    }
 }
 
 /// One completed call: which artifact ran and what it returned.
@@ -178,8 +196,8 @@ impl PluginExecutor {
     /// Binds the path in `input` under `record`'s declared `bind_dir` field
     /// for one call: exactly the file or folder it names, when `context`'s
     /// working folder or the operator's allowed folders cover it with the
-    /// access the plugin declares, or when the operator approves it for this
-    /// call. `None` when the plugin declares no binding or the input does
+    /// access this call asks for (Lean `ToolPolicy.pluginCallAdmitted`), or
+    /// when the operator approves it for this call. `None` when the plugin declares no binding or the input does
     /// not carry the field (the plugin then runs sealed, e.g. on inline
     /// data). The one function a graph node and a model tool both call; the
     /// error is one sentence for the caller.
@@ -210,14 +228,15 @@ impl PluginExecutor {
             .map_err(refuse)?;
         let scope = allowed::Scope::load(home, context.workdir, user_home.as_deref())
             .map_err(|error| refuse(format!("{error:#}")))?;
+        let access = binding.call_access(input);
         let granted = scope.granted(&resolved.target);
-        let covered = granted.is_some_and(|granted| granted >= binding.access);
+        let covered = granted.is_some_and(|granted| granted >= access);
         if !covered {
             let allowed = context.interactive && {
                 let request = approval::Request::new(
                     &plugin,
                     &resolved,
-                    binding.access,
+                    access,
                     context.session_id.map(str::to_owned),
                 );
                 approval::ask(home, &request, approval::WAIT)
@@ -225,14 +244,20 @@ impl PluginExecutor {
                     .map_err(|error| refuse(format!("{error:#}")))?
             };
             if !allowed {
-                return Err(refuse(not_allowed(&resolved, binding.access, context)));
+                return Err(refuse(not_allowed(
+                    &resolved,
+                    access,
+                    granted,
+                    binding.write_field_set(input),
+                    context,
+                )));
             }
         }
         let folder_allowed = allowed::Scope::load(home, context.workdir, user_home.as_deref())
             .map_err(|error| refuse(format!("{error:#}")))?
             .granted(resolved.folder())
             .is_some();
-        allowed::bind(&resolved, binding.access, folder_allowed)
+        allowed::bind(&resolved, access, folder_allowed)
             .map(Some)
             .map_err(refuse)
     }

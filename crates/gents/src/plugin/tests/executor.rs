@@ -26,6 +26,7 @@ pub(crate) fn installed_plugin(
         original_field: None,
         description: "a directory".into(),
         access,
+        write_fields: Vec::new(),
     });
     let home = tempfile::tempdir().unwrap();
     let hex = format!("{:x}", <sha2::Sha256 as sha2::Digest>::digest(&bytes));
@@ -390,6 +391,61 @@ mod bound {
         assert!(!reader.join("out.json").exists());
 
         tool.call(args(&writer)).await.unwrap();
+        assert_eq!(
+            std::fs::read_to_string(writer.join("out.json")).unwrap(),
+            "{}"
+        );
+    }
+
+    /// One `read_write` plugin with a write field serves readers and writers
+    /// (#2301): a call that does not set `output` asks for `read`, so it binds
+    /// under a read-only folder and runs read-only even where writing is
+    /// allowed; a call that sets it asks for `read_write`.
+    #[tokio::test]
+    async fn one_plugin_writes_only_on_a_call_that_sets_its_write_field() {
+        let mut fx = fixture(&create_file_wat("out.json"), BindAccess::ReadWrite);
+        fx.record
+            .declaration
+            .bind_dir
+            .as_mut()
+            .unwrap()
+            .write_fields = vec!["output".into()];
+        store::write_record(fx.home.path(), &fx.record).unwrap();
+        let tool = tool_for(&fx.home, &fx.record);
+        let reader = fx.root.join("docs");
+        let writer = fx.root.join("work");
+        allowed::add(fx.home.path(), &reader, BindAccess::Read).unwrap();
+        allowed::add(fx.home.path(), &writer, BindAccess::ReadWrite).unwrap();
+        let call = |path: &std::path::Path, output: bool| {
+            let mut input = serde_json::json!({ "path": path });
+            if output {
+                input["output"] = serde_json::json!("out.json");
+            }
+            tool.call(input.to_string())
+        };
+
+        let read = format!("{:#}", call(&reader, false).await.unwrap_err());
+        assert!(
+            read.contains("did not return a result") && !read.contains("dirs add"),
+            "a reading call binds under a read-only folder and its sandbox refuses the write: {read}"
+        );
+        let escalation = format!("{:#}", call(&reader, true).await.unwrap_err());
+        for expected in [
+            "allowed read-only",
+            r#"sets "output""#,
+            "--access read_write",
+            r#"call again without "output""#,
+        ] {
+            assert!(escalation.contains(expected), "{escalation}");
+        }
+        assert!(!reader.join("out.json").exists());
+
+        call(&writer, false).await.unwrap_err();
+        assert!(
+            !writer.join("out.json").exists(),
+            "a reading call runs read-only even where writing is allowed"
+        );
+        call(&writer, true).await.unwrap();
         assert_eq!(
             std::fs::read_to_string(writer.join("out.json")).unwrap(),
             "{}"

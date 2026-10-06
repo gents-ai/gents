@@ -424,6 +424,7 @@ mod tests {
                 original_field: Some("origin".into()),
                 description: "a directory".into(),
                 access: Default::default(),
+                write_fields: Vec::new(),
             });
             crate::plugin::store::write_record(home.path(), &record).unwrap();
         }

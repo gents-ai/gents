@@ -1134,6 +1134,7 @@ fn bound_guest_can_read_inside_but_cannot_write_or_follow_a_symlink_out() {
             input_field: "root".into(),
             description: "test root".into(),
             access: crate::pack::BindAccess::Read,
+            write_fields: Vec::new(),
             original_field: None,
         });
         let runner = PluginRunner::compile(&afb, &plugin).unwrap();
@@ -1144,4 +1145,70 @@ fn bound_guest_can_read_inside_but_cannot_write_or_follow_a_symlink_out() {
         assert_eq!(result.output, serde_json::json!(denied), "{path}");
     }
     assert!(!inside.join("created.txt").exists());
+}
+
+/// Lean `ToolPolicy.pluginBindingValid`, `pluginCallAccess` and
+/// `pluginCallAdmitted`, driven through the manifest validator and the
+/// executor's headless bind admission over a real allowed-folders file.
+#[tokio::test]
+async fn generated_plugin_call_access_cases_drive_bind_admission() {
+    use crate::pack::BindAccess;
+    let cases = &crate::lean_vocab_test::lean_contract_snapshot().plugin_resource_cases;
+    let access = |value: &serde_json::Value| -> Option<BindAccess> {
+        value.as_str().map(|text| text.parse().unwrap())
+    };
+    let cases = cases["call_access"].as_array().unwrap();
+    assert_eq!(cases.len(), 24);
+    for case in cases {
+        let declared = access(&case["declared"]).unwrap();
+        let write_fields = case["write_fields"].as_bool().unwrap();
+        let sets = case["sets_write_field"].as_bool().unwrap();
+        let (home, mut record) = executor::installed_plugin(ECHO_WAT, Some(declared));
+        let binding = record.declaration.bind_dir.as_mut().unwrap();
+        if write_fields {
+            binding.write_fields = vec!["output".into()];
+        }
+        record.declaration.input_schema = serde_json::json!({
+            "type": "object",
+            "properties": {"path": {"type": "string"}, "output": {"type": "string"}},
+        });
+        assert_eq!(
+            record.declaration.validate().is_ok(),
+            case["valid"].as_bool().unwrap(),
+            "{case}"
+        );
+        if !case["valid"].as_bool().unwrap() {
+            continue;
+        }
+        crate::plugin::store::write_record(home.path(), &record).unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        if let Some(granted) = access(&case["granted"]) {
+            crate::plugin::allowed::add(home.path(), folder.path(), granted).unwrap();
+        }
+        let mut input = serde_json::json!({ "path": folder.path() });
+        if sets {
+            input["output"] = serde_json::json!("out.json");
+        }
+        let binding = record.declaration.bind_dir.as_ref().unwrap();
+        let call = access(&case["call"]).unwrap();
+        assert_eq!(binding.call_access(&input), call, "{case}");
+        let bound = crate::plugin::executor::PluginExecutor::new(Some(home.path().to_owned()))
+            .bind_input(
+                &record,
+                &input,
+                &crate::plugin::executor::BindContext::headless(None),
+            )
+            .await;
+        match bound {
+            Ok(Some(bound)) => {
+                assert!(case["admitted"].as_bool().unwrap(), "{case}");
+                assert_eq!(bound.access(), call, "{case}");
+            }
+            Ok(None) => panic!("the path field is set: {case}"),
+            Err(reason) => {
+                assert!(!case["admitted"].as_bool().unwrap(), "{case}: {reason}");
+                assert!(reason.contains("gents plugin dirs add"), "{reason}");
+            }
+        }
+    }
 }

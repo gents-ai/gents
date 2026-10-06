@@ -33,6 +33,14 @@ source consistency checks, not a separate runtime compatibility version.
 - iOS builds again: the DB Explorer window keeps its desktop-only title, size and
   focus calls off mobile targets, and CI checks the iOS simulator build on main.
 
+- One plugin can read and write (#2301). `bind_dir.access` is now the most a
+  plugin may use, and `bind_dir.write_fields` names the inputs that make a call
+  write. A call that sets none of them asks only for `read`: it binds under a
+  read-only or working folder and runs read-only even where writing is allowed.
+  A writing call under a read-only folder is refused with the
+  `gents plugin dirs add ... --access read_write` command, or the advice to call
+  again without the write field. Packs no longer need a second `*_write`
+  plugin.
 - Plugin tools can return images (#2302). A result shaped
   `{"response", "parts": [{"type": "image", "data", "mimeType"}]}` reaches a
   Claude model as one text part plus whole image parts. Before this change, an
