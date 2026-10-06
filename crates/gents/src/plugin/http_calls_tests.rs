@@ -399,7 +399,8 @@ async fn loopback_and_private_targets_are_refused_unless_named_literally() {
     .await;
     let refusal = error(&results, "a");
     assert!(
-        refusal.contains("resolves to the internal address"),
+        refusal.contains("resolves to the internal address")
+            && refusal.contains("name the IP literal in the request URL"),
         "{refusal}"
     );
 
@@ -420,6 +421,7 @@ async fn loopback_and_private_targets_are_refused_unless_named_literally() {
     for id in ["loopback", "private", "metadata", "mapped"] {
         let refusal = error(&results, id);
         assert!(refusal.contains("internal address"), "{id}: {refusal}");
+        assert!(refusal.contains("exact IP literal"), "{id}: {refusal}");
     }
     assert!(server.hits().is_empty());
 }
@@ -585,6 +587,25 @@ async fn the_response_budget_is_charged_as_bytes_are_read() {
     .await;
     assert!(error(&results, "a").contains("was not sent"));
     assert_eq!(server.hits(), ["hello", "hello", "big"]);
+
+    // A request that starts after earlier ones of its round used the budget
+    // up is not sent.
+    let mut session = session_bytes(&server, 4);
+    let round: Vec<Value> = (0..MAX_IN_FLIGHT + 4)
+        .map(|n| json!({"id": n.to_string(), "url": server.url("hello")}))
+        .collect();
+    let hits = server.hits().len();
+    let results = ask(&mut session, Value::Array(round)).await;
+    let unsent = results
+        .values()
+        .filter(|answer| {
+            answer["error"]
+                .as_str()
+                .is_some_and(|e| e.contains("was not sent"))
+        })
+        .count();
+    assert_eq!(unsent, 4, "{results:?}");
+    assert_eq!(server.hits().len() - hits, MAX_IN_FLIGHT);
 }
 
 fn session_bytes(server: &Server, max_response_bytes: usize) -> Session {

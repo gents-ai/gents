@@ -325,12 +325,20 @@ pub(crate) fn addresses_allowed(explicit: bool, addrs: &[IpAddr]) -> bool {
     !addrs.is_empty() && (explicit || addrs.iter().all(ip_public))
 }
 
-fn internal_refusal(host: &str, ip: &IpAddr) -> String {
-    format!(
-        "{host} resolves to the internal address {ip}; a hostname grant reaches public \
-         addresses only, so to reach it, name the IP literal in the request URL and grant \
-         that literal"
-    )
+/// The refusal of `ip` as the target `host` names; `host` is `None` when
+/// the URL names `ip` itself.
+fn internal_refusal(host: Option<&str>, ip: &IpAddr) -> String {
+    match host {
+        Some(host) => format!(
+            "{host} resolves to the internal address {ip}; a hostname grant reaches public \
+             addresses only, so to reach it, name the IP literal in the request URL and grant \
+             that literal"
+        ),
+        None => format!(
+            "{ip} is an internal address; only an allow-list entry naming that exact IP \
+             literal grants it, so add {ip} to the plugin's allow-list to reach it"
+        ),
+    }
 }
 
 /// Resolves a host name for the client.
@@ -367,7 +375,7 @@ impl reqwest::dns::Resolve for Guarded {
         Box::pin(async move {
             let addrs = lookup.lookup(host.clone()).await?;
             if let Some(ip) = addrs.iter().find(|ip| !ip_public(ip)) {
-                return Err(Box::new(InternalAddress(internal_refusal(&host, ip))) as _);
+                return Err(Box::new(InternalAddress(internal_refusal(Some(&host), ip))) as _);
             }
             if !addresses_allowed(false, &addrs) {
                 return Err(format!("{host} did not resolve").into());
@@ -584,14 +592,11 @@ impl Session {
         deadline: Instant,
     ) -> Map<String, Value> {
         let mut room = self.max_requests.saturating_sub(self.requests_sent);
-        let bytes_left = self.response_bytes.load(Ordering::Relaxed) < self.max_response_bytes;
         let plan: Vec<(Request, Option<Refusal>)> = requests
             .into_iter()
             .map(|request| {
                 let refusal = if room == 0 {
                     Some(Refusal::RequestLimit)
-                } else if !bytes_left {
-                    Some(Refusal::ResponseBudget)
                 } else {
                     room -= 1;
                     None
@@ -604,6 +609,12 @@ impl Session {
         let answers: Vec<(String, Result<Value, String>)> = futures::stream::iter(plan)
             .map(|(request, refusal)| async move {
                 let id = request.id.clone();
+                // The budget is checked as each request starts: earlier
+                // ones of this round may already have used it up.
+                let refusal = refusal.or_else(|| {
+                    (this.response_bytes.load(Ordering::Relaxed) >= this.max_response_bytes)
+                        .then_some(Refusal::ResponseBudget)
+                });
                 let answer = match refusal {
                     Some(why) => Err(why.message().to_owned()),
                     None => this.fetch(request, deadline).await,
@@ -643,7 +654,7 @@ impl Session {
         })?;
         if let Some(ip) = admission.literal {
             if !addresses_allowed(admission.explicit, &[ip]) {
-                return Err(internal_refusal(&ip.to_string(), &ip));
+                return Err(internal_refusal(None, &ip));
             }
         }
         Ok(())
