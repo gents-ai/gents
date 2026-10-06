@@ -139,20 +139,12 @@ mod tests {
         async fn execute_capture_query(&self, _query: &str) -> Result<Value> {
             anyhow::bail!("store unavailable")
         }
-        async fn capture_field_commit(
-            &self,
-            _doc_id: &str,
-            _field: &str,
-        ) -> Result<Option<commits::RequestJsonCommit>> {
-            anyhow::bail!("store unavailable")
-        }
     }
 
     struct MissingBase;
 
     struct CountingBase {
         reads: std::sync::atomic::AtomicUsize,
-        commits: std::sync::atomic::AtomicUsize,
         cid: std::sync::Mutex<String>,
     }
 
@@ -171,20 +163,7 @@ mod tests {
                 "capture_version":CAPTURE_VERSION, "agent_did":"did:test", "requester_did":"",
                 "session_id":"session", "source":"openai_responses", "capture_scope":"inference.1",
                 "request_json":encoded
-            }]}}))
-        }
-
-        async fn capture_field_commit(
-            &self,
-            _doc_id: &str,
-            _field: &str,
-        ) -> Result<Option<commits::RequestJsonCommit>> {
-            self.commits
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            Ok(Some(commits::RequestJsonCommit {
-                cid: self.cid.lock().unwrap().clone(),
-                height: 1,
-            }))
+            }], "_commits":[{"cid":self.cid.lock().unwrap().clone(), "height":1, "fieldName":"request_json"}]}}))
         }
     }
 
@@ -192,7 +171,6 @@ mod tests {
     async fn replay_batch_reuses_witnessed_bases_without_skipping_witness_checks() {
         let reader = CountingBase {
             reads: std::sync::atomic::AtomicUsize::new(0),
-            commits: std::sync::atomic::AtomicUsize::new(0),
             cid: std::sync::Mutex::new("base-commit".into()),
         };
         let stored = delta_capture();
@@ -213,7 +191,6 @@ mod tests {
             );
         }
         assert_eq!(reader.reads.load(std::sync::atomic::Ordering::Relaxed), 1);
-        assert_eq!(reader.commits.load(std::sync::atomic::Ordering::Relaxed), 1);
         for changed in [
             stored.replace("base-commit", "foreign-commit"),
             stored.replace("session", "foreign-session"),
@@ -238,7 +215,6 @@ mod tests {
         .await
         .is_err());
         assert_eq!(reader.reads.load(std::sync::atomic::Ordering::Relaxed), 2);
-        assert_eq!(reader.commits.load(std::sync::atomic::Ordering::Relaxed), 2);
     }
 
     #[async_trait::async_trait]
@@ -246,13 +222,59 @@ mod tests {
         async fn execute_capture_query(&self, _query: &str) -> Result<Value> {
             Ok(serde_json::json!({"data": {"RenderedRequest": []}}))
         }
-        async fn capture_field_commit(
-            &self,
-            _doc_id: &str,
-            _field: &str,
-        ) -> Result<Option<commits::RequestJsonCommit>> {
-            Ok(None)
-        }
+    }
+
+    #[tokio::test]
+    async fn batched_base_read_decodes_through_local_and_embedded_access() {
+        use crate::config_client::ConfigAccess;
+        use crate::graphql::escape_graphql_string;
+        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        crate::ensure_runtime_schemas(&node).await.unwrap();
+        let access = ConfigAccess::Local(node.clone());
+        let value = serde_json::json!({"model":"m", "stream":false, "padding":"x".repeat(4096)});
+        let container = encoding::encode_container(
+            &encoding::encode_full(&value).unwrap(),
+            &encoding::encode_full(&serde_json::json!({})).unwrap(),
+        )
+        .unwrap();
+        let mutation = format!(
+            r#"mutation {{ create_RenderedRequest(input: {{
+                capture_key: "batched-base", capture_version: 2,
+                agent_did: "did:test", requester_did: "", session_id: "session",
+                source: "openai_responses", capture_scope: "inference.1",
+                request_json: "{}"
+            }}) {{ _docID }} }}"#,
+            escape_graphql_string(&container),
+        );
+        let created = ConfigAccess::write_local_response(&node, "test.capture_base", &mutation)
+            .await
+            .unwrap();
+        let data = created.data.unwrap();
+        let doc_id = data.as_object().unwrap().values().next().unwrap()[0]["_docID"]
+            .as_str()
+            .unwrap();
+        let commit = commits::request_json_commit(&access, doc_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let stored = delta_capture()
+            .replace("bae-base", doc_id)
+            .replace("base-commit", &commit.cid);
+        let mut expected = value;
+        expected["stream"] = serde_json::json!(true);
+        assert_eq!(
+            decode_capture_json(&access, 2, &stored, CapturePayloadKind::RequestBody)
+                .await
+                .unwrap(),
+            expected
+        );
+        assert_eq!(
+            decode_capture_json_embedded(&node, 2, &stored, CapturePayloadKind::RequestBody)
+                .await
+                .unwrap(),
+            expected
+        );
+        node.shutdown().await;
     }
 
     /// Replay drops a turn only for a capture that fails verification; a store
@@ -389,25 +411,12 @@ pub struct CaptureStoreReadError(pub anyhow::Error);
 #[async_trait::async_trait]
 trait CaptureBaseReader {
     async fn execute_capture_query(&self, query: &str) -> Result<Value>;
-    async fn capture_field_commit(
-        &self,
-        doc_id: &str,
-        field: &str,
-    ) -> Result<Option<commits::RequestJsonCommit>>;
 }
 
 #[async_trait::async_trait]
 impl CaptureBaseReader for crate::config_client::ConfigAccess {
     async fn execute_capture_query(&self, query: &str) -> Result<Value> {
         self.execute(query).await
-    }
-
-    async fn capture_field_commit(
-        &self,
-        doc_id: &str,
-        field: &str,
-    ) -> Result<Option<commits::RequestJsonCommit>> {
-        commits::field_commit(self, doc_id, field).await
     }
 }
 
@@ -422,14 +431,6 @@ impl CaptureBaseReader for defra_node::EmbeddedNode {
         .await?;
         crate::graphql::ensure_no_errors(&response, "reading rendered-request delta base")?;
         Ok(serde_json::json!({"data": response.data}))
-    }
-
-    async fn capture_field_commit(
-        &self,
-        doc_id: &str,
-        field: &str,
-    ) -> Result<Option<commits::RequestJsonCommit>> {
-        commits::field_commit_embedded(self, doc_id, field).await
     }
 }
 
@@ -460,7 +461,9 @@ async fn decode_capture_json_from_cached<R: CaptureBaseReader + Sync>(
                     let query = format!(
                         r#"{{ RenderedRequest(filter: {{_docID: {{_eq: "{doc_id}"}}}}, limit: 2) {{
                             capture_version agent_did requester_did session_id source capture_scope request_json
-                        }} }}"#,
+                        }}
+                        _commits(docID: "{doc_id}") {{ cid height fieldName }}
+                        }}"#,
                         doc_id = crate::graphql::escape_graphql_string(&base.doc_id),
                     );
                     let response = reader
@@ -477,9 +480,7 @@ async fn decode_capture_json_from_cached<R: CaptureBaseReader + Sync>(
                     let [row] = rows.as_slice() else {
                         anyhow::bail!("rendered-request delta base did not resolve uniquely");
                     };
-                    let actual = reader
-                        .capture_field_commit(&base.doc_id, "request_json")
-                        .await
+                    let actual = commits::select_field_commit(&response, "request_json")
                         .map_err(|error| anyhow::Error::new(CaptureStoreReadError(error)))?
                         .context("rendered-request delta base lacks field commit")?
                         .cid;
