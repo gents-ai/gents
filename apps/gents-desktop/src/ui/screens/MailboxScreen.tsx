@@ -61,6 +61,7 @@ import { Markdown } from "./Markdown";
 import { Axis, type Option } from "./SessionFilters";
 import { span, when } from "./time";
 import { useApp } from "@/app/AppContext";
+import { toastFailure } from "@/lib/failure";
 import { useDeployments } from "@/hooks/useClient";
 import { nodeOf, useFleet } from "@/hooks/useFleet";
 
@@ -220,7 +221,9 @@ export function MailboxScreen({
   return (
     <ScrollArea className="h-full" data-testid="mailbox-screen">
       <div className="mx-auto max-w-page px-6 py-6">
-        {items.length > 0 && (
+        {/* narrowed to nodes with nothing open, the filters stay so the
+            narrowing can be undone */}
+        {(items.length > 0 || nodeIds.length > 0) && (
           <>
             <div className="flex h-10 items-center gap-2">
               <h1 className="font-heading text-lg font-medium text-heading">
@@ -676,7 +679,12 @@ function Item({
         size="sm"
         variant="raised"
         className="-mt-3.5 mr-4 ml-auto flex h-7 w-fit rounded-full px-3 text-xs"
-        onClick={() => dismissMailboxItem(m.itemId)}
+        onClick={() =>
+          dismissMailboxItem(m.itemId).then(
+            () => onSelect(false),
+            (e: unknown) => toastFailure("dismiss the item", e),
+          )
+        }
       >
         <X className="size-3" /> Dismiss
       </Button>

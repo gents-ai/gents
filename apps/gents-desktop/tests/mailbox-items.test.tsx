@@ -1,6 +1,6 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactElement } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { MailboxItemView } from "@source-inc/gents-desktop-client";
 import type { DesktopApp } from "../src/hooks/desktopApp";
@@ -55,6 +55,8 @@ const deploymentWith = (items: MailboxItemView[]) =>
 
 const renderMailbox = (app: DesktopApp) =>
   render(<MailboxScreen />, { wrapper: withApp(app) });
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe("mailbox item", () => {
   it("shows the title, sender, session, time, kind and status", () => {
@@ -280,6 +282,45 @@ describe("a mailbox opened from a node", () => {
     expect(JSON.parse(stored.get("gents-prototype-mailbox-nodes") ?? "[]")).toEqual([
       "did:key:b",
     ]);
-    vi.unstubAllGlobals();
+  });
+
+  it("keeps the filters when the routed node has nothing open, so it can be cleared", () => {
+    const stored = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => stored.get(key) ?? null,
+      setItem: (key: string, value: string) => stored.set(key, value),
+      removeItem: (key: string) => stored.delete(key),
+    });
+    const app = testApp({
+      deployments: [
+        node({
+          agentDid: "did:key:a",
+          mailboxItems: [
+            item({ itemId: "a-item", agentDid: "did:key:a", title: "From A" }),
+          ],
+        }),
+        node({ agentDid: "did:key:quiet", mailboxItems: [] }),
+      ],
+    });
+    render(<MailboxScreen nodeDid="did:key:quiet" />, { wrapper: withApp(app) });
+    expect(screen.queryByRole("heading", { name: "From A" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(screen.getByRole("heading", { name: "From A" })).toBeInTheDocument();
+  });
+});
+
+describe("dismissing one item from its card", () => {
+  it("reports a failure once and leaves no rejection unhandled", async () => {
+    const reportFailure = vi.fn();
+    const app = testApp({
+      api: { dismissMailboxItem: vi.fn().mockRejectedValue(new Error("offline")) },
+      deployments: [deploymentWith([item()])],
+      reportFailure,
+    });
+    render(<MailboxScreen />, { wrapper: withApp(app) });
+    const card = screen.getByTestId("mailbox-item");
+    fireEvent.click(within(card).getByRole("button", { name: "Dismiss" }));
+    await waitFor(() => expect(reportFailure).toHaveBeenCalledOnce());
+    expect(reportFailure.mock.calls[0]![0]).toContain("offline");
   });
 });
