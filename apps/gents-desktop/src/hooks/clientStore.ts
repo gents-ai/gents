@@ -17,7 +17,7 @@ import type {
     to, and what the managed server is doing. */
 export type ClientState = {
   snapshot: DesktopClientSnapshot | null;
-  /** the client's own failure, shown in the banner with Reconnect */
+  /** the client's own failure, shown in the banner */
   error: string | null;
   startupPhase: DesktopStartupPhase;
   starting: boolean;

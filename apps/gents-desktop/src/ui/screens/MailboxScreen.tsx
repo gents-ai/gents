@@ -491,8 +491,8 @@ function Item({
   const Icon = kind.icon;
   const open = () => openItem(m, openMailboxItem);
   const deadline = deadlineOf(m);
-  /* a deadline that has passed is the runtime's to expire, not a state
-     to show; a countdown never reads below zero */
+  /* a countdown never reads below zero; a passed deadline shows as overdue
+     until the runtime expires the item */
   const due = deadline === null ? null : span(Math.max(0, deadline - now));
   const soon = dueSoon(deadline, now);
   const age = when(m.createdAt, now);
@@ -504,8 +504,6 @@ function Item({
       {age}
     </time>
   );
-  /* a deadline that has passed is still shown as such until the runtime
-     expires the item */
   const overdue = deadline !== null && deadline < now;
   const behavior = behaviorName(m.targetBehaviorId, filer);
   return (

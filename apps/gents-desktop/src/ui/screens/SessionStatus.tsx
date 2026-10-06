@@ -19,10 +19,8 @@ export function SessionStatus({
     turnState === "waitingForClaim" ? (
       <Clock className="size-3.5 text-muted-foreground" />
     ) : /* anything the runtime has not settled is working, whatever it calls
-       it: streaming, processing, or a state this build has not met. The
-       list agreed a session was live and then drew it as finished, because
-       the glyph knew two names for working and isLive knows every name for
-       done. */
+       it: isLive knows every name for done, so a state this build has not
+       met still reads as working */
     isLive(turnState) ? (
       <Spinner className="text-foreground" />
     ) : turnState === "failed" ? (

@@ -1,9 +1,8 @@
-/* The armed reply, made visible. Opening a mailbox item with Reply arms a
-   cause on the shell: the next message sent carries the item's id, and the
-   item closes when that request is claimed. Without this strip the composer
-   looked the same armed or not, so a person could not tell a reply from an
-   ordinary message, nor put the reply down. The chip names the item, the
-   popover shows what it asked, and the X disarms it. */
+/* The armed reply, made visible. Opening a mailbox item with Reply holds it
+   as the selection's mailbox route: the next message sent carries the
+   item's id, and the item closes when that request is claimed. The chip
+   names the item, the popover shows what it asked, and the X puts the
+   reply down. */
 import { ChevronDown, Clock, CornerDownLeft, X } from "lucide-react";
 import type { MailboxItemView } from "@source-inc/gents-desktop-client";
 import {

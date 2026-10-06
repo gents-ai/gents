@@ -1,4 +1,4 @@
-/* Skills, as the desktop app's Skills tab: id (immutable after create),
+/* Skills: id (immutable after create),
    name, enabled, display name, description, instructions and tool
    dependencies, saved through SkillSaveRequest. */
 import { dependentsWarning } from "./dependents";

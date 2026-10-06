@@ -66,8 +66,8 @@ function Entry({
   );
 }
 
-/* the trace as a registered surface: the shell from context, the close
-   through the workspace, so the dock and the phone sheet mount the same thing */
+/* the trace as a registered surface, closed through the workspace, so the
+   dock and the phone sheet mount the same thing */
 export function TraceSurface({ sessionId }: SurfaceContext) {
   const { closeTab: closeTraceTab } = useDockFor(dockScopeOf("session", sessionId));
   return <TracePanel onClose={() => closeTraceTab("trace")} chrome={false} />;

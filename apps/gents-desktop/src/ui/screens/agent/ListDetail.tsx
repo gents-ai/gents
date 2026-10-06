@@ -1,7 +1,5 @@
 /* A section that is a list of documents and one document's settings,
-   routed by item id, as the desktop app's config tabs are (list on the
-   left, editor beside it; here the list is the page and a row opens the
-   editor). */
+   routed by item id: the list is the page and a row opens the editor. */
 import { Fragment, useMemo, useRef, useState, type ReactNode } from "react";
 import { ArrowLeft, ChevronDown, Plus, Trash2 } from "lucide-react";
 import { Badge } from "@gents/ui/components/badge";
@@ -210,7 +208,7 @@ export type ListRow = {
   metaLeadToggles?: boolean;
 };
 
-/* pack provenance (desktop #1511): a document from a pack carries a
+/* pack provenance: a document from a pack carries a
    gents:pack:<origin> tag; lists can filter by it */
 const PACK_ORIGIN_PREFIX = "gents:pack:";
 const NOT_FROM_PACK_FILTER = "__not_from_pack__";

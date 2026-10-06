@@ -16,7 +16,7 @@ import type { DesktopApp } from "./desktopApp";
 /**
  * Own all event, polling, selection, and foreground reads for the bounded
  * desktop projection. Keeping this lifecycle beside the controller prevents
- * new shell effects from accidentally creating a second refresh owner.
+ * a new effect from accidentally creating a second refresh owner.
  */
 export function useDesktopProjectionEffects(
   { stores, view, actions, lifecycle, trackedRequestId }: DesktopApp,

@@ -97,25 +97,12 @@ export function SessionsScreen({
   /* the session whose latest request spawned this one, by provenance */
   const parentOf = (c: SessionSummary) => parentOfIn(fleet, c);
 
-  /* Work a session handed out sits under the session that handed it out.
-     A parent with four workers is one piece of work in five sessions, and
-     a flat list sorted by recency interleaves them with everything else
-     the moment anything older moves.
-
-     A child follows its parent only when the parent is here to follow: a
-     filter or a search that keeps the child and drops the parent leaves
-     the child where it fell, with the mark it already wears saying it came
-     from somewhere. Nothing is hidden to make the shape tidy. */
-  /* Work handed out is folded under the work that handed it out: a parent
-     with four workers is one piece of work, and a list that spends five
-     rows on it stops being a list of what a person is doing.
-
-     Folded is not hidden. A worker that failed or is running is on the
-     list whether or not its parent is open — the status
-     mark is the reason to read this screen, and a fold that costs someone
-     that is worse than the rows it saved. So is a worker that matches a
-     filter: a person who asked for what needs them has asked for exactly
-     these. */
+  /* Work a session handed out sits under the session that handed it out,
+     shown only when the person opens it: a list someone is reading does not
+     rearrange itself as workers start and settle, and the parent's marks
+     say what its workers are doing. A child follows its parent only when
+     the parent is here to follow: a filter or a search that keeps the child
+     and drops the parent leaves the child where it fell. */
   type Row =
     | {
         kind: "session";
@@ -132,19 +119,6 @@ export function SessionsScreen({
         running: number;
       };
 
-  /* Work handed out sits under the work that handed it out — but only when
-     someone asks to see it.
-
-     Showing a worker the moment it became busy and folding it away when it
-     settled made the list move on its own: rows appearing under the cursor,
-     rows leaving from under it, everything below shifting each time. A list
-     a person is reading should not rearrange itself because a machine got
-     on with something. Opening and closing is theirs to decide, and what
-     they decided holds.
-
-     Nothing is lost by it. The parent says what its workers are doing and
-     how many need someone, so the reason to look is on the screen; the
-     looking is a click. */
   /* every worker on any node by the session that handed it out, whether
      or not the list is showing it: the parent's marks say the whole piece
      of work, and a worker on another node is still its work */

@@ -1,6 +1,6 @@
-/* The App Shell from the Branding file: a header with the mark and
-   settings; a rail with the agent, new session, mailbox and
-   sessions; the content slot on the ground. Chrome and canvas share the
+/* The app's frame: a window bar with the mark and the screen's own bar; a
+   rail with the agent, new session, mailbox and sessions; the content slot
+   on the ground. Chrome and canvas share the
    ground; content that needs a surface brings its own. */
 import { useState, type ReactNode } from "react";
 import { CircleAlert, X } from "lucide-react";

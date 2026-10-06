@@ -47,7 +47,6 @@ export function isIncompatibleHomeError(error: unknown): boolean {
   return false;
 }
 
-/** Owns the one decision flow for a local home this version cannot open. */
 /** What the person can do about a home this version cannot open. Made
     once; each reads the report from the client store when it runs. */
 export function createIncompatibleHomeOps({

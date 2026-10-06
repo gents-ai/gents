@@ -2,8 +2,7 @@
    in one list. A row is a backend; its kind decides the credential
    section. OpenAI-compatible and OpenRouter take a key or an env var;
    ChatGPT/Codex and Grok exist only through a subscription sign-in, so
-   the account card sits in the row with connect, cancel and disconnect.
-   Everything else is the desktop app's Backends panel field for field. */
+   the account card sits in the row with connect, cancel and disconnect. */
 import { setEnabled } from "./enabled";
 import { dependentsWarning } from "./dependents";
 import { useCallback, useEffect, useRef, useState } from "react";

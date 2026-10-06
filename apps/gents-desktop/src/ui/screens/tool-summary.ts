@@ -174,8 +174,7 @@ export function diffTally(diff: readonly ToolDiffLineView[]) {
 
    Matching the wording is sniffing a presentation detail: it is a constant
    in that crate today, and if it changes we silently start showing it
-   again. The honest fix is a typed signal on the timeline item, which is
-   filed with the other contract gaps in BACKGROUND-WORK.md. */
+   again. The honest fix is a typed signal on the timeline item. */
 const WITHHELD = /^\s*\[(encrypted|redacted) reasoning\]\s*$/;
 
 /* what of a turn's reasoning is actually readable */
@@ -196,11 +195,9 @@ export function reasoningWithheld(reasoning: string | null | undefined): boolean
   return reasoning.split("\n").some((line) => WITHHELD.test(line));
 }
 
-/* Every ending used to arrive as 'done', so a command that exited 1 was
-   drawn exactly like one that exited 0 — same glyph, same muted ink, the
-   exit code only inside the opened body. The outcome belongs on the row:
-   a failure is the row a person is looking for, and a refusal is not a
-   failure but the policy declining, which is why it reads as stopped.
+/* The outcome belongs on the row: a failure is the row a person is looking
+   for, and a refusal is not a failure but the policy declining, which is
+   why it reads as stopped.
 
    statusKind alone does not carry it. It is the call's lifecycle, and a
    command that exits non-zero still completes its lifecycle — the

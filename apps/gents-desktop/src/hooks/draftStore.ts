@@ -5,7 +5,7 @@ import { createStore, type StoreApi } from "zustand/vanilla";
 /**
  * Composer drafts by context (a session, or the new-session screen for an
  * agent and behavior). Held outside React state so a keystroke reaches the
- * composer that shows the draft rather than the whole shell.
+ * composer that shows the draft rather than the whole screen.
  */
 export type DraftStore = StoreApi<{ drafts: Record<string, string> }>;
 

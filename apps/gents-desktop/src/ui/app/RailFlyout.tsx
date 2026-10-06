@@ -290,7 +290,7 @@ export function RailFlyout({
          mousedown and mouseup on different elements and dispatched no
          click: the icon simply did not respond. A press holds the timer,
          a mouse release goes back to hover timing, and only real keyboard
-         focus still opens at once. Ported from gents 7058d8b24. */
+         focus still opens at once. */
       onPointerDown={() => {
         if (timer.current) window.clearTimeout(timer.current);
       }}

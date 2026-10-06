@@ -1,6 +1,5 @@
-/* Agent configuration: the Settings screen from the Branding file. A
-   sidebar of groups (the desktop app's config tabs, grouped) beside a
-   page of field rows. Sections are routes, so a tab is linkable. */
+/* Agent configuration: a sidebar of grouped sections beside a page of
+   field rows. Sections are routes, so a section is linkable. */
 import { useEffect, useRef } from "react";
 import {
   SidebarGroup,

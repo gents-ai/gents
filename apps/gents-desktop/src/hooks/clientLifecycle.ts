@@ -212,7 +212,7 @@ export function createClientLifecycle({
           });
         } catch (error) {
           // A legacy or broken ~/.gents must not block first-run setup or
-          // already-saved remote peers. Surface the error after the shell is up.
+          // already-saved remote peers. Surface the error after the app is up.
           localServerAvailable = false;
           setError(error instanceof Error ? error.message : String(error));
           if (await home.adopt(error)) {

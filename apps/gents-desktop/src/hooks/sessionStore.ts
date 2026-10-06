@@ -148,9 +148,9 @@ function factsOf(
   };
 }
 
-/** The session fields the shell decides with. A streamed chunk changes the
-    transcript and the revision but none of these, so the shell keeps its
-    previous header and does not re-render. */
+/** The session fields the projection decides with. A streamed chunk changes
+    the transcript and the revision but none of these, so the projection
+    keeps its previous header and what reads it does not re-render. */
 export type SessionHeader = Pick<
   DesktopSessionSnapshot,
   | "sessionId"

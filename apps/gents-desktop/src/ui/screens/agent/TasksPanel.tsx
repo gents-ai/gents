@@ -1,5 +1,5 @@
-/* Tasks, as the desktop app's Tasks tab: TaskSaveRequest fields, the
-   run facts, and a manual run with JSON args. */
+/* Tasks: TaskSaveRequest fields, the run facts, and a manual run with
+   JSON args. */
 import { setEnabled } from "./enabled";
 import { dependentsWarning } from "./dependents";
 import { useState } from "react";

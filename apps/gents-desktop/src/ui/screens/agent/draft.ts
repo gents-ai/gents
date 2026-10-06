@@ -85,7 +85,7 @@ export function useDraft<T extends object>(
   };
 }
 
-/* one item per line; the desktop app splits on newline or comma */
+/* one item per line, split on newline or comma */
 export const fromLines = (text: string) =>
   text
     .split(/[\n,]/)

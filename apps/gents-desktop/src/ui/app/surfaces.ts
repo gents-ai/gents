@@ -25,7 +25,7 @@ export type Surface = {
   /** route names the surface belongs to; absent means every route */
   routes?: readonly string[];
   render: ComponentType<SurfaceContext>;
-  /** a small count for the tab, from the shell's nodes; null shows nothing */
+  /** a small count for the tab, from the fleet; null shows nothing */
   badge?: (fleet: FleetState, sessionId: string | null) => number | null;
 };
 
