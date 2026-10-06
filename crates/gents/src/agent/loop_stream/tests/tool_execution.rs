@@ -563,13 +563,9 @@ async fn oversized_tool_result_is_bounded_before_threading() {
     node.shutdown().await;
 }
 
-/// Runs one turn in which the model calls a plugin tool whose result carries
-/// one `image_bytes`-long image part, under `provider`, and returns the tool
-/// result content the next provider request carries.
-async fn plugin_image_result_seen_by(
-    provider: crate::BackendProviderKind,
-    image_bytes: usize,
-) -> Vec<ToolResultContent> {
+/// An installed plugin tool whose result carries one `image_bytes`-long
+/// image part; the tempdir is the plugin home and must outlive the tool.
+fn plugin_image_tool(image_bytes: usize) -> (tempfile::TempDir, Box<dyn ToolDyn>) {
     const PREFIX: &[u8] = br#"{"response":{"width":2,"height":2},"parts":[{"type":"image","mimeType":"image/png","data":""#;
     const SUFFIX: &[u8] = br#""}]}"#;
     let (home, record) = crate::plugin::tests::executor::installed_plugin(
@@ -588,8 +584,11 @@ async fn plugin_image_result_seen_by(
         None,
     )
     .unwrap();
-    let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(tool)];
-    let model = ScriptedModel::new_turns(vec![
+    (home, Box::new(tool))
+}
+
+fn plugin_call_then_text_turns() -> Vec<Vec<RawStreamingChoice<()>>> {
+    vec![
         vec![
             RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
                 "call-1".to_string(),
@@ -602,7 +601,19 @@ async fn plugin_image_result_seen_by(
             RawStreamingChoice::Message("seen".to_string()),
             RawStreamingChoice::FinalResponse(()),
         ],
-    ])
+    ]
+}
+
+/// Runs one turn in which the model calls a plugin tool whose result carries
+/// one `image_bytes`-long image part, under `provider`, and returns the tool
+/// result content the next provider request carries.
+async fn plugin_image_result_seen_by(
+    provider: crate::BackendProviderKind,
+    image_bytes: usize,
+) -> Vec<ToolResultContent> {
+    let (_home, tool) = plugin_image_tool(image_bytes);
+    let tools: Vec<Box<dyn ToolDyn>> = vec![tool];
+    let model = ScriptedModel::new_turns(plugin_call_then_text_turns())
     // The scripted capture renders an OpenAI Chat Completions body.
     .without_capture();
     let mut config = config(4);
@@ -670,6 +681,58 @@ async fn plugin_image_parts_reach_the_provider_whole() {
         IMAGE_BYTES,
         "the image is not cut by the text bound"
     );
+}
+
+/// A later request replays the call from the persisted session, where the
+/// result is text: it carries no more than the loop's tool-result text bound,
+/// not the image's base64.
+#[tokio::test]
+async fn persisted_plugin_image_result_replays_within_the_text_bound() {
+    const IMAGE_BYTES: usize = 400_000;
+    let (_home, tool) = plugin_image_tool(IMAGE_BYTES);
+    let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let stream = run_loop_stream(
+        ScriptedModel::new_turns(plugin_call_then_text_turns()),
+        Some(hook.clone()),
+        TaggedMessage::unassociated(Message::user("draw it")),
+        Vec::new(),
+        Arc::new(vec![tool]),
+        owned_config(4),
+    );
+    let collected = collect_owned_scripted_stream(
+        stream,
+        &hook,
+        &writer,
+        &mut lifecycle,
+        gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
+    )
+    .await;
+    assert!(collected.error.is_none(), "{:?}", collected.error);
+    assert_eq!(collected.final_text.as_deref(), Some("seen"));
+
+    let session_id = hook.session_id().await.expect("session id");
+    let history = crate::session::load_history(&node, &session_id, "did:test:test", None)
+        .await
+        .unwrap();
+    let replayed: usize = history
+        .iter()
+        .flat_map(|message| match message {
+            Message::User { content } => content.as_slice(),
+            _ => &[],
+        })
+        .filter_map(|part| match part {
+            UserContent::ToolResult(result) => Some(&result.content),
+            _ => None,
+        })
+        .flatten()
+        .map(|part| tool_result_text(part).len())
+        .sum();
+    let limit = crate::truncation::TruncationLimits::default().max_bytes;
+    assert!(
+        replayed > 0 && replayed <= limit + 512,
+        "replayed {replayed} bytes of tool result; bound {limit}"
+    );
+    node.shutdown().await;
 }
 
 /// A provider whose wire refuses tool-result images still gets the request,

@@ -35,7 +35,7 @@
 //! the loop puts a short note in place of each image instead of failing the
 //! request. The model sees an image only within the request that ran the call.
 //! Later requests do not carry it, because the transcript records tool output
-//! as text.
+//! as text, presented within the same text bound.
 //! Called as a graph stage ([`crate::callback::plugin`]), the value is the
 //! stage's output documents and is never split.
 //!
