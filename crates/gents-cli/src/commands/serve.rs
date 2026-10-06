@@ -645,6 +645,27 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
             anyhow::anyhow!("--tool-root is required when --tool-ceiling readwrite")
         })?),
     };
+    let explicit_ceiling_root = match effective_tool_ceiling {
+        ToolCeilingArg::MetaOnly => None,
+        ToolCeilingArg::Readonly | ToolCeilingArg::Readwrite => args.tool_root.as_ref(),
+    };
+    let recorded_root = init_config
+        .as_ref()
+        .and_then(|config| config.tool_root.as_deref())
+        .map(str::trim)
+        .filter(|root| !root.is_empty())
+        .map(PathBuf::from);
+    if let (Some(explicit_root), Some(recorded_root)) = (explicit_ceiling_root, recorded_root) {
+        if !gents::tool_surface::tool_root_admitted_under_ceiling(&recorded_root, explicit_root)? {
+            anyhow::bail!(
+                "--tool-root {} does not admit the tool root {} recorded for home {}; the recorded root must be at or below --tool-root; re-run `gents init --tool-root {}` or omit --tool-root",
+                explicit_root.display(),
+                recorded_root.display(),
+                home_dir.display(),
+                explicit_root.display()
+            );
+        }
+    }
     let mut tool_ceiling = match effective_tool_ceiling {
         ToolCeilingArg::MetaOnly => ToolCeiling::meta_only(),
         ToolCeilingArg::Readonly => ToolCeiling::readonly_at(

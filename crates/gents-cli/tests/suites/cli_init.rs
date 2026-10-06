@@ -886,6 +886,114 @@ fn init_accepts_tool_root_for_readonly_defaults() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn serve_refuses_tool_root_that_does_not_admit_initialized_home() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    let recorded_root = tempdir.path().join("recorded-root");
+    let explicit_root = tempdir.path().join("explicit-root");
+    fs::create_dir_all(&home_dir)?;
+    fs::create_dir_all(&recorded_root)?;
+    fs::create_dir_all(&explicit_root)?;
+    let recorded_root = recorded_root.to_str().context("utf-8 recorded root")?;
+    let explicit_root = explicit_root.to_str().context("utf-8 explicit root")?;
+
+    let model_name = format!("tool-root-conflict-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let agent_name = format!("cli-tool-root-conflict-{}", Uuid::new_v4().simple());
+    run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            "--tool-root",
+            recorded_root,
+            "--inference-url",
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+
+    let port = allocate_port()?;
+    let stderr = run_cli_failure_stderr(
+        &home_dir,
+        &[
+            "server",
+            "--http-port",
+            &port.to_string(),
+            "--tool-root",
+            explicit_root,
+        ],
+    )?;
+
+    assert!(
+        stderr.contains("--tool-root"),
+        "expected the refusal to name the flag, got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("does not admit the tool root"),
+        "expected the refusal to state the admission failure, got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains(recorded_root),
+        "expected the refusal to render the recorded root, got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains(explicit_root),
+        "expected the refusal to render the requested root, got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("omit --tool-root"),
+        "expected the refusal to name the remedy, got:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("no runnable behaviors"),
+        "an explicit --tool-root that strands the recorded root must be refused by name before startup instead of surfacing the generic invalid-configuration bail:\n{stderr}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn serve_admits_ancestor_tool_root_for_initialized_home() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    let workspace_root = tempdir.path().join("workspace");
+    let recorded_root = workspace_root.join("leaf");
+    fs::create_dir_all(&home_dir)?;
+    fs::create_dir_all(&recorded_root)?;
+    let workspace_root = workspace_root.to_str().context("utf-8 workspace root")?;
+    let recorded_root = recorded_root.to_str().context("utf-8 recorded root")?;
+
+    let model_name = format!("ancestor-tool-root-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let agent_name = format!("cli-ancestor-tool-root-{}", Uuid::new_v4().simple());
+    let port = allocate_port()?;
+    let graphql = graphql_url(port);
+
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            "--tool-root",
+            recorded_root,
+            "--inference-url",
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+
+    let mut serve = spawn_server_with_env(&home_dir, port, &["--tool-root", workspace_root], &[])?;
+    wait_for_port(port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn init_with_write_tools_bootstraps_write_defaults() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
