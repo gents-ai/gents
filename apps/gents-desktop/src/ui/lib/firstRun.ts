@@ -61,6 +61,19 @@ export function shouldRebindSetupDefault(
   return defaultProfile?.backend_id === `${deployment.agentDid}:backend`;
 }
 
+/** The node first-run setup configured: the one this machine runs, else the
+    first listed. Setup also runs when remote nodes are already paired and
+    only this machine's agent lacks inference, so the first listed node may
+    be a remote one. */
+export function nodeSetUp(snapshot: DesktopClientSnapshot) {
+  const nodes = snapshot.client?.deployments ?? [];
+  return (
+    nodes.find((node) => isLocalAgent(node, snapshot.bootstrap.initAgentDid)) ??
+    nodes[0] ??
+    null
+  );
+}
+
 export function needsFirstRunSetup(snapshot: DesktopClientSnapshot): boolean {
   const deployments = snapshot.client?.deployments ?? [];
   if (deployments.length === 0) return true;

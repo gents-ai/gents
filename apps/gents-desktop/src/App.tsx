@@ -27,10 +27,12 @@ import { usePlatformSetup, useWindowTitle } from "./ui/app/platform";
 import { useFirstRun } from "./ui/app/useFirstRun";
 import { WindowControls } from "./ui/app/WindowControls";
 import { dockScope, workspace } from "./ui/app/workspace";
-import { useDeployments, useSnapshot, useStartup } from "./ui/hooks/useClient";
+import { useHomeDid, useStartup } from "./ui/hooks/useClient";
+import { useFleet } from "./ui/hooks/useFleet";
+import { fleetNodes } from "./ui/lib/scope";
 import { useFollowRoute } from "./ui/hooks/useFollowRoute";
 import { defaultAgentOf } from "./ui/lib/agents";
-import { isLocalAgent } from "./ui/lib/firstRun";
+import { isLocalAgent, nodeSetUp } from "./ui/lib/firstRun";
 import { useHistoryInputs } from "./ui/lib/history-inputs";
 import {
   bindNav,
@@ -110,17 +112,14 @@ function AppBody() {
   useFollowRoute(route);
   useWindowTitle(route);
 
-  const snapshot = useSnapshot();
-  const deployments = useDeployments();
   const startup = useStartup();
   const firstRun = useFirstRun(
-    snapshot,
     startup.incompatibleHome.generation,
     startup.phase === "ready",
   );
-  const homeDid = snapshot?.bootstrap.initAgentDid ?? null;
-  const hasLocalAgent = deployments.some((deployment) =>
-    isLocalAgent(deployment, homeDid),
+  const homeDid = useHomeDid();
+  const hasLocalAgent = useFleet((state) =>
+    fleetNodes(state).some((node) => isLocalAgent(node, homeDid)),
   );
   useNativeWindowReadiness(startup.phase === "ready" && firstRun.settled);
 
@@ -152,7 +151,7 @@ function AppBody() {
             initialStep={hasLocalAgent ? "inference" : "welcome"}
             onDone={(done) => {
               firstRun.finish();
-              const deployment = done.client?.deployments[0];
+              const deployment = nodeSetUp(done);
               if (deployment) {
                 actions.selectAgent(deployment.agentDid);
                 const behavior = defaultAgentOf(deployment) ?? deployment.behaviors[0];
