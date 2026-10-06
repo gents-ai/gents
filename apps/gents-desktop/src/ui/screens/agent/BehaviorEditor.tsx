@@ -45,7 +45,7 @@ import { ToolsSheet } from "./ToolsSheet";
 import { NewSkillSheet } from "./NewSkillSheet";
 import { EditorSheet } from "./EditorSheet";
 import { ToolsEditor } from "./ToolsPanel";
-import { ProfileEditor, modelSentence } from "./ProfilesPanel";
+import { ProfileEditor, modelSentence } from "./ProfileEditor";
 import { newId, useDraft } from "./draft";
 import { ConfirmDelete, DeleteButton } from "./ListDetail";
 import { Group } from "./rows";

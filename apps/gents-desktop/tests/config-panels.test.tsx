@@ -15,9 +15,9 @@ import { InferencePanel } from "../src/ui/screens/agent/InferencePanel";
 import { useAccounts } from "../src/ui/hooks/useProviders";
 import {
   ProfileEditor,
-  ProfilesPanel,
   newProfileDocument,
-} from "../src/ui/screens/agent/ProfilesPanel";
+} from "../src/ui/screens/agent/ProfileEditor";
+import { ProfilesPanel } from "../src/ui/screens/agent/ProfilesPanel";
 import { ProfileSheet } from "../src/ui/screens/agent/ProfileSheet";
 import { SetupScreen } from "../src/ui/screens/setup/SetupScreen";
 import { SchedulesPanel } from "../src/ui/screens/agent/SchedulesPanel";
