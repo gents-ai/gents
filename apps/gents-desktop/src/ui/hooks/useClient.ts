@@ -25,6 +25,7 @@ import {
   type ScopeContext,
 } from "../lib/scope";
 import { useFleet } from "./useFleet";
+import { clientRunning, syncHealthOf } from "../../hooks/clientStore";
 
 /** What the home was set up with, as last read; the same object while it
     is unchanged. */
@@ -81,7 +82,7 @@ export function useNodeCount() {
 
 /** Whether the client is running. */
 export function useOnline() {
-  return useStore(useApp().stores.client, (state) => Boolean(state.snapshot?.client));
+  return useStore(useApp().stores.client, clientRunning);
 }
 
 /** The enrolment requests in flight; null while the signed enrolment state
@@ -95,10 +96,7 @@ export function useEnrollmentRequests() {
 
 /** How the client's database sync is doing. */
 export function useSyncHealth() {
-  return useStore(
-    useApp().stores.client,
-    (state) => state.snapshot?.client?.syncHealth,
-  );
+  return useStore(useApp().stores.client, syncHealthOf);
 }
 
 /** The tool root and ceiling this machine's node was set up with. */

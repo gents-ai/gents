@@ -37,6 +37,15 @@ export type ClientState = {
 
 export type ClientStore = WithSelectors<StoreApi<ClientState>>;
 
+/** Whether the client is running: the last read found it. */
+export const clientRunning = (state: Pick<ClientState, "snapshot">) =>
+  Boolean(state.snapshot?.client);
+
+/** How the client's database sync is doing, as the runtime projects it;
+    null while the client is not running. */
+export const syncHealthOf = (state: Pick<ClientState, "snapshot">) =>
+  state.snapshot?.client?.syncHealth ?? null;
+
 export function createClientStore(
   startupPhase: DesktopStartupPhase = "loading-configuration",
 ) {

@@ -11,7 +11,7 @@ import {
 } from "@source-inc/gents-desktop-client";
 
 import type { ChatStore } from "./chatStore";
-import type { ClientStore } from "./clientStore";
+import { clientRunning, syncHealthOf, type ClientStore } from "./clientStore";
 import { trackedRequestIdForSession } from "./desktopShellRuntime";
 import { listedSession, nodeOf, type FleetStore, type NodeView } from "./fleetStore";
 import type { Selection, SelectionStore } from "./selectionStore";
@@ -96,13 +96,13 @@ export type ShellProjection = ReturnType<typeof projectShell>;
 export function projectionInputsOf(stores: ShellStores): ProjectionInputs {
   const selection = stores.selection.getState();
   const fleet = stores.fleet.getState();
-  const snapshot = stores.client.getState().snapshot;
+  const client = stores.client.getState();
   const chat = stores.chat.getState();
   const held = stores.session.getState().session;
   const agentDid = selection.agentDid;
   return {
-    clientAvailable: Boolean(snapshot?.client),
-    syncHealth: snapshot?.client?.syncHealth ?? null,
+    clientAvailable: clientRunning(client),
+    syncHealth: syncHealthOf(client),
     selection,
     node: nodeOf(fleet, agentDid),
     sessionSummary: listedSession(fleet, agentDid, selection.sessionId),

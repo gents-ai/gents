@@ -12,6 +12,7 @@ import {
   timingConfig,
 } from "./desktopShellRuntime";
 import type { DesktopApp } from "./desktopApp";
+import { clientRunning } from "./clientStore";
 
 /**
  * Own all event, polling, selection, and foreground reads for the bounded
@@ -23,9 +24,7 @@ export function useDesktopProjectionEffects(
   listenToUpdates: DesktopClientUpdatedListenerFactory,
 ) {
   const store = stores.selection;
-  const clientAvailable = useStore(stores.client, (state) =>
-    Boolean(state.snapshot?.client),
-  );
+  const clientAvailable = useStore(stores.client, clientRunning);
   const selectedAgentDid = useStore(store, (state) => state.agentDid);
   const selectedSessionId = useStore(store, (state) => state.sessionId);
   const selectedTrackedRequestId = useStore(view, (state) => state.trackedRequestId);

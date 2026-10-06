@@ -15,7 +15,7 @@ import {
 } from "./desktopShellRuntime";
 import { selection } from "./selectionStore";
 import { useDesktopProjectionEffects } from "./useDesktopProjectionEffects";
-import { clientStatus } from "./clientStore";
+import { clientRunning, clientStatus } from "./clientStore";
 import { firstNode, nodeOf } from "./fleetStore";
 
 /**
@@ -178,9 +178,7 @@ function usePublishedSelection({
   stores,
   lifecycle,
 }: Pick<DesktopApp, "api" | "stores" | "lifecycle">) {
-  const clientAvailable = useStore(stores.client, (state) =>
-    Boolean(state.snapshot?.client),
-  );
+  const clientAvailable = useStore(stores.client, clientRunning);
   const agentDid = useStore(stores.selection, (state) => state.agentDid);
   useEffect(() => {
     if (!clientAvailable) return;
