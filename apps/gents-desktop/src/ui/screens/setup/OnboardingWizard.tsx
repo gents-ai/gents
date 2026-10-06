@@ -31,6 +31,8 @@ import { useApp } from "@/app/AppContext";
 import { useBootstrap, useStartup } from "@/hooks/useClient";
 import { Field, Frame, Nav, Option, Title } from "./parts";
 import { InferenceSetup } from "./InferenceSetup";
+import { nodeSetUp } from "@/lib/firstRun";
+import type { NodeView } from "../../../hooks/fleetStore";
 import type { ProviderId } from "./inferenceSetupForm";
 
 type Step = "welcome" | "starting" | "inference";
@@ -200,9 +202,14 @@ export function OnboardingWizard({
       );
   }, [api, homeRoot, step, allowLocal]);
 
-  const finishProvisioning = async () => {
+  /* the node just set up, as the next read lists it: the local agent's own
+     node, which a paired remote node may be listed before; an enrolment's
+     node is not listed until its server approves, so it takes the first */
+  const finishProvisioning = async (
+    setUp: (snapshot: DesktopClientSnapshot) => NodeView | null | undefined,
+  ) => {
     const next = await api.fetchDesktopSnapshot();
-    const nextDeployment = next.client?.deployments[0];
+    const nextDeployment = setUp(next);
     const steward = nextDeployment ? setupStewardPatches(nextDeployment) : [];
     if (steward.length && nextDeployment) {
       await changeConfig("patchConfigComponents", {
@@ -284,7 +291,7 @@ export function OnboardingWizard({
         await api.commitManagedServerAutoStart(requestedName);
       }
       await waitForManagedRuntimePairing(api);
-      await finishProvisioning();
+      await finishProvisioning(nodeSetUp);
     } catch (e) {
       dispatch({ type: "failed", phase: failedPhase, error: setupErrorMessage(e) });
       await incompatibleHome?.adopt(e);
@@ -296,7 +303,7 @@ export function OnboardingWizard({
     dispatch({ type: "begun", phase: "starting-client" });
     try {
       await api.requestStatusEnrollment(address.trim());
-      await finishProvisioning();
+      await finishProvisioning((snapshot) => snapshot.client?.deployments[0]);
     } catch (e) {
       dispatch({ type: "failed", phase: "client-error", error: setupErrorMessage(e) });
     } finally {

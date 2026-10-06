@@ -527,6 +527,33 @@ describe("first-run local agent startup", () => {
     await screen.findByRole("heading", { name: "Choose an inference provider" });
   }, 15_000);
 
+  it("finishes on the agent it set up when a paired remote node is listed first", async () => {
+    const run = firstRun();
+    const remote = {
+      ...deployment,
+      agentDid: "did:key:z6MkRemote",
+      label: "Remote Node",
+      source: "status",
+    };
+    run.api.fetchDesktopSnapshot = vi.fn(async () => ({
+      bootstrap,
+      client: { deployments: [remote, deployment] },
+    }));
+    renderIn(
+      testApp({ api: run.api, snapshot: run.snapshot }),
+      <SetupScreen onDone={vi.fn()} />,
+    );
+    const next = screen.getByTestId("setup-next");
+    await waitFor(() => expect(next).toBeEnabled());
+    await userEvent.click(next);
+    run.finishStart();
+
+    await screen.findByRole("heading", { name: "Ready" }, { timeout: 3_000 });
+    const log = screen.getByRole("list", { name: "Setup progress" });
+    expect(log).toHaveTextContent(`Connected securely to ${deployment.label}`);
+    expect(log).not.toHaveTextContent("Remote Node");
+  }, 15_000);
+
   it("keeps observing a runtime its start left migrating, then continues without restarting it", async () => {
     const run = firstRun();
     renderIn(
