@@ -56,7 +56,8 @@ export function AppShell({
   children: ReactNode;
 }) {
   const layout = useShellLayout(route);
-  const { shellRef, columns, wide, docked, dockVisible, paneCol, shownNav } = layout;
+  const { shellRef, columns, wide, docked, dockVisible, paneCol, paneWidth, shownNav } =
+    layout;
   /* the pane bar's slot: screens fill it through a portal */
   const [paneBar, setPaneBar] = useState<HTMLElement | null>(null);
   const settings = (variant: "rail" | "row") => (
@@ -95,6 +96,8 @@ export function AppShell({
             "md:col-start-2 md:row-start-2 md:mt-2 md:mr-2 md:mb-2 md:overflow-hidden md:rounded-2xl md:border md:border-border/60",
           )}
           data-testid="pane"
+          /* the card's width less its right margin, while the divider settles */
+          style={paneWidth === null ? undefined : { width: paneWidth - 8 }}
         >
           <main
             className="@container relative min-h-0 min-w-0 flex-1 overflow-hidden"

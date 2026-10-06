@@ -9,7 +9,7 @@ const sessionOf = (route: Route) => (route.name === "session" ? route.sessionId 
 
 /** The dock as a column beside the pane, where the window has the room. */
 export function DockColumn({ route, layout }: { route: Route; layout: ShellLayout }) {
-  const { divider, dockVisible } = layout;
+  const { divider, dockVisible, dockWidth } = layout;
   return (
     /* the surface keeps its width inside a clipping cell, so it slides rather than squashes */
     <div
@@ -19,7 +19,7 @@ export function DockColumn({ route, layout }: { route: Route; layout: ShellLayou
     >
       <div className="h-full overflow-hidden">
         {/* below its minimum the card keeps that width and slides under the edge */}
-        <div className="h-full" style={{ width: Math.max(divider.min, divider.pos) }}>
+        <div className="h-full" style={{ width: Math.max(divider.min, dockWidth) }}>
           {dockVisible && <Dock sessionId={sessionOf(route)} routeName={route.name} />}
         </div>
       </div>
