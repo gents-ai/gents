@@ -496,7 +496,7 @@ function Item({
      to show; a countdown never reads below zero */
   const due = deadline === null ? null : span(Math.max(0, deadline - now));
   const soon = deadline !== null && deadline - now < SOON_MS;
-  const age = when(m.createdAt);
+  const age = when(m.createdAt, now);
   const created = Number.isNaN(Date.parse(m.createdAt))
     ? undefined
     : new Date(m.createdAt).toLocaleString();

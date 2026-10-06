@@ -7,7 +7,7 @@ import { href } from "@/lib/router";
 import { nodeOfSession } from "@/lib/nodes";
 import { NodeBehaviorStack } from "./NodeBehaviorStack";
 import { SessionStatus } from "./SessionStatus";
-import { when } from "./time";
+import { Age } from "./time";
 import { useFleet, workersOfId } from "../hooks/useFleet";
 
 export function WorkersSurface({ sessionId }: SurfaceContext) {
@@ -35,7 +35,7 @@ export function WorkersSurface({ sessionId }: SurfaceContext) {
                   size="sm"
                 />
                 <span className="w-8 text-right text-xs text-muted-foreground">
-                  {when(w.updatedAt)}
+                  <Age iso={w.updatedAt} />
                 </span>
               </a>
             </li>

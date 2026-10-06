@@ -20,7 +20,7 @@ import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { cn } from "@gents/ui/lib/utils";
 import { href } from "@/lib/router";
 import { useState } from "react";
-import { span, when } from "./time";
+import { Age, span } from "./time";
 import { useApp } from "@/app/AppContext";
 import { useMailboxCause, useSelectedDeployment } from "@/hooks/useClient";
 
@@ -118,7 +118,9 @@ function Details({ item }: { item: MailboxItemView }) {
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
         <span>{KIND_LABEL[item.kind] ?? item.kind}</span>
         <span aria-hidden="true">·</span>
-        <span>{when(item.createdAt)}</span>
+        <span>
+          <Age iso={item.createdAt} />
+        </span>
         {deadline !== null && (
           <span
             className={cn(

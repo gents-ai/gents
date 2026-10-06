@@ -20,7 +20,7 @@ import { href } from "@/lib/router";
 import { useSelectedNode } from "@/hooks/useClient";
 import { ToolBody } from "./tool-views";
 import { duration } from "./tool-summary";
-import { when } from "./time";
+import { useMinute, when } from "./time";
 import { isLive } from "@/lib/live";
 import { scopeKey, type Reached, type Subagent, type Workers } from "./workers";
 import { RequestStop } from "./WorkerActions";
@@ -40,6 +40,7 @@ const WAITING = new Set(["waitingforclaim", "pending", "claimed"]);
 export function workerNow(
   tool: RenderedToolCallView,
   reached: Reached | null,
+  now: number,
 ): { tone: Tone; text: string; detail?: string | null } {
   const failure = firstLine(
     tool.presentation.kind === "subagent" ? tool.presentation.output : null,
@@ -63,7 +64,7 @@ export function workerNow(
   if (WAITING.has(state.toLowerCase()))
     return { tone: "running", text: "waiting for the agent to pick it up" };
   if (isLive(state)) {
-    const s = when(reached?.summary?.updatedAt ?? null);
+    const s = when(reached?.summary?.updatedAt ?? null, now);
     return {
       tone: "running",
       text: s && s !== "now" ? `working · last change ${s}` : "working",
@@ -224,6 +225,7 @@ export function WorkerStep({
   workers: Workers;
 }) {
   const deployment = useSelectedNode();
+  const minute = useMinute();
   const p = tool.presentation;
   if (p.kind === "process") {
     const bg = workers.background(tool);
@@ -291,7 +293,7 @@ export function WorkerStep({
       </Row>
     );
   }
-  const now = workerNow(tool, reached);
+  const now = workerNow(tool, reached, minute);
   return (
     <Row
       tone={now.tone}

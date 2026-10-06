@@ -2,7 +2,7 @@ import { createElement, Fragment, useSyncExternalStore } from "react";
 
 /* a moment, as a person would say it: the age alone, since every place
    that shows one is a list where "ago" would repeat on every row */
-export const when = (iso: string | null, now: number = Date.now()) => {
+export const when = (iso: string | null, now: number) => {
   if (!iso) return "";
   const mins = Math.round((now - Date.parse(iso)) / 60_000);
   if (mins < 1) return "now";
@@ -52,16 +52,13 @@ const currentMinute = () => {
   return minute * 60_000;
 };
 
-/** `when(iso)`, kept current while it is on screen. */
-export function useAge(iso: string | null): string {
-  return useSyncExternalStore(
-    subscribe,
-    () => when(iso, currentMinute()),
-    () => when(iso, currentMinute()),
-  );
+/** The clock to the minute, kept current while the caller is on screen:
+    what any text that reads the time is worked out from. */
+export function useMinute(): number {
+  return useSyncExternalStore(subscribe, currentMinute, currentMinute);
 }
 
 /** An age as text, kept current while it is on screen. */
 export function Age({ iso }: { iso: string | null }) {
-  return createElement(Fragment, null, useAge(iso));
+  return createElement(Fragment, null, when(iso, useMinute()));
 }

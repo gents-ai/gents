@@ -182,7 +182,10 @@ describe("subagents of a session", () => {
     const reachedStart = result.current.byToolCall(start)!;
     expect(reachedStart.request.requestId).toBe("r-done");
     expect(reachedStart.subagent?.sessionId).toBe("session-done");
-    expect(workerNow(start, reachedStart)).toEqual({ tone: "done", text: "finished" });
+    expect(workerNow(start, reachedStart, Date.now())).toEqual({
+      tone: "done",
+      text: "finished",
+    });
 
     const reachedMessage = result.current.byToolCall(message)!;
     expect(reachedMessage.request.sessionId).toBe("session-old");
