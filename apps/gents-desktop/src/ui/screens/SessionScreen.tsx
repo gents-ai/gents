@@ -21,7 +21,7 @@ import { cn } from "@gents/ui/lib/utils";
 import { scrollParent, Composer } from "@gents/ui/conversation";
 import type { ShellView } from "@/../hooks/shellView";
 import { ChatFolderPicker } from "./ChatFolderPicker";
-import { useFollowTail, useScroller } from "@/lib/scroll";
+import { distanceFromFoot, useFollowTail, useScroller } from "@/lib/scroll";
 import { href, navigate } from "@/lib/router";
 import {
   DropdownMenu,
@@ -290,8 +290,7 @@ export function SessionScreen() {
          this measurement arrives after that: the room it reserves appears
          underneath a view that has already stopped, leaving it exactly a
          composer short of the end. A reader at the foot stays at the foot. */
-      const was =
-        scroller && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+      const was = scroller && distanceFromFoot(scroller);
       column.current?.style.setProperty("--composer-h", `${gap}px`);
       if (scroller && was !== null && was < 4)
         requestAnimationFrame(() => {

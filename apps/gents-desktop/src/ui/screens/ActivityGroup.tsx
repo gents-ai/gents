@@ -1,20 +1,12 @@
 /* A run of tool steps folded into one group, with the worker sessions its
    calls started, and the reasoning shown beside a step or a reply. */
-import {
-  createContext,
-  useContext,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import type { RenderedToolCallView } from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
 import { cn } from "@gents/ui/lib/utils";
 import { ToolStep, ToolSteps } from "@gents/ui/conversation";
-import { anchor } from "@/lib/scroll";
+import { anchor, useFollowNewest, useScrollEdges } from "@/lib/scroll";
 import {
   Collapsible,
   CollapsibleContent,
@@ -224,56 +216,17 @@ export function ActivityGroup({
   /* the capped box scrolls in the kit's ScrollArea, like the transcript
      and the diffs: a plain overflow box drew WebKit's wide scrollbar */
   const box = useRef<HTMLDivElement>(null);
-  const stick = useRef(true);
   const capped = !single;
-  const viewport = () =>
-    box.current?.querySelector<HTMLElement>("[data-slot=scroll-area-viewport]") ?? null;
   /* whether rows are hidden past either edge of the box: a fade says so,
      the way the transcript's own edge does. A live box follows the newest
      call, so what it hides is usually above. */
-  const [more, setMore] = useState({ above: false, below: false });
-  useEffect(() => {
-    const el = viewport();
-    if (!el) return;
-    const measure = () => {
-      const below = el.scrollHeight - el.scrollTop - el.clientHeight;
-      const above = el.scrollTop;
-      setMore((m) =>
-        m.above === above > 4 && m.below === below > 4
-          ? m
-          : { above: above > 4, below: below > 4 },
-      );
-      return below;
-    };
-    const onScroll = () => {
-      stick.current = measure() < 4;
-    };
-    el.addEventListener("scroll", onScroll, { passive: true });
-    const sizes = new ResizeObserver(measure);
-    sizes.observe(el);
-    if (el.firstElementChild) sizes.observe(el.firstElementChild);
-    measure();
-    return () => {
-      el.removeEventListener("scroll", onScroll);
-      sizes.disconnect();
-    };
-  }, []);
-  /* Follows the newest call only while the box is at its end. A step that
-     was open grew the box without a scroll, so on closing it the box's
-     place is read again from where it actually is, and left there: the row
-     the reader just closed stays in view. */
-  const wasOpen = useRef(openStep);
-  useLayoutEffect(() => {
-    const el = viewport();
-    const closing = wasOpen.current !== null && openStep === null;
-    wasOpen.current = openStep;
-    if (!el || !capped || openStep) return;
-    if (closing) {
-      stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 4;
-      return;
-    }
-    if (stick.current) el.scrollTop = el.scrollHeight;
-  }, [entry.members.length, capped, openStep]);
+  const more = useScrollEdges(box);
+  /* an open step grows the box without a scroll, so following waits for it */
+  useFollowNewest(box, {
+    rows: entry.members.length,
+    paused: openStep !== null,
+    enabled: capped,
+  });
 
   return (
     <div ref={root} data-anchor-key={entry.key}>

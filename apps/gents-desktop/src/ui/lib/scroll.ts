@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
 import { scrollParent } from "@gents/ui/conversation";
 
 /* Hold something still across a layout change. Folding a long block away
@@ -39,15 +46,81 @@ export function anchor(node: HTMLElement | null): () => void {
 
 const FOLLOW_THRESHOLD_PX = 64;
 
-export function scrollViewport(owner: HTMLDivElement | null) {
+export function scrollViewport(owner: HTMLElement | null) {
   return owner?.querySelector<HTMLElement>("[data-slot=scroll-area-viewport]") ?? null;
 }
 
-function isNearTip(viewport: HTMLElement) {
-  return (
-    viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight <
-    FOLLOW_THRESHOLD_PX
-  );
+/** How far a scroller sits above its foot. */
+export const distanceFromFoot = (scroller: HTMLElement) =>
+  scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+
+const isNearTip = (viewport: HTMLElement) =>
+  distanceFromFoot(viewport) < FOLLOW_THRESHOLD_PX;
+
+/* a box this close to an edge counts as at it */
+const EDGE_PX = 4;
+
+/**
+ * Whether content is hidden past either edge of the scroll area inside
+ * `owner`, for a fade that says so: measured as it scrolls, and as it or
+ * its content changes size. The owner is mounted for the hook's life.
+ */
+export function useScrollEdges(owner: RefObject<HTMLElement | null>) {
+  const [edges, setEdges] = useState({ above: false, below: false });
+  useEffect(() => {
+    const viewport = scrollViewport(owner.current);
+    if (!viewport) return;
+    const measure = () => {
+      const above = viewport.scrollTop > EDGE_PX;
+      const below = distanceFromFoot(viewport) > EDGE_PX;
+      setEdges((e) => (e.above === above && e.below === below ? e : { above, below }));
+    };
+    viewport.addEventListener("scroll", measure, { passive: true });
+    const sizes = new ResizeObserver(measure);
+    sizes.observe(viewport);
+    if (viewport.firstElementChild) sizes.observe(viewport.firstElementChild);
+    measure();
+    return () => {
+      viewport.removeEventListener("scroll", measure);
+      sizes.disconnect();
+    };
+  }, [owner]);
+  return edges;
+}
+
+/**
+ * Keep the scroll area inside `owner` at its newest row as `rows` grows,
+ * while the reader leaves it at its foot. While `paused` (a row the reader
+ * opened grows the box without a scroll) it does not follow; when the pause
+ * ends, where the box actually is decides again, and it is left there, so
+ * the row just closed stays in view. Off while `enabled` is false.
+ */
+export function useFollowNewest(
+  owner: RefObject<HTMLElement | null>,
+  { rows, paused, enabled }: { rows: number; paused: boolean; enabled: boolean },
+) {
+  const stick = useRef(true);
+  useEffect(() => {
+    const viewport = scrollViewport(owner.current);
+    if (!viewport) return;
+    const onScroll = () => {
+      stick.current = distanceFromFoot(viewport) < EDGE_PX;
+    };
+    viewport.addEventListener("scroll", onScroll, { passive: true });
+    return () => viewport.removeEventListener("scroll", onScroll);
+  }, [owner]);
+  const wasPaused = useRef(paused);
+  useLayoutEffect(() => {
+    const viewport = scrollViewport(owner.current);
+    const resuming = wasPaused.current && !paused;
+    wasPaused.current = paused;
+    if (!viewport || !enabled || paused) return;
+    if (resuming) {
+      stick.current = distanceFromFoot(viewport) < EDGE_PX;
+      return;
+    }
+    if (stick.current) viewport.scrollTop = viewport.scrollHeight;
+  }, [owner, rows, paused, enabled]);
 }
 
 /**
@@ -114,7 +187,7 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
        So a short way is animated and a long way is not, and either way the
        foot is claimed again on the next frame, after whatever render the
        click set off has landed. */
-    const distance = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+    const distance = distanceFromFoot(scroller);
     shouldFollow.current = true;
     scroller.scrollTo({
       top: scroller.scrollHeight,
