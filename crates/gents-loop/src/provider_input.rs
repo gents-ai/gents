@@ -35,6 +35,14 @@ pub enum ProviderInputProfile {
 }
 
 impl ProviderInputProfile {
+    /// Whether this wire carries an image inside a tool result. Only Claude
+    /// Messages does: rig's OpenAI Chat Completions and Responses converters
+    /// refuse the whole request over one, and its OpenRouter converter turns
+    /// it into a note.
+    pub fn carries_tool_result_images(self) -> bool {
+        self == Self::ClaudeMessages
+    }
+
     /// The wire on which this profile replays reasoning; Chat Completions
     /// carries none.
     pub fn replay_wire(self) -> Option<crate::claude_messages_body::ReplayWire> {

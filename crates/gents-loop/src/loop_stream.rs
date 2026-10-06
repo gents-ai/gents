@@ -91,7 +91,8 @@ use request_assembly::{
     prepare_dispatch_attempt, repair_and_rebuild_request,
 };
 pub use tool_dispatch::value_to_json_string;
-use turn_threading::close_streaming_turn;
+pub use turn_threading::TOOL_RESULT_IMAGE_OMITTED;
+use turn_threading::{bounded_tool_result, close_streaming_turn};
 // The test suite stayed in gents (crates/gents/src/agent/loop_stream/tests/):
 // it builds real DefraSessionHook/EmbeddedNode fixtures for its end-to-end
 // cases and uses `include!` to share one big fixture module across files.
@@ -467,7 +468,7 @@ where
             // yielded items drive the consumer's own accumulation/persistence.
             let mut accumulator = AssistantTurnAccumulator::default();
             let mut pending_calls = Vec::new();
-            let mut pending_results: Vec<(ToolCall, String, String)> = Vec::new();
+            let mut pending_results: Vec<(ToolCall, String, Vec<ToolResultContent>)> = Vec::new();
             let mut turn_text = String::new();
             let mut saw_stream_item = false;
             let mut saw_final_usage_event = false;
@@ -1033,11 +1034,7 @@ where
                         &outcome,
                         command_envelope,
                     );
-                    let (bounded, _, _) = truncate_text(
-                        outcome.model_facing_text(),
-                        tool_result_truncation_mode(&tool_name),
-                        &TruncationLimits::default(),
-                    );
+                    let bounded = bounded_tool_result(provider_profile, &tool_name, outcome.model_facing_text());
                     pending_results.push((
                         rig_compat::from_rig_tool_call(&tool_call),
                         internal_call_id,
@@ -1085,7 +1082,7 @@ where
                     }
                     ToolCallHookAction::Skip { reason } => {
                         repeated_tool_failure.reset();
-                        reason
+                        ToolResultContent::from_tool_output(reason)
                     }
                     _ => {
                         let live_output = match hook.as_ref() {
@@ -1147,12 +1144,7 @@ where
                                 command_envelope,
                             );
                         }
-                        let (bounded, _, _) = truncate_text(
-                            outcome.model_facing_text(),
-                            tool_result_truncation_mode(&tool_name),
-                            &TruncationLimits::default(),
-                        );
-                        bounded
+                        bounded_tool_result(provider_profile, &tool_name, outcome.model_facing_text())
                     }
                 };
                 pending_results.push((
