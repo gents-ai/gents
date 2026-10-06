@@ -17,7 +17,8 @@ import {
   SelectValue,
 } from "@gents/ui/components/select";
 import { href, navigate } from "@/lib/router";
-import { useDeployments } from "@/hooks/useClient";
+import { useFleet } from "@/hooks/useFleet";
+import { nodeOf } from "../../../hooks/fleetStore";
 import "./builtInSections";
 import { agentSections, isListed } from "./sections";
 
@@ -30,7 +31,6 @@ export function AgentScreen({
   section: string;
   item?: string;
 }) {
-  const deployments = useDeployments();
   const sections = agentSections.useList();
   /* a new section or document starts at the top; the scroll area keeps its
      position across hash changes otherwise */
@@ -40,7 +40,7 @@ export function AgentScreen({
       ?.querySelector("[data-slot=scroll-area-viewport]")
       ?.scrollTo({ top: 0 });
   }, [section, item]);
-  const deployment = deployments.find((d) => d.agentDid === agentDid) ?? null;
+  const deployment = useFleet((s) => nodeOf(s, agentDid));
   if (!deployment) {
     return (
       <p className="p-8 text-sm text-muted-foreground">

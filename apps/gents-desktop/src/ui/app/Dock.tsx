@@ -9,7 +9,7 @@ import { Hint } from "@/screens/Hint";
 import { PanelMenu } from "./PanelMenu";
 import { cn } from "@gents/ui/lib/utils";
 import { dockView } from "./dock-scope";
-import { useSurfaces, type Placement } from "./surfaces";
+import { useSurfaces, type Placement, type Surface } from "./surfaces";
 import { dockScopeOf, useDockFor } from "./workspace";
 import { useFleet } from "../hooks/useFleet";
 
@@ -99,10 +99,8 @@ export function DockTabs({
   const { dock, activate, moveTab, closeTab, closeDock } = useDockFor(
     dockScopeOf(routeName, sessionId),
   );
-  /* the tabs' badges count from the fleet */
-  const fleet = useFleet((s) => s);
   const paneTitle =
-    (sessionId ? fleet.bySessionId[sessionId]?.title : null) ?? "Session";
+    useFleet((s) => (sessionId ? s.bySessionId[sessionId]?.title : null)) ?? "Session";
   /* reordering, the way a browser does it: a press shows the tab; moved past
      a few pixels it follows the pointer while the others slide aside, and the
      order is written when it is let go. The strip's tabs share one width, so
@@ -296,14 +294,7 @@ export function DockTabs({
                 <span className={cn("truncate", active && "font-medium")}>
                   {s.title}
                 </span>
-                {(() => {
-                  const n = s.badge?.(fleet, sessionId) ?? null;
-                  return n === null ? null : (
-                    <span className="ml-0.5 font-mono text-[10px] leading-none text-muted-foreground">
-                      {n}
-                    </span>
-                  );
-                })()}
+                <TabBadge surface={s} sessionId={sessionId} />
               </button>
               {/* the close is always there for the tab showing, on hover for
                   the rest. A tablist holds only tabs, so it is the pointer's
@@ -342,5 +333,22 @@ export function DockTabs({
         </Button>
       </Hint>
     </div>
+  );
+}
+
+/* a tab's count from the fleet; a number, so the tab re-renders only when
+   it changes */
+function TabBadge({
+  surface,
+  sessionId,
+}: {
+  surface: Surface;
+  sessionId: string | null;
+}) {
+  const n = useFleet((fleet) => surface.badge?.(fleet, sessionId) ?? null);
+  return n === null ? null : (
+    <span className="ml-0.5 font-mono text-[10px] leading-none text-muted-foreground">
+      {n}
+    </span>
   );
 }

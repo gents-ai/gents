@@ -85,12 +85,9 @@ import {
   type InferenceSettingsDraft,
 } from "../inference/InferenceModelControls";
 import { useApp } from "@/app/AppContext";
-import {
-  useDeployments,
-  useSelectedDeployment,
-  useStartup,
-  useSnapshot,
-} from "@/hooks/useClient";
+import { useBootstrap, useSelectedNode, useStartup } from "@/hooks/useClient";
+import { useFleet } from "@/hooks/useFleet";
+import { nodeOf } from "../../../hooks/fleetStore";
 
 type Step = "welcome" | "starting" | "inference";
 
@@ -374,15 +371,14 @@ export function SetupScreen({
   /* a catalog row was chosen, so the form is that provider's inputs only */
   provider?: ProviderId;
 }) {
-  const clientSnapshot = useSnapshot();
+  const bootstrap = useBootstrap();
   const {
     api,
     actions: { initLocalRuntime, refreshSnapshot, changeConfig },
   } = useApp();
-  const deployments = useDeployments();
   const { diagnosticsHint } = useStartup();
   const { incompatibleHome } = useStartup();
-  const selectedDeployment = useSelectedDeployment();
+  const selectedNode = useSelectedNode();
   const [step, setStep] = useState<Step>(initialStep);
   const allowLocal = supportsLocalManagedServer();
   const [where, setWhere] = useState<"local" | "remote">(
@@ -390,26 +386,21 @@ export function SetupScreen({
   );
   const [address, setAddress] = useState("");
   const existingHome = Boolean(
-    clientSnapshot?.bootstrap.agentHomeExists &&
-    clientSnapshot?.bootstrap.initAgentDid?.trim(),
+    bootstrap?.agentHomeExists && bootstrap?.initAgentDid?.trim(),
   );
-  const [name, setName] = useState(
-    clientSnapshot?.bootstrap.initAgentName?.trim() || "Forge",
-  );
+  const [name, setName] = useState(bootstrap?.initAgentName?.trim() || "Forge");
   /* An initialized home keeps its identity: provisioning never renames it,
      so its name is shown, not asked for. */
-  const existingName = existingHome
-    ? clientSnapshot?.bootstrap.initAgentName?.trim() || null
-    : null;
+  const existingName = existingHome ? bootstrap?.initAgentName?.trim() || null : null;
   const agentName = existingName ?? name;
   const [homeRoot, setHomeRoot] = useState<string | null>(
-    api.managedServerStatus ? null : (clientSnapshot?.bootstrap.initToolRoot ?? null),
+    api.managedServerStatus ? null : (bootstrap?.initToolRoot ?? null),
   );
   const [toolCeiling, setToolCeiling] = useState<
     ManagedServerAuthorityInput["toolCeiling"]
-  >(() => ceilingFromInit(clientSnapshot?.bootstrap.initToolCeiling));
+  >(() => ceilingFromInit(bootstrap?.initToolCeiling));
   const [selectedDirectory, setSelectedDirectory] = useState<string | null | undefined>(
-    clientSnapshot?.bootstrap.initToolRoot ?? undefined,
+    bootstrap?.initToolRoot ?? undefined,
   );
   const [authorityError, setAuthorityError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -446,30 +437,24 @@ export function SetupScreen({
   const [accountLabel, setAccountLabel] = useState("");
   const [signInHint, setSignInHint] = useState<string | null>(null);
   const accountRevision = useRef(0);
-  const setupAgentDid =
-    agentDid ??
-    selectedDeployment?.agentDid ??
-    clientSnapshot?.client?.deployments[0]?.agentDid;
+  const setupAgentDid = agentDid ?? selectedNode?.agentDid;
   const setupAgentDidRef = useRef(setupAgentDid);
   setupAgentDidRef.current = setupAgentDid;
   /* Setup re-entry opens at the provider step without first run's
      provisioning, so a local agent's managed runtime may not be serving.
      Provider sign-in and the final save both write through it. */
-  const setupDeployment = (deployments ?? []).find(
-    (deployment) => deployment.agentDid === setupAgentDid,
-  );
+  const setupDeployment = useFleet((s) => nodeOf(s, setupAgentDid));
   const requiresManagedRuntime = Boolean(
     initialStep === "inference" &&
     allowLocal &&
     api.managedServerStatus &&
     setupDeployment &&
-    isLocalAgent(setupDeployment, clientSnapshot?.bootstrap.initAgentDid),
+    isLocalAgent(setupDeployment, bootstrap?.initAgentDid),
   );
   const [runtimeGate, setRuntimeGate] = useState<
     "idle" | "checking" | "ready" | "unavailable"
   >("idle");
-  const runtimeFallbackName =
-    clientSnapshot?.bootstrap.initAgentName?.trim() || "Local Agent";
+  const runtimeFallbackName = bootstrap?.initAgentName?.trim() || "Local Agent";
   const checkManagedRuntime = async () => {
     setRuntimeGate("checking");
     setError(null);
@@ -534,7 +519,7 @@ export function SetupScreen({
   /* The provider the user just chose, whose sign-in starts without a click. */
   const autoSignIn = useRef<ProviderId | null>(fixedProvider ?? null);
   const [autoSignInRequest, setAutoSignInRequest] = useState(0);
-  const root = clientSnapshot?.bootstrap.defaultAgentHome ?? "~/.gents";
+  const root = bootstrap?.defaultAgentHome ?? "~/.gents";
   const toolRoot = selectedDirectory === undefined ? homeRoot : selectedDirectory;
   const authority = authorityForSelection(toolCeiling, toolRoot);
 
@@ -1141,11 +1126,8 @@ export function SetupScreen({
               {existingHome ? (
                 <p className="text-xs text-muted-foreground">
                   Found an existing Gents home
-                  {clientSnapshot?.bootstrap.initAgentName
-                    ? ` for ${clientSnapshot.bootstrap.initAgentName}`
-                    : ""}
-                  . Next keeps that identity, native service, and reviewed host
-                  authority.
+                  {bootstrap?.initAgentName ? ` for ${bootstrap?.initAgentName}` : ""}.
+                  Next keeps that identity, native service, and reviewed host authority.
                 </p>
               ) : null}
               <p className="text-xs text-muted-foreground">
@@ -1238,7 +1220,7 @@ export function SetupScreen({
             setStep("inference");
           }}
           onOpenLoginItems={api.openManagedServerLoginItems}
-          diagnosticsHint={diagnosticsHint ?? clientSnapshot?.bootstrap.diagnosticsHint}
+          diagnosticsHint={diagnosticsHint ?? bootstrap?.diagnosticsHint}
         />
       </Frame>
     );

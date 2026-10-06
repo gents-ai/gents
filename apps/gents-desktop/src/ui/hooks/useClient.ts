@@ -3,8 +3,6 @@
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 
-import type { DeploymentView } from "@source-inc/gents-desktop-client";
-
 import type { MailboxItemView } from "@source-inc/gents-desktop-client";
 
 import {
@@ -28,11 +26,15 @@ import {
 } from "../lib/scope";
 import { useFleet } from "./useFleet";
 
-const NO_DEPLOYMENTS: DeploymentView[] = [];
-
 /** The client as last read. */
 export function useSnapshot() {
   return useApp().stores.client.use.snapshot();
+}
+
+/** What the home was set up with, as last read; the same object while it
+    is unchanged. */
+export function useBootstrap() {
+  return useStore(useApp().stores.client, (state) => state.snapshot?.bootstrap);
 }
 
 /** The home's agent DID, which marks the node this machine runs. */
@@ -40,25 +42,6 @@ export function useHomeDid() {
   return useStore(
     useApp().stores.client,
     (state) => state.snapshot?.bootstrap.initAgentDid ?? null,
-  );
-}
-
-/** Every node the client lists, sessions and mailbox included. */
-export function useDeployments(): DeploymentView[] {
-  return useStore(
-    useApp().stores.client,
-    (state) => state.snapshot?.client?.deployments ?? NO_DEPLOYMENTS,
-  );
-}
-
-/** The selected node, or the first one while nothing is selected yet. */
-export function useSelectedDeployment(): DeploymentView | null {
-  const deployments = useDeployments();
-  const agentDid = useApp().stores.selection.use.agentDid();
-  return (
-    deployments.find((deployment) => deployment.agentDid === agentDid) ??
-    deployments[0] ??
-    null
   );
 }
 

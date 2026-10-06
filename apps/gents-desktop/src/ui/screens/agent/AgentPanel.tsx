@@ -8,10 +8,10 @@ import { LocalServer } from "./LocalServer";
 import { AgentCard } from "./AgentCard";
 import { saveDefault } from "./BehaviorsPanel";
 import { useApp } from "@/app/AppContext";
-import { useSnapshot } from "@/hooks/useClient";
+import { useBootstrap } from "@/hooks/useClient";
 
 export function AgentPanel({ deployment }: { deployment: NodeView }) {
-  const snapshot = useSnapshot();
+  const bootstrap = useBootstrap();
   const { changeConfig } = useApp().actions;
   const agent = deployment.agentPrincipal;
   const behaviors = deployment.behaviors.map((b) => ({
@@ -99,16 +99,16 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
           <Fact mono>{agent.agentDid}</Fact>
         </Row>
         <Row label="Install name">
-          <Fact>{snapshot?.bootstrap.initAgentName}</Fact>
+          <Fact>{bootstrap?.initAgentName}</Fact>
         </Row>
         <Row
           label="Tool ceiling"
           description="The most any behavior on this agent may do."
         >
-          <Fact>{snapshot?.bootstrap.initToolCeiling ?? "not configured"}</Fact>
+          <Fact>{bootstrap?.initToolCeiling ?? "not configured"}</Fact>
         </Row>
         <Row label="Tool root" description="The directory tools are confined to.">
-          <Fact mono>{snapshot?.bootstrap.initToolRoot ?? "not configured"}</Fact>
+          <Fact mono>{bootstrap?.initToolRoot ?? "not configured"}</Fact>
         </Row>
         <Row label="Peer" description="Where the agent's node runs.">
           <Fact mono>{deployment.peerId}</Fact>
@@ -137,7 +137,7 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
           </Fact>
         </Row>
       </Group>
-      {isLocalAgent(deployment, snapshot?.bootstrap.initAgentDid) && <LocalServer />}
+      {isLocalAgent(deployment, bootstrap?.initAgentDid) && <LocalServer />}
     </div>
   );
 }
