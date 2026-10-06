@@ -2,10 +2,9 @@
    model's recommended settings and how far they may be changed, and who
    uses it. */
 import type { NodeView } from "../../../hooks/fleetStore";
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { dependentsWarning } from "./dependents";
 import type {
-  BackendProviderKind,
   ProviderAccountView,
   InferenceExecution,
   InferenceModelRecommendation,
@@ -38,6 +37,7 @@ import {
   type InferenceSettingsDraft,
 } from "../inference/InferenceModelControls";
 import { useApp } from "@/app/AppContext";
+import { useModelRecommendation } from "./useModelRecommendation";
 
 /* behaviors named in Used by before the rest are counted */
 const USERS_SHOWN = 3;
@@ -217,15 +217,10 @@ export function ProfileEditor({
       )?.retry_policy_id ?? "",
     tags: profile.tags ?? [],
   };
-  const [recommendation, setRecommendation] =
-    useState<InferenceModelRecommendation | null>(null);
-  const [recommendationKey, setRecommendationKey] = useState<string | null>(null);
-  const [recommendationError, setRecommendationError] = useState<string | null>(null);
   const [customize, setCustomize] = useState(false);
   const [editedModelFields, setEditedModelFields] = useState<
     Set<keyof InferenceSettingsDraft>
   >(new Set());
-  const deliberateSelectionRef = useRef<string | null>(null);
   const advertisedMaxContext = (backendId: string, modelName: string) =>
     deployment.inferenceBackends
       .find((backend) => backend.backendId === backendId)
@@ -239,8 +234,7 @@ export function ProfileEditor({
       if (!deployment.inferenceBackends.some((b) => b.backendId === next.backendId))
         throw new Error("Choose an existing backend");
       if (!next.modelName.trim()) throw new Error("Model is required");
-      const modelKey = `${next.backendId}\u0000${next.modelName.trim()}`;
-      if (!recommendation || recommendationKey !== modelKey)
+      if (!recommendation)
         throw new Error(
           recommendationError ?? "Wait for model-aware settings before saving",
         );
@@ -432,87 +426,40 @@ export function ProfileEditor({
   const advertisedModel = selectedBackend?.advertisedModels?.find(
     (entry) => entry.model_name === d.draft.modelName.trim(),
   );
-  const advertisedModelKey = JSON.stringify(advertisedModel ?? null);
+  const {
+    recommendation,
+    error: recommendationError,
+    choose,
+  } = useModelRecommendation({
+    api,
+    backendId: d.draft.backendId,
+    modelName: d.draft.modelName,
+    backend: selectedBackend,
+    advertised: advertisedModel,
+    /* a model the person just picked takes its recommended settings */
+    onChosen: (next) => {
+      const defaults = recommendedInferenceSettings(next);
+      d.set("contextWindow", defaults.contextWindow);
+      d.set("maxOutputTokens", defaults.maxOutputTokens);
+      d.set("temperature", defaults.temperature);
+      d.set("topP", defaults.topP);
+      d.set(
+        "reasoningEffort",
+        defaults.reasoningEffort as typeof d.draft.reasoningEffort,
+      );
+      if ((defaults.temperature || defaults.topP) && !d.draft.samplingId)
+        d.set("samplingId", `${profile.profile_id}-sampling`);
+    },
+  });
   const beginModelSelection = (backendId: string, modelName: string) => {
     if (
       backendId === d.draft.backendId &&
       modelName.trim() === d.draft.modelName.trim()
     )
       return;
-    deliberateSelectionRef.current = `${backendId}\u0000${modelName.trim()}`;
-    setRecommendation(null);
-    setRecommendationKey(null);
-    setRecommendationError(null);
+    choose(backendId, modelName);
     setEditedModelFields(new Set());
   };
-  useEffect(() => {
-    const backend = selectedBackend;
-    const modelName = d.draft.modelName.trim();
-    const requestKey = `${d.draft.backendId}\u0000${modelName}`;
-    if (!backend?.providerKind || !backend.endpoint || !d.draft.modelName.trim()) {
-      setRecommendation(null);
-      setRecommendationKey(null);
-      return;
-    }
-    setRecommendation(null);
-    setRecommendationKey(null);
-    setRecommendationError(null);
-    let canceled = false;
-    const timeout = window.setTimeout(() => {
-      void api
-        .getInferenceBackendRecommendation({
-          providerKind: backend.providerKind as BackendProviderKind,
-          endpoint: backend.endpoint!,
-          modelName,
-          displayName: advertisedModel?.display_name ?? null,
-          // Only the backend's advertised facts describe the model.
-          contextWindow: advertisedModel?.context_window ?? null,
-          maxContextWindow: advertisedModel?.max_context_window ?? null,
-          maxOutputTokens: advertisedModel?.max_output_tokens ?? null,
-          reasoningEfforts: advertisedModel?.reasoning_efforts ?? null,
-        })
-        .then((next) => {
-          if (canceled) return;
-          const defaults = recommendedInferenceSettings(next);
-          const deliberate = deliberateSelectionRef.current === requestKey;
-          setRecommendation(next);
-          setRecommendationKey(requestKey);
-          setRecommendationError(null);
-          if (deliberate) {
-            d.set("contextWindow", defaults.contextWindow);
-            d.set("maxOutputTokens", defaults.maxOutputTokens);
-            d.set("temperature", defaults.temperature);
-            d.set("topP", defaults.topP);
-            d.set(
-              "reasoningEffort",
-              defaults.reasoningEffort as typeof d.draft.reasoningEffort,
-            );
-            if ((defaults.temperature || defaults.topP) && !d.draft.samplingId)
-              d.set("samplingId", `${profile.profile_id}-sampling`);
-            deliberateSelectionRef.current = null;
-          }
-        })
-        .catch((error) => {
-          if (canceled) return;
-          setRecommendationError(
-            `Model-aware settings unavailable: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        });
-    }, 150);
-    return () => {
-      canceled = true;
-      window.clearTimeout(timeout);
-    };
-    // Draft fields are intentionally captured for the exact backend/model request.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    d.draft.backendId,
-    d.draft.modelName,
-    selectedBackend?.providerKind,
-    selectedBackend?.endpoint,
-    advertisedModelKey,
-    api,
-  ]);
   const updateGuided = (next: InferenceSettingsDraft) => {
     if (guided) {
       setEditedModelFields((fields) => {
