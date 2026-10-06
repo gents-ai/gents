@@ -312,15 +312,10 @@ pub(super) async fn resolve_summary_starters<R: gents::config_client::ConfigRead
                 .and_then(|p| p.parent_request_doc_id.as_deref())
         })
         .collect::<std::collections::BTreeSet<_>>();
-    let scopes = match gents::session_origin::request_scopes(access, parents).await {
-        Ok(scopes) => scopes
-            .into_iter()
-            .collect::<std::collections::BTreeMap<_, _>>(),
-        Err(error) => {
-            tracing::warn!(%error, "session starters unavailable");
-            return;
-        }
-    };
+    let scopes = gents::session_origin::request_scopes(access, parents)
+        .await
+        .into_iter()
+        .collect::<std::collections::BTreeMap<_, _>>();
     for summary in summaries {
         let Some(parent) = summary
             .provenance
@@ -329,8 +324,8 @@ pub(super) async fn resolve_summary_starters<R: gents::config_client::ConfigRead
         else {
             continue;
         };
-        // A parent request no longer readable stays an absent starter, the
-        // same join miss a per-session read produced.
+        // A parent request no store holds stays an absent starter rather
+        // than an error.
         summary.started_by =
             scopes
                 .get(parent)

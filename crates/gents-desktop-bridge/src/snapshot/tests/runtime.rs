@@ -417,7 +417,7 @@ async fn fleet_snapshot_resolves_all_starters_with_one_query_per_build() {
     assert_eq!(
         reads.queries(),
         1,
-        "starter resolution over four distinct parent ids must issue one batched read"
+        "starter resolution over four starter children with three distinct parent ids must issue one batched read"
     );
 
     let starter_of = |session_id: &str| {
