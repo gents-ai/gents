@@ -19,8 +19,8 @@ use serde_json::{json, Value};
 use super::graphql;
 use super::retry;
 use super::write_telemetry::{
-    ConflictSource, ReceiptRecovery, RetryOwner, RollbackStatus, WriteAttemptEvent,
-    WriteAttemptOrdinal, WriteBackend, WriteMode, WriteOperation, WriteOutcome,
+    record_slow_native_phase, ConflictSource, ReceiptRecovery, RetryOwner, RollbackStatus,
+    WriteAttemptEvent, WriteAttemptOrdinal, WriteBackend, WriteMode, WriteOperation, WriteOutcome,
 };
 use super::{graphql_api_base, ConfigAccess, GraphqlEndpoint};
 
@@ -416,6 +416,7 @@ async fn begin_embedded_owned<F, Fut>(
     runner: Arc<dyn query::QueryExecutor>,
     node_identity: Option<String>,
     read_only: bool,
+    operation: WriteOperation,
     write_guard: Option<MutationWriteGuard>,
     cancellation_rollback_scheduled: Arc<AtomicBool>,
     after_begin: F,
@@ -435,16 +436,21 @@ where
         write_guard,
         armed: true,
     };
-    let handle = tokio::time::timeout(
+    let started = Instant::now();
+    let result = tokio::time::timeout(
         EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
         defra_core::current_identity::with_scoped_identity(
             node_identity,
             runner.begin_txn(read_only),
         ),
     )
-    .await
-    .map_err(|_| embedded_phase_timeout("begin", EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT))?
-    .map_err(|error| retry::transaction_storage_failure(anyhow::anyhow!("begin_txn: {error}")))?;
+    .await;
+    record_slow_native_phase(Some(operation.as_str()), "begin", started.elapsed());
+    let handle = result
+        .map_err(|_| embedded_phase_timeout("begin", EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT))?
+        .map_err(|error| {
+            retry::transaction_storage_failure(anyhow::anyhow!("begin_txn: {error}"))
+        })?;
     rollback.set_embedded_handle(handle.clone());
     cancellation_rollback_scheduled.store(true, Ordering::Release);
     after_begin(handle.clone()).await;
@@ -568,7 +574,6 @@ pub struct ConfigApplyTxn<'a> {
     backend: TxnBackend<'a>,
     rollback_on_drop: Option<RollbackOnDrop>,
     affected_documents: AtomicU64,
-    #[cfg(test)]
     operation: Option<&'static str>,
 }
 
@@ -791,6 +796,7 @@ impl<'a> ConfigApplyTxn<'a> {
             runner,
             node.node_identity_did().map(str::to_owned),
             read_only,
+            operation,
             write_guard,
             cancellation_rollback_scheduled,
             |_| std::future::ready(()),
@@ -805,7 +811,6 @@ impl<'a> ConfigApplyTxn<'a> {
             },
             rollback_on_drop: Some(rollback_on_drop),
             affected_documents: AtomicU64::new(0),
-            #[cfg(test)]
             operation: Some(operation.as_str()),
         })
     }
@@ -852,7 +857,6 @@ impl<'a> ConfigApplyTxn<'a> {
             },
             rollback_on_drop: Some(rollback_on_drop),
             affected_documents: AtomicU64::new(0),
-            #[cfg(test)]
             operation: None,
         };
         Ok(txn)
@@ -900,7 +904,8 @@ impl<'a> ConfigApplyTxn<'a> {
                 handle,
                 identity,
             } => {
-                let response = tokio::time::timeout(
+                let started = Instant::now();
+                let result = tokio::time::timeout(
                     EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
                     node.execute_request_in_txn(
                         QueryRequest::new(document)
@@ -909,8 +914,9 @@ impl<'a> ConfigApplyTxn<'a> {
                         handle,
                     ),
                 )
-                .await
-                .map_err(|_| {
+                .await;
+                record_slow_native_phase(self.operation, "execute", started.elapsed());
+                let response = result.map_err(|_| {
                     embedded_phase_timeout("execute", EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT)
                 })?;
                 if response.is_transaction_conflict() {
@@ -981,15 +987,17 @@ impl<'a> ConfigApplyTxn<'a> {
         else {
             anyhow::bail!("native transaction responses require embedded access");
         };
-        let response = tokio::time::timeout(
+        let started = Instant::now();
+        let result = tokio::time::timeout(
             EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
             node.execute_request_in_txn(
                 QueryRequest::new(document).with_identity(identity.clone()),
                 handle,
             ),
         )
-        .await
-        .map_err(|_| {
+        .await;
+        record_slow_native_phase(self.operation, "execute", started.elapsed());
+        let response = result.map_err(|_| {
             embedded_phase_timeout("execute", EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT)
         })?;
         if response.is_transaction_conflict() {
@@ -1030,12 +1038,14 @@ impl<'a> ConfigApplyTxn<'a> {
                     },
                 }),
             TxnBackend::Embedded { node, handle, .. } => {
-                match tokio::time::timeout(
+                let started = Instant::now();
+                let result = tokio::time::timeout(
                     EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
                     node.commit_transaction(handle),
                 )
-                .await
-                {
+                .await;
+                record_slow_native_phase(self.operation, "commit", started.elapsed());
+                match result {
                     Err(_) => Err(CommitFailure {
                         error: embedded_phase_timeout(
                             "commit",

@@ -134,8 +134,8 @@ struct ReadCache {
     /// Rows the caller read by an exact scoped query in the same transaction;
     /// each still passes coordinate validation before it enters `headers`.
     observed: BTreeMap<String, super::canonical_rows::TranscriptMessageRow>,
-    /// Undecoded scoped headers of one session, for coordinate validation.
-    sessions: BTreeMap<String, Vec<serde_json::Value>>,
+    /// Bulk readers cache scoped session headers; single-header readers query twins only.
+    sessions: Option<BTreeMap<String, Vec<serde_json::Value>>>,
 }
 
 impl ReadAccess<'_, '_> {
@@ -180,9 +180,14 @@ pub(crate) async fn load_canonical_message_in_txn(
     gents_protocol::output::TranscriptMessage,
     gents_protocol::message::Message,
 )> {
-    TxnCanonicalReader::new(txn, agent_did, requester_did)
-        .load_message(header_doc_id)
-        .await
+    reconstruct_scoped_message(
+        ReadAccess::Txn(txn),
+        header_doc_id,
+        agent_did,
+        requester_did,
+        &mut ReadCache::default(),
+    )
+    .await
 }
 
 /// Exact reconstruction of many headers of one scope in one authoritative
@@ -211,7 +216,10 @@ impl<'a, 'txn> TxnCanonicalReader<'a, 'txn> {
             txn,
             agent_did,
             requester_did,
-            cache: ReadCache::default(),
+            cache: ReadCache {
+                sessions: Some(BTreeMap::new()),
+                ..ReadCache::default()
+            },
         }
     }
 
@@ -506,7 +514,7 @@ async fn load_header(
 }
 
 /// Scoped headers sharing `header`'s key or sequence in its session. A
-/// transaction reads its session once: validating each of a request's
+/// bulk transaction reader reads its session once: validating each of a request's
 /// headers by its own query costs the session size per header.
 async fn coordinate_twins(
     access: ReadAccess<'_, '_>,
@@ -519,7 +527,7 @@ async fn coordinate_twins(
     let scope = session_scope_filter(agent_did, session_id, requester_did);
     let key = &header.message.message_key;
     let sequence = header.message.sequence;
-    if !matches!(access, ReadAccess::Txn(_)) {
+    if cache.sessions.is_none() {
         let escaped = crate::graphql::escape_graphql_string(key);
         let query = format!(
             r#"{{ AgentMessage(filter: {{ {scope},
@@ -534,16 +542,17 @@ async fn coordinate_twins(
             .map(decode_transcript_message_row)
             .collect();
     }
-    if !cache.sessions.contains_key(session_id) {
+    let sessions = cache.sessions.as_mut().expect("bulk coordinate cache");
+    if !sessions.contains_key(session_id) {
         let query =
             format!(r#"{{ AgentMessage(filter: {{ {scope} }}) {{ {AGENT_MESSAGE_FIELDS} }} }}"#);
         let response = access
             .query(&query, "validate_canonical_header_coordinate")
             .await?;
         let rows = rows_value(&response, "AgentMessage")?.clone();
-        cache.sessions.insert(session_id.clone(), rows);
+        sessions.insert(session_id.clone(), rows);
     }
-    cache.sessions[session_id]
+    sessions[session_id]
         .iter()
         .filter(|row| {
             row.get("message_key").and_then(serde_json::Value::as_str) == Some(key.as_str())

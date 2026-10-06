@@ -416,9 +416,7 @@ async fn tool_does_not_execute_when_provider_stalls_before_turn_closure() {
     assert!(
         matches!(
             first,
-            Ok(LoopStreamItem::Item(
-                MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::ToolCall { .. })
-            ))
+            Ok(LoopStreamItem::ToolCall { .. })
         ),
         "first item should be streamed intent: {first:?}"
     );

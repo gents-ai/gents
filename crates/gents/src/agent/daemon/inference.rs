@@ -13,9 +13,9 @@ use crate::admission::{self, CallKind};
 use crate::agent::loop_stream::{LoopReplayInput, TaggedMessage};
 use crate::compaction::ReductionOptions;
 use crate::config::{MaxTurnsProvenance, ResolvedBehavior};
+use crate::error::LoopFailureCause;
 use crate::hook::DefraSessionHook;
 use crate::llm::message::Message;
-use crate::llm::rig_compat::{classify_stream_failure, StreamFailureKind};
 use crate::streaming::StreamWriter;
 use crate::watcher::AgentRequest;
 
@@ -32,15 +32,15 @@ fn terminal_response_has_visible_output(streamed_text: &str, final_text: Option<
 /// ever appended after that unmodified `Display`, never substituted into it.
 fn stream_failure_reason(
     error_display: &str,
-    failure: StreamFailureKind,
+    failure: &LoopFailureCause,
     provenance: MaxTurnsProvenance,
 ) -> String {
     match failure {
-        StreamFailureKind::MaxTurns => format!(
+        LoopFailureCause::MaxTurns => format!(
             "agent stream failed: {error_display} ({})",
             provenance.describe()
         ),
-        StreamFailureKind::Other => format!("agent stream failed: {error_display}"),
+        _ => format!("agent stream failed: {error_display}"),
     }
 }
 
@@ -117,7 +117,7 @@ where
     }
 }
 
-impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
+impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn run_inference(
         &mut self,
@@ -693,7 +693,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                 .await?;
                             let error_reason = stream_failure_reason(
                                 &error.to_string(),
-                                classify_stream_failure(&error),
+                                error.cause(),
                                 max_turns_provenance,
                             );
                             return Ok(HandleRequestOutcome::FailedAfterResponse(anyhow!(
@@ -807,12 +807,12 @@ pub(super) mod tests {
         assemble_request_context_message, await_with_request_deadline,
         ensure_request_deadline_open, request_deadline_remaining, stream_failure_reason,
         terminal_response_has_visible_output, BehaviorDaemon, MaxTurnsProvenance,
-        StreamFailureKind,
     };
     use crate::agent::completion_retry::CompletionRetryProfileFields;
     use crate::agent::runtime::StartupBarrier;
     use crate::backend_provider::BackendProviderKind;
     use crate::config::{ResolvedBehavior, SamplingConfig};
+    use crate::error::{CompletionFailure, LoopFailureCause};
     use crate::hook::{BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy};
     use crate::identity::{AgentIdentity, KeyIdentity, RuntimePrincipal};
     use crate::llm::tool::ToolDyn;
@@ -841,7 +841,7 @@ pub(super) mod tests {
     fn max_turns_failure_message_reports_default_provenance_and_keeps_pinned_prefix() {
         let reason = stream_failure_reason(
             MAX_TURNS_DISPLAY,
-            StreamFailureKind::MaxTurns,
+            &LoopFailureCause::MaxTurns,
             MaxTurnsProvenance::Default,
         );
         assert!(
@@ -858,7 +858,7 @@ pub(super) mod tests {
     fn max_turns_failure_message_reports_execution_profile_provenance() {
         let reason = stream_failure_reason(
             MAX_TURNS_DISPLAY,
-            StreamFailureKind::MaxTurns,
+            &LoopFailureCause::MaxTurns,
             MaxTurnsProvenance::ExecutionProfile,
         );
         assert!(reason.starts_with(PINNED_PREFIX));
@@ -872,7 +872,7 @@ pub(super) mod tests {
     fn max_turns_failure_message_reports_builder_provenance_without_naming_a_document() {
         let reason = stream_failure_reason(
             MAX_TURNS_DISPLAY,
-            StreamFailureKind::MaxTurns,
+            &LoopFailureCause::MaxTurns,
             MaxTurnsProvenance::BuilderOverride,
         );
         assert!(reason.starts_with(PINNED_PREFIX));
@@ -890,7 +890,10 @@ pub(super) mod tests {
     fn max_turns_clause_is_absent_from_other_stream_failures() {
         let reason = stream_failure_reason(
             "CompletionError: ProviderError: boom",
-            StreamFailureKind::Other,
+            &LoopFailureCause::Completion {
+                failure: CompletionFailure::Provider("boom".into()),
+                reason: "ProviderError: boom".into(),
+            },
             MaxTurnsProvenance::Default,
         );
         assert_eq!(

@@ -7,7 +7,7 @@
 # in-flight upserts of this row, and the logical request_id paired with
 # request_doc_id. message_key is an ordinary index: twins sharing a key or a
 # (session_id, sequence) are integrity conflicts readers must surface.
-type AgentMessage @branchable {
+type AgentMessage @branchable @index(fields: ["agent_did", "session_id", "sequence"]) {
     message_key: String @index @immutable
     session_id: String @index @immutable
     agent_did: String @index @immutable

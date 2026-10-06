@@ -1,5 +1,6 @@
 import { always, eventually } from "@antithesishq/bombadil";
-import { extract } from "@antithesishq/bombadil/browser";
+import { actions, extract } from "@antithesishq/bombadil/browser";
+import { defaultActions as browserActions } from "@antithesishq/bombadil/browser/defaults";
 export * from "@antithesishq/bombadil/browser/defaults";
 
 const shellState = extract((state) => {
@@ -33,6 +34,12 @@ const shellState = extract((state) => {
     ).length,
   };
 });
+
+// Navigation must not replace a loading document before the readiness
+// properties can observe whether that document settles within their bound.
+export const defaultActions = actions(() =>
+  shellState.current.shellMounted ? browserActions.generate() : ["Wait"],
+);
 
 const transcriptCards = extract((state) => {
   return Array.from(

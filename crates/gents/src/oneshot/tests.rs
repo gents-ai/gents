@@ -1,5 +1,5 @@
 use super::*;
-use rig::completion::{CompletionError, CompletionRequest, CompletionResponse};
+use rig::completion::{CompletionError, CompletionModel, CompletionRequest, CompletionResponse};
 use rig::streaming::{RawStreamingChoice, StreamingCompletionResponse};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
