@@ -371,6 +371,28 @@ describe("desktop startup screen", () => {
     });
   });
 
+  it("starts the client again when a retry follows a failed start", async () => {
+    /* the client stays stopped until a start succeeds; each read repeats
+       the same stopped client, so nothing about the read itself changes */
+    let running = false;
+    const fetchDesktopSnapshot = vi.fn(async () => snapshot(true, running));
+    const startDesktopClient = vi
+      .fn<DesktopApiAdapter["startDesktopClient"]>()
+      .mockRejectedValueOnce(new Error("client failed to start"))
+      .mockImplementation(async () => {
+        running = true;
+        return snapshot(true, true);
+      });
+    render(<App bridge={bridge(fetchDesktopSnapshot, startDesktopClient)} />);
+
+    await userEvent.click(await screen.findByTestId("startup-retry"));
+
+    await waitFor(() => expect(startDesktopClient).toHaveBeenCalledTimes(2));
+    await waitFor(() => {
+      expect(screen.queryByTestId("startup-screen")).not.toBeInTheDocument();
+    });
+  });
+
   it("offers a retry when reading saved configuration fails", async () => {
     const fetchDesktopSnapshot = vi
       .fn<DesktopApiAdapter["fetchDesktopSnapshot"]>()

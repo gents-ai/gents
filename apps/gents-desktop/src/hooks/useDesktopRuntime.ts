@@ -75,8 +75,8 @@ function useStartup({
   }, [api, needsHint, stores]);
 }
 
-/** Starts a stopped client once, and restarts one whose P2P transport is
-    wedged, at most once per cooldown. */
+/** Restarts a client whose P2P transport is wedged, at most once per
+    cooldown. */
 function useClientRecovery({
   stores,
   lifecycle,
@@ -87,14 +87,6 @@ function useClientRecovery({
   const stopping = useStore(stores.client, (state) => state.stopping);
   const sending = useStore(stores.chat, (state) => state.sending);
   const runtimeHealth = snapshot?.client?.p2pHealth ?? null;
-
-  useEffect(() => {
-    if (!ownsAutomaticRecovery() || !snapshot || snapshot.client || starting || sending)
-      return;
-    if (!lifecycle.clientAutostarts(snapshot) || recovery.autostartAttempted) return;
-    recovery.autostartAttempted = true;
-    void lifecycle.startClient();
-  }, [lifecycle, recovery, sending, snapshot, starting]);
 
   useEffect(() => {
     const previousHealth = recovery.lastObservedP2PHealth;

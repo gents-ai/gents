@@ -90,6 +90,7 @@ export function createClientLifecycle({
       equal(withoutDeployments(before), withoutDeployments(next));
     if (!unchanged) client.setState({ snapshot: next });
     resolveStartupPhase(next);
+    autostart();
   });
   const home = createIncompatibleHomeOps({
     api,
@@ -163,6 +164,25 @@ export function createClientLifecycle({
     startClientInFlight = pending;
     return pending;
   }
+
+  /* Starts a stopped client that autostarts, once per startup, when no start,
+     restart or send is under way. Asked after every read, a repeated one
+     included (startup run again reads the same stopped client), and again
+     when a start or a send ends. */
+  function autostart() {
+    const { snapshot, starting } = client.getState();
+    if (!ownsAutomaticRecovery() || !snapshot || snapshot.client || starting) return;
+    if (stores.chat.getState().sending) return;
+    if (!clientAutostarts(snapshot) || recovery.autostartAttempted) return;
+    recovery.autostartAttempted = true;
+    void startClient();
+  }
+  client.subscribe((state, prev) => {
+    if (prev.starting && !state.starting) autostart();
+  });
+  stores.chat.subscribe((state, prev) => {
+    if (prev.sending && !state.sending) autostart();
+  });
 
   async function startClient() {
     try {
