@@ -1,6 +1,6 @@
 /* Sessions: a heading row with search and New, then plain rows on the
    ground: title, the behavior's chip, and when it last moved. */
-import { memo, useMemo, useState } from "react";
+import { memo, useState } from "react";
 import {
   ChevronDown,
   CornerDownRight,
@@ -44,12 +44,7 @@ import {
   useFleet,
   workersOf,
 } from "../hooks/useFleet";
-import type { NodeView } from "../../hooks/fleetStore";
-import {
-  useDeployments,
-  useSelectedAgentDid,
-  useSelectedDeployment,
-} from "@/hooks/useClient";
+import { useDeployments, useSelectedDeployment } from "@/hooks/useClient";
 
 export function SessionsScreen({
   nodeDid,
@@ -59,7 +54,6 @@ export function SessionsScreen({
 }) {
   const deployments = useDeployments();
   const homeDid = useHomeDid();
-  const selectedAgentDid = useSelectedAgentDid();
   const deployment = useSelectedDeployment();
   const [query, setQuery] = useState<string | null>(null);
   /* the three axes the summary carries: behavior, state, and what started it */
@@ -70,13 +64,6 @@ export function SessionsScreen({
      chips choose; none chosen means every node */
   const fleet = useFleet((s) => s);
   const ctx = useScopeContext();
-  /* the nodes as rows draw them, without their lists: the same objects
-     while unchanged, so a row whose session did not change skips */
-  const nodeList = useMemo(
-    () => fleet.nodeKeys.map((key) => fleet.nodes[key]!),
-    [fleet.nodeKeys, fleet.nodes],
-  );
-  const selectedNode = (selectedAgentDid && fleet.nodes[selectedAgentDid]) || null;
   const defaultNodeIds = nodesInScope(defaultScope("sessions"), ctx).map(nodeDidOf);
   const [storedNodeIds, setNodeIds] = useStoredStrings(
     "gents-prototype-sessions-nodes",
@@ -306,9 +293,6 @@ export function SessionsScreen({
                 child={row.child}
                 delay={row.delay ?? null}
                 parent={parentOf(row.session)}
-                nodes={nodeList}
-                homeDid={homeDid}
-                deployment={selectedNode}
                 workers={row.child ? NO_SESSIONS : workersOf(fleet, row.session)}
               />
             ),
@@ -350,18 +334,12 @@ const SessionRow = memo(function SessionRow({
   child,
   delay,
   parent,
-  nodes,
-  homeDid,
-  deployment,
   workers,
 }: {
   session: SessionSummary;
   child: boolean;
   delay: number | null;
   parent: SessionSummary | null;
-  nodes: readonly NodeView[];
-  homeDid: string | null | undefined;
-  deployment: NodeView | null;
   workers: readonly SessionSummary[];
 }) {
   return (
@@ -435,11 +413,8 @@ const SessionRow = memo(function SessionRow({
           </span>
         </p>
         <NodeBehaviorStack
-          nodes={nodes}
-          homeDid={homeDid}
           nodeDid={nodeOfSession(session)}
           behaviorId={session.behaviorId}
-          deployment={deployment}
           size={child ? "sm" : "md"}
           workers={workers}
         />

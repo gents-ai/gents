@@ -61,7 +61,8 @@ import { Markdown } from "./Markdown";
 import { Axis, type Option } from "./SessionFilters";
 import { span, when } from "./time";
 import { useApp } from "@/app/AppContext";
-import { useDeployments, useSelectedDeployment } from "@/hooks/useClient";
+import { useDeployments } from "@/hooks/useClient";
+import { nodeOf, useFleet } from "@/hooks/useFleet";
 
 type BadgeVariant = ComponentProps<typeof Badge>["variant"];
 
@@ -461,9 +462,11 @@ function Item({
   onSelect: (next: boolean) => void;
   last: boolean;
 }) {
-  const deployments = useDeployments();
-  const homeDid = useHomeDid();
-  const selectedDeployment = useSelectedDeployment();
+  /* the node that filed the item names its behavior; its session may be listed by any node */
+  const filer = useFleet((state) => nodeOf(state, m.agentDid));
+  const session = useFleet((state) =>
+    m.sessionId ? state.bySessionId[m.sessionId] : undefined,
+  );
   const { answerMailboxQuestion, dismissMailboxItem, openMailboxItem } =
     useApp().actions;
   const kind = KIND[m.kind] ?? {
@@ -475,9 +478,6 @@ function Item({
     label: m.status,
     badge: "outline" as BadgeVariant,
   };
-  const session = m.sessionId
-    ? selectedDeployment?.sessions.find((s) => s.sessionId === m.sessionId)
-    : undefined;
   /* a kind with its own answer surface renders it; any other item keeps
      the generic reading view */
   const question = parseQuestion(m);
@@ -505,11 +505,7 @@ function Item({
   /* a deadline that has passed is still shown as such until the runtime
      expires the item */
   const overdue = deadline !== null && deadline < now;
-  /* the sender's behavior, named on the node that filed the item */
-  const behavior = behaviorName(
-    m.targetBehaviorId,
-    deployments.find((n) => nodeDidOf(n) === m.agentDid) ?? selectedDeployment,
-  );
+  const behavior = behaviorName(m.targetBehaviorId, filer);
   return (
     <li
       className="group/item relative"
@@ -572,13 +568,7 @@ function Item({
               line up whether or not this one is remote; the stack keeps
               to the title's side, the node reaching left */}
           <div className="col-start-1 row-start-1 flex justify-end max-md:self-center md:mt-0.5 md:w-12">
-            <NodeBehaviorStack
-              nodes={deployments}
-              homeDid={homeDid}
-              nodeDid={m.agentDid}
-              behaviorId={m.targetBehaviorId}
-              deployment={selectedDeployment}
-            />
+            <NodeBehaviorStack nodeDid={m.agentDid} behaviorId={m.targetBehaviorId} />
           </div>
           <span className="col-start-2 row-start-1 flex items-center gap-3 self-center justify-self-end text-xs leading-5 text-muted-foreground md:hidden">
             <Due due={due} soon={soon} />

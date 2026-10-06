@@ -7,17 +7,18 @@ import type { DesktopApp } from "../src/hooks/desktopApp";
 import { MailboxScreen } from "../src/ui/screens/MailboxScreen";
 import { node, testApp, withApp } from "./app-fixture";
 
-/* the sender's hover card reads the whole deployment; the card is not
-   what these cases are about */
+/* the hover cards are not what these cases are about */
 vi.mock("../src/ui/screens/HoverCards", () => ({
   BehaviorHoverCard: ({ children }: { children: ReactElement }) => children,
+  AgentHoverCard: ({ children }: { children: ReactElement }) => children,
 }));
 
 const item = (over: Partial<MailboxItemView> = {}): MailboxItemView => ({
   itemId: "item-1",
   itemKey: "key-1",
   requesterDid: "did:key:person",
-  agentDid: "did:key:agent",
+  /* the node that lists the item: the bridge lists a node's own items */
+  agentDid: "did:key:node",
   status: "open",
   kind: "finished",
   action: "ack",
@@ -44,12 +45,13 @@ const mailboxWith = (
   items: MailboxItemView[],
   send: ReturnType<typeof vi.fn> = vi.fn().mockResolvedValue({}),
 ) => testApp({ api: { sendChatMessage: send }, deployments: [deploymentWith(items)] });
-const deploymentWith = (items: MailboxItemView[]) => ({
-  agentDid: "did:key:node",
-  mailboxItems: items,
-  behaviors: [{ behaviorId: "engineer", displayName: "Engineer" }],
-  sessions: [{ sessionId: "session-1", title: "Mailbox cleanup" }],
-});
+const deploymentWith = (items: MailboxItemView[]) =>
+  node({
+    agentDid: "did:key:node",
+    mailboxItems: items,
+    behaviors: [{ behaviorId: "engineer", displayName: "Engineer" }],
+    sessions: [{ sessionId: "session-1", title: "Mailbox cleanup" }],
+  });
 
 const renderMailbox = (app: DesktopApp) =>
   render(<MailboxScreen />, { wrapper: withApp(app) });

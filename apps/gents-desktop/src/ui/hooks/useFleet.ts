@@ -2,7 +2,7 @@ import { useStore } from "zustand";
 
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
 
-import { sessionKeyOf, type FleetState } from "../../hooks/fleetStore";
+import { nodeKeyOf, sessionKeyOf, type FleetState } from "../../hooks/fleetStore";
 import { useApp } from "../app/AppContext";
 
 export const NO_SESSIONS: readonly SessionSummary[] = [];
@@ -11,6 +11,10 @@ export const NO_SESSIONS: readonly SessionSummary[] = [];
 export function useFleet<T>(select: (state: FleetState) => T): T {
   return useStore(useApp().stores.fleet, select);
 }
+
+/** The node with this DID, as the fleet holds it; null when the client cannot see it. */
+export const nodeOf = (state: FleetState, agentDid: string | null | undefined) =>
+  agentDid ? (state.nodes[nodeKeyOf({ agentDid })] ?? null) : null;
 
 /** The session that handed `session` out, on whatever node lists it. */
 export const parentOf = (state: FleetState, session: SessionSummary) =>

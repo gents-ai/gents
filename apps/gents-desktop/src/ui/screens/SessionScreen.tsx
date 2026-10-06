@@ -1711,11 +1711,8 @@ export function SessionScreen() {
                   )}
                 >
                   <NodeBehaviorStack
-                    nodes={deployments}
-                    homeDid={homeDid}
                     nodeDid={session?.agentDid}
                     behaviorId={session?.behaviorId}
-                    deployment={deployment}
                     size="sm"
                     keyboard
                     workers={sessionWorkers}
@@ -1795,11 +1792,8 @@ export function SessionScreen() {
                     )}
                   <div className="mt-3 flex flex-wrap items-center gap-2">
                     <NodeBehaviorStack
-                      nodes={deployments}
-                      homeDid={homeDid}
                       nodeDid={session?.agentDid}
                       behaviorId={session?.behaviorId}
-                      deployment={deployment}
                       workers={sessionWorkers}
                     />
                     <span className="text-sm text-muted-foreground">
