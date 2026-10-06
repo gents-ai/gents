@@ -30,11 +30,12 @@
 //!    on every axis, and forces `listen` to `None` regardless of either
 //!    side. See [`PluginRunner::compile`] for why the ceiling is
 //!    `Manifold::sealed()` today.
-//! 3. **A plugin never listens.** WASI preview 1 command modules (what
-//!    every bounded dispatch path in `run_afb_bytes` runs) have no socket
-//!    import wired at all, so this holds structurally; [`narrow_manifold`]
-//!    enforces it a second time regardless, as defense in depth against a
-//!    manifold that somehow reached this file unvalidated.
+//! 3. **A plugin never listens and never holds a socket.** WASI preview 1
+//!    command modules (what every bounded dispatch path in `run_afb_bytes`
+//!    runs) have no socket import wired at all, so this holds structurally;
+//!    [`narrow_manifold`] forces `listen` off and every run strips `net`
+//!    regardless, as defense in depth. A granted `net` axis is served by the
+//!    host instead ([`http_calls`]).
 //! 4. **A plugin that cannot be run with every bound enforced is refused
 //!    before it is ever called, not run with the bound silently dropped.**
 //!    `run_afb_bytes` does not enforce `stdin`, `fuel`, `memory_bytes`, or
@@ -534,6 +535,13 @@ impl PluginRunner {
             matches!(manifold.listen, ListenAccess::None),
             "a granted manifold must never carry a listen capability"
         );
+        // The guest never holds network authority, even on a dispatch path
+        // that might honour it: the host serves the grant through
+        // `http_calls`, where its allow-list and address checks apply.
+        let manifold = Manifold {
+            net: NetAccess::None,
+            ..manifold
+        };
 
         start_wasm_trap_handler_with_signals_blocked()?;
         let stdin =
@@ -715,36 +723,41 @@ fn start_wasm_trap_handler_with_signals_blocked(
 /// that ran fully bounded was reported as unsafe.
 fn unbounded_dispatch_reason(afb: &afterburner_afb::Afb, granted: &Manifold) -> Option<String> {
     let supported = afterburner::afb_run::bounds_for(afb);
-    let mut missing: Vec<&str> = Vec::new();
+    let mut missing: Vec<String> = Vec::new();
 
     // Every call carries its arguments on stdin and all three budget axes
     // (see [`PluginRunner::call`]), so these are always asked for.
     if !supported.stdin {
-        missing.push("the arguments on stdin");
+        missing.push("the arguments on stdin".to_owned());
     }
     if !supported.fuel {
-        missing.push("the fuel ceiling");
+        missing.push("the fuel ceiling".to_owned());
     }
     if !supported.memory_bytes {
-        missing.push("the memory ceiling");
+        missing.push("the memory ceiling".to_owned());
     }
     if !supported.timeout {
-        missing.push("the wall-clock budget");
+        missing.push("the wall-clock budget".to_owned());
     }
 
     // The manifold axes are asked for only when this plugin was actually
     // granted them. An empty grant list is not a grant.
     match &granted.fs {
         FsAccess::ReadOnly(paths) if !paths.is_empty() && !supported.manifold_fs_ro => {
-            missing.push("the read-only filesystem grant")
+            missing.push("the read-only filesystem grant".to_owned())
         }
         FsAccess::ReadWrite(paths) if !paths.is_empty() && !supported.manifold_fs_rw => {
-            missing.push("the read-write filesystem grant")
+            missing.push("the read-write filesystem grant".to_owned())
         }
         _ => {}
     }
     if !matches!(granted.env, EnvAccess::None) && !supported.manifold_env {
-        missing.push("the environment grant");
+        missing.push("the environment grant".to_owned());
+    }
+    // The network axis is the host's to enforce on every dispatch path, so
+    // only a grant the host cannot serve is unbounded.
+    if let Err(why) = http_calls::net_grant(&granted.net) {
+        missing.push(format!("the network grant ({why})"));
     }
 
     if missing.is_empty() {
@@ -959,8 +972,10 @@ pub fn retry_backoff(attempts: u32) -> std::time::Duration {
         .min(std::time::Duration::from_secs(60))
 }
 pub mod executor;
+pub mod http_calls;
 pub mod install;
 pub mod model_calls;
+mod rounds;
 pub mod store;
 pub mod tool;
 

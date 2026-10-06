@@ -12,7 +12,9 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 
+use super::http_calls;
 use super::model_calls::{self, ModelResolver};
+use super::rounds::{self, HostCalls};
 use super::store::{self, InstalledPlugin};
 use super::{allowed, approval};
 use super::{BoundDir, Manifold, PluginBudget, PluginOutcome, PluginRunner};
@@ -317,18 +319,23 @@ impl PluginExecutor {
     ) -> Result<PluginCall> {
         let admitted = self.admit(record)?;
         let coordinate = format!("{}/{}", record.namespace, record.name);
-        let (session, binding_note) = self.model_session(record).await?;
+        let (model, binding_note) = self.model_session(record).await?;
+        let calls = HostCalls {
+            model,
+            http: http_calls::Session::for_grant(&coordinate, &admitted.runner.manifold)?,
+        };
         let budget = admitted.budget;
         let bound = bound.map(Arc::new);
-        let round: model_calls::Round = Arc::new(move |input, budget| match &bound {
+        let round: rounds::Round = Arc::new(move |input, budget| match &bound {
             Some(bound) => admitted.runner.call_bound(&input, &budget, bound),
             None => admitted.runner.call(&input, &budget),
         });
-        let outcome = match session {
-            Some(session) => model_calls::drive(session, input, budget, round).await?,
-            None => tokio::task::spawn_blocking(move || round(input, budget))
+        let outcome = if calls.is_empty() {
+            tokio::task::spawn_blocking(move || round(input, budget))
                 .await
-                .with_context(|| format!("plugin {coordinate} stopped unexpectedly"))??,
+                .with_context(|| format!("plugin {coordinate} stopped unexpectedly"))??
+        } else {
+            rounds::drive(calls, input, budget, round).await?
         };
         Ok(PluginCall {
             coordinate,
