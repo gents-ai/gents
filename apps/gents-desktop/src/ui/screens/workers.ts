@@ -151,10 +151,15 @@ export function useSessionProvenance(): SessionProvenanceView | null {
       .map((x) => `${x.sessionId}:${x.turnState ?? ""}:${x.updatedAt ?? ""}`)
       .join(),
   );
-  const generation = useRef(0);
   /* what the last ask observed: a live lineage arriving starts following the
      store version without asking again for the one it was read at */
   const asked = useRef<{ cues: string; version: number | null } | null>(null);
+  /* one ask out at a time: while the stream moves faster than a lineage read,
+     a newer ask would outdate every answer before it lands. A cue that came
+     while one was out is asked once that one lands. */
+  const out = useRef(false);
+  const missed = useRef(false);
+  const [landed, setLanded] = useState(0);
   useEffect(() => {
     /* without the session's summary its exact scope is unknown */
     if (!agentDid || !sessionId || !listed) return;
@@ -166,6 +171,10 @@ export function useSessionProvenance(): SessionProvenanceView | null {
     ) {
       return;
     }
+    if (out.current) {
+      missed.current = true;
+      return;
+    }
     asked.current = {
       cues,
       version:
@@ -174,16 +183,22 @@ export function useSessionProvenance(): SessionProvenanceView | null {
           selectedAgentDid: agentDid,
         })?.projectionRevision?.storeVersion ?? null,
     };
-    const ask = ++generation.current;
-    void api.sessionProvenance({ sessionId, agentDid, requesterDid }).then(
-      (value) => {
-        if (generation.current === ask) setHeld({ scope, value });
-      },
-      () => {
-        /* the last known lineage stays; the next cue asks again */
-        if (generation.current === ask) asked.current = null;
-      },
-    );
+    out.current = true;
+    void api
+      .sessionProvenance({ sessionId, agentDid, requesterDid })
+      .then(
+        (value) => setHeld({ scope, value }),
+        () => {
+          /* the last known lineage stays; the next cue asks again */
+          asked.current = null;
+        },
+      )
+      .finally(() => {
+        out.current = false;
+        if (!missed.current) return;
+        missed.current = false;
+        setLanded((n) => n + 1);
+      });
   }, [
     api,
     stores,
@@ -195,6 +210,7 @@ export function useSessionProvenance(): SessionProvenanceView | null {
     storeVersion,
     rowsRevision,
     sessionsCue,
+    landed,
   ]);
   return provenance;
 }

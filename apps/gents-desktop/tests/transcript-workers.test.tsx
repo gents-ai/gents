@@ -360,6 +360,42 @@ describe("subagent lineage freshness", () => {
     }
   });
 
+  it("shows a lineage read that took longer than the stream moved", async () => {
+    /* the first read finds the caused request running; each later read is
+       held until the test lets it answer */
+    const held: ((value: SessionProvenanceView) => void)[] = [];
+    const api = apiWith(async () =>
+      held.length === 0 && api.sessionProvenance.mock.calls.length === 1
+        ? view([caused("r-1", "session-1", "processing", "req-1", "call-1")])
+        : new Promise((resolve) => held.push(resolve)),
+    );
+    const tool = call("req-1", "call-1", "success");
+    const app = appFor(api, [group(tool)]);
+    const observe = (storeVersion: number) =>
+      writeSession(app.stores.session, (session) =>
+        session
+          ? { ...session, projectionRevision: { storeVersion, reconcileVersion: 1 } }
+          : session,
+      );
+    observe(1);
+    const { result } = renderWorkers(app);
+    await waitFor(() =>
+      expect(result.current.byToolCall(tool)?.request.lifecycleState).toBe(
+        "processing",
+      ),
+    );
+
+    act(() => observe(2));
+    await waitFor(() => expect(held).toHaveLength(1));
+    /* the stream moves again while that read is still out */
+    act(() => observe(3));
+    await act(async () =>
+      held[0]!(view([caused("r-1", "session-1", "completed", "req-1", "call-1")])),
+    );
+
+    expect(result.current.byToolCall(tool)?.request.lifecycleState).toBe("completed");
+  });
+
   it("does not follow streamed live deltas once every caused request settled", async () => {
     const api = apiWith(async () =>
       view([caused("r-1", "session-1", "completed", "req-1", "call-1")]),
