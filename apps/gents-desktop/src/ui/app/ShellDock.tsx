@@ -42,12 +42,15 @@ export function DockColumn({ route, layout }: { route: Route; layout: ShellLayou
  * The dock as a bottom sheet showing one surface at a time, where the window
  * is too narrow for the column. It takes its turn with the shell's popovers
  * like any other dialog (#1778): the store says it is wanted, the popover
- * owner says when it is on screen. Mounted in every layout so that the
- * window growing past the sheet closes it through its owner.
+ * owner says when it is on screen. Whether the dock is open is the store's
+ * alone: a dismissal, or another popover taking the turn, closes it there;
+ * the window growing past the sheet only changes how it is shown, so the
+ * column picks it up. Mounted in every layout so that change closes the
+ * sheet through its owner.
  */
 export function DockSheet({ route, layout }: { route: Route; layout: ShellLayout }) {
   const { docked, dockOpen, closeDock } = layout;
-  const sheet = useExclusivePopover(closeDock);
+  const sheet = useExclusivePopover(docked ? undefined : closeDock);
   const wanted = !docked && dockOpen;
   const { open, onOpenChange } = sheet;
   useEffect(() => {
