@@ -46,7 +46,7 @@ import { NewSkillSheet } from "./NewSkillSheet";
 import { EditorSheet } from "./EditorSheet";
 import { ToolsEditor } from "./ToolsPanel";
 import { ProfileEditor, modelSentence } from "./ProfileEditor";
-import { newId, useDraft } from "./draft";
+import { focusFirstProblem, newId, useDraft } from "./draft";
 import { ConfirmDelete, DeleteButton } from "./ListDetail";
 import { Group } from "./rows";
 import { rememberContextOrigin } from "./contextOrigin";
@@ -142,10 +142,13 @@ export function BehaviorEditor({
           : undefined,
       };
     },
-    { isNew: draftMode !== undefined },
+    {
+      isNew: draftMode !== undefined,
+      problems: (next) => problems(deployment, next, draftMode !== undefined),
+    },
   );
   const id = (f: string) => `${behavior.behaviorId}-${f}`;
-  const errors = problems(deployment, d.draft, draftMode !== undefined);
+  const errors = d.problems;
   /* a draft closes only once the bridge has the behavior */
   const finish = async (intent: SaveIntent) => {
     const ok = await d.save(intent);
@@ -153,11 +156,10 @@ export function BehaviorEditor({
   };
   /* problems stay at their fields; Save takes you to the first one */
   const save = (intent: SaveIntent = {}): void | Promise<void> => {
-    const first = FIELD_ORDER.find(([field]) => errors[field]);
-    if (first) {
-      document.getElementById(id(first[1]))?.focus();
-      return;
-    }
+    const fields = Object.fromEntries(
+      FIELD_ORDER.map(([field, slug]) => [field, id(slug)]),
+    );
+    if (focusFirstProblem(errors, fields)) return;
     if (sharedEdit) {
       setPendingIntent(intent);
       setConfirmShared(true);
