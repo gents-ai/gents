@@ -122,10 +122,13 @@ export function HooksRows({
   id,
   value,
   onChange,
+  error,
 }: {
   id: string;
   value: HookDraft[];
   onChange: (v: HookDraft[]) => void;
+  /** what hooksFromDraft says is wrong with them */
+  error?: string;
 }) {
   const set = (i: number, patch: Partial<HookDraft>) =>
     onChange(value.map((h, j) => (j === i ? { ...h, ...patch } : h)));
@@ -134,6 +137,7 @@ export function HooksRows({
       label="Hooks"
       description="Commands the runtime runs around the task."
       htmlFor={value.length ? `${id}-0-id` : undefined}
+      error={error}
     >
       <div className="grid gap-2">
         {value.map((h, i) => (
