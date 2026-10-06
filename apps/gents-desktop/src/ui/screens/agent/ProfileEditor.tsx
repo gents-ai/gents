@@ -27,7 +27,15 @@ import { useAccounts, useSetupCatalog } from "@/hooks/useProviders";
 import { BackendSheet } from "./BackendSheet";
 import type { InferenceBackendView } from "@source-inc/gents-desktop-client";
 import { SetupScreen } from "../setup/SetupScreen";
-import { newId, optionalInteger, optionalNumber, str, useDraft } from "./draft";
+import { newId, str, useDraft } from "./draft";
+import {
+  PROFILE_NUMBERS,
+  profileDraftFrom,
+  profileNumbers,
+  profileProblems,
+  type ProfileContext,
+  type ProfileDraft,
+} from "./profileDraft";
 import { DeleteButton } from "./ListDetail";
 import { Group } from "./rows";
 import {
@@ -131,92 +139,7 @@ export function ProfileEditor({
     agentDid: deployment.agentDid,
     section: "profiles",
   };
-  const saved = {
-    displayName: profile.display_name ?? "",
-    description: profile.description ?? "",
-    backendId: profile.backend_id,
-    modelName: profile.model_name,
-    reasoningEffort: profile.reasoning_effort ?? "",
-    contextWindow: str(profile.context_window),
-    maxOutputTokens: str(profile.max_output_tokens),
-    samplingId: profile.sampling_id ?? "",
-    temperature: str(
-      deployment.inferenceSampling.find(
-        (row) => row.sampling_id === profile.sampling_id,
-      )?.temperature,
-    ),
-    topP: str(
-      deployment.inferenceSampling.find(
-        (row) => row.sampling_id === profile.sampling_id,
-      )?.top_p,
-    ),
-    topK: str(
-      deployment.inferenceSampling.find(
-        (row) => row.sampling_id === profile.sampling_id,
-      )?.top_k,
-    ),
-    seed: str(
-      deployment.inferenceSampling.find(
-        (row) => row.sampling_id === profile.sampling_id,
-      )?.seed,
-    ),
-    minP: str(
-      deployment.inferenceSampling.find(
-        (row) => row.sampling_id === profile.sampling_id,
-      )?.min_p,
-    ),
-    frequencyPenalty: str(
-      deployment.inferenceSampling.find(
-        (row) => row.sampling_id === profile.sampling_id,
-      )?.frequency_penalty,
-    ),
-    presencePenalty: str(
-      deployment.inferenceSampling.find(
-        (row) => row.sampling_id === profile.sampling_id,
-      )?.presence_penalty,
-    ),
-    repetitionPenalty: str(
-      deployment.inferenceSampling.find(
-        (row) => row.sampling_id === profile.sampling_id,
-      )?.repetition_penalty,
-    ),
-    executionId: profile.execution_id ?? "",
-    maxTurns: str(
-      deployment.inferenceExecution.find(
-        (row) => row.execution_id === profile.execution_id,
-      )?.max_turns,
-    ),
-    maxTotalTokens: str(
-      deployment.inferenceExecution.find(
-        (row) => row.execution_id === profile.execution_id,
-      )?.max_total_tokens,
-    ),
-    streamBatchMs: str(
-      deployment.inferenceExecution.find(
-        (row) => row.execution_id === profile.execution_id,
-      )?.stream_batch_ms,
-    ),
-    streamLivenessSecs: str(
-      deployment.inferenceExecution.find(
-        (row) => row.execution_id === profile.execution_id,
-      )?.stream_liveness_timeout_secs,
-    ),
-    providerIdleSecs: str(
-      deployment.inferenceExecution.find(
-        (row) => row.execution_id === profile.execution_id,
-      )?.provider_idle_timeout_secs,
-    ),
-    deadlineSecs: str(
-      deployment.inferenceExecution.find(
-        (row) => row.execution_id === profile.execution_id,
-      )?.deadline_duration_secs,
-    ),
-    retryPolicyId:
-      deployment.inferenceExecution.find(
-        (row) => row.execution_id === profile.execution_id,
-      )?.retry_policy_id ?? "",
-    tags: profile.tags ?? [],
-  };
+  const saved = profileDraftFrom(profile, deployment);
   const [customize, setCustomize] = useState(false);
   const [editedModelFields, setEditedModelFields] = useState<
     Set<keyof InferenceSettingsDraft>
@@ -230,10 +153,6 @@ export function ProfileEditor({
   const d = useDraft(
     saved,
     async (next) => {
-      if (!next.backendId.trim()) throw new Error("Backend is required");
-      if (!deployment.inferenceBackends.some((b) => b.backendId === next.backendId))
-        throw new Error("Choose an existing backend");
-      if (!next.modelName.trim()) throw new Error("Model is required");
       if (!recommendation)
         throw new Error(
           recommendationError ?? "Wait for model-aware settings before saving",
@@ -265,78 +184,26 @@ export function ProfileEditor({
       const effectiveSamplingId =
         next.samplingId.trim() ||
         (hasSamplingValues ? `${profile.profile_id}-sampling` : "");
-      const executionValuesPresent = [
-        next.maxTurns,
-        next.maxTotalTokens,
-        next.streamBatchMs,
-        next.streamLivenessSecs,
-        next.providerIdleSecs,
-        next.deadlineSecs,
-        next.retryPolicyId,
-      ].some((value) => value.trim());
-      if (executionValuesPresent && !next.executionId.trim())
-        throw new Error("Execution values require an execution document ID");
-
-      const contextWindow = optionalInteger("Context window", next.contextWindow, {
-        min: 1,
-        // A model that advertises only its maximum has no model-aware
-        // control, but that maximum still bounds the profile's window.
-        ...(recommendation.contextWindow
-          ? {}
-          : { max: advertisedMaxContext(next.backendId, next.modelName) }),
-      });
-      const maxOutputTokens = optionalInteger(
-        "Max output tokens",
-        next.maxOutputTokens,
-        {
-          min: 1,
-        },
-      );
-      const temperature = optionalNumber("Temperature", next.temperature, {
-        min: 0,
-      });
-      const topP = optionalNumber("Top P", next.topP, { min: 0, max: 1 });
-      const topK = optionalInteger("Top K", next.topK, { min: 1 });
-      const seed = optionalInteger("Seed", next.seed, { min: 0 });
-      const minP = optionalNumber("Min P", next.minP, { min: 0, max: 1 });
-      const frequencyPenalty = optionalNumber(
-        "Frequency penalty",
-        next.frequencyPenalty,
-        { min: -2, max: 2 },
-      );
-      const presencePenalty = optionalNumber("Presence penalty", next.presencePenalty, {
-        min: -2,
-        max: 2,
-      });
-      const repetitionPenalty = optionalNumber(
-        "Repetition penalty",
-        next.repetitionPenalty,
-        { min: Number.MIN_VALUE },
-      );
-      const maxTurns = optionalInteger("Max turns", next.maxTurns, { min: 1 });
-      const maxTotalTokens = optionalInteger("Max total tokens", next.maxTotalTokens, {
-        min: 1,
-      });
-      const streamBatchMs = optionalInteger("Stream batch", next.streamBatchMs, {
-        min: 1,
-      });
-      const streamLivenessSecs = optionalInteger(
-        "Execution lease",
-        next.streamLivenessSecs,
-        { min: 1 },
-      );
-      const providerIdleSecs = optionalInteger(
-        "Provider idle timeout",
-        next.providerIdleSecs,
-        { min: 1 },
-      );
-      const deadlineSecs = optionalInteger("Deadline", next.deadlineSecs, { min: 1 });
-      if (
-        streamLivenessSecs != null &&
-        deadlineSecs != null &&
-        streamLivenessSecs >= deadlineSecs
-      )
-        throw new Error("Execution lease must be less than the deadline");
+      /* the fields' problems are said there and hold the save back; what
+         has no field here is checked as it is read */
+      const {
+        contextWindow,
+        maxOutputTokens,
+        temperature,
+        topP,
+        topK,
+        seed,
+        minP,
+        frequencyPenalty,
+        presencePenalty,
+        repetitionPenalty,
+        maxTurns,
+        maxTotalTokens,
+        streamBatchMs,
+        streamLivenessSecs,
+        providerIdleSecs,
+        deadlineSecs,
+      } = profileNumbers(next, profileContext(next));
 
       const sampling = deployment.inferenceSampling.find(
         (row) => row.sampling_id === effectiveSamplingId,
@@ -451,6 +318,18 @@ export function ProfileEditor({
         d.set("samplingId", `${profile.profile_id}-sampling`);
     },
   });
+  /* what the problems and the numbers are read against */
+  const profileContext = (draft: ProfileDraft): ProfileContext => ({
+    deployment,
+    contextMax: recommendation?.contextWindow
+      ? undefined
+      : advertisedMaxContext(draft.backendId, draft.modelName),
+    limitsShown: {
+      contextWindow: Boolean(recommendation && !recommendation.contextWindow),
+      maxOutputTokens: Boolean(recommendation && !recommendation.maxOutputTokens),
+    },
+  });
+  const problems = profileProblems(d.draft, profileContext(d.draft));
   const beginModelSelection = (backendId: string, modelName: string) => {
     if (
       backendId === d.draft.backendId &&
@@ -570,6 +449,7 @@ export function ProfileEditor({
           label="Backend"
           description="The provider and endpoint the model is served from."
           value={d.draft.backendId}
+          error={problems.backendId}
           onChange={(v) => {
             const modelName =
               deployment.inferenceBackends.find((backend) => backend.backendId === v)
@@ -600,6 +480,7 @@ export function ProfileEditor({
           id={id("model")}
           label="Model"
           value={d.draft.modelName}
+          error={problems.modelName}
           onChange={(v) => {
             beginModelSelection(d.draft.backendId, v);
             d.set("modelName", v);
@@ -654,7 +535,8 @@ export function ProfileEditor({
           {!recommendation.contextWindow && (
             <NumberRow
               id={id("context-window")}
-              label="Context window"
+              label={PROFILE_NUMBERS.contextWindow.label}
+              error={problems.contextWindow}
               description={
                 advertisedModel?.max_context_window
                   ? `Tokens per request, up to ${advertisedModel.max_context_window.toLocaleString()}. Empty uses the runtime default.`
@@ -667,7 +549,8 @@ export function ProfileEditor({
           {!recommendation.maxOutputTokens && (
             <NumberRow
               id={id("max-output")}
-              label="Max output tokens"
+              label={PROFILE_NUMBERS.maxOutputTokens.label}
+              error={problems.maxOutputTokens}
               description="Empty uses the runtime default."
               value={d.draft.maxOutputTokens}
               onChange={(v) => d.set("maxOutputTokens", v)}
@@ -691,13 +574,15 @@ export function ProfileEditor({
           label="Execution document ID"
           description="Reuse an existing ID or enter a new one for these limits."
           value={d.draft.executionId}
+          error={problems.executionId}
           placeholder="Created when limits are customized"
           onChange={(v) => d.set("executionId", v)}
           mono
         />
         <NumberRow
           id={id("max-turns")}
-          label="Max turns"
+          label={PROFILE_NUMBERS.maxTurns.label}
+          error={problems.maxTurns}
           value={
             editedExecution.has("maxTurns")
               ? d.draft.maxTurns
@@ -710,14 +595,16 @@ export function ProfileEditor({
         />
         <NumberRow
           id={id("max-total")}
-          label="Max total tokens"
+          label={PROFILE_NUMBERS.maxTotalTokens.label}
+          error={problems.maxTotalTokens}
           value={d.draft.maxTotalTokens}
           placeholder={executionDefault("maxTotalTokens")}
           onChange={(v) => setExecution("maxTotalTokens", v)}
         />
         <NumberRow
           id={id("batch")}
-          label="Stream batch ms"
+          label={PROFILE_NUMBERS.streamBatchMs.label}
+          error={problems.streamBatchMs}
           value={
             editedExecution.has("streamBatchMs")
               ? d.draft.streamBatchMs
@@ -730,7 +617,8 @@ export function ProfileEditor({
         />
         <NumberRow
           id={id("liveness")}
-          label="Execution lease seconds"
+          label={PROFILE_NUMBERS.streamLivenessSecs.label}
+          error={problems.streamLivenessSecs}
           value={
             editedExecution.has("streamLivenessSecs")
               ? d.draft.streamLivenessSecs
@@ -743,7 +631,8 @@ export function ProfileEditor({
         />
         <NumberRow
           id={id("provider-idle")}
-          label="Provider idle seconds"
+          label={PROFILE_NUMBERS.providerIdleSecs.label}
+          error={problems.providerIdleSecs}
           value={
             editedExecution.has("providerIdleSecs")
               ? d.draft.providerIdleSecs
@@ -756,7 +645,8 @@ export function ProfileEditor({
         />
         <NumberRow
           id={id("deadline")}
-          label="Deadline seconds"
+          label={PROFILE_NUMBERS.deadlineSecs.label}
+          error={problems.deadlineSecs}
           value={
             editedExecution.has("deadlineSecs")
               ? d.draft.deadlineSecs
@@ -786,6 +676,20 @@ export function ProfileEditor({
       </Group>
       <DraftActions
         draft={d}
+        problems={problems}
+        fields={{
+          backendId: id("backend"),
+          modelName: id("model"),
+          contextWindow: id("context-window"),
+          maxOutputTokens: id("max-output"),
+          executionId: id("execution"),
+          maxTurns: id("max-turns"),
+          maxTotalTokens: id("max-total"),
+          streamBatchMs: id("batch"),
+          streamLivenessSecs: id("liveness"),
+          providerIdleSecs: id("provider-idle"),
+          deadlineSecs: id("deadline"),
+        }}
         saveLabel={draftMode ? "Create" : undefined}
         onSave={() =>
           draftMode

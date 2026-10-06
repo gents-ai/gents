@@ -58,9 +58,10 @@ type DraftLike = {
 export function DraftActions({
   draft,
   fields,
+  problems = draft.problems ?? {},
   dirty = draft.dirty,
   error = draft.error,
-  onSave = () => focusFirstProblem(draft.problems ?? {}, fields) || draft.save(),
+  onSave = () => draft.save(),
   onCancel = draft.reset,
   saveLabel = "Save",
 }: {
@@ -68,6 +69,8 @@ export function DraftActions({
   /** each field with a problem's element, in the order they are drawn: Save
       goes to the first instead of saving */
   fields?: Partial<Record<string, string>>;
+  /** the draft's problems, where the editor works them out itself */
+  problems?: Partial<Record<string, string>>;
   dirty?: boolean;
   error?: string | null;
   onSave?: () => unknown;
@@ -89,7 +92,9 @@ export function DraftActions({
         <Button
           variant="brand"
           disabled={!dirty || saving}
-          onClick={() => void onSave()}
+          onClick={() => {
+            if (!focusFirstProblem(problems, fields)) void onSave();
+          }}
         >
           {saving ? "Saving…" : saveLabel}
         </Button>
