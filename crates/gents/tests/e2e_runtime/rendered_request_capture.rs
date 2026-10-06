@@ -420,8 +420,22 @@ async fn v2_capture_containers_delta_chain_round_trip_and_bound_logical_bytes() 
     for (turn, (_, stored)) in rows.iter().enumerate() {
         let container: Value = serde_json::from_str(stored).unwrap();
         for payload in ["request_body", "provenance_payload"] {
+            let mut record = container[payload].clone();
+            if record["kind"] == "zlib" {
+                use base64::Engine;
+                use std::io::Read;
+
+                let compressed = base64::engine::general_purpose::STANDARD
+                    .decode(record["data"].as_str().unwrap())
+                    .unwrap();
+                let mut decoded = String::new();
+                flate2::read::ZlibDecoder::new(compressed.as_slice())
+                    .read_to_string(&mut decoded)
+                    .unwrap();
+                record = serde_json::from_str(&decoded).unwrap();
+            }
             assert_eq!(
-                container[payload]["kind"],
+                record["kind"],
                 if turn == 0 || turn == 9 {
                     "full"
                 } else {
