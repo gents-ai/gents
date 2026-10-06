@@ -1849,7 +1849,7 @@ pub(crate) struct ServeArgs {
     #[arg(
         long,
         default_value_t = false,
-        help = "Expose the Grok TUI leader socket so stock Grok can attach as the pager client (`gents grok` needs it)"
+        help = "Expose the Grok TUI leader socket so stock Grok can attach as the pager client: start this server first, then run `grok --leader --leader-socket <path>`"
     )]
     pub(crate) grok_shim: bool,
     #[arg(

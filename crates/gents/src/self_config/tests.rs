@@ -1051,11 +1051,25 @@ async fn graph_tools_start_observe_and_cancel_on_the_current_node() {
     )
     .await
     .expect("node-bound graph starts");
+    let receipt = crate::graph_pipeline::run_receipt_from_tool_result(&started)
+        .expect("session observers decode the run from the durable reply");
     let started: Value = serde_json::from_str(&started).unwrap();
     assert_eq!(started["node_bound"], true);
     assert_eq!(started["principal"], agent_did);
     assert_eq!(started["observed"]["status"], "running");
     let run_id = started["receipt"]["run_id"].as_str().unwrap();
+    assert_eq!(receipt.run_id, run_id);
+    assert_eq!(
+        crate::graph_pipeline::load_graph_run_view_with_access(
+            &access,
+            &agent_did,
+            &receipt.run_id
+        )
+        .await
+        .expect("the decoded run loads through the canonical view owner")
+        .run_id,
+        run_id
+    );
 
     let observed = call(GET_GRAPH_RUN_TOOL_NAME, json!({"run_id": run_id}))
         .await

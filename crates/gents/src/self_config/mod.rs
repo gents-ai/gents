@@ -2754,13 +2754,12 @@ impl Tool for RunGraphTool {
             &receipt.run_id,
         )
         .await?;
-        serde_json::to_string_pretty(&json!({
-            "node_bound": true,
-            "principal": self.core.agent_did(),
-            "receipt": receipt,
-            "observed": observed,
-            "next": {"status_tool": GET_GRAPH_RUN_TOOL_NAME, "result_tool": GET_GRAPH_RESULT_TOOL_NAME},
-        }))
+        crate::graph_pipeline::run_graph_tool_result(
+            self.core.agent_did(),
+            &receipt,
+            &observed,
+            json!({"status_tool": GET_GRAPH_RUN_TOOL_NAME, "result_tool": GET_GRAPH_RESULT_TOOL_NAME}),
+        )
         .map_err(|error| SelfConfigError(anyhow!(error)))
     }
 }

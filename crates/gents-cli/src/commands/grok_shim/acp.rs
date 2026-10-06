@@ -50,8 +50,9 @@
 //! wire instead of being silently swallowed.
 //!
 //! All GraphQL values pass through `gents::graphql::escape_graphql_string`
-//! and every query runs in-process on the embedded node via
-//! `EmbeddedNode::execute`; no HTTP GraphQL helper is used.
+//! and every query runs in-process on the embedded node through the
+//! `graphql_with_transaction_retry` and `ConfigAccess` owners; no HTTP
+//! GraphQL helper is used.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
