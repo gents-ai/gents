@@ -132,14 +132,12 @@ export function NodeBehaviorStack({
           >
             <BehaviorAvatar
               name={behaviorName(behaviorId ?? null, found)}
-              behaviorId={behaviorId}
               className={shifted}
             />
           </button>
         ) : (
           <BehaviorAvatar
             name={behaviorName(behaviorId ?? null, found)}
-            behaviorId={behaviorId}
             className={shifted}
           />
         )}
@@ -148,7 +146,6 @@ export function NodeBehaviorStack({
         <BehaviorHoverCard key={b} deployment={on} behaviorId={b} side="bottom">
           <BehaviorAvatar
             name={behaviorName(b, on)}
-            behaviorId={b}
             className={cn(shifted, foldedBehavior)}
           />
         </BehaviorHoverCard>

@@ -98,22 +98,11 @@ export function useDraft<T extends object>(
 }
 
 /* one item per line; the desktop app splits on newline or comma */
-export const toLines = (items: string[]) => items.join("\n");
 export const fromLines = (text: string) =>
   text
     .split(/[\n,]/)
     .map((s) => s.trim())
     .filter(Boolean);
-export const fromLinesOrNull = (text: string) => {
-  const items = fromLines(text);
-  return items.length ? items : null;
-};
-
-/* the desktop app's number hints */
-export const intOrNull = (s: string) =>
-  s.trim() === "" ? null : Number.parseInt(s, 10);
-export const floatOrNull = (s: string) =>
-  s.trim() === "" ? null : Number.parseFloat(s);
 export const str = (n: number | null | undefined) => (n == null ? "" : String(n));
 
 export function optionalInteger(

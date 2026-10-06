@@ -74,7 +74,6 @@ import { newId, useDraft } from "./draft";
 import { ConfirmDelete, DeleteButton, ListDetail } from "./ListDetail";
 import { Group } from "./rows";
 import { rememberContextOrigin } from "./contextOrigin";
-import { clearPromptFocus, promptFocusRequested } from "./promptFocus";
 import { toastFailure } from "@/lib/failure";
 import { defaultAgentOf } from "@/lib/agents";
 import { agentOf } from "@/lib/agents";
@@ -668,15 +667,6 @@ export function BehaviorEditor({
   const [confirmShared, setConfirmShared] = useState(false);
   /* what the save waiting on that question should also do */
   const [pendingIntent, setPendingIntent] = useState<SaveIntent>({});
-  /* just created: open on the prompt, expanded and focused */
-  const [focusPrompt] = useState(() => promptFocusRequested(behavior.behaviorId));
-  useEffect(() => {
-    if (!focusPrompt) return;
-    clearPromptFocus();
-    const el = document.getElementById(`${behavior.behaviorId}-prompt`);
-    el?.scrollIntoView({ block: "center" });
-    el?.focus();
-  }, [focusPrompt, behavior.behaviorId]);
   /* switching to another behavior's instructions opens the picker inline */
   const [switching, setSwitching] = useState(false);
   const shared = others.length > 0;
@@ -831,7 +821,6 @@ export function BehaviorEditor({
             name={
               draftMode ? d.draft.displayName.trim() || "New" : behavior.displayName
             }
-            behaviorId={behavior.behaviorId}
             className="size-10 shrink-0 text-sm"
           />
           <div className="min-w-0">
@@ -1045,7 +1034,6 @@ export function BehaviorEditor({
                 onCommit={d.commit}
                 rows={6}
                 stacked
-                expandedByDefault={focusPrompt}
               />
             </Group>
             <Group title="Capabilities">
@@ -1397,7 +1385,6 @@ export function BehaviorsPanel({
             icon: (
               <BehaviorAvatar
                 name={b.displayName}
-                behaviorId={b.behaviorId}
                 className="size-6 border-0 bg-transparent text-[10px]"
               />
             ),

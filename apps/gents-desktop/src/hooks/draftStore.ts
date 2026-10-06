@@ -13,10 +13,6 @@ export function createDraftStore(): DraftStore {
   return createStore(() => ({ drafts: {} }));
 }
 
-export function readDraft(store: DraftStore, key: string): string {
-  return store.getState().drafts[key] ?? "";
-}
-
 export function writeDraft(
   store: DraftStore,
   key: string,

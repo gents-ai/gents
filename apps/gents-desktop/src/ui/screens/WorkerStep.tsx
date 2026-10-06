@@ -267,7 +267,6 @@ export function WorkerStep({
   const mark = behaviorId ? (
     <BehaviorAvatar
       name={behaviorName(behaviorId, deployment)}
-      behaviorId={behaviorId}
       className="size-4 text-[8px]"
     />
   ) : undefined;
@@ -346,7 +345,6 @@ export function SubagentList({ workers }: { workers: Workers }) {
               {behaviorId && (
                 <BehaviorAvatar
                   name={behaviorName(behaviorId, deployment)}
-                  behaviorId={behaviorId}
                   className="size-4 text-[8px]"
                 />
               )}

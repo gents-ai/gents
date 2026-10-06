@@ -64,15 +64,5 @@ export function groupItems(items: MailboxItemView[]): TriageGroup[] {
   })).filter((g) => g.items.length > 0);
 }
 
-/* how many of each kind there are, in a fixed order, for the filter */
+/* the kinds, in the order a person works through them */
 export const KIND_ORDER = ["ask", "gate", "failed", "flag", "finished"];
-
-export function countKinds(
-  items: MailboxItemView[],
-): { kind: string; count: number }[] {
-  const counts = new Map<string, number>();
-  for (const m of items) counts.set(m.kind, (counts.get(m.kind) ?? 0) + 1);
-  const known = KIND_ORDER.filter((k) => counts.has(k));
-  const unknown = [...counts.keys()].filter((k) => !KIND_ORDER.includes(k)).sort();
-  return [...known, ...unknown].map((kind) => ({ kind, count: counts.get(kind)! }));
-}

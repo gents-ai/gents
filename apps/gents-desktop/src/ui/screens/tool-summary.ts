@@ -149,27 +149,13 @@ export function toolSummary(t: RenderedToolCallView): {
   }
 }
 
-/* What a diff line is, in the words the runtime uses. The bridge writes
-   "add" and "del" (crates/gents-desktop-bridge/src/snapshot/
-   tool_presentation.rs, `diff_lines`), while the scenarios here were
-   written as "added" and "removed" — so a test for 'added' alone sent
-   every real line down the removed branch and a whole diff read as a
-   deletion. Anything else is context, which is neither. */
-export const diffKind = (kind: string): "added" | "removed" | "context" => {
-  const k = kind.toLowerCase();
-  if (k.startsWith("add") || k === "+") return "added";
-  if (k.startsWith("del") || k.startsWith("rem") || k === "-") return "removed";
-  return "context";
-};
-
 /* how big the change is, the way an editor says it: +18 −2 */
-export function diffTally(diff: { kind: string; text?: string }[]) {
+export function diffTally(diff: readonly ToolDiffLineView[]) {
   let added = 0;
   let removed = 0;
   for (const line of diff) {
-    const kind = diffKind(line.kind);
-    if (kind === "added") added += 1;
-    else if (kind === "removed") removed += 1;
+    if (line.kind === "added") added += 1;
+    else if (line.kind === "removed") removed += 1;
   }
   if (!added && !removed) return null;
   return [added ? `+${added}` : null, removed ? `\u2212${removed}` : null]

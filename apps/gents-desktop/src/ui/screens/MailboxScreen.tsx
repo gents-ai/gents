@@ -55,7 +55,7 @@ import { useStoredStrings } from "@/lib/stored";
 import { nodeDidOf } from "@/lib/nodes";
 import { NodeAxis } from "./NodeAxis";
 import { NodeBehaviorStack } from "./NodeBehaviorStack";
-import { groupItems, matches } from "./mailbox-triage";
+import { groupItems, KIND_ORDER, matches } from "./mailbox-triage";
 import { parseQuestion, QuestionAnswer } from "./MailboxQuestion";
 import { Markdown } from "./Markdown";
 import { Axis, type Option } from "./SessionFilters";
@@ -96,15 +96,13 @@ const STATUS: Record<string, { label: string; badge: BadgeVariant }> = {
 const FOLD_CHARS = 600;
 const FOLD_LINES = 10;
 
-/* the kind axis, in the order a person works through them */
-const KINDS: Option<string>[] = ["ask", "gate", "failed", "flag", "finished"].map(
-  (value) => ({
-    value,
-    label: KIND[value]!.label,
-    icon: KIND[value]!.icon,
-    tint: KIND[value]!.tone,
-  }),
-);
+/* the kind axis */
+const KINDS: Option<string>[] = KIND_ORDER.map((value) => ({
+  value,
+  label: KIND[value]!.label,
+  icon: KIND[value]!.icon,
+  tint: KIND[value]!.tone,
+}));
 
 export function MailboxScreen({
   nodeDid,

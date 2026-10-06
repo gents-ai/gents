@@ -363,8 +363,6 @@ export function createClientLifecycle({
   };
 }
 
-export type ClientLifecycle = ReturnType<typeof createClientLifecycle>;
-
 /* the read without its deployments, which the fleet store compares by key */
 function withoutDeployments(snapshot: DesktopClientSnapshot) {
   return snapshot.client

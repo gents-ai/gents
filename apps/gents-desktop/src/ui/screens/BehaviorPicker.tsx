@@ -105,11 +105,7 @@ function MountedBehaviorPicker({
           }
           aria-label="Behavior"
         >
-          <BehaviorAvatar
-            name={chosen.displayName}
-            behaviorId={chosen.behaviorId}
-            className="size-6 text-[10px]"
-          />
+          <BehaviorAvatar name={chosen.displayName} className="size-6 text-[10px]" />
           <span>{chosen.displayName}</span>
           <ChevronDown className="ml-6 size-3.5 text-muted-foreground" />
         </PopoverTrigger>
@@ -186,7 +182,6 @@ function MountedBehaviorPicker({
                     >
                       <BehaviorAvatar
                         name={b.displayName}
-                        behaviorId={b.behaviorId}
                         className="row-span-3 mt-0.5"
                       />
                       <span className="text-sm font-medium">

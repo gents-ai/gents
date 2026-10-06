@@ -605,7 +605,6 @@ function WorkerRunStep({
         behaviorId ? (
           <BehaviorAvatar
             name={behaviorName(behaviorId, deployment)}
-            behaviorId={behaviorId}
             className="size-4 text-[8px]"
           />
         ) : (
@@ -873,7 +872,6 @@ const TranscriptItem = memo(function TranscriptItem({
         <div className={cn("relative", state && "mb-2")}>
           <BehaviorAvatar
             name={sender.behaviorName ?? senderName}
-            behaviorId={sender.summary?.behaviorId ?? null}
             /* in the gutter where there is one; seated on the bubble's
                top corner when the screen is too narrow to spare it */
             className="absolute -top-1 right-2 size-6 text-[10px] ring-2 ring-background sm:top-3.5 sm:-right-8 sm:ring-0"

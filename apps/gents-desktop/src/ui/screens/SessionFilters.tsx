@@ -277,7 +277,6 @@ function BehaviorAxis({
               <BehaviorAvatar
                 key={b.id}
                 name={b.name}
-                behaviorId={b.id}
                 className="size-5 text-[9px] ring-1 ring-background"
               />
             ))}
@@ -318,11 +317,7 @@ function BehaviorAxis({
                 value={id}
                 disabled={b.count === 0 && !value.includes(id)}
               >
-                <BehaviorAvatar
-                  name={b.name}
-                  behaviorId={b.id}
-                  className="size-5 text-[9px]"
-                />
+                <BehaviorAvatar name={b.name} className="size-5 text-[9px]" />
                 <span className="min-w-0 flex-1 truncate">{b.name}</span>
                 <span className="text-xs tabular-nums text-muted-foreground">
                   {b.count}
