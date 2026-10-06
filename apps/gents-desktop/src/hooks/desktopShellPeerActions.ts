@@ -14,7 +14,8 @@ type PeerActionParams = {
   ensureDesktopClientStarted: () => Promise<DesktopClientSnapshot>;
   mutateSnapshot: <T>(operation: () => Promise<T>) => Promise<T>;
   refreshSnapshot: () => Promise<void>;
-  setError: (error: string | null) => void;
+  /** shows a failed action to the person, once */
+  reportFailure: (message: string) => void;
   selectAgent: (agentDid: string | null) => void;
 };
 
@@ -24,7 +25,7 @@ export function createDesktopShellPeerActions({
   ensureDesktopClientStarted,
   mutateSnapshot,
   refreshSnapshot,
-  setError,
+  reportFailure,
   selectAgent,
 }: PeerActionParams) {
   const setStarting = clientSetter(stores.client, "starting");
@@ -62,18 +63,16 @@ export function createDesktopShellPeerActions({
   }
 
   async function fetchPeerStatus(peerId: string) {
-    setError(null);
     try {
       return await api.fetchPeerStatus(peerId);
     } catch (err) {
       const message = formatPeerConnectionError(err, "peer-status");
-      setError(message);
+      reportFailure(message);
       throw shownFailure(new Error(message));
     }
   }
 
   async function requestStatusEnrollment(serverAddress: string) {
-    setError(null);
     try {
       if (!clientRuns()) {
         await ensureDesktopClientStarted();
@@ -83,13 +82,12 @@ export function createDesktopShellPeerActions({
       return request;
     } catch (err) {
       const message = formatPeerConnectionError(err, "peer-status");
-      setError(message);
+      reportFailure(message);
       throw shownFailure(new Error(message));
     }
   }
 
   async function removePeer(peerId: string, agentDid?: string) {
-    setError(null);
     try {
       const next = await mutateSnapshot(() => api.removePeer(peerId));
       if (agentDid && stores.selection.getState().agentDid === agentDid) {
@@ -98,7 +96,7 @@ export function createDesktopShellPeerActions({
       return next;
     } catch (err) {
       const message = formatPeerConnectionError(err, "remove-peer");
-      setError(message);
+      reportFailure(message);
       throw shownFailure(new Error(message));
     }
   }

@@ -22,7 +22,7 @@ function mailbox(api: DesktopApiAdapter) {
     api,
     stores,
     refreshSnapshot: async () => {},
-    setError: () => {},
+    reportFailure: () => {},
   });
   return { store: stores.selection, actions };
 }

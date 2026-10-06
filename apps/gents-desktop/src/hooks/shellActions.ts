@@ -25,8 +25,8 @@ type ShellActionParams = {
     mutateSnapshot: <T>(operation: () => Promise<T>) => Promise<T>;
     ensureDesktopClientStarted: () => Promise<DesktopClientSnapshot>;
   };
-  /** shows a failed action once; null clears nothing a toast holds */
-  setError: (error: string | null) => void;
+  /** shows a failed action to the person, once */
+  reportFailure: (message: string) => void;
 };
 
 /**
@@ -40,9 +40,9 @@ export function createShellActions({
   project,
   reads,
   client: { refreshSnapshot, mutateSnapshot, ensureDesktopClientStarted },
-  setError,
+  reportFailure,
 }: ShellActionParams) {
-  const route = createDesktopShellSelectionActions({ stores, setError });
+  const route = createDesktopShellSelectionActions({ stores });
   return {
     ...reads,
     ...route,
@@ -50,7 +50,12 @@ export function createShellActions({
         newest read issued publishes. A failure is the client's own state,
         shown in the banner. */
     refreshSnapshot,
-    ...createDesktopShellMailboxActions({ api, stores, refreshSnapshot, setError }),
+    ...createDesktopShellMailboxActions({
+      api,
+      stores,
+      refreshSnapshot,
+      reportFailure,
+    }),
     /** Puts down the mailbox item the next message was going to answer; the
         item stays open, and the next message is an ordinary one. */
     clearMailboxCause: () => selection.releaseMailboxRoute(stores.selection),
@@ -60,15 +65,15 @@ export function createShellActions({
       ensureDesktopClientStarted,
       mutateSnapshot,
       refreshSnapshot,
-      setError,
+      reportFailure,
       selectAgent: route.selectAgent,
     }),
-    ...createDesktopShellConfigActions({ api, mutateSnapshot, setError }),
+    ...createDesktopShellConfigActions({ api, mutateSnapshot, reportFailure }),
     ...createDesktopShellTaskActions({
       api,
       store: stores.selection,
       refreshSnapshot,
-      setError,
+      reportFailure,
     }),
     ...createDesktopShellChatActions({
       api,
@@ -76,7 +81,7 @@ export function createShellActions({
       project,
       refreshSession: reads.refreshSession,
       refreshSnapshot,
-      setError,
+      reportFailure,
     }),
     /** Where the person is now, to check an async result against later
         with acceptsComposeIntent. */

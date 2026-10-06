@@ -23,7 +23,7 @@ function fixture(
   });
   const store = stores.selection;
   const effects = {
-    setError: vi.fn(),
+    reportFailure: vi.fn(),
     refreshSession: vi.fn(async () => {
       throw new Error("observation unavailable");
     }),
@@ -141,7 +141,7 @@ describe("canonical chat submission acceptance", () => {
       f.actions.sendMessage("review this", "new-choice"),
     ).resolves.toBeNull();
     expect(send).not.toHaveBeenCalled();
-    expect(f.setError).toHaveBeenLastCalledWith("Behavior is unavailable");
+    expect(f.reportFailure).toHaveBeenLastCalledWith("Behavior is unavailable");
   });
   it("records an accepted pending request without depending on a successful refresh", async () => {
     const accepted = {
@@ -167,7 +167,7 @@ describe("canonical chat submission acceptance", () => {
     });
     expect(f.refreshSession).not.toHaveBeenCalled();
     expect(f.refreshSnapshot).not.toHaveBeenCalled();
-    expect(f.setError).toHaveBeenLastCalledWith(null);
+    expect(f.reportFailure).not.toHaveBeenCalled();
   });
 
   it("publishes a failed submission and does not invent an accepted request", async () => {
@@ -175,7 +175,7 @@ describe("canonical chat submission acceptance", () => {
       throw new Error("request rejected");
     });
     await expect(f.actions.sendMessage("review this")).resolves.toBeNull();
-    expect(f.setError).toHaveBeenLastCalledWith(
+    expect(f.reportFailure).toHaveBeenLastCalledWith(
       "Couldn’t send the message: request rejected",
     );
     expect(f.getWorkflow()).toEqual({ kind: "ready" });
@@ -208,7 +208,7 @@ describe("canonical chat submission acceptance", () => {
     expect(f.pendingTurn()).toBeNull();
     expect(f.getWorkflow()).toEqual({ kind: "ready" });
     expect(f.store.getState().mailboxRoute).toBeNull();
-    expect(f.setError).not.toHaveBeenCalled();
+    expect(f.reportFailure).not.toHaveBeenCalled();
     expect(f.sending).toEqual([true, false]);
   });
 
@@ -222,7 +222,7 @@ describe("canonical chat submission acceptance", () => {
 
     await expect(submitted).resolves.toBeNull();
     expect(f.getWorkflow()).toEqual({ kind: "ready" });
-    expect(f.setError).not.toHaveBeenCalled();
+    expect(f.reportFailure).not.toHaveBeenCalled();
     expect(f.sending).toEqual([true, false]);
   });
 
@@ -244,7 +244,7 @@ describe("canonical chat submission acceptance", () => {
     await retried;
     expect(f.store.getState().sessionId).toBe("session");
     expect(f.getWorkflow()).toEqual({ kind: "ready" });
-    expect(f.setError).not.toHaveBeenCalled();
+    expect(f.reportFailure).not.toHaveBeenCalled();
     expect(f.sending).toEqual([true, false]);
   });
 
@@ -263,7 +263,7 @@ describe("canonical chat submission acceptance", () => {
     await retried;
     expect(f.store.getState().sessionId).toBe("session");
     expect(f.getWorkflow()).toEqual({ kind: "ready" });
-    expect(f.setError).not.toHaveBeenCalled();
+    expect(f.reportFailure).not.toHaveBeenCalled();
     expect(f.sending).toEqual([true, false]);
   });
 });

@@ -27,7 +27,8 @@ type ChatActionParams = {
     nextSessionId: string | null,
   ) => Promise<DesktopSessionSnapshot | null>;
   refreshSnapshot: () => Promise<void>;
-  setError: (error: string | null) => void;
+  /** shows a failed action to the person, once */
+  reportFailure: (message: string) => void;
 };
 
 export function releaseOwnedSubmissionWorkflow(
@@ -47,7 +48,7 @@ export function createDesktopShellChatActions({
   project,
   refreshSession,
   refreshSnapshot,
-  setError,
+  reportFailure,
 }: ChatActionParams) {
   const store = stores.selection;
   const setLocalWorkflow = setterOf(stores.chat, "localWorkflow");
@@ -79,7 +80,7 @@ export function createDesktopShellChatActions({
     const projection = project();
     const status = projection.shellProjection.nonEmptyContentSendStatus;
     if (status.kind !== "ready") {
-      setError(status.hint);
+      reportFailure(status.hint);
       return null;
     }
     const admission =
@@ -87,7 +88,7 @@ export function createDesktopShellChatActions({
         ? projection.behaviorReadiness
         : selectedBehaviorReadinessDecision(node, behaviorId);
     if (admission.kind !== "ready") {
-      setError("The selected behavior is unavailable");
+      reportFailure("The selected behavior is unavailable");
       return null;
     }
 
@@ -102,7 +103,6 @@ export function createDesktopShellChatActions({
     /* one write: the app releases a submission whose send has ended, so the
        workflow and the send start together */
     stores.chat.setState({ localWorkflow: ownedWorkflow, sending: true });
-    setError(null);
     try {
       const result = await api.sendChatMessage({
         agentDid: node.agentDid,
@@ -136,7 +136,7 @@ export function createDesktopShellChatActions({
     } catch (err) {
       if (!selection.acceptsIntent(store, intentGeneration)) return null;
       setLocalWorkflow({ kind: "ready" });
-      setError(actionFailure("send the message", err));
+      reportFailure(actionFailure("send the message", err));
       return null;
     } finally {
       stores.chat.setState((state) => ({
@@ -156,7 +156,7 @@ export function createDesktopShellChatActions({
     if (!node) return;
     const status = project().retryShellProjection.nonEmptyContentSendStatus;
     if (status.kind !== "ready") {
-      setError(status.hint);
+      reportFailure(status.hint);
       return;
     }
     submissionInFlight = true;
@@ -169,7 +169,6 @@ export function createDesktopShellChatActions({
     /* one write: the app releases a submission whose send has ended, so the
        workflow and the send start together */
     stores.chat.setState({ localWorkflow: ownedWorkflow, sending: true });
-    setError(null);
     try {
       const result = await api.retryRequest(requestId, node.agentDid);
       if (!selection.acceptsIntent(store, intentGeneration)) return;
@@ -183,7 +182,7 @@ export function createDesktopShellChatActions({
     } catch (err) {
       if (!selection.acceptsIntent(store, intentGeneration)) return;
       setLocalWorkflow({ kind: "ready" });
-      setError(actionFailure("retry the message", err));
+      reportFailure(actionFailure("retry the message", err));
     } finally {
       stores.chat.setState((state) => ({
         localWorkflow: releaseOwnedSubmissionWorkflow(
@@ -199,13 +198,12 @@ export function createDesktopShellChatActions({
   async function renameSession(sessionId: string, title: string) {
     const node = selectedNode();
     if (!node) return;
-    setError(null);
     try {
       await api.renameSession({ agentDid: node.agentDid, sessionId, title });
       await refreshSnapshot();
       await refreshSession(sessionId);
     } catch (err) {
-      setError(actionFailure("rename the session", err));
+      reportFailure(actionFailure("rename the session", err));
       throw shownFailure(err);
     }
   }
@@ -216,7 +214,7 @@ export function createDesktopShellChatActions({
     try {
       await api.interruptRequest({ ...request, cause: "userCancelled" });
     } catch (err) {
-      setError(actionFailure("stop", err));
+      reportFailure(actionFailure("stop", err));
       throw shownFailure(err);
     }
   }

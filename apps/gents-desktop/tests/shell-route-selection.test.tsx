@@ -20,7 +20,7 @@ function routeOwner(initial = { agentDid: "a", sessionId: "a-1" as string | null
     deployments: [node("a", ["a-1"]), node("b", ["b-1"])],
     selection: initial,
   });
-  const route = createDesktopShellSelectionActions({ stores, setError: vi.fn() });
+  const route = createDesktopShellSelectionActions({ stores });
   return { store: stores.selection, route };
 }
 

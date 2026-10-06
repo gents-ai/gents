@@ -63,9 +63,7 @@ function useHarness(
     })),
   ).current;
   const api = useRef({ sendChatMessage }).current as unknown as DesktopApiAdapter;
-  const [route] = useState(() =>
-    createDesktopShellSelectionActions({ stores, setError: vi.fn() }),
-  );
+  const [route] = useState(() => createDesktopShellSelectionActions({ stores }));
   const [actions] = useState(() => ({
     ...route,
     ...createDesktopShellChatActions({
@@ -74,7 +72,7 @@ function useHarness(
       project: () => admittingProjection("setup"),
       refreshSession: async () => null,
       refreshSnapshot: async () => {},
-      setError: vi.fn(),
+      reportFailure: vi.fn(),
     }),
   }));
   useSelectionReconcile({ stores, actions });
@@ -148,7 +146,7 @@ describe("explicit session selection", () => {
     writeSession(stores.session, {
       sessionId: "first-setup",
     } as DesktopSessionSnapshot);
-    const route = createDesktopShellSelectionActions({ stores, setError: vi.fn() });
+    const route = createDesktopShellSelectionActions({ stores });
     route.selectAgent("agent");
     expect(store.getState().sessionId).toBe("first-setup");
     expect(readSession(stores.session)).not.toBeNull();
@@ -164,7 +162,7 @@ describe("explicit session selection", () => {
       client: { deployments: [initialDeployment] },
     } as unknown as DesktopClientSnapshot);
     stores.client.setState({ error: "Session not found" });
-    createDesktopShellSelectionActions({ stores, setError: vi.fn() }).startNewSession();
+    createDesktopShellSelectionActions({ stores }).startNewSession();
     expect(stores.client.getState().error).toBeNull();
   });
 

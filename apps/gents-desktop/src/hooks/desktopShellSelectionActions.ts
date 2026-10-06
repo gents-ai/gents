@@ -7,7 +7,6 @@ import type { ShellStores } from "./shellProjection";
 
 type SelectionActionParams = {
   stores: ShellStores;
-  setError: (error: string | null) => void;
 };
 
 /**
@@ -16,10 +15,7 @@ type SelectionActionParams = {
  * copy, and each drops the session the screen showed when it no longer
  * applies.
  */
-export function createDesktopShellSelectionActions({
-  stores,
-  setError,
-}: SelectionActionParams) {
+export function createDesktopShellSelectionActions({ stores }: SelectionActionParams) {
   const store = stores.selection;
   const fleet = () => stores.fleet.getState();
   const dropSession = () => writeSession(stores.session, null);
@@ -60,7 +56,6 @@ export function createDesktopShellSelectionActions({
     );
     dropSession();
     setterOf(stores.chat, "localWorkflow")({ kind: "ready" });
-    setError(null);
     /* the banner may hold the session left behind (a read that failed);
        the new session starts without it */
     stores.client.setState({ error: null });

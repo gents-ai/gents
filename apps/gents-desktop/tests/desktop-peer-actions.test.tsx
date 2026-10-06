@@ -33,9 +33,7 @@ function usePeerRoute(
     }),
   );
   const current = useSelection(stores.selection);
-  const [route] = useState(() =>
-    createDesktopShellSelectionActions({ stores, setError: () => {} }),
-  );
+  const [route] = useState(() => createDesktopShellSelectionActions({ stores }));
   const [actions] = useState(() =>
     createDesktopShellPeerActions({
       api,
@@ -44,7 +42,7 @@ function usePeerRoute(
       mutateSnapshot: async <T,>(operation: () => Promise<T>) => operation(),
       refreshSnapshot: async () => {},
       selectAgent: route.selectAgent,
-      setError: vi.fn(),
+      reportFailure: vi.fn(),
     }),
   );
   return {

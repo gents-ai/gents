@@ -16,7 +16,8 @@ type MailboxActionParams = {
   api: DesktopApiAdapter;
   stores: ShellStores;
   refreshSnapshot: () => Promise<void>;
-  setError: (error: string | null) => void;
+  /** shows a failed action to the person, once */
+  reportFailure: (message: string) => void;
 };
 
 /** Opening, dismissing and answering mailbox items. An opened item routes
@@ -25,7 +26,7 @@ export function createDesktopShellMailboxActions({
   api,
   stores,
   refreshSnapshot,
-  setError,
+  reportFailure,
 }: MailboxActionParams) {
   const store = stores.selection;
   async function openMailboxItem(itemId: string): Promise<MailboxItemView | null> {
@@ -41,11 +42,10 @@ export function createDesktopShellMailboxActions({
         sessionId: item.sessionId ?? null,
       });
       writeSession(stores.session, null);
-      setError(null);
       return item;
     } catch (error) {
       if (!selection.acceptsIntent(store, captured)) return null;
-      setError(actionFailure("open the item", error));
+      reportFailure(actionFailure("open the item", error));
       throw shownFailure(error);
     }
   }
@@ -60,7 +60,7 @@ export function createDesktopShellMailboxActions({
       );
       await refreshSnapshot();
     } catch (error) {
-      setError(actionFailure("dismiss the item", error));
+      reportFailure(actionFailure("dismiss the item", error));
       throw shownFailure(error);
     }
   }
@@ -83,10 +83,9 @@ export function createDesktopShellMailboxActions({
       if (store.getState().mailboxRoute?.itemId === item.itemId) {
         selection.releaseMailboxRoute(store);
       }
-      setError(null);
       await refreshSnapshot();
     } catch (error) {
-      setError(actionFailure("send the answer", error));
+      reportFailure(actionFailure("send the answer", error));
       throw shownFailure(error);
     }
   }

@@ -14,23 +14,25 @@ import { toastFailure } from "../src/ui/lib/failure";
    not report it again. */
 describe("a failed action", () => {
   const actions = (saveSkillConfig: () => Promise<never>) => {
-    const setError = vi.fn();
+    const reportFailure = vi.fn();
     const created = createDesktopShellConfigActions({
       api: { saveSkillConfig } as unknown as DesktopApiAdapter,
       mutateSnapshot: async <T>(mutation: () => Promise<T>) => mutation(),
-      setError,
+      reportFailure,
     });
-    return { created, setError };
+    return { created, reportFailure };
   };
 
   it("is reported by its action, naming what failed, and not again by the screen", async () => {
     /* the bridge rejects with a plain string */
-    const { created, setError } = actions(() => Promise.reject("skill name taken"));
+    const { created, reportFailure } = actions(() =>
+      Promise.reject("skill name taken"),
+    );
     const failure = await created
       .changeConfig("saveSkillConfig", {} as never)
       .catch((error: unknown) => error);
 
-    expect(setError).toHaveBeenLastCalledWith(
+    expect(reportFailure).toHaveBeenLastCalledWith(
       "Couldn’t save the skill: skill name taken",
     );
     expect(failure).toBeInstanceOf(Error);

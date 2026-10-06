@@ -68,7 +68,7 @@ describe("sending with a chat folder", () => {
       project: () => admittingProjection(),
       refreshSession: vi.fn(),
       refreshSnapshot: vi.fn(),
-      setError: vi.fn(),
+      reportFailure: vi.fn(),
     });
     actions.setChatFolder("/work/notes");
     await actions.sendMessage("what is in todo.txt");

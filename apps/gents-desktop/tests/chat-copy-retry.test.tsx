@@ -24,7 +24,7 @@ function chatActions(
     shellProjection: ReturnType<typeof projectChatShell>;
     retryShellProjection: ReturnType<typeof projectChatShell>;
   },
-  setError = vi.fn(),
+  reportFailure = vi.fn(),
 ) {
   const stores = shellStores({
     deployments: [deployment],
@@ -36,7 +36,7 @@ function chatActions(
     project: () => projection as unknown as ShellProjection,
     refreshSession: vi.fn(),
     refreshSnapshot: vi.fn(),
-    setError,
+    reportFailure,
   });
   return { actions, stores };
 }
@@ -376,7 +376,7 @@ describe("error card retry", () => {
       sessionId: "s1",
       requestId: "req_retry",
     });
-    const setError = vi.fn();
+    const reportFailure = vi.fn();
     const composerProjection = projectChatShell({
       clientAvailable: true,
       selectedAgentDid: deployment.agentDid,
@@ -406,17 +406,17 @@ describe("error card retry", () => {
         shellProjection: composerProjection,
         retryShellProjection: blockedRetryProjection,
       },
-      setError,
+      reportFailure,
     );
     await blocked.retryMessage("req-failed");
     expect(retryRequest).not.toHaveBeenCalled();
-    expect(setError).toHaveBeenCalledWith(
+    expect(reportFailure).toHaveBeenCalledWith(
       blockedRetryProjection.nonEmptyContentSendStatus.kind === "disabled"
         ? blockedRetryProjection.nonEmptyContentSendStatus.hint
         : null,
     );
 
-    setError.mockClear();
+    reportFailure.mockClear();
     const { actions: readyRetry } = chatActions(
       api,
       {
@@ -424,11 +424,11 @@ describe("error card retry", () => {
         shellProjection: blockedRetryProjection,
         retryShellProjection: composerProjection,
       },
-      setError,
+      reportFailure,
     );
     await readyRetry.retryMessage("req-failed");
     expect(retryRequest).toHaveBeenCalledWith("req-failed", deployment.agentDid);
-    expect(setError).not.toHaveBeenCalledWith(
+    expect(reportFailure).not.toHaveBeenCalledWith(
       blockedRetryProjection.nonEmptyContentSendStatus.kind === "disabled"
         ? blockedRetryProjection.nonEmptyContentSendStatus.hint
         : null,

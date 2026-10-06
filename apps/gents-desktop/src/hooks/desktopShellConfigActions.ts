@@ -42,13 +42,14 @@ export type ConfigRequest<K extends ConfigChange> = Parameters<DesktopApiAdapter
 
 type ConfigActionParams = {
   api: DesktopApiAdapter;
-  setError: (error: string | null) => void;
+  /** shows a failed action to the person, once */
+  reportFailure: (message: string) => void;
   mutateSnapshot: <T>(operation: () => Promise<T>) => Promise<T>;
 };
 
 export function createDesktopShellConfigActions({
   api,
-  setError,
+  reportFailure,
   mutateSnapshot,
 }: ConfigActionParams) {
   async function changeConfig<K extends ConfigChange>(
@@ -59,22 +60,20 @@ export function createDesktopShellConfigActions({
     const write = api[change] as (
       request: ConfigRequest<K>,
     ) => Promise<DesktopClientSnapshot>;
-    setError(null);
     try {
       return await mutateSnapshot(() => write(request));
     } catch (error) {
-      setError(actionFailure(label, error));
+      reportFailure(actionFailure(label, error));
       throw shownFailure(error);
     }
   }
 
   /** A call that stores nothing: reported the same way, without a re-read. */
   async function call<T>(label: string, run: () => Promise<T>) {
-    setError(null);
     try {
       return await run();
     } catch (error) {
-      setError(actionFailure(label, error));
+      reportFailure(actionFailure(label, error));
       throw shownFailure(error);
     }
   }

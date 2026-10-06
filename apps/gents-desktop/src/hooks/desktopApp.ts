@@ -58,11 +58,8 @@ export function createDesktopApp({
      happened where the person clicked and is over. Only the client's own
      state belongs in the banner: the lifecycle, the session reads and the
      effects that refresh in the background, so a repeated poll failure does
-     not raise a toast every interval. Actions clear an earlier error with
-     null; a toast has nothing to clear. */
-  const reportAction = (message: string | null) => {
-    if (message) reportFailure?.(message);
-  };
+     not raise a toast every interval. */
+  const reportAction = (message: string) => reportFailure?.(message);
   const reads = createSessionReads({
     api,
     store: stores.selection,
@@ -82,7 +79,7 @@ export function createDesktopApp({
     project,
     reads,
     client: lifecycle,
-    setError: reportAction,
+    reportFailure: reportAction,
   });
   /* the composer's drafts, kept apart so a keystroke reaches only it */
   const drafts = createDraftStore();

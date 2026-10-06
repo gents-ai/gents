@@ -34,7 +34,7 @@ function configActions(
   return createDesktopShellConfigActions({
     api,
     mutateSnapshot,
-    setError: vi.fn(),
+    reportFailure: vi.fn(),
   });
 }
 
