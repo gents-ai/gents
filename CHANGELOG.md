@@ -6,6 +6,11 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- Rig's completion-model and client traits, usage and error types no longer
+  leak into the daemon, one-shot, title, compaction or backend admission code:
+  those owners use native `ProviderModel`/`ProviderClient` handles and admission
+  errors and usage, and a structure test keeps Rig paths behind their owners
+  (#438). No behavior change.
 - iOS builds again: the DB Explorer window keeps its desktop-only title, size and
   focus calls off mobile targets, and CI checks the iOS simulator build on main.
 

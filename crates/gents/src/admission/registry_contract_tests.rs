@@ -103,7 +103,7 @@ fn config_from_case(backend_id: &str, desired: &Desired) -> Result<BackendAdmiss
 struct Harness {
     registry: AdmissionRegistry,
     backend_id: String,
-    calls: Vec<JoinHandle<Result<AdmissionPermit, CompletionError>>>,
+    calls: Vec<JoinHandle<Result<AdmissionPermit, AdmissionError>>>,
     held: VecDeque<AdmissionPermit>,
     outcomes: Observation,
     started: usize,

@@ -3,10 +3,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures::{future::BoxFuture, StreamExt};
-use rig::completion::{CompletionError, CompletionResponse};
+use rig::completion::CompletionResponse;
 use rig::streaming::{RawStreamingChoice, StreamingCompletionResponse};
 
-use super::hold_stream_guard;
+use crate::llm::rig_compat::hold_stream_guard;
 
 struct DropProbe {
     drops: Arc<AtomicUsize>,
@@ -29,7 +29,7 @@ struct ContendedFinalizeProbe {
 }
 
 impl super::StreamGuardLifecycle for ContendedFinalizeProbe {
-    fn finish_stream(self) -> BoxFuture<'static, Result<(), CompletionError>> {
+    fn finish_stream(self) -> BoxFuture<'static, Result<(), crate::admission::AdmissionError>> {
         Box::pin(async move {
             let _drop_probe = self.drop_probe;
             let _guard = self.gate.lock().await;
@@ -151,13 +151,13 @@ struct AsyncFinalizeProbe {
 }
 
 impl super::StreamGuardLifecycle for AsyncFinalizeProbe {
-    fn finish_stream(self) -> BoxFuture<'static, Result<(), CompletionError>> {
+    fn finish_stream(self) -> BoxFuture<'static, Result<(), crate::admission::AdmissionError>> {
         Box::pin(async move {
             self.started.store(true, Ordering::SeqCst);
             let _ = self.release.await;
             self.finished.store(true, Ordering::SeqCst);
             match self.error {
-                Some(error) => Err(CompletionError::ProviderError(error.to_string())),
+                Some(error) => Err(crate::admission::AdmissionError(error.to_string())),
                 None => Ok(()),
             }
         })

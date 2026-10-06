@@ -1,6 +1,31 @@
 use crate::tool::ToolDefinition;
 use crate::ToolChoice;
 
+/// A provider completion model the owned loop drives. Runtime owners are
+/// generic over this bound so the provider client's traits stay here.
+pub trait ProviderModel:
+    rig::completion::CompletionModel<Response: 'static, StreamingResponse: 'static> + 'static
+{
+}
+
+impl<M> ProviderModel for M
+where
+    M: rig::completion::CompletionModel + 'static,
+    M::Response: 'static,
+    M::StreamingResponse: 'static,
+{
+}
+
+/// A built provider client; `completion_model` names one [`ProviderModel`].
+pub trait ProviderClient: rig::client::CompletionClient<CompletionModel: ProviderModel> {}
+
+impl<C> ProviderClient for C
+where
+    C: rig::client::CompletionClient,
+    C::CompletionModel: ProviderModel,
+{
+}
+
 /// Whether the provider's raw response carries an OpenAI Responses cache-token
 /// observation. Rig's `Usage` turns a missing `input_tokens_details` into zero,
 /// so admission must consult the raw response before persisting the nullable
