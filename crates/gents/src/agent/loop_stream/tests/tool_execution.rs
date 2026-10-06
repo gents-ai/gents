@@ -657,10 +657,12 @@ async fn plugin_image_result_seen_by(
 /// The plugin result ABI (`crate::plugin`'s module doc): a plugin tool that
 /// returns `{"response", "parts": [{"type": "image", ...}]}` reaches a provider
 /// that carries tool-result images as one text part and one whole image part,
-/// even far past the loop's text bound.
+/// even far past the loop's text bound. The image's base64 alone is ~225k
+/// tokens at bytes/4, past the default context window, so the request is
+/// admitted only because the estimate charges it as an image.
 #[tokio::test]
 async fn plugin_image_parts_reach_the_provider_whole() {
-    const IMAGE_BYTES: usize = 400_000;
+    const IMAGE_BYTES: usize = 900_000;
     let result =
         plugin_image_result_seen_by(crate::BackendProviderKind::AnthropicApiKey, IMAGE_BYTES)
             .await;

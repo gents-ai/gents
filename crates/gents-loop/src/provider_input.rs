@@ -120,13 +120,13 @@ impl ProviderInputCounter {
     }
 
     pub fn project_request(&self, request: &CompletionRequest) -> Result<ProviderInputProjection> {
-        let body = self.project_body(request)?;
+        let body = self.estimated_body(request)?;
         let documentless_body = if request.documents.is_empty() {
             None
         } else {
             let mut documentless = request.clone();
             documentless.documents.clear();
-            Some(self.project_body(&documentless)?)
+            Some(self.estimated_body(&documentless)?)
         };
 
         projected_accounting(body, documentless_body, self.profile.estimator_name())
@@ -137,7 +137,21 @@ impl ProviderInputCounter {
     /// path; rendered-request accounting calls `project_request` once for the
     /// request that may actually be dispatched.
     pub fn estimate_request(&self, request: &CompletionRequest) -> Result<usize> {
-        estimate_input_body(self.project_body(request)?)
+        estimate_input_body(self.estimated_body(request)?)
+    }
+
+    /// The wire body as the byte estimate sees it. Claude counts an image by
+    /// its pixels, downscaled to at most about [`CLAUDE_IMAGE_TOKENS`], not by
+    /// its base64 length, so each base64 image's data is charged that fixed
+    /// cost instead.
+    fn estimated_body(&self, request: &CompletionRequest) -> Result<Value> {
+        let mut body = self.project_body(request)?;
+        if self.profile == ProviderInputProfile::ClaudeMessages {
+            if let Some(messages) = body.get_mut("messages") {
+                charge_claude_images(messages);
+            }
+        }
+        Ok(body)
     }
 
     // pub, not private: gents' own provider_input tests project a request
@@ -331,6 +345,26 @@ impl ProviderInputCounter {
             }
         }
         Ok(Value::Object(body))
+    }
+}
+
+/// Anthropic's ceiling for one image: `width * height / 750` tokens after the
+/// API downscales it to about 1.15 megapixels.
+pub const CLAUDE_IMAGE_TOKENS: usize = 1_600;
+
+fn charge_claude_images(value: &mut Value) {
+    match value {
+        Value::Object(map) if map.get("type").and_then(Value::as_str) == Some("image") => {
+            if let Some(data) = map
+                .get_mut("source")
+                .and_then(|source| source.get_mut("data"))
+            {
+                *data = Value::String("x".repeat(CLAUDE_IMAGE_TOKENS * 4));
+            }
+        }
+        Value::Object(map) => map.values_mut().for_each(charge_claude_images),
+        Value::Array(items) => items.iter_mut().for_each(charge_claude_images),
+        _ => {}
     }
 }
 
