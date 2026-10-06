@@ -1111,3 +1111,102 @@ async fn concurrent_keyed_appends_resolve_sequence_conflicts_without_duplicates(
     );
     node.shutdown().await;
 }
+
+#[tokio::test]
+async fn single_header_transaction_matches_bulk_coordinate_validation() {
+    use crate::config_client::ConfigAccess;
+    use canonical_rows::{
+        decode_transcript_message_row, transcript_message_create_variables, AGENT_MESSAGE_FIELDS,
+        CREATE_AGENT_MESSAGE_MUTATION,
+    };
+    use gents_protocol::output::MessagePublication;
+
+    for case in [
+        "unrelated",
+        "key",
+        "sequence",
+        "foreign",
+        "requester",
+        "fork",
+    ] {
+        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        ensure_runtime_schemas(&node).await.unwrap();
+        import_history_observation(
+            &node,
+            "request",
+            "session",
+            "did:test:owner",
+            None,
+            "accepted",
+            "accepted-key",
+            1,
+            None,
+        )
+        .await;
+        ConfigAccess::transact_local(&node, None, "test.single_header_coordinates", |txn| {
+            Box::pin(async move {
+                let response = txn
+                    .execute(&format!("{{ AgentMessage {{ {AGENT_MESSAGE_FIELDS} }} }}"))
+                    .await?;
+                let original = decode_transcript_message_row(&response["data"]["AgentMessage"][0])?;
+                let mut noise = transcript_message_create_variables(&original.message)?;
+                noise["input"]["message_key"] = serde_json::json!("unrelated-key");
+                noise["input"]["sequence"] = serde_json::json!(99);
+                noise["input"]["blocks"] = serde_json::json!({"invalid": "unrelated"});
+                for index in 0..if case == "unrelated" { 49 } else { 1 } {
+                    noise["input"]["message_key"] = serde_json::json!(format!("unrelated-{index}"));
+                    noise["input"]["sequence"] = serde_json::json!(99 + index);
+                    txn.execute_with_variables(CREATE_AGENT_MESSAGE_MUTATION, &noise)
+                        .await?;
+                }
+
+                let mut other = original.message.clone();
+                let mut target = original.doc_id.clone();
+                match case {
+                    "key" => other.sequence = 2,
+                    "sequence" => other.message_key = "sequence-twin".into(),
+                    "foreign" => other.agent_did = "did:test:foreign".into(),
+                    "requester" => other.requester_did = Some("did:test:requester".into()),
+                    "fork" => {
+                        other.session_id = "child-session".into();
+                        other.message_key = "fork-key".into();
+                        other.request_doc_id = None;
+                        other.publication = MessagePublication::Fork {
+                            origin_message_doc_id: original.doc_id.clone(),
+                        };
+                    }
+                    _ => {}
+                }
+                if case != "unrelated" {
+                    let created = txn
+                        .execute_with_variables(
+                            CREATE_AGENT_MESSAGE_MUTATION,
+                            &transcript_message_create_variables(&other)?,
+                        )
+                        .await?;
+                    if case == "fork" {
+                        target = crate::graphql::created_doc_id(&created, "AgentMessage")?;
+                    }
+                }
+                let single =
+                    output::load_canonical_message_in_txn(txn, &target, "did:test:owner", None)
+                        .await
+                        .map_err(|error| format!("{error:#}"));
+                let bulk = output::TxnCanonicalReader::new(txn, "did:test:owner", None)
+                    .load_message(&target)
+                    .await
+                    .map_err(|error| format!("{error:#}"));
+                assert_eq!(single, bulk, "single/bulk mismatch for {case}");
+                assert_eq!(
+                    single.is_err(),
+                    matches!(case, "key" | "sequence"),
+                    "{case}"
+                );
+                Ok(())
+            })
+        })
+        .await
+        .unwrap();
+        node.shutdown().await;
+    }
+}
