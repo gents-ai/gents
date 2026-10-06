@@ -6,9 +6,8 @@
 import type { NodeView } from "../../../hooks/fleetStore";
 import { setEnabled } from "./enabled";
 import { dependentsWarning } from "./dependents";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { PROVIDER_VISUALS, SetupScreen, type ProviderId } from "../setup/SetupScreen";
-import type { InferenceProviderOption } from "@source-inc/gents-desktop-client";
 import { toast } from "sonner";
 import type {
   DesktopApiAdapter,
@@ -63,6 +62,7 @@ import { Plus } from "lucide-react";
 import { ProviderLogo } from "../ProviderLogo";
 import { RenameDialog } from "../AgentsScreen";
 import { useApp } from "@/app/AppContext";
+import { useAccounts, useProviderUsage, useSetupCatalog } from "@/hooks/useProviders";
 import { toastFailure } from "@/lib/failure";
 
 export function backendSave(
@@ -159,67 +159,6 @@ const SUBSCRIPTION: Record<
   },
 };
 
-const NO_ACCOUNTS: ProviderAccountView[] = [];
-
-export function useAccounts(agentDid: string) {
-  const { api, stores } = useApp();
-  const snapshot = stores.client.use.snapshot();
-  /* held with the agent they were read for: another agent's never show */
-  const [held, setHeld] = useState<{
-    agentDid: string;
-    views: ProviderAccountView[];
-  } | null>(null);
-  const accounts = held?.agentDid === agentDid ? held.views : NO_ACCOUNTS;
-  const latest = useRef(0);
-  const load = useCallback(() => {
-    const read = ++latest.current;
-    return (api.listProviderAccounts?.(agentDid) ?? Promise.resolve([])).then(
-      (views) => {
-        if (latest.current === read) setHeld({ agentDid, views });
-      },
-      () => {
-        if (latest.current === read) setHeld({ agentDid, views: [] });
-      },
-    );
-  }, [api, agentDid]);
-  useEffect(() => {
-    void load();
-    return () => {
-      latest.current += 1;
-    };
-  }, [load, snapshot]);
-  return { accounts, reload: load };
-}
-
-/* usage, read when the panel opens and on Refresh (both skip accounts read
-   in the last five minutes); nothing polls, and a snapshot change does not
-   read again */
-function useProviderUsage(agentDid: string) {
-  const { api } = useApp();
-  const [usage, setUsage] = useState<BackendUsageView[]>([]);
-  /* only the latest read draws: an older one, or another agent's, may land later */
-  const latest = useRef(0);
-  useEffect(() => {
-    const read = ++latest.current;
-    setUsage([]);
-    api.readProviderUsage?.(agentDid, false, null).then(
-      (views) => {
-        if (latest.current === read) setUsage(views);
-      },
-      () => undefined,
-    );
-    return () => {
-      latest.current += 1;
-    };
-  }, [api, agentDid]);
-  const refresh = async (provider: string | null) => {
-    const read = ++latest.current;
-    const views = await api.readProviderUsage?.(agentDid, true, provider);
-    if (views && latest.current === read) setUsage(views);
-  };
-  return { usage, refresh };
-}
-
 /* "2h13m", "3m", "<1m": the CLI's short durations */
 function shortDuration(ms: number) {
   const total = Math.max(0, Math.floor(ms / 60_000));
@@ -301,7 +240,7 @@ function UsageRows({ view }: { view?: BackendUsageView }) {
 /* the stored account a subscription backend runs on: the one with the
    backend's reference; no reference is the provider's original account */
 function referencedAccount(
-  accounts: ProviderAccountView[],
+  accounts: readonly ProviderAccountView[],
   provider: string,
   accountRef: string | null | undefined,
 ) {
@@ -314,7 +253,10 @@ function referencedAccount(
 }
 
 /* the account a subscription backend runs on, if it is stored here */
-function backendAccount(accounts: ProviderAccountView[], b: InferenceBackendView) {
+function backendAccount(
+  accounts: readonly ProviderAccountView[],
+  b: InferenceBackendView,
+) {
   const sub = SUBSCRIPTION[b.providerKind ?? ""];
   return sub ? referencedAccount(accounts, sub.provider, b.accountRef) : undefined;
 }
@@ -322,7 +264,7 @@ function backendAccount(accounts: ProviderAccountView[], b: InferenceBackendView
 /* a backend as a profile sees it: a subscription backend serves only on its
    enabled account and is named "<label> · <provider>"; others always serve */
 export function profileBackend(
-  accounts: ProviderAccountView[],
+  accounts: readonly ProviderAccountView[],
   b: InferenceBackendView,
 ) {
   const sub = SUBSCRIPTION[b.providerKind ?? ""];
@@ -340,7 +282,7 @@ export function profileBackend(
    added account's backends that no profile uses, as the CLI's remove) */
 function accountWarnings(
   deployment: NodeView,
-  accounts: ProviderAccountView[],
+  accounts: readonly ProviderAccountView[],
   account: ProviderAccountView,
 ) {
   const backends = deployment.inferenceBackends.filter(
@@ -383,7 +325,7 @@ function AccountDialogs({
   onClose,
 }: {
   deployment: NodeView;
-  accounts: ProviderAccountView[];
+  accounts: readonly ProviderAccountView[];
   reload: () => Promise<void>;
   acting: AccountAction | null;
   onClose: () => void;
@@ -490,7 +432,7 @@ function AccountRows({
   deployment: NodeView;
   kind: string;
   accountRef: string | null;
-  accounts: ProviderAccountView[];
+  accounts: readonly ProviderAccountView[];
   reload: () => Promise<void>;
 }) {
   const { api } = useApp();
@@ -631,7 +573,7 @@ export function BackendEditor({
 }: {
   deployment: NodeView;
   backend: InferenceBackendView;
-  accounts: ProviderAccountView[];
+  accounts: readonly ProviderAccountView[];
   reload: () => Promise<void>;
   /* this backend's usage and the read again; absent, no Usage group */
   usage?: {
@@ -1028,33 +970,6 @@ export function BackendEditor({
       )}
     </>
   );
-}
-
-/* the provider catalog the bridge publishes, once per mount */
-/* the provider catalog; a failed read is said, with a way to ask again */
-function useSetupCatalog() {
-  const { api } = useApp();
-  const [providers, setProviders] = useState<InferenceProviderOption[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [attempt, setAttempt] = useState(0);
-  useEffect(() => {
-    let live = true;
-    setError(null);
-    const read = api.getInferenceSetupCatalog?.();
-    if (!read) return;
-    read.then(
-      (c) => {
-        if (live) setProviders(c.providers);
-      },
-      (e: unknown) => {
-        if (live) setError(e instanceof Error ? e.message : String(e));
-      },
-    );
-    return () => {
-      live = false;
-    };
-  }, [api, attempt]);
-  return { providers, error, retry: () => setAttempt((n) => n + 1) };
 }
 
 /* which catalog provider a configured backend belongs to */

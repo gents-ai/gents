@@ -322,7 +322,7 @@ export function ceilingFromInit(
   }
 }
 
-export function providerSignInState(accounts: ProviderAccountView[]) {
+export function providerSignInState(accounts: readonly ProviderAccountView[]) {
   const next: Partial<Record<ProviderId, string>> = {};
   for (const [providerId, credentialKind] of Object.entries(PROVIDER_CREDENTIAL_KIND)) {
     const account = accounts.find(
@@ -335,7 +335,7 @@ export function providerSignInState(accounts: ProviderAccountView[]) {
 }
 
 /** Providers whose completed sign-in the bridge holds after a failed save. */
-export function providerPendingSaveState(accounts: ProviderAccountView[]) {
+export function providerPendingSaveState(accounts: readonly ProviderAccountView[]) {
   const next: Partial<Record<ProviderId, true>> = {};
   for (const [providerId, credentialKind] of Object.entries(PROVIDER_CREDENTIAL_KIND)) {
     if (

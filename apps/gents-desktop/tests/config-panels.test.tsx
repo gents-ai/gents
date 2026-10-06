@@ -13,7 +13,8 @@ import {
 } from "../src/ui/screens/agent/BehaviorsPanel";
 import { ContextsPanel } from "../src/ui/screens/agent/ContextsPanel";
 import { EventSourcesPanel } from "../src/ui/screens/agent/EventSourcesPanel";
-import { InferencePanel, useAccounts } from "../src/ui/screens/agent/InferencePanel";
+import { InferencePanel } from "../src/ui/screens/agent/InferencePanel";
+import { useAccounts } from "../src/ui/hooks/useProviders";
 import {
   ProfileEditor,
   ProfilesPanel,

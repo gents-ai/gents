@@ -4,7 +4,7 @@ import type { NodeView } from "../../../hooks/fleetStore";
 import { useState } from "react";
 import { EditorSheet } from "./EditorSheet";
 import { ProfileEditor, newProfileDocument } from "./ProfilesPanel";
-import { useAccounts } from "./InferencePanel";
+import { useAccounts } from "@/hooks/useProviders";
 
 export function ProfileSheet({
   deployment,

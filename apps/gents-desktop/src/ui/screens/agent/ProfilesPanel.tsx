@@ -21,7 +21,8 @@ import {
   TextRow,
 } from "./editors";
 import { ProfileSheet } from "./ProfileSheet";
-import { InferencePanel, profileBackend, useAccounts } from "./InferencePanel";
+import { InferencePanel, profileBackend } from "./InferencePanel";
+import { useAccounts, useSetupCatalog } from "@/hooks/useProviders";
 import { BackendSheet } from "./BackendSheet";
 import { Plus } from "lucide-react";
 import type { InferenceBackendView } from "@source-inc/gents-desktop-client";
@@ -82,7 +83,7 @@ function settingsForDraft(
 export function newProfileDocument(
   deployment: NodeView,
   backendId?: string,
-  accounts: ProviderAccountView[] = [],
+  accounts: readonly ProviderAccountView[] = [],
 ): InferenceProfile {
   const backends = deployment.inferenceBackends;
   const usable = (b: InferenceBackendView) => profileBackend(accounts, b).usable;
@@ -405,31 +406,9 @@ export function ProfileEditor({
     },
     { isNew: draftMode !== undefined },
   );
-  const [executionDefaults, setExecutionDefaults] = useState<
-    Record<string, number | null | undefined>
-  >({});
-  const [executionDefaultsError, setExecutionDefaultsError] = useState<string | null>(
-    null,
-  );
-  useEffect(() => {
-    let canceled = false;
-    if (api.getInferenceSetupCatalog)
-      void api.getInferenceSetupCatalog().then(
-        (catalog) => {
-          if (!canceled) {
-            setExecutionDefaults(catalog.executionDefaults ?? {});
-            setExecutionDefaultsError(null);
-          }
-        },
-        (e: unknown) => {
-          if (!canceled)
-            setExecutionDefaultsError(e instanceof Error ? e.message : String(e));
-        },
-      );
-    return () => {
-      canceled = true;
-    };
-  }, [api]);
+  const { catalog, error: executionDefaultsError } = useSetupCatalog();
+  const executionDefaults: Record<string, number | null | undefined> =
+    catalog?.executionDefaults ?? {};
   const executionDefault = (key: string) =>
     executionDefaults[key] == null ? "Unlimited" : String(executionDefaults[key]);
   const [editedExecution, setEditedExecution] = useState<Set<string>>(new Set());
