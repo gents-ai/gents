@@ -78,6 +78,7 @@ function useHarness(
     agent: current.agentDid,
     selected: current.sessionId,
     behavior: current.behaviorId,
+    store,
     actions,
     route,
     sendChatMessage,
@@ -102,6 +103,30 @@ describe("explicit session selection", () => {
     expect(result.current.agent).toBe("agent");
     expect(result.current.selected).toBe("first-setup");
   });
+  it("keeps the behavior and an armed mailbox reply across a temporary missing snapshot", () => {
+    const { result, rerender } = renderHook(
+      ({ deployment }) => useHarness(deployment, null),
+      { initialProps: { deployment: initialDeployment as DeploymentView | null } },
+    );
+    const reply = {
+      itemId: "item-1",
+      agentDid: "agent",
+      behaviorId: "setup",
+      sessionId: null,
+    };
+    act(() =>
+      result.current.store.setState({ mailboxRoute: reply, composingFor: "agent" }),
+    );
+    /* a read while the client restarts lists no nodes */
+    rerender({ deployment: null });
+    expect(result.current.behavior).toBe("setup");
+    expect(result.current.store.getState().mailboxRoute).toEqual(reply);
+
+    rerender({ deployment: initialDeployment });
+    expect(result.current.behavior).toBe("setup");
+    expect(result.current.store.getState().mailboxRoute).toEqual(reply);
+  });
+
   it("uses the principal default instead of a conflicting marked default", () => {
     const deployment = {
       ...initialDeployment,

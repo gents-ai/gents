@@ -102,10 +102,10 @@ export function useSelectionReconcile({
     const selected = current.agentDid
       ? (stores.fleet.getState().nodes[current.agentDid] ?? null)
       : null;
-    if (!selected) {
-      selection.settleBehavior(store, null);
-      return;
-    }
+    /* a read that lists no such node (one taken while the client restarts)
+       is not a choice either: the behavior, and a mailbox reply armed with
+       it, stay until the node is listed again */
+    if (!selected) return;
     // A mailbox tap or the new-session screen chose this behavior. Preserve
     // it while the independently replicated behavior and session rows catch
     // up; explicit navigation lets go of it in the selection store.
