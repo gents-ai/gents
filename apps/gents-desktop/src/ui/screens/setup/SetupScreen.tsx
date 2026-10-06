@@ -55,7 +55,7 @@ import {
 import { setupStewardPatches } from "@/lib/setupSteward";
 import { supportsLocalManagedServer } from "../../../lib/shellPlatform";
 import { AgentAvatar } from "@/screens/AgentAvatar";
-import { applyTheme, themePreference } from "@/theme";
+import { preferences, useTheme } from "@/preferences";
 import { Mark } from "@/app/Mark";
 import { openExternalUrl } from "../../../lib/externalLinks";
 import {
@@ -143,12 +143,8 @@ function Frame({
   embedded?: boolean;
   onBack?: () => void;
 }) {
-  const [theme, setTheme] = useState(themePreference);
-  const flip = () => {
-    const next = theme === "dark" ? "light" : "dark";
-    applyTheme(next);
-    setTheme(next);
-  };
+  const theme = useTheme();
+  const flip = () => preferences.setTheme(theme === "dark" ? "light" : "dark");
   if (embedded)
     return (
       <div className="w-full min-w-0" data-testid="inference-setup-panel">

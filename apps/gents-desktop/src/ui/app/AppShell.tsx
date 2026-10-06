@@ -60,12 +60,7 @@ export function AppShell({
   /* the pane bar's slot: screens fill it through a portal */
   const [paneBar, setPaneBar] = useState<HTMLElement | null>(null);
   const settings = (variant: "rail" | "row") => (
-    <SettingsMenu
-      variant={variant}
-      nav={layout.nav}
-      onNav={layout.chooseNav}
-      showNav={wide}
-    />
+    <SettingsMenu variant={variant} showNav={wide} />
   );
   return (
     <PaneBarSlotContext.Provider value={paneBar}>

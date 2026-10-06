@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 
 import type { Route } from "@/lib/router";
-import { navPreference, saveNavPreference, type NavMode } from "@/nav";
+import type { NavMode } from "@/nav";
+import { useNavMode } from "@/preferences";
 import { useDivider } from "@/lib/divider";
 import { ROOMY_WINDOW, useMediaQuery } from "@/lib/media";
 import { dockView } from "./dock-scope";
@@ -11,11 +12,7 @@ import { dockScope, useDockFor } from "./workspace";
 /** The shell's columns for the window it is in: the rail, the pane and the
     dock, each a length the divider drives, and the person's nav choice. */
 export function useShellLayout(route: Route) {
-  const [nav, setNav] = useState<NavMode>(navPreference);
-  const chooseNav = (mode: NavMode) => {
-    saveNavPreference(mode);
-    setNav(mode);
-  };
+  const nav = useNavMode();
   const { dock, scope: dockOwner, closeDock } = useDockFor(dockScope(route));
   const surfaces = useSurfaces();
   const dockOpen = dockView(dock, route.name, surfaces).shown;
@@ -74,8 +71,6 @@ export function useShellLayout(route: Route) {
       : `${rail}px minmax(0,1fr) ${dockCol}px`;
   return {
     shellRef,
-    nav,
-    chooseNav,
     shownNav,
     wide,
     docked,

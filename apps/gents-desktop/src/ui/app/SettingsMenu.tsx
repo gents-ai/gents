@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { SlidersHorizontal } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -12,8 +11,9 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@gents/ui/components/dropdown-menu";
-import { applyTheme, themePreference, type ThemePreference } from "@/theme";
+import type { ThemePreference } from "@/theme";
 import type { NavMode } from "@/nav";
+import { preferences, useNavMode, useTheme } from "@/preferences";
 import { useApp } from "./AppContext";
 
 /** Global settings at the foot of the nav: an icon on the rail, a row in the
@@ -21,21 +21,15 @@ import { useApp } from "./AppContext";
     explorer where the bridge has it. */
 export function SettingsMenu({
   variant,
-  nav,
-  onNav,
   showNav,
 }: {
   variant: "rail" | "row";
-  nav: NavMode;
-  onNav: (mode: NavMode) => void;
+  /** the side nav choices only make sense where there is a side nav */
   showNav: boolean;
 }) {
   const { api } = useApp();
-  const [theme, setTheme] = useState<ThemePreference>(themePreference);
-  const choose = (next: ThemePreference) => {
-    applyTheme(next);
-    setTheme(next);
-  };
+  const theme = useTheme();
+  const nav = useNavMode();
   const openDbExplorer = () => {
     void api.openDbExplorer?.().catch((e: unknown) => {
       toast(`DB explorer failed to open: ${String(e)}`);
@@ -76,7 +70,7 @@ export function SettingsMenu({
           <DropdownMenuLabel>Theme</DropdownMenuLabel>
           <DropdownMenuRadioGroup
             value={theme}
-            onValueChange={(v) => choose(v as ThemePreference)}
+            onValueChange={(v) => preferences.setTheme(v as ThemePreference)}
           >
             <DropdownMenuRadioItem value="light">Light</DropdownMenuRadioItem>
             <DropdownMenuRadioItem value="dark">Dark</DropdownMenuRadioItem>
@@ -89,7 +83,7 @@ export function SettingsMenu({
               <DropdownMenuLabel>Side nav</DropdownMenuLabel>
               <DropdownMenuRadioGroup
                 value={nav}
-                onValueChange={(v) => onNav(v as NavMode)}
+                onValueChange={(v) => preferences.setNav(v as NavMode)}
               >
                 <DropdownMenuRadioItem value="hover">
                   Show on hover
