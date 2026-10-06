@@ -106,6 +106,15 @@ export function useOnline() {
   return useStore(useApp().stores.client, (state) => Boolean(state.snapshot?.client));
 }
 
+/** The enrolment requests in flight; null while the signed enrolment state
+    cannot be read, undefined while the client is not running. */
+export function useEnrollmentRequests() {
+  return useStore(
+    useApp().stores.client,
+    (state) => state.snapshot?.client?.enrollmentRequests,
+  );
+}
+
 /** How the client's database sync is doing. */
 export function useSyncHealth() {
   return useStore(

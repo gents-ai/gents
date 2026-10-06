@@ -4,7 +4,7 @@
    offers (rename the saved label, check the peer, remove). Add agent is
    the desktop's status enrolment: a server address, a request the
    server's admin approves, then the peer joins. */
-import { useState } from "react";
+import { memo, useState } from "react";
 import { EllipsisVertical, Inbox, Plus, SlidersHorizontal } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@gents/ui/components/button";
@@ -46,15 +46,17 @@ import { AgentHoverCard } from "./HoverCards";
 import { isWorkingNode } from "@/lib/nodes";
 import { toastFailure } from "@/lib/failure";
 import { useApp } from "@/app/AppContext";
-import { useDeployments, useHomeDid, useSnapshot } from "@/hooks/useClient";
+import { useEnrollmentRequests, useHomeDid } from "@/hooks/useClient";
+import { NO_SESSIONS, useFleet } from "@/hooks/useFleet";
+import { fleetNodes } from "@/lib/scope";
+import { nodeKeyOf, type NodeView } from "../../hooks/fleetStore";
+import { useShallow } from "zustand/react/shallow";
 
 export function AgentsScreen() {
   const {
-    api,
-    actions: { removePeer, renamePeer, selectAgent },
+    actions: { removePeer, renamePeer },
   } = useApp();
-  const deployments = useDeployments();
-  const snapshot = useSnapshot();
+  const nodes = useFleet(useShallow(fleetNodes));
   const [adding, setAdding] = useState(false);
   const [renaming, setRenaming] = useState<{
     peerId: string;
@@ -66,7 +68,7 @@ export function AgentsScreen() {
     label: string;
   } | null>(null);
   const [removingBusy, setRemovingBusy] = useState(false);
-  const pending = snapshot?.client?.enrollmentRequests;
+  const pending = useEnrollmentRequests();
   const homeDid = useHomeDid();
   /* the node this machine runs, then the paired ones with the reachable
      first: the dot is the first thing read on a row */
@@ -74,13 +76,13 @@ export function AgentsScreen() {
     {
       key: "local",
       label: "Local node",
-      nodes: deployments.filter((d) => isWorkingNode(d, homeDid)),
+      nodes: nodes.filter((d) => isWorkingNode(d, homeDid)),
       count: false,
     },
     {
       key: "remote",
       label: "Remote nodes",
-      nodes: deployments
+      nodes: nodes
         .filter((d) => !isWorkingNode(d, homeDid))
         .sort((a, b) => Number(b.dialSucceeded) - Number(a.dialSucceeded)),
       count: true,
@@ -139,201 +141,15 @@ export function AgentsScreen() {
               </p>
             )}
             <ul className="mt-3 grid grid-cols-[minmax(0,1fr)] gap-3">
-              {g.nodes.map((d) => {
-                const name = d.agentPrincipal.displayName ?? d.label;
-                const online = d.dialSucceeded;
-                const live = d.sessions.filter((c) => isLive(c.turnState)).length;
-                const waiting = d.mailboxItems.filter(
-                  (m) => m.status === "open",
-                ).length;
-                const config = href({
-                  name: "agent",
-                  agentDid: d.agentDid,
-                  section: "agent",
-                });
-                const check = async () => {
-                  try {
-                    const r = (await api.fetchPeerStatus(d.peerId)) as {
-                      reachable?: boolean;
-                    };
-                    toast(
-                      r?.reachable
-                        ? `${d.label} is reachable`
-                        : `${d.label} is not reachable`,
-                    );
-                  } catch (e) {
-                    toast(`Status check failed: ${String(e)}`);
-                  }
-                };
-                return (
-                  <li
-                    key={d.agentDid}
-                    className="flex items-center gap-4 rounded-2xl border border-border/60 bg-raised px-5 py-4 transition-colors hover:border-border hover:bg-accent"
-                  >
-                    {/* the row lights up whole, so it is clickable whole: the
-                    link reaches back through the padding it sits in rather
-                    than ending where its text does, which left the top and
-                    bottom of every row looking live and doing nothing */}
-                    <a
-                      href={href({ name: "sessions", nodeDid: d.agentDid })}
-                      onClick={() => selectAgent(d.agentDid)}
-                      aria-label={`${name} sessions`}
-                      className="-my-4 -ml-5 flex min-w-0 flex-1 items-center gap-3 overflow-hidden py-4 pl-5"
-                    >
-                      <AgentHoverCard deployment={d}>
-                        <span className="block shrink-0">
-                          <AgentAvatar name={name} className="size-8" />
-                        </span>
-                      </AgentHoverCard>
-                      <span
-                        className={cn(
-                          "size-2 shrink-0 rounded-full",
-                          online ? "bg-brand" : "bg-destructive",
-                        )}
-                        aria-label={online ? "online" : "offline"}
-                        role="img"
-                      />
-                      <span className="grid min-w-0 flex-1 auto-cols-[minmax(0,max-content)] grid-flow-col items-baseline justify-start gap-3">
-                        {/* name and label are columns that each take their full text when it
-                      fits; the short one always does, and the long one truncates
-                      into what is left (both split the row when both are long) */}
-                        <span className="truncate font-heading text-base font-medium text-heading">
-                          {name}
-                        </span>
-                        {/* the pairing label names a remote node when its principal
-                        does not; the local node's pill already says it */}
-                        {!isWorkingNode(d, homeDid) && d.label !== name && (
-                          <span className="min-w-0 truncate text-xs text-muted-foreground">
-                            {d.label}
-                          </span>
-                        )}
-                        {d.lastError && (
-                          <span className="min-w-0 truncate text-xs text-muted-foreground">
-                            {d.lastError}
-                          </span>
-                        )}
-                      </span>
-                    </a>
-                    {isLocalAgent(d, snapshot?.bootstrap.initAgentDid) &&
-                      !inferenceIsConfigured(d) && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          nativeButton={false}
-                          render={
-                            <a
-                              href={href({
-                                name: "agent",
-                                agentDid: d.agentDid,
-                                section: "inference",
-                              })}
-                            />
-                          }
-                          title={`Configure inference for ${d.label}`}
-                        >
-                          Setup needed
-                        </Button>
-                      )}
-                    {waiting > 0 && (
-                      <a
-                        href={href({ name: "mailbox", nodeDid: d.agentDid })}
-                        onClick={() => selectAgent(d.agentDid)}
-                        className="flex items-center gap-1.5 rounded-full px-2 py-1 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                        title={`${waiting} item${waiting === 1 ? "" : "s"} need${waiting === 1 ? "s" : ""} your attention`}
-                      >
-                        <Inbox className="size-4" /> {waiting}
-                      </a>
-                    )}
-                    {live > 0 && (
-                      <span
-                        className="flex items-center gap-2 text-sm text-muted-foreground"
-                        title={`${live} running`}
-                      >
-                        <Spinner className="text-foreground" /> {live}
-                      </span>
-                    )}
-                    <Button
-                      variant="quiet"
-                      size="icon-sm"
-                      aria-label={`Configure ${name}`}
-                      title="Configure"
-                      nativeButton={false}
-                      render={
-                        <a href={config} onClick={() => selectAgent(d.agentDid)} />
-                      }
-                    >
-                      <SlidersHorizontal />
-                    </Button>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger
-                        render={
-                          <Button
-                            variant="quiet"
-                            size="icon-sm"
-                            aria-label={`${name} actions`}
-                          />
-                        }
-                      >
-                        <EllipsisVertical />
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuGroup>
-                          <DropdownMenuItem
-                            nativeButton={false}
-                            render={
-                              <a
-                                href={href({
-                                  name: "sessions",
-                                  nodeDid: d.agentDid,
-                                })}
-                              />
-                            }
-                            onClick={() => selectAgent(d.agentDid)}
-                          >
-                            Open sessions
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            nativeButton={false}
-                            render={<a href={config} />}
-                            onClick={() => selectAgent(d.agentDid)}
-                          >
-                            Configure
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            onClick={() =>
-                              setRenaming({ peerId: d.peerId, label: d.label })
-                            }
-                          >
-                            Rename
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => void check()}>
-                            Check peer
-                          </DropdownMenuItem>
-                        </DropdownMenuGroup>
-                        {!isLocalAgent(d, snapshot?.bootstrap.initAgentDid) && (
-                          <>
-                            <DropdownMenuSeparator />
-                            <DropdownMenuGroup>
-                              <DropdownMenuItem
-                                variant="destructive"
-                                onClick={() =>
-                                  setRemoving({
-                                    agentDid: d.agentDid,
-                                    peerId: d.peerId,
-                                    label: d.label,
-                                  })
-                                }
-                              >
-                                Remove peer
-                              </DropdownMenuItem>
-                            </DropdownMenuGroup>
-                          </>
-                        )}
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </li>
-                );
-              })}
+              {g.nodes.map((d) => (
+                <AgentRow
+                  key={d.agentDid}
+                  node={d}
+                  homeDid={homeDid}
+                  onRename={setRenaming}
+                  onRemove={setRemoving}
+                />
+              ))}
             </ul>
           </section>
         ))}
@@ -532,3 +348,204 @@ export function RenameDialog({
     </Dialog>
   );
 }
+
+/* one node: its counts are selected by key, so a change on another node
+   leaves the row as it is */
+const AgentRow = memo(function AgentRow({
+  node: d,
+  homeDid,
+  onRename,
+  onRemove,
+}: {
+  node: NodeView;
+  homeDid: string | null;
+  onRename: (peer: { peerId: string; label: string }) => void;
+  onRemove: (peer: { agentDid: string; peerId: string; label: string }) => void;
+}) {
+  const {
+    api,
+    actions: { selectAgent },
+  } = useApp();
+  const live = useFleet(
+    (s) =>
+      (s.sessionsOf[nodeKeyOf(d)] ?? NO_SESSIONS).filter((c) => isLive(c.turnState))
+        .length,
+  );
+  const waiting = useFleet(
+    (s) => (s.mailboxOf[nodeKeyOf(d)] ?? []).filter((m) => m.status === "open").length,
+  );
+  const name = d.agentPrincipal.displayName ?? d.label;
+  const online = d.dialSucceeded;
+  const config = href({
+    name: "agent",
+    agentDid: d.agentDid,
+    section: "agent",
+  });
+  const check = async () => {
+    try {
+      const r = (await api.fetchPeerStatus(d.peerId)) as {
+        reachable?: boolean;
+      };
+      toast(r?.reachable ? `${d.label} is reachable` : `${d.label} is not reachable`);
+    } catch (e) {
+      toast(`Status check failed: ${String(e)}`);
+    }
+  };
+  return (
+    <li
+      key={d.agentDid}
+      className="flex items-center gap-4 rounded-2xl border border-border/60 bg-raised px-5 py-4 transition-colors hover:border-border hover:bg-accent"
+    >
+      {/* the row lights up whole, so it is clickable whole: the
+                    link reaches back through the padding it sits in rather
+                    than ending where its text does, which left the top and
+                    bottom of every row looking live and doing nothing */}
+      <a
+        href={href({ name: "sessions", nodeDid: d.agentDid })}
+        onClick={() => selectAgent(d.agentDid)}
+        aria-label={`${name} sessions`}
+        className="-my-4 -ml-5 flex min-w-0 flex-1 items-center gap-3 overflow-hidden py-4 pl-5"
+      >
+        <AgentHoverCard deployment={d}>
+          <span className="block shrink-0">
+            <AgentAvatar name={name} className="size-8" />
+          </span>
+        </AgentHoverCard>
+        <span
+          className={cn(
+            "size-2 shrink-0 rounded-full",
+            online ? "bg-brand" : "bg-destructive",
+          )}
+          aria-label={online ? "online" : "offline"}
+          role="img"
+        />
+        <span className="grid min-w-0 flex-1 auto-cols-[minmax(0,max-content)] grid-flow-col items-baseline justify-start gap-3">
+          {/* name and label are columns that each take their full text when it
+                      fits; the short one always does, and the long one truncates
+                      into what is left (both split the row when both are long) */}
+          <span className="truncate font-heading text-base font-medium text-heading">
+            {name}
+          </span>
+          {/* the pairing label names a remote node when its principal
+                        does not; the local node's pill already says it */}
+          {!isWorkingNode(d, homeDid) && d.label !== name && (
+            <span className="min-w-0 truncate text-xs text-muted-foreground">
+              {d.label}
+            </span>
+          )}
+          {d.lastError && (
+            <span className="min-w-0 truncate text-xs text-muted-foreground">
+              {d.lastError}
+            </span>
+          )}
+        </span>
+      </a>
+      {isLocalAgent(d, homeDid) && !inferenceIsConfigured(d) && (
+        <Button
+          size="sm"
+          variant="outline"
+          nativeButton={false}
+          render={
+            <a
+              href={href({
+                name: "agent",
+                agentDid: d.agentDid,
+                section: "inference",
+              })}
+            />
+          }
+          title={`Configure inference for ${d.label}`}
+        >
+          Setup needed
+        </Button>
+      )}
+      {waiting > 0 && (
+        <a
+          href={href({ name: "mailbox", nodeDid: d.agentDid })}
+          onClick={() => selectAgent(d.agentDid)}
+          className="flex items-center gap-1.5 rounded-full px-2 py-1 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          title={`${waiting} item${waiting === 1 ? "" : "s"} need${waiting === 1 ? "s" : ""} your attention`}
+        >
+          <Inbox className="size-4" /> {waiting}
+        </a>
+      )}
+      {live > 0 && (
+        <span
+          className="flex items-center gap-2 text-sm text-muted-foreground"
+          title={`${live} running`}
+        >
+          <Spinner className="text-foreground" /> {live}
+        </span>
+      )}
+      <Button
+        variant="quiet"
+        size="icon-sm"
+        aria-label={`Configure ${name}`}
+        title="Configure"
+        nativeButton={false}
+        render={<a href={config} onClick={() => selectAgent(d.agentDid)} />}
+      >
+        <SlidersHorizontal />
+      </Button>
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={
+            <Button variant="quiet" size="icon-sm" aria-label={`${name} actions`} />
+          }
+        >
+          <EllipsisVertical />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuGroup>
+            <DropdownMenuItem
+              nativeButton={false}
+              render={
+                <a
+                  href={href({
+                    name: "sessions",
+                    nodeDid: d.agentDid,
+                  })}
+                />
+              }
+              onClick={() => selectAgent(d.agentDid)}
+            >
+              Open sessions
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              nativeButton={false}
+              render={<a href={config} />}
+              onClick={() => selectAgent(d.agentDid)}
+            >
+              Configure
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={() => onRename({ peerId: d.peerId, label: d.label })}
+            >
+              Rename
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => void check()}>Check peer</DropdownMenuItem>
+          </DropdownMenuGroup>
+          {!isLocalAgent(d, homeDid) && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuGroup>
+                <DropdownMenuItem
+                  variant="destructive"
+                  onClick={() =>
+                    onRemove({
+                      agentDid: d.agentDid,
+                      peerId: d.peerId,
+                      label: d.label,
+                    })
+                  }
+                >
+                  Remove peer
+                </DropdownMenuItem>
+              </DropdownMenuGroup>
+            </>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </li>
+  );
+});
