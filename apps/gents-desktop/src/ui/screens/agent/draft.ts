@@ -38,7 +38,15 @@ export function focusFirstProblem(
 ): boolean {
   if (!hasProblems(problems)) return false;
   const first = Object.keys(fields).find((field) => problems[field]);
-  if (first) document.getElementById(fields[first]!)?.focus();
+  const element = first ? document.getElementById(fields[first]!) : null;
+  /* a field folded away in a disclosure is opened to be shown */
+  for (
+    let fold = element?.closest("details");
+    fold;
+    fold = fold.parentElement?.closest("details")
+  )
+    fold.open = true;
+  element?.focus();
   return true;
 }
 
