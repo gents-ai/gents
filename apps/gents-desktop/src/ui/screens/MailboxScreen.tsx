@@ -840,22 +840,13 @@ function GroupSelect({
    a person acted on; within the hour it turns the warm colour */
 const SOON_MS = 60 * 60_000;
 
-function Due({
-  due,
-  soon,
-  className,
-}: {
-  due: string | null;
-  soon: boolean;
-  className?: string;
-}) {
+function Due({ due, soon }: { due: string | null; soon: boolean }) {
   if (!due) return null;
   return (
     <span
       className={cn(
         "inline-flex shrink-0 items-center gap-1 leading-5 tabular-nums",
         soon ? "text-yellow" : "text-muted-foreground",
-        className,
       )}
       title={`Expires in ${due}`}
     >

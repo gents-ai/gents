@@ -15,7 +15,6 @@ import {
   useRef,
   useState,
   type ComponentProps,
-  type RefObject,
 } from "react";
 import {
   Check,
@@ -51,7 +50,6 @@ import {
   ToolSteps,
   UserMessage,
 } from "@gents/ui/conversation";
-import type { ShellActions } from "@/../hooks/shellActions";
 import type { ShellView } from "@/../hooks/shellView";
 import { ChatFolderPicker } from "./ChatFolderPicker";
 import { anchor, useFollowTail, useOlderPages, useScroller } from "@/lib/scroll";
@@ -94,7 +92,7 @@ import { createHandoff, holdLive, type HeldLive } from "./stream-reveal";
 import { ToolBody } from "./tool-views";
 import { gatherWorkers, workerStory, type GatheredWorker } from "./worker-gathering";
 import { SubagentList, WorkerStep, isWorkerStep } from "./WorkerStep";
-import { NO_WORKERS, useSessionProvenance, useWorkers, type Workers } from "./workers";
+import { useSessionProvenance, useWorkers, type Workers } from "./workers";
 import { useParentWork, type ParentWork } from "./parentWork";
 import { WorkerActionsContext, type WorkerActions } from "./WorkerActions";
 import { ArrowUpRight } from "lucide-react";
@@ -354,21 +352,19 @@ export function useBehaviorChoice() {
    and down, and a person's eye with it. One line of the small size is
    always reserved; an error, being rarer and longer, may still grow it. */
 export function SessionSubmissionStatus({
-  error,
   activityStatus,
   hint,
   reserve = true,
 }: {
-  error: string | null;
   activityStatus: ShellView["shellProjection"]["activityStatus"];
   hint?: string | null;
   /** a new chat has no transcript above to hold still, so its line may
       take no room until it has something to say */
   reserve?: boolean;
 }) {
-  const status = activityStatus && !error ? activityStatus : null;
-  const quiet = !status && !error && hint;
-  const empty = !status && !error && !quiet;
+  const status = activityStatus;
+  const quiet = !status && hint;
+  const empty = !status && !quiet;
   return (
     <div
       className={cn("px-1", reserve ? "mt-2 min-h-4" : !empty && "mt-2")}
@@ -382,11 +378,6 @@ export function SessionSubmissionStatus({
         >
           <span>{status.label}</span>
         </div>
-      )}
-      {error && (
-        <p role="alert" className="text-sm leading-4 text-destructive">
-          {error}
-        </p>
       )}
       {quiet && <p className="text-xs leading-4 text-muted-foreground">{hint}</p>}
     </div>
@@ -493,10 +484,6 @@ function copyActions(text: string | null | undefined) {
     },
   ];
 }
-
-/* the sessions this one reached; memoised items read it from context so a
-   lineage refresh re-renders only the subagent rows */
-const WorkersContext = createContext<Workers>(NO_WORKERS);
 
 /* the sessions that sent work into this one; a turn another session sent is
    labeled with its sender */
@@ -991,11 +978,6 @@ function StoppedNotice({ cause }: { cause: DerivedCancelCauseView | null }) {
   );
 }
 
-type TranscriptActions = Pick<
-  ShellActions,
-  "loadOlderSessionTimeline" | "retryMessage"
->;
-
 /* The live tail's text, revealed at a steady pace, reporting what is on
    screen so the message that replaces it can start from there. */
 function LiveContent({ content }: { content: string }) {
@@ -1050,7 +1032,6 @@ function ResponseActions({ text }: { text: string }) {
 }
 
 export const TranscriptPanel = memo(function TranscriptPanel({
-  actionsRef,
   inFlight,
   stopping = false,
   scroller,
@@ -1059,7 +1040,6 @@ export const TranscriptPanel = memo(function TranscriptPanel({
   parentWork,
   workerActions,
 }: {
-  actionsRef: RefObject<TranscriptActions>;
   inFlight: boolean;
   stopping?: boolean;
   /** the transcript's scroller, once mounted */
@@ -1069,11 +1049,12 @@ export const TranscriptPanel = memo(function TranscriptPanel({
   parentWork: ParentWork;
   workerActions: WorkerActions;
 }) {
+  const { actions } = useApp();
   const loadingOlder = useOlderPages(
     scroller,
     session?.sessionId ?? null,
     session?.timelinePage?.hasOlder ?? false,
-    () => actionsRef.current.loadOlderSessionTimeline(),
+    () => actions.loadOlderSessionTimeline(),
     session?.timelineItems[0]?.itemKey ?? null,
   );
   const [retrying, setRetrying] = useState(false);
@@ -1179,7 +1160,7 @@ export const TranscriptPanel = memo(function TranscriptPanel({
     if (!requestId) return;
     setRetrying(true);
     try {
-      await actionsRef.current.retryMessage(requestId);
+      await actions.retryMessage(requestId);
     } catch (error) {
       toastFailure("retry the message", error);
     } finally {
@@ -1209,40 +1190,38 @@ export const TranscriptPanel = memo(function TranscriptPanel({
         </div>
       )}
       <StreamContext.Provider value={stream}>
-        <WorkersContext.Provider value={workers}>
-          <WorkerActionsContext.Provider value={workerActions}>
-            <ParentContext.Provider value={parentWork}>
-              <GroupStateContext.Provider value={groupState}>
-                {entries.map((entry) =>
-                  entry.kind === "item" ? (
-                    /* keyed for the pager, which holds the reader's place
+        <WorkerActionsContext.Provider value={workerActions}>
+          <ParentContext.Provider value={parentWork}>
+            <GroupStateContext.Provider value={groupState}>
+              {entries.map((entry) =>
+                entry.kind === "item" ? (
+                  /* keyed for the pager, which holds the reader's place
                          by the row under their eye while older pages land */
-                    <div
-                      key={entry.key}
-                      data-timeline-key={entry.key}
-                      className="group/response"
-                    >
-                      <TranscriptItem
-                        item={entry.item}
-                        status={entry.item.kind === "liveAssistant" ? status : null}
-                        final={finalKeys.has(entry.key)}
-                      />
-                    </div>
-                  ) : (
-                    <ActivityGroup key={entry.key} entry={entry} workers={workers} />
-                  ),
-                )}
-              </GroupStateContext.Provider>
-              {continuing && showError && <FailedEarlier message={responseError} />}
-              {continuing &&
-                session?.timelineItems
-                  .filter((item) => item.kind === "liveAssistant")
-                  .map((item) => (
-                    <TranscriptItem key={item.itemKey} item={item} status={status} />
-                  ))}
-            </ParentContext.Provider>
-          </WorkerActionsContext.Provider>
-        </WorkersContext.Provider>
+                  <div
+                    key={entry.key}
+                    data-timeline-key={entry.key}
+                    className="group/response"
+                  >
+                    <TranscriptItem
+                      item={entry.item}
+                      status={entry.item.kind === "liveAssistant" ? status : null}
+                      final={finalKeys.has(entry.key)}
+                    />
+                  </div>
+                ) : (
+                  <ActivityGroup key={entry.key} entry={entry} workers={workers} />
+                ),
+              )}
+            </GroupStateContext.Provider>
+            {continuing && showError && <FailedEarlier message={responseError} />}
+            {continuing &&
+              session?.timelineItems
+                .filter((item) => item.kind === "liveAssistant")
+                .map((item) => (
+                  <TranscriptItem key={item.itemKey} item={item} status={status} />
+                ))}
+          </ParentContext.Provider>
+        </WorkerActionsContext.Provider>
       </StreamContext.Provider>
       {wasInterrupted && !inFlight && (
         <StoppedNotice cause={session?.latestRequestOutcome?.cancelCause ?? null} />
@@ -1287,9 +1266,7 @@ export function SessionScreen() {
       acceptsComposeIntent,
       captureComposeIntent,
       interruptRequest,
-      loadOlderSessionTimeline,
       renameSession,
-      retryMessage,
       selectAgent,
       sendMessage,
       setChatFolder,
@@ -1298,7 +1275,7 @@ export function SessionScreen() {
   const chatFolder = useChatFolder();
   const deployments = useDeployments();
   const draftKey = useView((view) => view.draftKey);
-  const interruptVisible = useInterruptVisible();
+  const inFlight = useInterruptVisible();
   const mailboxCause = useMailboxCause();
   const sendStatus = useView((view) => view.shellProjection.nonEmptyContentSendStatus);
   const selectedAgentDid = useSelectedAgentDid();
@@ -1322,17 +1299,6 @@ export function SessionScreen() {
     },
     [ownScroller],
   );
-  const viewport = () => scroller;
-  const transcriptActions = useRef<TranscriptActions>({
-    loadOlderSessionTimeline: loadOlderSessionTimeline,
-    retryMessage: retryMessage,
-  });
-  useLayoutEffect(() => {
-    transcriptActions.current = {
-      loadOlderSessionTimeline: loadOlderSessionTimeline,
-      retryMessage: retryMessage,
-    };
-  }, [loadOlderSessionTimeline, retryMessage]);
   /* away from the bottom, a button offers the way back; scrolling is the cue */
   const { atBottom, toBottom } = useFollowTail(scroller, selectedSessionId);
   /* once the full header scrolls out, a condensed one sticks to the top */
@@ -1340,7 +1306,7 @@ export function SessionScreen() {
   const [condensed, setCondensed] = useState(false);
   useEffect(() => {
     const el = headerEnd.current;
-    const root = viewport();
+    const root = scroller;
     if (!el || !root) return;
     const io = new IntersectionObserver(([e]) => setCondensed(!e!.isIntersecting), {
       root,
@@ -1562,11 +1528,7 @@ export function SessionScreen() {
           />
           {/* inside the composer's row, so the grid's gap is not paid twice
               around a line that is usually empty */}
-          <SessionSubmissionStatus
-            error={null}
-            activityStatus={activityStatus}
-            reserve={false}
-          />
+          <SessionSubmissionStatus activityStatus={activityStatus} reserve={false} />
         </div>
         <p className="text-xs text-muted-foreground">
           {chosenName} <strong className="font-medium text-foreground">can</strong>{" "}
@@ -1597,7 +1559,6 @@ export function SessionScreen() {
   }
 
   /* ---- an existing session ---- */
-  const inFlight = interruptVisible;
 
   /* stop: the interrupt reaches this request only; sessions it started keep
      their own work, each stoppable from its row or its own screen */
@@ -1720,7 +1681,7 @@ export function SessionScreen() {
                     <SessionContext context={session.context} compact />
                   </div>
                 )}
-                <PanelMenu routeName="session" size="icon-sm" />
+                <PanelMenu routeName="session" />
               </PaneBar>
               <div className="flex items-start justify-between gap-4">
                 <div>
@@ -1786,7 +1747,6 @@ export function SessionScreen() {
 
               <div ref={headerEnd} aria-hidden="true" />
               <SelectedTranscript
-                actionsRef={transcriptActions}
                 inFlight={inFlight}
                 stopping={stopping}
                 scroller={scroller}
@@ -1861,7 +1821,6 @@ export function SessionScreen() {
                 {/* the placeholder already says why sending is off while the
                     box is empty; the hint is only for when typed text hides it */}
                 <SessionSubmissionStatus
-                  error={null}
                   activityStatus={activityStatus}
                   hint={
                     status.kind === "disabled" && !inFlight && draft.trim() !== ""

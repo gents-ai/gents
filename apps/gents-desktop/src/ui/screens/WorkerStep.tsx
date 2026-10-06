@@ -318,8 +318,8 @@ export function WorkerStep({
   );
 }
 
-export const subagentName = (subagent: Subagent | null, target?: string | null) =>
-  subagent?.summary?.title ?? target ?? "a subagent";
+const subagentName = (subagent: Subagent | null) =>
+  subagent?.summary?.title ?? "a subagent";
 
 /* The sessions this one started, each as the session it is: where it got
    to and a way in. Stopping is a row's business: it names the call. */

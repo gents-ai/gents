@@ -51,7 +51,7 @@ export function Dock({
             {active.title}
           </span>
           {/* the sheet is modal, so the session's menu is out of reach: the same menu here switches surfaces */}
-          <PanelMenu routeName={routeName} size="icon-sm" />
+          <PanelMenu routeName={routeName} />
           <Button
             variant="ghost"
             size="icon-sm"

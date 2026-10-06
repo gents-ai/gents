@@ -1107,14 +1107,11 @@ function providerOf(b: InferenceBackendView): ProviderId {
 export function InferencePanel({
   deployment,
   item,
-  onAddingChange,
   under,
   orphans = [],
 }: {
   deployment: DeploymentView;
   item?: string;
-  /* tells the Models page the New backend form is open, so it steps aside */
-  onAddingChange?: (adding: boolean) => void;
   /* rows to nest under a configured backend: its models */
   under?: (b: InferenceBackendView) => ListRow[];
   /* profiles whose backend no longer exists, listed after the backends */
@@ -1139,11 +1136,7 @@ export function InferencePanel({
   const catalog = useSetupCatalog();
   const providers = catalog.providers;
   /* the provider whose inputs are open, from a catalog row or Add another */
-  const [adding, setAddingState] = useState<ProviderId | null>(null);
-  const setAdding = (next: ProviderId | null) => {
-    setAddingState(next);
-    onAddingChange?.(next !== null);
-  };
+  const [adding, setAdding] = useState<ProviderId | null>(null);
   if (adding)
     return (
       <SetupScreen

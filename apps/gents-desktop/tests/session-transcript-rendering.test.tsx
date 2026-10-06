@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, screen } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -15,6 +15,7 @@ vi.mock("../src/ui/screens/Markdown", () => ({
 }));
 
 import { TranscriptPanel } from "../src/ui/screens/SessionScreen";
+import { renderIn, testApp } from "./app-fixture";
 
 function session(content: string): DesktopSessionSnapshot {
   return {
@@ -58,33 +59,21 @@ function session(content: string): DesktopSessionSnapshot {
 describe("SessionScreen transcript render boundary", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it("renders failures and retries through the latest action owner, then shows interruption", async () => {
+  it("renders failures and retries through the app's action, then shows interruption", async () => {
     const failed = {
       ...session("partial response"),
       turnState: "failed",
       retryEligibility: { eligible: true, denialReason: null },
     };
-    const oldRetry = vi.fn(async () => null);
-    const latestRetry = vi.fn(async () => null);
-    const actionsRef = {
-      current: {
-        loadOlderSessionTimeline: vi.fn(async () => false),
-        retryMessage: oldRetry,
-      },
-    };
-    const props = {
-      actionsRef,
-      inFlight: false,
-      scroller: null,
-    };
-    const view = render(<TranscriptPanel {...props} session={failed} />);
+    const app = testApp();
+    const retry = vi.spyOn(app.actions, "retryMessage").mockResolvedValue(null);
+    const props = { inFlight: false, scroller: null };
+    const view = renderIn(app, <TranscriptPanel {...props} session={failed} />);
     expect(screen.getByText("The assistant could not finish this turn.")).toBeVisible();
-    actionsRef.current = { ...actionsRef.current, retryMessage: latestRetry };
     await act(async () =>
       fireEvent.click(screen.getByRole("button", { name: "Retry" })),
     );
-    expect(latestRetry).toHaveBeenCalledWith("request-1");
-    expect(oldRetry).not.toHaveBeenCalled();
+    expect(retry).toHaveBeenCalledWith("request-1");
     view.rerender(
       <TranscriptPanel {...props} session={{ ...failed, turnState: "interrupted" }} />,
     );
@@ -95,19 +84,8 @@ describe("SessionScreen transcript render boundary", () => {
   it("keeps unchanged rows out of unrelated session projection renders", () => {
     markdownRender.mockClear();
     const original = session("stable markdown");
-    const actionsRef = {
-      current: {
-        loadOlderSessionTimeline: vi.fn(async () => false),
-        retryMessage: vi.fn(async () => null),
-      },
-    };
-    const scroller = null;
-    const props = {
-      actionsRef,
-      inFlight: false,
-      scroller,
-    };
-    const view = render(<TranscriptPanel {...props} session={original} />);
+    const props = { inFlight: false, scroller: null };
+    const view = renderIn(testApp(), <TranscriptPanel {...props} session={original} />);
 
     expect(markdownRender).toHaveBeenCalledTimes(1);
 
@@ -152,31 +130,24 @@ describe("SessionScreen transcript render boundary", () => {
       };
       /* as the session owner does: the older page is set as state, then the
          load reports whether it added rows */
+      let setSession: (next: DesktopSessionSnapshot) => void = () => {};
       function Owner() {
         const [current, setCurrent] = useState(original);
-        const loadOlderSessionTimeline = async () => {
-          if (loaded) {
-            scrollHeight = 180;
-            setCurrent(withOlder);
-          }
-          return loaded;
-        };
+        setSession = setCurrent;
         return (
-          <TranscriptPanel
-            actionsRef={{
-              current: {
-                loadOlderSessionTimeline,
-                retryMessage: vi.fn(async () => null),
-              },
-            }}
-            inFlight={false}
-            scroller={viewport}
-            session={current}
-          />
+          <TranscriptPanel inFlight={false} scroller={viewport} session={current} />
         );
       }
+      const app = testApp();
+      vi.spyOn(app.actions, "loadOlderSessionTimeline").mockImplementation(async () => {
+        if (loaded) {
+          scrollHeight = 180;
+          setSession(withOlder);
+        }
+        return loaded;
+      });
 
-      render(<Owner />);
+      renderIn(app, <Owner />);
       await act(async () => {
         fireEvent.wheel(viewport, { deltaY: -20 });
       });

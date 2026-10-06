@@ -1,7 +1,6 @@
 /* The pane's menu, a dot menu in its bar: what can show in the dock here,
    with what is already showing marked, and a way to hide or show the
    dock. One control, however many surfaces there are. */
-import type { ReactNode } from "react";
 import { Check, EllipsisVertical } from "lucide-react";
 import { Button } from "@gents/ui/components/button";
 import {
@@ -17,16 +16,7 @@ import { useSurfaces } from "./surfaces";
 import { inScope } from "./dock-scope";
 import { useDock } from "./workspace";
 
-export function PanelMenu({
-  routeName,
-  size = "icon-sm",
-  actions,
-}: {
-  routeName: string;
-  size?: "icon-xs" | "icon-sm";
-  /** the screen's own actions on what it shows (menu items), below the surfaces */
-  actions?: ReactNode;
-}) {
+export function PanelMenu({ routeName }: { routeName: string }) {
   const { dock, closeTab, openSurface, closeDock, reopenDock } = useDock();
   const surfaces = useSurfaces().filter(
     (s) => s.placements.includes("dock") && inScope(s, routeName),
@@ -40,7 +30,7 @@ export function PanelMenu({
           render={
             <Button
               variant="ghost"
-              size={size}
+              size="icon-sm"
               aria-label="More"
               aria-pressed={showing}
               className={showing ? "bg-accent text-foreground" : undefined}
@@ -81,13 +71,6 @@ export function PanelMenu({
             >
               {dock.open ? "Hide panel" : "Show panel"}
             </DropdownMenuItem>
-          </>
-        )}
-        {/* the screen's own actions last: reached for less often than a surface */}
-        {actions && (
-          <>
-            <DropdownMenuSeparator />
-            <DropdownMenuGroup>{actions}</DropdownMenuGroup>
           </>
         )}
       </DropdownMenuContent>

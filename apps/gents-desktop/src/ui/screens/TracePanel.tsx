@@ -86,10 +86,8 @@ export function TracePanel({
      does not rebuild it */
   const tools = useSessionFacts()?.tools ?? NO_TOOLS;
   const running = trackedRequestId !== null;
-  const [openKey, setOpenKey] = useState<string | null>(null);
-
   /* every entry starts collapsed; only the reader opens one */
-  const effectiveOpen = openKey;
+  const [openKey, setOpenKey] = useState<string | null>(null);
 
   return (
     <aside
@@ -127,7 +125,7 @@ export function TracePanel({
             <Entry
               key={t.itemKey}
               tool={t}
-              open={effectiveOpen === t.itemKey}
+              open={openKey === t.itemKey}
               onOpenChange={(o) => setOpenKey(o ? t.itemKey : null)}
             />
           ))}
