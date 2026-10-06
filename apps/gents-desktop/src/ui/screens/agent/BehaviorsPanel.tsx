@@ -51,8 +51,8 @@ import {
 import { toast } from "sonner";
 import { href, navigate } from "@/lib/router";
 import { behaviorReadiness } from "@/lib/behavior-readiness";
-import { bashAccess, fileAccess, network } from "../behavior";
-import { BehaviorAvatar } from "../parts";
+import { shortAccess } from "../behavior";
+import { AccessSentence, BehaviorAvatar } from "../parts";
 import {
   AreaRow,
   ChipsRow,
@@ -79,12 +79,6 @@ import { defaultAgentOf } from "@/lib/agents";
 import { agentOf } from "@/lib/agents";
 import { useApp } from "@/app/AppContext";
 import type { ShellActions } from "@/../hooks/shellActions";
-
-/* the access modes at a glance, short enough for one line */
-const short = (mode: string | null | undefined) =>
-  ({ "read / write": "rw", "read-only": "ro", unrestricted: "any", off: "off" })[
-    mode ?? "off"
-  ] ?? mode;
 
 /* picker values for a context that does not exist until Save */
 const DUPLICATE = "new:duplicate";
@@ -839,14 +833,7 @@ export function BehaviorEditor({
                   data-testid="behavior-summary"
                   className="mt-0.5 text-sm text-muted-foreground"
                 >
-                  {behavior.displayName}{" "}
-                  <strong className="font-medium text-foreground">can</strong>{" "}
-                  {env
-                    ? `${fileAccess(env.fileAccess)} files and ${bashAccess(env.bashAccess)} commands`
-                    : "…"}
-                  , and{" "}
-                  <strong className="font-medium text-foreground">has access</strong> to{" "}
-                  {network(env?.networkAccess)}.
+                  <AccessSentence name={behavior.displayName} env={env} />
                 </p>
                 {attention && (
                   <p
@@ -1320,8 +1307,8 @@ export function BehaviorsPanel({
     );
     return [
       e?.modelName ?? "no backend",
-      `files ${short(e?.fileAccess)}`,
-      `bash ${short(e?.bashAccess)}`,
+      `files ${shortAccess(e?.fileAccess)}`,
+      `bash ${shortAccess(e?.bashAccess)}`,
       ...(!b.contextId || !contextIds.has(b.contextId) ? ["no instructions"] : []),
       ...(sharing.length
         ? [`shared with ${listNames(sharing.map((x) => x.displayName))}`]

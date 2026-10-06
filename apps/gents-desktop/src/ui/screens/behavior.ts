@@ -39,9 +39,19 @@ export const access = (mode: string) =>
     "read-only": "read files",
     off: "not touch files",
   })[mode] ?? mode;
+const NETWORK: Record<string, string> = {
+  enabled: "the network",
+  inherit: "the network (inherited)",
+};
 export const network = (mode: string | null | undefined) =>
-  mode === "enabled"
-    ? "the network"
-    : mode === "inherit"
-      ? "the network (inherited)"
-      : "no network";
+  (mode && NETWORK[mode]) || "no network";
+
+/* the access modes at a glance, short enough for one line */
+const SHORT: Record<string, string> = {
+  "read / write": "rw",
+  "read-only": "ro",
+  unrestricted: "any",
+  off: "off",
+};
+export const shortAccess = (mode: string | null | undefined) =>
+  SHORT[mode ?? "off"] ?? mode;

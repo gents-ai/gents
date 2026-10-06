@@ -11,15 +11,10 @@ import { Popover, PopoverContent, PopoverTrigger } from "@gents/ui/components/po
 import { cn } from "@gents/ui/lib/utils";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { BehaviorSheet } from "./agent/BehaviorSheet";
+import { shortAccess } from "./behavior";
 import { BehaviorAvatar } from "./parts";
 import { behaviorReadiness } from "@/lib/behavior-readiness";
 import { useExclusivePopover } from "@/hooks/useExclusivePopover";
-
-/* the access modes at a glance, short enough for one line */
-const short = (mode: string | null | undefined) =>
-  ({ "read / write": "rw", "read-only": "ro", unrestricted: "any", off: "off" })[
-    mode ?? "off"
-  ] ?? mode;
 
 export function BehaviorPicker({
   deployment,
@@ -199,8 +194,9 @@ function MountedBehaviorPicker({
                       )}
                       {readiness(b.behaviorId).ready ? (
                         <span className="truncate font-mono text-[11px] text-muted-foreground">
-                          {e?.modelName ?? "no backend"} · files {short(e?.fileAccess)}{" "}
-                          · bash {short(e?.bashAccess)} · net{" "}
+                          {e?.modelName ?? "no backend"} · files{" "}
+                          {shortAccess(e?.fileAccess)} · bash{" "}
+                          {shortAccess(e?.bashAccess)} · net{" "}
                           {e?.networkAccess ?? "disabled"}
                         </span>
                       ) : (

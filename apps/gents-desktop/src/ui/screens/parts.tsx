@@ -1,6 +1,7 @@
 import type { ComponentProps } from "react";
 import { cn } from "@gents/ui/lib/utils";
-import { initials } from "./behavior";
+import type { BehaviorEnvironmentView } from "@source-inc/gents-desktop-client";
+import { bashAccess, fileAccess, initials, network } from "./behavior";
 
 /* two-letter initials inside a quiet ring: raised face, hairline border,
    ordinary text ink */
@@ -21,5 +22,29 @@ export function BehaviorAvatar({
     >
       {initials(name)}
     </span>
+  );
+}
+
+/** What a behavior may do, as one sentence: files and commands, then the
+    network. Its environment is read from the node, so it may still be
+    loading. */
+export function AccessSentence({
+  name,
+  env,
+}: {
+  name: string;
+  env:
+    | Pick<BehaviorEnvironmentView, "fileAccess" | "bashAccess" | "networkAccess">
+    | undefined;
+}) {
+  return (
+    <>
+      {name} <strong className="font-medium text-foreground">can</strong>{" "}
+      {env
+        ? `${fileAccess(env.fileAccess)} files and ${bashAccess(env.bashAccess)} commands`
+        : "…"}
+      , and <strong className="font-medium text-foreground">has access</strong> to{" "}
+      {network(env?.networkAccess)}.
+    </>
   );
 }

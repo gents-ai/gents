@@ -55,7 +55,7 @@ import { useStoredStrings } from "@/lib/stored";
 import { nodeDidOf } from "@/lib/nodes";
 import { NodeAxis } from "./NodeAxis";
 import { NodeBehaviorStack } from "./NodeBehaviorStack";
-import { groupItems, KIND_ORDER, matches } from "./mailbox-triage";
+import { deadlineOf, dueSoon, groupItems, KIND_ORDER, matches } from "./mailbox-triage";
 import { parseQuestion, QuestionAnswer } from "./MailboxQuestion";
 import { Markdown } from "./Markdown";
 import { Axis, type Option } from "./SessionFilters";
@@ -490,11 +490,11 @@ function Item({
   const [expanded, setExpanded] = useState(false);
   const Icon = kind.icon;
   const open = () => openItem(m, openMailboxItem);
-  const deadline = m.deadlineAt ? Date.parse(m.deadlineAt) : null;
+  const deadline = deadlineOf(m);
   /* a deadline that has passed is the runtime's to expire, not a state
      to show; a countdown never reads below zero */
   const due = deadline === null ? null : span(Math.max(0, deadline - now));
-  const soon = deadline !== null && deadline - now < SOON_MS;
+  const soon = dueSoon(deadline, now);
   const age = when(m.createdAt, now);
   const created = Number.isNaN(Date.parse(m.createdAt))
     ? undefined
@@ -836,10 +836,6 @@ function GroupSelect({
     </span>
   );
 }
-
-/* when it expires: a clock and a span, the one fact of the old detail strip
-   a person acted on; within the hour it turns the warm colour */
-const SOON_MS = 60 * 60_000;
 
 function Due({ due, soon }: { due: string | null; soon: boolean }) {
   if (!due) return null;

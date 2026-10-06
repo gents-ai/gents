@@ -23,6 +23,7 @@ import { useState } from "react";
 import { Age, span } from "./time";
 import { useApp } from "@/app/AppContext";
 import { useMailboxCause, useSelectedDeployment } from "@/hooks/useClient";
+import { deadlineOf, dueSoon } from "./mailbox-triage";
 
 const KIND_LABEL: Record<string, string> = {
   ask: "Question",
@@ -111,8 +112,8 @@ export function ReplyingTo() {
 function Details({ item }: { item: MailboxItemView }) {
   /* fixed when the popover opens: a deadline does not tick over mid-read */
   const [now] = useState(() => Date.now());
-  const deadline = item.deadlineAt ? Date.parse(item.deadlineAt) : null;
-  const soon = deadline !== null && deadline - now < 60 * 60_000;
+  const deadline = deadlineOf(item);
+  const soon = dueSoon(deadline, now);
   return (
     <div className="flex min-w-0 flex-col gap-2">
       <div className="flex items-center gap-2 text-xs text-muted-foreground">

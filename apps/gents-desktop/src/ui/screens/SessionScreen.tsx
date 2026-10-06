@@ -72,7 +72,7 @@ import { Hint } from "./Hint";
 import { ToolIcon } from "./tool-icon";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { Spinner } from "@gents/ui/components/spinner";
-import { bashAccess, behaviorName, fileAccess, network } from "./behavior";
+import { behaviorName } from "./behavior";
 import { AgentAvatar } from "./AgentAvatar";
 import { PanelMenu } from "@/app/PanelMenu";
 import { PaneBar } from "@/app/PaneBar";
@@ -82,7 +82,7 @@ import { SlashSkillMenu } from "./SlashSkillMenu";
 import { useSlashSkills } from "./useSlashSkills";
 import { Thinking } from "./Thinking";
 import { activityStatus, isStopping } from "./activity-status";
-import { BehaviorAvatar } from "./parts";
+import { AccessSentence, BehaviorAvatar } from "./parts";
 import { NodeBehaviorStack } from "./NodeBehaviorStack";
 import { isWorkingNode, nodeDidOf } from "@/lib/nodes";
 import { Markdown } from "./Markdown";
@@ -1531,12 +1531,7 @@ export function SessionScreen() {
           <SessionSubmissionStatus activityStatus={activityStatus} reserve={false} />
         </div>
         <p className="text-xs text-muted-foreground">
-          {chosenName} <strong className="font-medium text-foreground">can</strong>{" "}
-          {env
-            ? `${fileAccess(env.fileAccess)} files and ${bashAccess(env.bashAccess)} commands`
-            : "…"}
-          , and <strong className="font-medium text-foreground">has access</strong> to{" "}
-          {network(env?.networkAccess)}.
+          <AccessSentence name={chosenName} env={env} />
           {deployment && choice.behaviorId && (
             <>
               {" "}
