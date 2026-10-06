@@ -116,7 +116,7 @@ theorem profile_choice_lands_on_current_or_default (dflt : String → Option Str
     · subst hk; simp [backendChoiceAllowed] at h; exact .inl (by rw [h])
     · simp [backendChoiceAllowed, hk] at h; exact .inr h
 
-/-- A selection that names a profile (behavior and compaction
+/-- A selection that names a profile (agent and compaction
 `inference_profile_id`, persona `--profile`, pack inference slots) is the
 backend choice between the backends the two profiles reach; `current` is
 absent on create, and an unknown next profile is refused. -/

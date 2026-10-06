@@ -63,7 +63,7 @@ validator; this model does not parse or duplicate the nested schema. -/
 structure Control where
   /-- `self_config.enable_self_config`: the `config` tool exists. -/
   selfConfig : Bool
-  /-- `subagents.enabled`: the agents tool group. -/
+  /-- `agents`: the agents tool group on Tools. -/
   agents : Bool
   /-- `self_config.self_config_no_lockout`: this guard applies to later writes. -/
   noLockout : Bool
@@ -82,7 +82,7 @@ validation). It is refused only a candidate that turns off its self-config tool,
 or drops the agents group, the no-lockout guard, or the `tools` authority it
 needs to restore any of them. Dropping the guard or that authority first would
 make the lockout a two-step edit, so both are retained like the tools they
-protect. Behavior and backend enablement are the same invariant on the other
+protect. Agent and backend enablement are the same invariant on the other
 reference-chain documents and remain their existing typed guards. -/
 def keepsControl (decode : Doc → Option Control) (stored candidate : Doc) : Bool :=
   match decode stored, decode candidate with
@@ -92,14 +92,14 @@ def keepsControl (decode : Doc → Option Control) (stored candidate : Doc) : Bo
         && retained old.toolsAuthority new.toolsAuthority
   | _, _ => false
 
-/-- The invoker's reachability, projected from its own behavior document:
+/-- The invoker's reachability, projected from its own agent document:
 `enabled` (absent is true) and whether its tags carry the Setup tag. -/
 structure Reach where
   enabled : Bool
   setupTag : Bool
   deriving DecidableEq, Repr
 
-/-- The behavior half of no lockout: the invoker stays enabled and keeps the
+/-- The agent half of no lockout: the invoker stays enabled and keeps the
 Setup tag it had. The tag is how the desktop reaches the Engineer and how
 persona requests refuse editing or disabling it
 (`PersonaRequest.protected_edit_or_disable_rejected`); dropping it first would
