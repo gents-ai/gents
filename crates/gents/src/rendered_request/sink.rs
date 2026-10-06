@@ -56,25 +56,7 @@ impl DefraRenderedRequestSink {
         &self,
         rendered: &RenderedCompletionRequest,
     ) -> Result<Option<Value>> {
-        let source = serde_json::to_value(rendered.source)?
-            .as_str()
-            .context("rendered source is not a string")?
-            .to_owned();
-        let query = format!(
-            r#"{{ RenderedRequest(filter: {{
-                agent_did: {{_eq: "{agent_did}"}}, requester_did: {{_eq: "{requester_did}"}},
-                session_id: {{_eq: "{session_id}"}}, source: {{_eq: "{source}"}},
-                capture_scope: {{_eq: "{capture_scope}"}}
-            }}, order: {{created_at: DESC}}, limit: 1) {{
-                _docID capture_version agent_did requester_did session_id source capture_scope
-                request_json
-            }} }}"#,
-            agent_did = escape_graphql_string(&rendered.agent_did),
-            requester_did = escape_graphql_string(&rendered.requester_did),
-            session_id = escape_graphql_string(&rendered.session_id),
-            source = escape_graphql_string(&source),
-            capture_scope = escape_graphql_string(&rendered.capture_scope),
-        );
+        let query = compatible_base_query(rendered)?;
         let response = crate::graphql::graphql_with_transaction_retry(
             &self.node,
             &query,
@@ -705,6 +687,32 @@ pub(crate) fn defra_rendered_request_capture_factory(
     })
 }
 
+/// DefraDB recognizes ordered index scans only when ORDER BY names the index
+/// prefix. The equality-constrained fields are constant across matching rows,
+/// so including them preserves newest-first order and lets LIMIT stop the scan.
+fn compatible_base_query(rendered: &RenderedCompletionRequest) -> Result<String> {
+    let source = serde_json::to_value(rendered.source)?
+        .as_str()
+        .context("rendered source is not a string")?
+        .to_owned();
+    Ok(format!(
+        r#"{{ RenderedRequest(filter: {{
+                agent_did: {{_eq: "{agent_did}"}}, requester_did: {{_eq: "{requester_did}"}},
+                session_id: {{_eq: "{session_id}"}}, source: {{_eq: "{source}"}},
+                capture_scope: {{_eq: "{capture_scope}"}}
+            }}, order: [{{agent_did: DESC}}, {{requester_did: DESC}}, {{session_id: DESC}},
+                {{source: DESC}}, {{capture_scope: DESC}}, {{created_at: DESC}}], limit: 1) {{
+                _docID capture_version agent_did requester_did session_id source capture_scope
+                request_json
+            }} }}"#,
+        agent_did = escape_graphql_string(&rendered.agent_did),
+        requester_did = escape_graphql_string(&rendered.requester_did),
+        session_id = escape_graphql_string(&rendered.session_id),
+        source = escape_graphql_string(&source),
+        capture_scope = escape_graphql_string(&rendered.capture_scope),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -754,6 +762,69 @@ mod tests {
             provenance_payload_json: serde_json::to_value(&assembly_trace).unwrap(),
             assembly_trace,
         }
+    }
+
+    #[tokio::test]
+    async fn compression_base_order_stops_at_latest_compatible_capture() {
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        let sink = DefraRenderedRequestSink::new(Arc::clone(&node));
+        let mut rendered = rendered_fixture();
+        for index in 0..49 {
+            rendered.capture_key = format!("capture-{index}");
+            sink.create_stored_for_test(&rendered, &format!("capture-{index}"))
+                .await
+                .unwrap();
+        }
+        let mut incompatible = rendered.clone();
+        incompatible.capture_scope = "other-scope".into();
+        incompatible.capture_key = "incompatible-capture".into();
+        sink.create_stored_for_test(&incompatible, "incompatible")
+            .await
+            .unwrap();
+        let latest = sink
+            .latest_compatible_base(&rendered)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(latest["request_json"], "capture-48");
+
+        fn metric(value: &Value, field: &str) -> Option<u64> {
+            match value {
+                Value::Object(object) => object
+                    .get(field)
+                    .and_then(Value::as_u64)
+                    .or_else(|| object.values().find_map(|value| metric(value, field))),
+                Value::Array(array) => array.iter().find_map(|value| metric(value, field)),
+                _ => None,
+            }
+        }
+        let ordered = compatible_base_query(&rendered).unwrap();
+        let before = ordered.replace(
+            "order: [{agent_did: DESC}, {requester_did: DESC}, {session_id: DESC},\n                {source: DESC}, {capture_scope: DESC}, {created_at: DESC}]",
+            "order: {created_at: DESC}",
+        );
+        assert_ne!(before, ordered);
+        let mut fetched = Vec::new();
+        for query in [before, ordered] {
+            let response = crate::graphql::graphql_with_transaction_retry(
+                &node,
+                &format!("query @explain(type: execute) {query}"),
+                "measure compression-base query",
+            )
+            .await
+            .unwrap();
+            let data = response.data.unwrap();
+            fetched.push(metric(&data, "docFetches").unwrap_or_else(|| panic!("{data}")));
+        }
+        assert_eq!(fetched, vec![49, 1]);
+        rendered.capture_scope = "absent-scope".into();
+        assert!(sink
+            .latest_compatible_base(&rendered)
+            .await
+            .unwrap()
+            .is_none());
+        node.shutdown().await;
     }
 
     #[tokio::test]

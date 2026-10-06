@@ -7,8 +7,11 @@
 //! message list to be repeated.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::Write;
 
 use anyhow::{Context, Result};
+use base64::{engine::general_purpose::STANDARD, Engine};
+use flate2::{write::ZlibEncoder, Compression, Decompress, FlushDecompress, Status};
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use serde_json::Value;
@@ -17,6 +20,77 @@ pub(crate) const LOSSLESS_JSON_VERSION: u32 = 1;
 const CAPTURE_CONTAINER_VERSION: u32 = 1;
 pub(crate) const MAX_DELTA_DEPTH: u8 = 8;
 const MIN_DELTA_SAVINGS: usize = 256;
+const COMPRESSED_JSON_VERSION: u32 = 2;
+/// Bounds decompression allocation from replicated input. Larger legitimate
+/// captures retain the uncompressed encoding and its existing decode behavior.
+const MAX_COMPRESSED_RECORD_BYTES: usize = 64 * 1024 * 1024;
+const MIN_COMPRESSION_BYTES: usize = 4096;
+
+#[derive(Serialize, Deserialize)]
+struct CompressedEnvelope {
+    gents_lossless_json: u32,
+    kind: String,
+    uncompressed_bytes: usize,
+    data: String,
+}
+
+fn compress_record(stored: &str) -> Result<String> {
+    if !(MIN_COMPRESSION_BYTES..=MAX_COMPRESSED_RECORD_BYTES).contains(&stored.len()) {
+        return Ok(stored.to_owned());
+    }
+    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::fast());
+    encoder.write_all(stored.as_bytes())?;
+    let compressed = serde_json::to_string(&CompressedEnvelope {
+        gents_lossless_json: COMPRESSED_JSON_VERSION,
+        kind: "zlib".into(),
+        uncompressed_bytes: stored.len(),
+        data: STANDARD.encode(encoder.finish()?),
+    })?;
+    Ok(
+        if compressed.len().saturating_add(MIN_DELTA_SAVINGS) < stored.len() {
+            compressed
+        } else {
+            stored.to_owned()
+        },
+    )
+}
+
+fn decompress_record(stored: &str) -> Result<String> {
+    let envelope: CompressedEnvelope = serde_json::from_str(stored)?;
+    anyhow::ensure!(
+        envelope.gents_lossless_json == COMPRESSED_JSON_VERSION && envelope.kind == "zlib",
+        "unsupported compressed capture encoding"
+    );
+    anyhow::ensure!(
+        envelope.uncompressed_bytes <= MAX_COMPRESSED_RECORD_BYTES,
+        "compressed capture exceeds decoded byte bound"
+    );
+    anyhow::ensure!(
+        envelope.data.len() <= MAX_COMPRESSED_RECORD_BYTES.div_ceil(3) * 4,
+        "compressed capture exceeds encoded byte bound"
+    );
+    let bytes = STANDARD
+        .decode(&envelope.data)
+        .context("decoding compressed capture base64")?;
+    let mut decoder = Decompress::new(true);
+    let mut decoded = Vec::with_capacity(envelope.uncompressed_bytes + 1);
+    let status = decoder
+        .decompress_vec(&bytes, &mut decoded, FlushDecompress::Finish)
+        .context("decompressing capture record")?;
+    anyhow::ensure!(
+        status == Status::StreamEnd,
+        "compressed capture is incomplete or exceeds its byte bound"
+    );
+    anyhow::ensure!(
+        decoded.len() == envelope.uncompressed_bytes,
+        "compressed capture length mismatch"
+    );
+    anyhow::ensure!(
+        decoder.total_in() == bytes.len() as u64,
+        "compressed capture has trailing bytes"
+    );
+    String::from_utf8(decoded).context("compressed capture is not UTF-8")
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct BaseWitness {
@@ -195,10 +269,10 @@ fn encode_envelope(payload: Payload) -> Result<String> {
 }
 
 pub(crate) fn encode_container(request: &EncodedJson, provenance: &EncodedJson) -> Result<String> {
-    let request_body =
-        RawValue::from_string(request.stored.clone()).context("decoding request envelope")?;
-    let provenance_payload =
-        RawValue::from_string(provenance.stored.clone()).context("decoding provenance envelope")?;
+    let request_body = RawValue::from_string(compress_record(&request.stored)?)
+        .context("decoding request envelope")?;
+    let provenance_payload = RawValue::from_string(compress_record(&provenance.stored)?)
+        .context("decoding provenance envelope")?;
     serde_json::to_string(&RawCaptureContainer {
         gents_capture_json: CAPTURE_CONTAINER_VERSION,
         request_body: &request_body,
@@ -305,6 +379,15 @@ pub(crate) enum DecodedRecord {
 pub(crate) fn decode_record(stored: &str) -> Result<DecodedRecord> {
     let envelope: BorrowedEnvelope<'_> =
         serde_json::from_str(stored).context("decoding lossless envelope")?;
+    if envelope.gents_lossless_json == COMPRESSED_JSON_VERSION {
+        let decoded = decompress_record(stored)?;
+        let inner: BorrowedEnvelope<'_> = serde_json::from_str(&decoded)?;
+        anyhow::ensure!(
+            inner.gents_lossless_json == LOSSLESS_JSON_VERSION,
+            "compressed capture must contain an uncompressed lossless record"
+        );
+        return decode_record(&decoded);
+    }
     anyhow::ensure!(
         envelope.gents_lossless_json == LOSSLESS_JSON_VERSION,
         "unsupported lossless JSON version {}",
@@ -517,6 +600,134 @@ pub(crate) fn apply_delta(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn compressed_records_preserve_full_delta_and_commit_witnesses() {
+        let base = json!({"messages": (0..400).map(|i| format!("message {i}: {}", "payload ".repeat(20))).collect::<Vec<_>>()});
+        let mut next = base.clone();
+        next["messages"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("new payload ".repeat(1000)));
+        let witness = BaseWitness {
+            doc_id: "base".into(),
+            field_commit_cid: "cid".into(),
+            depth: 0,
+            agent_did: "agent".into(),
+            requester_did: String::new(),
+            session_id: "session".into(),
+            source: "source".into(),
+            capture_scope: "inference.1".into(),
+        };
+        let base_full = encode_full(&base).unwrap();
+        let full_container = encode_container(&base_full, &base_full).unwrap();
+        assert!(full_container.len() < base_full.stored.len() / 4);
+        assert_eq!(
+            capture_record_depth(2, &full_container, CapturePayloadKind::RequestBody).unwrap(),
+            0
+        );
+        let delta = encode_against(&next, &base, witness).unwrap();
+        assert!(matches!(
+            decode_record(&delta.stored).unwrap(),
+            DecodedRecord::Delta { .. }
+        ));
+        let container = encode_container(&delta, &base_full).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&container).unwrap()["request_body"]
+                ["gents_lossless_json"],
+            COMPRESSED_JSON_VERSION
+        );
+        assert_eq!(
+            capture_record_depth(2, &container, CapturePayloadKind::RequestBody).unwrap(),
+            1
+        );
+        assert_eq!(
+            resolve_capture_with(2, &container, CapturePayloadKind::RequestBody, |_| Ok((
+                2,
+                full_container.clone(),
+                "cid".into()
+            )))
+            .unwrap(),
+            next
+        );
+        assert!(
+            resolve_capture_with(2, &container, CapturePayloadKind::RequestBody, |_| Ok((
+                2,
+                full_container.clone(),
+                "wrong".into()
+            )))
+            .is_err()
+        );
+        assert_eq!(
+            resolve_capture_with(
+                2,
+                &container,
+                CapturePayloadKind::ProvenancePayload,
+                |_| unreachable!()
+            )
+            .unwrap(),
+            base
+        );
+    }
+
+    #[test]
+    fn compression_preserves_unbounded_plain_capture_support() {
+        let large = "x".repeat(MAX_COMPRESSED_RECORD_BYTES + 1);
+        assert_eq!(compress_record(&large).unwrap(), large);
+        let small = encode_full(&json!({"message": "tiny"})).unwrap();
+        assert_eq!(compress_record(&small.stored).unwrap(), small.stored);
+    }
+
+    #[test]
+    fn compressed_records_reject_corruption_expansion_and_nesting() {
+        let full = encode_full(&json!({"unicode": "αβγ🙂".repeat(4096)})).unwrap();
+        let compressed = compress_record(&full.stored).unwrap();
+        assert!(compressed.len() < full.stored.len());
+        assert_eq!(decompress_record(&compressed).unwrap(), full.stored);
+        let valid: Value = serde_json::from_str(&compressed).unwrap();
+        for size in [
+            0,
+            full.stored.len() - 1,
+            full.stored.len() + 1,
+            MAX_COMPRESSED_RECORD_BYTES + 1,
+        ] {
+            let mut invalid = valid.clone();
+            invalid["uncompressed_bytes"] = json!(size);
+            assert!(decode_record(&invalid.to_string()).is_err(), "size {size}");
+        }
+        for bytes in [
+            vec![0, 1, 2],
+            {
+                let mut v = STANDARD.decode(valid["data"].as_str().unwrap()).unwrap();
+                v.pop();
+                v
+            },
+            {
+                let mut v = STANDARD.decode(valid["data"].as_str().unwrap()).unwrap();
+                v.push(0);
+                v
+            },
+            {
+                let mut v = STANDARD.decode(valid["data"].as_str().unwrap()).unwrap();
+                *v.last_mut().unwrap() ^= 1;
+                v
+            },
+        ] {
+            let mut invalid = valid.clone();
+            invalid["data"] = json!(STANDARD.encode(bytes));
+            assert!(decode_record(&invalid.to_string()).is_err());
+        }
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::fast());
+        encoder.write_all(compressed.as_bytes()).unwrap();
+        let nested = serde_json::to_string(&CompressedEnvelope {
+            gents_lossless_json: COMPRESSED_JSON_VERSION,
+            kind: "zlib".into(),
+            uncompressed_bytes: compressed.len(),
+            data: STANDARD.encode(encoder.finish().unwrap()),
+        })
+        .unwrap();
+        assert!(decode_record(&nested).is_err());
+    }
 
     fn nested_json(depth: usize) -> String {
         format!("{}0{}", "{\"n\":".repeat(depth), "}".repeat(depth))
