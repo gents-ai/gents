@@ -12,7 +12,6 @@ import {
   useOnline,
   useSelectedNode,
   useSyncHealth,
-  useToolAuthority,
 } from "@/hooks/useClient";
 
 function RailItem({
@@ -61,7 +60,6 @@ function RailItem({
 function RailNode({ route }: { route: Route }) {
   const node = useSelectedNode();
   const online = useOnline();
-  const { root, ceiling } = useToolAuthority();
   const agentName = node?.agentPrincipal.displayName ?? null;
   if (!node)
     return (
@@ -75,7 +73,7 @@ function RailNode({ route }: { route: Route }) {
       </a>
     );
   return (
-    <AgentHoverCard deployment={node} root={root} ceiling={ceiling}>
+    <AgentHoverCard deployment={node}>
       <a
         href={href({ name: "agent", agentDid: node.agentDid, section: "agent" })}
         aria-label={`${agentName ?? "Agent"} configuration`}

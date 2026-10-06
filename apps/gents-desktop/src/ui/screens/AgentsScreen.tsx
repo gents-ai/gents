@@ -180,11 +180,7 @@ export function AgentsScreen() {
                       aria-label={`${name} sessions`}
                       className="-my-4 -ml-5 flex min-w-0 flex-1 items-center gap-3 overflow-hidden py-4 pl-5"
                     >
-                      <AgentHoverCard
-                        deployment={d}
-                        root={snapshot?.bootstrap.initToolRoot}
-                        ceiling={snapshot?.bootstrap.initToolCeiling}
-                      >
+                      <AgentHoverCard deployment={d}>
                         <span className="block shrink-0">
                           <AgentAvatar name={name} className="size-8" />
                         </span>
