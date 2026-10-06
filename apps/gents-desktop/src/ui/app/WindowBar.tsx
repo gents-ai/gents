@@ -153,10 +153,12 @@ export function WindowBar({
         <div
           className={cn(
             "app-bar-dock flex h-full min-w-0 items-center overflow-hidden",
-            /* first in the bar while the pane is hidden: it takes the pane's inset */
-            paneHidden && "app-bar-first",
             windows && dockOpen && "pr-[138px]",
           )}
+          /* first in the bar once the pane is hidden, it takes the pane's
+             inset, grown over the same last stretch as the session tab: a
+             step at either end would jog the tabs sideways */
+          style={toEnd > 0 ? { paddingLeft: `calc(0.75rem * ${toEnd})` } : undefined}
           data-tauri-drag-region={drag}
         >
           {dockOpen && (

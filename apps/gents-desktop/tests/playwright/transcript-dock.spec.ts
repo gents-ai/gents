@@ -123,3 +123,70 @@ test("nothing over the transcript is a size container", async ({ page }, testInf
   });
   expect(containers).toEqual([]);
 });
+
+/* every frame's left edge of the dock's first tab, while `act` runs */
+async function tabEdgeDuring(page: Page, act: () => Promise<void>) {
+  await page.evaluate(() => {
+    const lefts: number[] = [];
+    const tick = () => {
+      const tab = document.querySelector(
+        '[data-testid="dock-tabs"] [role=tablist] > *',
+      );
+      if (tab) lefts.push(tab.getBoundingClientRect().left);
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+    Object.assign(window, { __lefts: lefts });
+  });
+  await act();
+  await page.waitForTimeout(1200);
+  return page.evaluate(() =>
+    (window as unknown as { __lefts: number[] }).__lefts.splice(0),
+  );
+}
+
+/* The dock's tabs ride the divider as the pane hides behind a full dock and
+   comes back: they only ever move the way the divider does. The inset the
+   tabs take once first in the bar, and the room after the session tab, grow
+   and shrink with the divider's last stretch rather than stepping at either
+   end, including for a dock that rests at its widest. */
+for (const rest of ["remembered", "widest"] as const) {
+  test(`the dock's tabs follow the divider as the pane hides and returns (${rest})`, async ({
+    page,
+  }, testInfo) => {
+    test.skip(testInfo.project.name !== "webkit-desktop", "one engine");
+    await page.setViewportSize({ width: 1500, height: 900 });
+    if (rest === "widest")
+      await page.addInitScript(() =>
+        localStorage.setItem("gents-prototype-trace-width", "5000"),
+      );
+    await gotoHarness(page, "mobile-performance");
+    await page.locator('[data-testid="session-session-large"]').click();
+    await page
+      .getByTestId("transcript-panel")
+      .getByText("stream-start")
+      .last()
+      .waitFor();
+    await page.getByRole("button", { name: "More" }).first().click();
+    await page.getByRole("menuitem", { name: "Workers" }).click();
+    await page.waitForTimeout(1200);
+
+    const handle = page.getByRole("separator", { name: "Resize panel" });
+    const box = (await handle.boundingBox())!;
+    const hiding = await tabEdgeDuring(page, async () => {
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await page.mouse.down();
+      for (let i = 1; i <= 20; i += 1)
+        await page.mouse.move(box.x - i * 40, box.y + box.height / 2);
+      await page.mouse.up();
+    });
+    const right = hiding.slice(1).filter((x, i) => x - hiding[i]! > 0.5);
+    expect(right).toEqual([]);
+
+    const returning = await tabEdgeDuring(page, async () => {
+      await page.getByTitle("Show the session").click();
+    });
+    const left = returning.slice(1).filter((x, i) => returning[i]! - x > 0.5);
+    expect(left).toEqual([]);
+  });
+}
