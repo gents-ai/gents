@@ -12,6 +12,10 @@ export type Spring = {
   running: () => boolean;
 };
 
+/* seconds: short enough that damping × step stays far below 2 at any
+   stiffness the divider uses */
+const SUB_STEP = 1 / 240;
+
 export function createSpring({
   get,
   set,
@@ -47,12 +51,21 @@ export function createSpring({
       let v = velocity;
       let last = performance.now();
       const step = (now: number) => {
-        /* a long frame (tab hidden) must not launch the value */
-        const dt = Math.min(0.064, (now - last) / 1000);
+        /* A frame's time is integrated in short fixed steps. One explicit
+           step as long as a slow frame overcorrects: once damping × dt passes
+           2, the velocity flips and grows every frame. A long transcript
+           re-laid out under the moving divider makes frames of 200 ms and
+           more, and the dock swung wider and wider until it filled the
+           window. Bounded, so a hidden tab's frame is still only a moment. */
+        let left = Math.min(0.25, (now - last) / 1000);
         last = now;
-        const a = -stiffness * (x - target) - damping * v;
-        v += a * dt;
-        x += v * dt;
+        while (left > 0) {
+          const dt = Math.min(SUB_STEP, left);
+          left -= dt;
+          const a = -stiffness * (x - target) - damping * v;
+          v += a * dt;
+          x += v * dt;
+        }
         if (Math.abs(v) < 2 && Math.abs(x - target) < 0.5) {
           raf = null;
           set(target);
