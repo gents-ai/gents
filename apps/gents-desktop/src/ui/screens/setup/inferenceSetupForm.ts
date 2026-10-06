@@ -323,3 +323,13 @@ export function providerPendingSaveState(accounts: readonly ProviderAccountView[
   }
   return next;
 }
+
+/** The provider whose sign-in a connection method is, if it is one. */
+export const oauthProviderFor = (method: InferenceAuthMethod): OauthProvider | null =>
+  method === "chat_gpt_oauth"
+    ? "openai"
+    : method === "claude_oauth"
+      ? "anthropic"
+      : method === "grok_oauth"
+        ? "grok"
+        : null;
