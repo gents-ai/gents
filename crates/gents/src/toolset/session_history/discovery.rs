@@ -846,14 +846,24 @@ resources:
         assert_eq!(recovered["hits"][0]["session_id"], "work");
         assert_eq!(recovered["hits"][0]["sequence"], 1);
         let definition = Tool::definition(&tool, String::new()).await;
-        let validator = jsonschema::validator_for(&definition.parameters).unwrap();
-        for invalid in [
+        for combinator in ["oneOf", "allOf", "anyOf"] {
+            assert!(
+                definition.parameters.get(combinator).is_none(),
+                "top-level {combinator} is rejected by Claude Messages"
+            );
+        }
+        for missing in [
             json!({"action":"search"}),
             json!({"action":"get"}),
             json!({"action":"transcript"}),
         ] {
-            assert!(!validator.is_valid(&invalid), "{invalid}");
+            let error = Tool::call(&tool, serde_json::from_value(missing.clone()).unwrap())
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("next call: sessions"), "{missing}: {error}");
         }
+        let validator = jsonschema::validator_for(&definition.parameters).unwrap();
         for valid in [
             json!({}),
             json!({"action":"search","query":"retry"}),
