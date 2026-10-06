@@ -6,10 +6,20 @@ import { useShallow } from "zustand/react/shallow";
 
 import type { DeploymentView } from "@source-inc/gents-desktop-client";
 
+import type { NodeView } from "../../hooks/fleetStore";
+
 import { folderOf } from "../../hooks/chatFolders";
 import { useIncompatibleHome } from "../../hooks/useIncompatibleHome";
 import { useApp, useView } from "../app/AppContext";
-import type { ScopeContext } from "../lib/scope";
+import { workingNode } from "../lib/nodes";
+import {
+  defaultScope,
+  fleetNodes,
+  mailboxInScope,
+  recentInScope,
+  scopeContextOf,
+  type ScopeContext,
+} from "../lib/scope";
 import { useFleet } from "./useFleet";
 
 const NO_DEPLOYMENTS: DeploymentView[] = [];
@@ -49,8 +59,76 @@ export function useSelectedDeployment(): DeploymentView | null {
 /** The selected node's DID, or the first node's while nothing is selected. */
 export function useSelectedAgentDid(): string | null {
   const agentDid = useApp().stores.selection.use.agentDid();
-  const first = useSelectedDeployment();
-  return agentDid ?? first?.agentDid ?? null;
+  const first = useFleet((state) => fleetNodes(state)[0]?.agentDid ?? null);
+  return agentDid ?? first;
+}
+
+/** The selected node as the fleet holds it, or the first one while nothing
+    is selected yet; the same object while it is unchanged. */
+export function useSelectedNode(): NodeView | null {
+  const agentDid = useApp().stores.selection.use.agentDid();
+  return useFleet(
+    (state) =>
+      fleetNodes(state).find((node) => node.agentDid === agentDid) ??
+      fleetNodes(state)[0] ??
+      null,
+  );
+}
+
+/** The node this machine runs, as the fleet holds it; null when the client
+    is paired only to remote nodes. */
+export function useWorkingNode(): NodeView | null {
+  const homeDid = useHomeDid();
+  return useFleet((state) => workingNode(fleetNodes(state), homeDid));
+}
+
+/** How many nodes the client can see. */
+export function useNodeCount() {
+  return useFleet((state) => state.nodeKeys.length);
+}
+
+/** Whether the client is running. */
+export function useOnline() {
+  return useStore(useApp().stores.client, (state) => Boolean(state.snapshot?.client));
+}
+
+/** How the client's database sync is doing. */
+export function useSyncHealth() {
+  return useStore(
+    useApp().stores.client,
+    (state) => state.snapshot?.client?.syncHealth,
+  );
+}
+
+/** The tool root and ceiling this machine's node was set up with. */
+export function useToolAuthority() {
+  return useStore(
+    useApp().stores.client,
+    useShallow((state) => ({
+      root: state.snapshot?.bootstrap.initToolRoot,
+      ceiling: state.snapshot?.bootstrap.initToolCeiling,
+    })),
+  );
+}
+
+/* a value worked out over the fleet in the selection's scope; re-renders
+   when it changes, item by item for a list */
+function useInScope<T>(pick: (ctx: ScopeContext) => T): T {
+  const selectedNodeDid = useSelectedAgentDid();
+  const homeDid = useHomeDid();
+  return useFleet(
+    useShallow((state) => pick(scopeContextOf(state, selectedNodeDid, homeDid))),
+  );
+}
+
+/** How many open mailbox items wait in the mailbox's default scope. */
+export function useMailboxCount() {
+  return useInScope((ctx) => mailboxInScope(defaultScope("mailbox"), ctx).length);
+}
+
+/** The newest sessions in the recents' default scope. */
+export function useRecentSessions(limit: number) {
+  return useInScope((ctx) => recentInScope(defaultScope("recents"), ctx, limit));
 }
 
 export function useSelectedSessionId() {
@@ -115,12 +193,9 @@ export function useSessionLoad() {
 /** What a scope is resolved against: the nodes, the selection, the home,
     and each node's sessions and mailbox items by key. */
 export function useScopeContext(): ScopeContext {
-  const nodes = useDeployments();
+  const nodes = useFleet(useShallow(fleetNodes));
   const selectedNodeDid = useSelectedAgentDid();
-  const homeDid = useStore(
-    useApp().stores.client,
-    (state) => state.snapshot?.bootstrap.initAgentDid ?? null,
-  );
+  const homeDid = useHomeDid();
   const fleet = useFleet(
     useShallow((state) => ({
       sessionsOf: state.sessionsOf,

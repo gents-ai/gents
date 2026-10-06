@@ -3,13 +3,9 @@
    shell has selected (what every screen does today), `working` the node
    this machine runs, `all` every paired node, or a chosen set. Agents
    narrow within those nodes. */
-import type {
-  DeploymentView,
-  MailboxItemView,
-  SessionSummary,
-} from "@source-inc/gents-desktop-client";
-import type { FleetState } from "../../hooks/fleetStore";
-import { nodeDidOf, workingNode, type NodeDid } from "./nodes";
+import type { MailboxItemView, SessionSummary } from "@source-inc/gents-desktop-client";
+import type { FleetState, NodeView } from "../../hooks/fleetStore";
+import { nodeDidOf, workingNode, type NodeDid, type NodeLike } from "./nodes";
 
 export type NodeScope = "selected" | "working" | "all" | readonly NodeDid[];
 export type Scope = { nodes: NodeScope; agents: readonly string[] };
@@ -25,7 +21,7 @@ export const defaultScope = (view: ScopedView): Scope => ({
 });
 
 export type ScopeContext = {
-  nodes: readonly DeploymentView[];
+  nodes: readonly NodeLike[];
   selectedNodeDid: NodeDid | null;
   /** the home's agent DID, which marks the working node */
   homeDid: string | null | undefined;
@@ -34,8 +30,19 @@ export type ScopeContext = {
   fleet: Pick<FleetState, "sessionsOf" | "mailboxOf">;
 };
 
+/** The fleet's nodes, in the snapshot's order. */
+export const fleetNodes = (fleet: FleetState): NodeView[] =>
+  fleet.nodeKeys.flatMap((key) => fleet.nodes[key] ?? []);
+
+/** A scope's context from the fleet store and the selection. */
+export const scopeContextOf = (
+  fleet: FleetState,
+  selectedNodeDid: NodeDid | null,
+  homeDid: string | null,
+): ScopeContext => ({ nodes: fleetNodes(fleet), selectedNodeDid, homeDid, fleet });
+
 /* the nodes a scope names, in the snapshot's order */
-export function nodesInScope(scope: Scope, ctx: ScopeContext): DeploymentView[] {
+export function nodesInScope(scope: Scope, ctx: ScopeContext): NodeLike[] {
   const { nodes } = ctx;
   if (scope.nodes === "all") return [...nodes];
   if (scope.nodes === "working" || scope.nodes === "selected") {

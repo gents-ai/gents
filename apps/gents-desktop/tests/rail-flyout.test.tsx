@@ -1,21 +1,16 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RailFlyout } from "@/app/RailFlyout";
+import { renderIn, testApp } from "./app-fixture";
 
 describe("the rail flyout", () => {
   afterEach(() => vi.useRealTimers());
 
   it("leaves no timer behind when it unmounts", () => {
     vi.useFakeTimers();
-    const { unmount } = render(
-      <RailFlyout
-        route={{ name: "sessions" }}
-        agentName={null}
-        agentDid={null}
-        deployment={null}
-        online={false}
-        mailboxCount={0}
-      >
+    const { unmount } = renderIn(
+      testApp(),
+      <RailFlyout route={{ name: "sessions" }} settings={null}>
         <button type="button">rail</button>
       </RailFlyout>,
     );

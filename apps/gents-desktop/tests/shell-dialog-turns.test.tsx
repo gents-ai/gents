@@ -155,6 +155,7 @@ const context = {
 /* the screen's app, holding a completed session */
 function sessionApp() {
   return testApp({
+    snapshot: { bootstrap: {}, client: { deployments: [], syncHealth: healthy } },
     api: {
       sessionProvenance: vi.fn().mockResolvedValue(null),
       fetchOperationsSnapshot: vi.fn().mockResolvedValue(null),
@@ -183,15 +184,7 @@ function Harness() {
     <AppProvider value={app}>
       <MemoryNavProvider initial={{ name: "session", sessionId: "session-1" }}>
         <TooltipProvider>
-          <AppShell
-            route={{ name: "session", sessionId: "session-1" }}
-            agentName={null}
-            agentDid={null}
-            deployment={null}
-            online
-            mailboxCount={0}
-            syncHealth={healthy}
-          >
+          <AppShell route={{ name: "session", sessionId: "session-1" }}>
             <SessionScreen />
           </AppShell>
         </TooltipProvider>

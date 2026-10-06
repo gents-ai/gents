@@ -26,19 +26,11 @@ import { usePlatformSetup, useWindowTitle } from "./ui/app/platform";
 import { useFirstRun } from "./ui/app/useFirstRun";
 import { WindowControls } from "./ui/app/WindowControls";
 import { dockScope, workspace } from "./ui/app/workspace";
-import {
-  useDeployments,
-  useScopeContext,
-  useSelectedAgentDid,
-  useSelectedDeployment,
-  useSnapshot,
-  useStartup,
-} from "./ui/hooks/useClient";
+import { useDeployments, useSnapshot, useStartup } from "./ui/hooks/useClient";
 import { useFollowRoute } from "./ui/hooks/useFollowRoute";
 import { defaultAgentOf } from "./ui/lib/agents";
 import { isLocalAgent } from "./ui/lib/firstRun";
 import { useHistoryInputs } from "./ui/lib/history-inputs";
-import { workingNode } from "./ui/lib/nodes";
 import {
   bindNav,
   interceptNavClicks,
@@ -46,7 +38,6 @@ import {
   useHistory,
   useRoute,
 } from "./ui/lib/router";
-import { defaultScope, mailboxInScope, recentInScope } from "./ui/lib/scope";
 import { useSwipeNav } from "./ui/lib/swipe-nav";
 import { AgentScreen } from "./ui/screens/agent/AgentScreen";
 import { AgentsScreen } from "./ui/screens/AgentsScreen";
@@ -124,16 +115,12 @@ function AppBody({ managedServerSupported }: { managedServerSupported: boolean }
 
   const snapshot = useSnapshot();
   const deployments = useDeployments();
-  const selectedDeployment = useSelectedDeployment();
-  const selectedAgentDid = useSelectedAgentDid();
   const startup = useStartup();
   const firstRun = useFirstRun(
     snapshot,
     startup.incompatibleHome.generation,
     startup.phase === "ready",
   );
-  /* what the rail counts and lists: each node's sessions and mailbox */
-  const railScope = useScopeContext();
   const homeDid = snapshot?.bootstrap.initAgentDid ?? null;
   const hasLocalAgent = deployments.some((deployment) =>
     isLocalAgent(deployment, homeDid),
@@ -207,34 +194,9 @@ function AppBody({ managedServerSupported }: { managedServerSupported: boolean }
 
   if (!firstRun.settled) return null;
 
-  const openDbExplorer = api.openDbExplorer
-    ? () => {
-        void api.openDbExplorer?.().catch((e: unknown) => {
-          toast(`DB explorer failed to open: ${String(e)}`);
-        });
-      }
-    : null;
-
   return (
     <TooltipProvider>
-      <AppShell
-        route={route}
-        history={history}
-        agentName={selectedDeployment?.agentPrincipal.displayName ?? null}
-        agentDid={selectedAgentDid}
-        deployment={selectedDeployment}
-        root={snapshot?.bootstrap.initToolRoot}
-        ceiling={snapshot?.bootstrap.initToolCeiling}
-        online={Boolean(snapshot?.client)}
-        mailboxCount={mailboxInScope(defaultScope("mailbox"), railScope).length}
-        recent={recentInScope(defaultScope("recents"), railScope, 8)}
-        working={workingNode(deployments, homeDid)}
-        nodeCount={deployments.length}
-        syncHealth={snapshot?.client?.syncHealth}
-        error={startup.error}
-        onDismissError={() => lifecycle.setError(null)}
-        onOpenDbExplorer={openDbExplorer}
-      >
+      <AppShell route={route} history={history}>
         {route.name === "sessions" && <SessionsScreen nodeDid={route.nodeDid} />}
         {route.name === "session" && <SessionScreen />}
         {route.name === "mailbox" && <MailboxScreen nodeDid={route.nodeDid} />}

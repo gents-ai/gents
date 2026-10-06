@@ -21,7 +21,7 @@ export const nodeOfSession = (session: SessionSummary): NodeDid => session.agent
    isLocalAgent owns that test. */
 /** What telling a node apart needs: a deployment, or a node as the fleet
     holds it. */
-type NodeLike = Pick<DeploymentView, "agentDid" | "source">;
+export type NodeLike = Pick<DeploymentView, "agentDid" | "source">;
 export const isWorkingNode = (node: NodeLike, homeDid: string | null | undefined) =>
   isLocalAgent(node, homeDid);
 export const workingNode = <N extends NodeLike>(
