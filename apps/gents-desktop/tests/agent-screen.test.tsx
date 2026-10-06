@@ -32,6 +32,46 @@ describe("switching agents on the configuration screen", () => {
   });
 });
 
+describe("moving within the configuration screen", () => {
+  /* where each scroll to the top landed */
+  function scrolls() {
+    const at: Element[] = [];
+    const original = HTMLElement.prototype.scrollTo;
+    HTMLElement.prototype.scrollTo = function (this: HTMLElement) {
+      at.push(this);
+    } as typeof HTMLElement.prototype.scrollTo;
+    return { at, restore: () => (HTMLElement.prototype.scrollTo = original) };
+  }
+  const page = (agentDid: string, section: string) => (
+    <TooltipProvider>
+      <AgentScreen agentDid={agentDid} section={section} />
+    </TooltipProvider>
+  );
+  /* the scroll area holding the section, not the sidebar beside it */
+  const content = () =>
+    screen
+      .getByRole("combobox", { name: "Section" })
+      .closest("[data-slot=scroll-area-viewport]");
+
+  it("starts a new section, or another agent's, at the top of the page", () => {
+    const app = testApp({
+      deployments: [node({ agentDid: "did:key:a" }), node({ agentDid: "did:key:b" })],
+    });
+    const scrolled = scrolls();
+    try {
+      const view = renderIn(app, page("did:key:a", "skills"));
+      scrolled.at.length = 0;
+      act(() => view.rerender(page("did:key:a", "behaviors")));
+      expect(scrolled.at).toEqual([content()]);
+      scrolled.at.length = 0;
+      act(() => view.rerender(page("did:key:b", "behaviors")));
+      expect(scrolled.at).toEqual([content()]);
+    } finally {
+      scrolled.restore();
+    }
+  });
+});
+
 describe("the inference route", () => {
   it("lists what the Providers page lists, profiles under their backends", async () => {
     const app = testApp({ deployments: [node({ agentDid: "did:key:a" })] });

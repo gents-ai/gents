@@ -32,14 +32,14 @@ export function AgentScreen({
   item?: string;
 }) {
   const sections = agentSections.useList();
-  /* a new section or document starts at the top; the scroll area keeps its
-     position across hash changes otherwise */
-  const page = useRef<HTMLDivElement>(null);
+  /* a new section, document or agent starts at the top; the scroll area
+     keeps its position across hash changes otherwise */
+  const content = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    page.current
+    content.current
       ?.querySelector("[data-slot=scroll-area-viewport]")
       ?.scrollTo({ top: 0 });
-  }, [section, item]);
+  }, [agentDid, section, item]);
   const deployment = useFleet((s) => nodeOf(s, agentDid));
   if (!deployment) {
     return (
@@ -59,7 +59,6 @@ export function AgentScreen({
       className="grid h-full min-h-0 grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)] @4xl:grid-cols-[20rem_minmax(0,1fr)]"
       data-testid="agent-screen"
       data-section={section}
-      ref={page}
     >
       <ScrollArea className="hidden h-full @4xl:block">
         <SidebarNav className="w-auto">
@@ -82,7 +81,7 @@ export function AgentScreen({
           ))}
         </SidebarNav>
       </ScrollArea>
-      <ScrollArea className="h-full">
+      <ScrollArea ref={content} className="h-full">
         {/* the section list needs room beside the editor, whatever the nav
             takes; without it the list becomes a sticky section picker */}
         <div className="sticky top-0 z-10 border-b border-border/60 bg-background/95 px-4 py-2 backdrop-blur @4xl:hidden">
