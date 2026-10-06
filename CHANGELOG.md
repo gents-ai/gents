@@ -6,6 +6,14 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- Removing an enrolled agent stays removed. Removal records the ended
+  authorization generation locally, so the enrollment reconciler stops
+  reinstalling and redialling the server every tick until the authorization
+  lease expires or the network owner revokes; a fresh enrollment installs
+  again. The enrollment list also derives "approved" from the durable
+  projection the reconciler uses, so a locally removed or revoked request
+  stops listing as approved before its own expiry (#2295).
+
 - Grok subscription backends advertise client version 1.0.46, above the
   proxy's floor (#2274). A 426 version gate now fails fast instead of burning
   the retry ladder, and `grok-auth-probe` and model discovery name the version

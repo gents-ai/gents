@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, RwLock as StdRwLock};
 use tokio::sync::watch;
 use tokio::sync::RwLock;
@@ -144,6 +144,20 @@ impl ClientSyncStateOwner {
 
     pub(super) async fn pending_removals(&self) -> Vec<PeerRecord> {
         self.directory.read().await.pending_removals().to_vec()
+    }
+
+    pub(super) async fn retired_enrollment_digests(&self) -> BTreeSet<String> {
+        self.directory.read().await.retired_enrollment_digests()
+    }
+
+    pub(super) async fn prune_retired_enrollments(
+        &self,
+        observed_server_peers: &BTreeSet<String>,
+    ) -> anyhow::Result<()> {
+        let mut directory = self.directory.write().await;
+        directory
+            .prune_retired_enrollments(observed_server_peers)
+            .await
     }
 
     pub(super) async fn clear_ephemeral_pairing_readiness(&self) -> anyhow::Result<()> {
