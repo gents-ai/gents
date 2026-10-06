@@ -83,7 +83,7 @@ impl BehaviorToolConfig {
             custom_tools: Vec::new(),
             enable_memory: false,
             enable_context_budget_tool: true,
-            enable_session_history_tool: false,
+            enable_session_history_tool: true,
             enable_schema_tool: false,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),

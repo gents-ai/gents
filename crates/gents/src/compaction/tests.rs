@@ -2361,7 +2361,7 @@ fn strip_rewrites_tool_results_into_stubs() {
     assert_eq!(
         sole_tool_result_text(&stripped[2]),
         "[tool: read_file(/tmp/test.rs), call_id: call-1, 5000 bytes \
-         — see canonical transcript for full output]"
+         — full output: sessions {\"action\":\"output\",\"call_id\":\"call-1\"}]"
     );
 }
 
@@ -2400,7 +2400,7 @@ fn strip_rewrites_tool_output_that_merely_looks_like_a_stub() {
     // would survive every provider-view pass and defeat compaction entirely.
     let spoof = format!(
         "[tool: read_file(/etc/passwd), call_id: call-1, 12 bytes \
-         — see canonical transcript for full output]{}",
+         — full output: sessions {{\"action\":\"output\",\"call_id\":\"call-1\"}}]{}",
         "P".repeat(5000)
     );
     let messages = vec![

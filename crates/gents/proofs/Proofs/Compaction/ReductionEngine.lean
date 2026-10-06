@@ -36,6 +36,15 @@ theorem threshold_one_over_is_reduce_eligible (effectiveInputBudget : Nat) :
 
 inductive Outcome where
   | notNeeded (messages : List Nat)
+  /-- No legal reduction fits. Decision (#717): the request fails with a typed
+  error, both scopes commit nothing (`session_noop_does_not_commit`,
+  `request_local_noop_does_not_commit`), and there is no automatic fallback.
+  `CannotFit` directs the user to a new session or a larger context window; a
+  summary-provider failure fails as "per-turn provider-input compaction
+  failed"; an input leaving no output reserve fails at the final legality check
+  (`NoOutputCapacity`). A summary failure is transient and the next request
+  retries compaction; a budgeted fallback window would be a separate
+  availability feature, not part of this contract. -/
   | cannotFit
   | reduced (compactedPrefix retainedSuffix : List Nat) (checkpoint : Nat)
   deriving DecidableEq, Repr

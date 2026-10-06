@@ -6,6 +6,13 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## 0.20.0 - 2026-10-05
 
+- Trimmed tool results are recoverable: `sessions` gains an `output`
+  action that pages a tool call's full stored output by call_id, 16000 bytes
+  at a time with a hash guard, including bytes cut from the model's 50 KiB
+  view. The stub that replaces an earlier request's tool result now names
+  that exact call. The `sessions` tool is on unless a Tools document sets
+  `enable_session_history_tool` to false (#722).
+
 - Desktop shell (macOS): a two-finger swipe goes back or forward. AppKit
   recognises the gesture, an arrow handle travels in from the pane's edge
   and fills as it nears the commit distance, and content that can still

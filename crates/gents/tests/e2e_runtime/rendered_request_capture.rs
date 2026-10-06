@@ -1160,7 +1160,7 @@ async fn per_turn_compaction_is_captured_and_governs_later_turns() {
         "turn 1 must not carry the compacted-away tool output"
     );
     assert!(
-        turn_one.contains("see canonical transcript for full output]"),
+        turn_one.contains("full output: sessions {"),
         "turn 1 must carry the stub compaction left in its place; the body was \
          {} chars",
         turn_one.len()
@@ -1170,8 +1170,7 @@ async fn per_turn_compaction_is_captured_and_governs_later_turns() {
     let trace = parse_json(&rows[1]["provenance_payload_json"]);
     let effective = serde_json::to_string(&trace["effective_messages"]).expect("trace messages");
     assert!(
-        !effective.contains(BIG_MARKER)
-            && effective.contains("see canonical transcript for full output]"),
+        !effective.contains(BIG_MARKER) && effective.contains("full output: sessions {"),
         "the assembly trace must be the post-compaction message list"
     );
 

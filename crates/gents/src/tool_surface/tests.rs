@@ -1424,7 +1424,13 @@ fn document_tool_config_expands_linked_datastore_surfaces() {
     .unwrap();
     let explanation =
         config.explain_with_runtime(false, agent_did, &std::collections::HashSet::new());
-    assert_eq!(explanation.tool_names, vec!["read_research_source"]);
+    assert_eq!(
+        explanation.tool_names,
+        vec![
+            crate::toolset::SESSION_HISTORY_TOOL_NAME,
+            "read_research_source"
+        ]
+    );
 }
 
 #[test]
@@ -1483,7 +1489,7 @@ fn write_tool_colliding_with_builtin_is_rejected_during_configuration() {
 #[test]
 fn memory_tool_defaults_disabled() {
     assert!(!ResolvedToolSelection::default().enable_memory);
-    assert!(!ResolvedToolSelection::default().enable_session_history_tool);
+    assert!(ResolvedToolSelection::default().enable_session_history_tool);
     assert!(!BehaviorToolConfig::meta_only().goal_creation_requested());
     assert!(!BehaviorToolConfig::meta_only()
         .static_policy()
@@ -1843,7 +1849,7 @@ fn absent_groups_grant_nothing_and_goal_controls_are_independent() {
 }
 
 #[tokio::test]
-async fn session_history_tool_requires_selection_opt_in() {
+async fn session_history_tool_follows_selection() {
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
     crate::ensure_runtime_schemas(&node).await.unwrap();
 
@@ -2316,14 +2322,9 @@ fn explain_default_surface_calls_out_builtin_reads_and_defra_query_scope() {
     assert!(explanation
         .tool_names
         .contains(&crate::toolset::CONTEXT_BUDGET_TOOL_NAME.to_string()));
-    // `sessions` is opt-in (enable_session_history_tool, default off), so the
-    // default surface excludes it rather than listing it as callable.
-    assert!(!explanation
+    assert!(explanation
         .tool_names
         .contains(&crate::toolset::SESSION_HISTORY_TOOL_NAME.to_string()));
-    assert!(explanation.excluded.get("built_in_read").is_some_and(
-        |names| names.contains(&crate::toolset::SESSION_HISTORY_TOOL_NAME.to_string())
-    ));
     // defra_query is opt-in (#592): the default surface excludes it, and with
     // the tool off the empty-scope warning has nothing to warn about.
     assert!(!explanation
@@ -2697,7 +2698,13 @@ fn flat_presentation_explanation_matches_selected_names_and_ceiling() {
     .unwrap();
     let explanation = config.explain_with_runtime(true, "did:test:test", &HashSet::new());
     let name = crate::meta_tools::flat_tool_name("selected", "read");
-    assert_eq!(explanation.tool_names, vec![name.clone()]);
+    assert_eq!(
+        explanation.tool_names,
+        vec![
+            name.clone(),
+            crate::toolset::SESSION_HISTORY_TOOL_NAME.to_string()
+        ]
+    );
     assert_eq!(explanation.included["meta_mcp"], vec![name]);
     assert!(!explanation
         .tool_names

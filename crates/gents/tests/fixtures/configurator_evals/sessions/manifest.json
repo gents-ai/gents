@@ -19,7 +19,8 @@
     "cases/filtered_discovery.json",
     "cases/transcript_evidence.json",
     "cases/archive_evidence.json",
-    "cases/cross_agent_visible.json"
+    "cases/cross_agent_visible.json",
+    "cases/stub_recovery.json"
   ],
   "config": "pack_config.json"
 }

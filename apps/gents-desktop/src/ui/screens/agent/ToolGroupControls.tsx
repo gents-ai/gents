@@ -167,14 +167,18 @@ export function ToolGroupControls({
     );
   const flags = <K extends "built_ins" | "self_config" | "subagents" | "datastore">(
     key: K,
-    entries: [keyof NonNullable<Tools[K]>, string][],
+    entries: [keyof NonNullable<Tools[K]>, string, boolean?][],
   ) =>
-    entries.map(([field, label]) => (
+    entries.map(([field, label, unsetIsOn]) => (
       <SwitchRow
         key={String(field)}
         id={`tools-${key}-${String(field)}`}
         label={label}
-        checked={(groups[key] as NonNullable<Tools[K]> | undefined)?.[field] === true}
+        checked={
+          unsetIsOn
+            ? (groups[key] as NonNullable<Tools[K]> | undefined)?.[field] !== false
+            : (groups[key] as NonNullable<Tools[K]> | undefined)?.[field] === true
+        }
         onChange={(checked) =>
           update(key, { [field]: checked } as Partial<NonNullable<Tools[K]>>)
         }
@@ -293,7 +297,7 @@ export function ToolGroupControls({
           ["enable_goal_tools", "Read and update goals"],
           ["enable_goal_creation", "Create goals"],
           ["enable_memory", "Memory"],
-          ["enable_session_history_tool", "Session history"],
+          ["enable_session_history_tool", "Session history", true],
           ["enable_context_budget", "Context budget"],
         ])}
       </Group>

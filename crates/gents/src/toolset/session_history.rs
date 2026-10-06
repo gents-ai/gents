@@ -18,6 +18,16 @@ use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 
 pub const SESSION_HISTORY_TOOL_NAME: &str = "sessions";
 
+const ACTIONS: [&str; 7] = [
+    "help",
+    "list",
+    "count",
+    "search",
+    "get",
+    "transcript",
+    "output",
+];
+
 pub(crate) fn is_current_session(
     caller_owner: &str,
     caller_session: &str,
@@ -49,6 +59,14 @@ pub struct SessionHistoryParams {
     pub query: Option<String>,
     #[serde(default)]
     pub details: bool,
+    #[serde(default)]
+    pub call_id: Option<String>,
+    #[serde(default)]
+    pub tool_call_doc_id: Option<String>,
+    #[serde(default)]
+    pub offset_bytes: Option<usize>,
+    #[serde(default)]
+    pub expected_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -551,19 +569,23 @@ impl Tool for SessionHistoryTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Discover, count and search sessions readable through DefraDB ACP; inspect canonical transcript evidence. Use help for available actions and help topic for action syntax.".into(),
+            description: "Discover, count and search sessions readable through DefraDB ACP; inspect canonical transcript evidence; recover a tool call's full output by call_id. Use help for available actions and help topic for action syntax.".into(),
             parameters: json!({
                 "type":"object", "additionalProperties":false,
                 "properties": {
-                    "action":{"type":"string","enum":["help","list","count","search","get","transcript"],"description":"Defaults to list. Search requires query; get and transcript require session_id."},
-                    "topic":{"type":"string","enum":["list","count","search","get","transcript"],"description":"Action to explain when action is help."},
+                    "action":{"type":"string","enum":ACTIONS,"description":"Defaults to list. Search requires query; get and transcript require session_id; output requires call_id or tool_call_doc_id."},
+                    "topic":{"type":"string","enum":&ACTIONS[1..],"description":"Action to explain when action is help."},
                     "limit":{"type":"integer","minimum":1,"maximum":100},
-                    "session_id":{"type":"string","minLength":1,"description":"Session ID returned by list or search; required for get and transcript."},
+                    "session_id":{"type":"string","minLength":1,"description":"Session ID returned by list or search; required for get and transcript. Output defaults to the current session."},
                     "filter":{"type":"object","additionalProperties":false,"properties":{
                         "behavior_id":{"type":"string"},"status":{"type":"string","enum":["open","closed"]},
                         "tag":{"type":"string"},"created_after":{"type":"string"},"created_before":{"type":"string"},"text":{"type":"string","description":"Title or session ID substring only; use query to search transcript text."}
                     }},
-                    "cursor":{"type":"string","description":"Previous next_cursor with the same action and filters."},"query":{"type":"string","minLength":1,"description":"Required for search: literal case-insensitive substring of title, ID or transcript."},"details":{"type":"boolean","description":"Include accounting and timeline for get."}
+                    "cursor":{"type":"string","description":"Previous next_cursor with the same action and filters."},"query":{"type":"string","minLength":1,"description":"Required for search: literal case-insensitive substring of title, ID or transcript."},"details":{"type":"boolean","description":"Include accounting and timeline for get."},
+                    "call_id":{"type":"string","minLength":1,"description":"Output: the call_id of a tool result or [tool: …] stub."},
+                    "tool_call_doc_id":{"type":"string","minLength":1,"description":"Output: exact tool call document, when a call_id is ambiguous."},
+                    "offset_bytes":{"type":"integer","minimum":0,"description":"Output: from the previous next_call."},
+                    "expected_hash":{"type":"string","description":"Output: from the previous next_call."}
                 }
             }),
         }
@@ -571,7 +593,7 @@ impl Tool for SessionHistoryTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let action = args.action.as_deref().unwrap_or("list").trim();
-        if !["help", "list", "count", "search", "get", "transcript"].contains(&action) {
+        if !ACTIONS.contains(&action) {
             return Err(anyhow!(
                 "unsupported sessions action; next call: sessions {{\"action\":\"help\"}}"
             )
@@ -584,8 +606,15 @@ impl Tool for SessionHistoryTool {
                 anyhow!("{error:#}; next call: sessions {{\"action\":\"help\"}}")
             }
         })?;
-        Ok(serde_json::to_string(&discovery::AnswerFirst(&value))
-            .context("serialize sessions result")?)
+        Ok(if action == "output" {
+            serde_json::to_string(&crate::self_config::Ordered::reading_order(
+                value,
+                discovery::OUTPUT_ORDER,
+            ))
+        } else {
+            serde_json::to_string(&discovery::AnswerFirst(&value))
+        }
+        .context("serialize sessions result")?)
     }
 }
 

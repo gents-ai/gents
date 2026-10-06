@@ -1,0 +1,81 @@
+{
+  "case_id": "stub-recovery",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "documents": [
+      {
+        "collection": "AgentSession",
+        "document": {
+          "agent_did": "$trial",
+          "requester_did": "$trial",
+          "session_id": "vault-rotation",
+          "behavior_id": "engineer",
+          "created_at": "2025-01-01T00:00:00Z",
+          "closed_at": null,
+          "title": {
+            "text": "Vault rotation escrow code KESTREL-7731",
+            "source": "user"
+          },
+          "tags": [
+            "vault"
+          ]
+        }
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "list",
+      "prompt": "Use sessions to list my sessions tagged vault. Do not repeat what you find; reply only Listed.",
+      "deadline_secs": 300,
+      "checks": [
+        {
+          "check": "final_message_matches",
+          "params": {
+            "any": [
+              "Listed",
+              "listed"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "recover",
+      "prompt": "Your earlier sessions list result is no longer in your context. Recover that stored result, without listing or searching again, and tell me the escrow code in the vault session's title.",
+      "deadline_secs": 300,
+      "checks": [
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              "KESTREL-7731"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "text",
+                "contains": "KESTREL-7731"
+              },
+              {
+                "field": "complete",
+                "equals": true
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

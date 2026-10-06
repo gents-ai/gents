@@ -8,7 +8,7 @@ use crate::graphql::escape_graphql_string;
 use crate::session::TxnCanonicalReader;
 
 const FIELDS: &str = crate::session::AGENT_SESSION_FIELDS;
-const HELP: &str = "Read canonical sessions visible to your authenticated DID through DefraDB ACP. Actions: list, count, search, get, transcript. Use {\"action\":\"help\",\"topic\":\"search\"} for an action's syntax. Copied IDs grant no access; ACP determines visibility across agents and requesters.";
+const HELP: &str = "Read canonical sessions visible to your authenticated DID through DefraDB ACP. Actions: list, count, search, get, transcript, output. Use {\"action\":\"help\",\"topic\":\"search\"} for an action's syntax. Copied IDs grant no access; ACP determines visibility across agents and requesters.";
 
 fn action_help(topic: Option<&str>) -> Result<&'static str> {
     Ok(match topic {
@@ -27,6 +27,9 @@ fn action_help(topic: Option<&str>) -> Result<&'static str> {
         }
         Some("transcript") => {
             r#"{"action":"transcript","session_id":"<ID>","limit":6}. Session ID is required; discover it with list or search. Returns canonical text with physical message IDs and payload references, up to six messages and 8000 characters per chunk. Pass next_cursor as cursor with the same session_id to continue."#
+        }
+        Some("output") => {
+            r#"{"action":"output","call_id":"<call_id>"}. Returns a tool call's full stored output, including bytes trimmed from the model's view, 16000 bytes per page. call_id comes from a tool result or a [tool: …] stub; session_id defaults to the current session. Continue with the returned next_call: its offset_bytes and expected_hash keep pages from mixing output versions. If a call_id is ambiguous, pass the tool_call_doc_id the error lists."#
         }
         Some(_) => bail!("unknown help topic; next call: sessions {{\"action\":\"help\"}}"),
     })
@@ -163,6 +166,24 @@ fn compact(row: &Value, current_session: Option<&str>, agent: &str) -> Value {
     json!({"session_id":row["session_id"],"title":row["title"]["text"],"created_at":row["created_at"],"closed_at":row["closed_at"],"behavior_id":row["behavior_id"],"tags":row["tags"],"agent_did":row["agent_did"],"requester_did":row["requester_did"],"is_current":current_session.is_some_and(|id|super::is_current_session(agent,id,row["agent_did"].as_str().unwrap_or_default(),row["session_id"].as_str().unwrap_or_default())),"session_doc_id":row["_docID"]})
 }
 
+/// Bytes per `output` page. With JSON escaping the result stays below the
+/// 50 KiB model-view truncation limit for ordinary text.
+const OUTPUT_PAGE_BYTES: usize = 16_000;
+
+pub(super) const OUTPUT_ORDER: &[&str] = &[
+    "text",
+    "next_call",
+    "complete",
+    "offset_bytes",
+    "next_offset_bytes",
+    "total_bytes",
+    "output_hash",
+    "tool_name",
+    "call_id",
+    "tool_call_doc_id",
+    "session_id",
+];
+
 pub(super) struct AnswerFirst<'a>(pub &'a Value);
 
 impl Serialize for AnswerFirst<'_> {
@@ -285,28 +306,20 @@ async fn execute(
         args.limit.is_none_or(|limit| (1..=100).contains(&limit)),
         "limit must be 1 through 100; next call: sessions {{\"action\":\"help\"}}"
     );
+    if action == "output" {
+        return tool_output(txn, current_session, args).await;
+    }
     if matches!(action, "get" | "transcript") {
         let id = args
             .session_id
             .as_deref()
             .filter(|id| !id.trim().is_empty())
             .context("session_id required; next call: sessions {\"action\":\"list\"}")?;
-        let session = rows(
-            txn.execute(&format!(
-                "{{AgentSession(filter: {{session_id: {{_eq: {}}}}}, limit: 2) {{{FIELDS}}}}}",
-                quoted(id)
-            ))
-            .await?,
-            "AgentSession",
-        )?;
-        anyhow::ensure!(
-            session.len() == 1,
-            "session is unavailable or ambiguous under ACP; next call: sessions {{\"action\":\"list\"}}"
-        );
-        let agent = session[0]["agent_did"]
+        let session = authorized_session(txn, id).await?;
+        let agent = session["agent_did"]
             .as_str()
             .context("session agent DID missing")?;
-        let requester = session[0]["requester_did"].as_str();
+        let requester = session["requester_did"].as_str();
         if action == "get" {
             let details = if args.details {
                 let value = txn
@@ -343,7 +356,7 @@ async fn execute(
             } else {
                 None
             };
-            return Ok(json!({"session":session[0],"details":details}));
+            return Ok(json!({"session":session,"details":details}));
         }
         return transcript(txn, agent, requester, id, args, limit).await;
     }
@@ -461,6 +474,174 @@ async fn execute(
     } else {
         json!({"sessions":selected,"next_cursor":null,"scope":{"agent_did":agent,"requester_did":requester}})
     })
+}
+
+/// The one session row ACP lets the caller read under this ID.
+async fn authorized_session(txn: &ConfigApplyTxn<'_>, id: &str) -> Result<Value> {
+    let mut session = rows(
+        txn.execute(&format!(
+            "{{AgentSession(filter: {{session_id: {{_eq: {}}}}}, limit: 2) {{{FIELDS}}}}}",
+            quoted(id)
+        ))
+        .await?,
+        "AgentSession",
+    )?;
+    anyhow::ensure!(
+        session.len() == 1,
+        "session is unavailable or ambiguous under ACP; next call: sessions {{\"action\":\"list\"}}"
+    );
+    Ok(session.remove(0))
+}
+
+/// Full stored output of one tool call, paged by bytes. The model-facing
+/// result is bounded at the provider-input boundary; this reads the canonical
+/// stream behind it through the tool-call read owner.
+async fn tool_output(
+    txn: &ConfigApplyTxn<'_>,
+    current_session: Option<&str>,
+    args: &SessionHistoryParams,
+) -> Result<Value> {
+    let nonblank = |value: &Option<String>| {
+        value
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+    };
+    let session_id = nonblank(&args.session_id)
+        .or_else(|| current_session.map(str::to_owned))
+        .context(
+            "output needs session_id outside a session; next call: sessions {\"action\":\"list\"}",
+        )?;
+    let call_id = nonblank(&args.call_id);
+    let named_doc = nonblank(&args.tool_call_doc_id);
+    let session = authorized_session(txn, &session_id).await?;
+    let agent = session["agent_did"]
+        .as_str()
+        .context("session agent DID missing")?;
+    let requester = session["requester_did"].as_str();
+    let transcript_call = json!({"action":"transcript","session_id":session_id});
+    let tool_call_doc_id = match (named_doc, &call_id) {
+        (Some(doc), _) => doc,
+        (None, Some(key)) => {
+            let headers = rows(
+                txn.execute(&format!(
+                    "{{AgentMessage(filter: {{{},session_id: {{_eq: {}}}}},order: {{sequence: ASC}}) {{{}}}}}",
+                    scope(agent, requester),
+                    quoted(&session_id),
+                    crate::session::canonical_rows::AGENT_MESSAGE_FIELDS
+                ))
+                .await?,
+                "AgentMessage",
+            )?;
+            let mut docs = std::collections::BTreeSet::new();
+            for row in &headers {
+                let header = crate::session::canonical_rows::decode_transcript_message_row(row)?;
+                for block in &header.message.blocks {
+                    use gents_protocol::output::MessageBlock;
+                    let (MessageBlock::ToolCall {
+                        tool_call_doc_id,
+                        id,
+                        call_id,
+                        ..
+                    }
+                    | MessageBlock::ToolResult {
+                        tool_call_doc_id,
+                        id,
+                        call_id,
+                        ..
+                    }) = block
+                    else {
+                        continue;
+                    };
+                    if id == key || call_id.as_deref() == Some(key.as_str()) {
+                        docs.insert(tool_call_doc_id.clone());
+                    }
+                }
+            }
+            match docs.len() {
+                0 => bail!(
+                    "no tool call with call_id {key} in session {session_id}; next call: sessions {transcript_call}"
+                ),
+                1 => docs.pop_first().unwrap(),
+                _ => bail!(
+                    "call_id {key} names {} tool calls in session {session_id}: {}; next call: sessions {}",
+                    docs.len(),
+                    docs.iter().cloned().collect::<Vec<_>>().join(", "),
+                    json!({"action":"output","session_id":session_id,"tool_call_doc_id":docs.first()})
+                ),
+            }
+        }
+        (None, None) => bail!(
+            "output requires call_id; next call: sessions {{\"action\":\"help\",\"topic\":\"output\"}}"
+        ),
+    };
+    let read = crate::tool_call_lifecycle::query::load_tool_call_read_in_txn(
+        txn,
+        &tool_call_doc_id,
+        agent,
+        &session_id,
+        requester,
+    )
+    .await
+    .map_err(|error| anyhow::anyhow!("{error:#}; next call: sessions {transcript_call}"))?;
+    let mut next = json!({"action":"output","session_id":session_id});
+    match &call_id {
+        Some(call_id) => next["call_id"] = json!(call_id),
+        None => next["tool_call_doc_id"] = json!(tool_call_doc_id),
+    }
+    let Some(output) = read.raw_result.as_deref() else {
+        if read.result.is_none() {
+            bail!(
+                "tool call {tool_call_doc_id} has no delivered output yet (state {:?}); next call: sessions {next}",
+                read.lifecycle_state
+            );
+        }
+        bail!(
+            "tool call {tool_call_doc_id} has no single text output to page; next call: sessions {transcript_call}"
+        );
+    };
+    let offset = args.offset_bytes.unwrap_or(0);
+    let page = crate::defra_query::utf8_page(
+        output,
+        offset,
+        args.expected_hash.as_deref(),
+        OUTPUT_PAGE_BYTES,
+    )
+    .map_err(|error| {
+        let reason = match error {
+            crate::defra_query::Utf8PageError::MissingHash => {
+                "offset_bytes past 0 requires expected_hash"
+            }
+            crate::defra_query::Utf8PageError::Changed => {
+                "output changed since expected_hash; restart at offset 0"
+            }
+            crate::defra_query::Utf8PageError::Offset => {
+                "offset_bytes is not a UTF-8 boundary within the output"
+            }
+        };
+        anyhow::anyhow!("{reason}; next call: sessions {next}")
+    })?;
+    let complete = page.end == output.len();
+    let next_call = (!complete).then(|| {
+        let mut next = next.clone();
+        next["offset_bytes"] = json!(page.end);
+        next["expected_hash"] = json!(page.hash);
+        next
+    });
+    Ok(json!({
+        "text": page.text,
+        "next_call": next_call,
+        "complete": complete,
+        "offset_bytes": offset,
+        "next_offset_bytes": page.end,
+        "total_bytes": output.len(),
+        "output_hash": page.hash,
+        "tool_name": read.tool_name,
+        "call_id": call_id,
+        "tool_call_doc_id": tool_call_doc_id,
+        "session_id": session_id,
+    }))
 }
 
 #[derive(Default, Deserialize, Serialize)]
@@ -698,7 +879,150 @@ resources:
         assert!(error
             .to_string()
             .contains("unavailable or ambiguous under ACP"));
+        let error = Tool::call(
+            &denied_tool,
+            serde_json::from_value(
+                json!({"action":"output","session_id":"shared","call_id":"any"}),
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("unavailable or ambiguous under ACP"));
         node.shutdown().await;
+    }
+
+    async fn call_error(tool: &SessionHistoryTool, params: Value) -> String {
+        Tool::call(tool, serde_json::from_value(params).unwrap())
+            .await
+            .unwrap_err()
+            .to_string()
+    }
+
+    #[tokio::test]
+    async fn output_pages_the_full_stored_tool_output_behind_a_bounded_view() {
+        use crate::tool_call_lifecycle::admission_fixture::{
+            published_admission, PublishedAdmissionOptions,
+        };
+        use gents_protocol::output::{PayloadPresentation, PresentationPart};
+
+        let fixture = published_admission(PublishedAdmissionOptions {
+            name: "sessions-output".into(),
+            real_identity: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let mut lifecycle = fixture.tool;
+        // Beyond the 50 KiB model view, with scalars of every UTF-8 width so
+        // page ends must back off to boundaries.
+        let raw: String = (0..9_000)
+            .map(|line| format!("{line:05} aé€😀\n"))
+            .collect();
+        assert!(raw.len() > 2 * 50 * 1024);
+        let bounded = "[Showing first 10 of many bytes]";
+        lifecycle
+            .complete_raw_with_presentation(
+                &raw,
+                bounded,
+                PayloadPresentation::Composed {
+                    parts: vec![PresentationPart::Literal {
+                        text: bounded.to_owned(),
+                    }],
+                },
+            )
+            .await
+            .unwrap();
+        let session = lifecycle.session_id().to_owned();
+        let tool = SessionHistoryTool::new(fixture.node.clone(), fixture.agent_did.clone());
+
+        for key in ["spawn-provider-call", "spawn-native-tool"] {
+            let mut params = json!({"action":"output","session_id":session,"call_id":key});
+            let mut recovered = String::new();
+            let mut pages = 0;
+            loop {
+                let text = Tool::call(&tool, serde_json::from_value(params.clone()).unwrap())
+                    .await
+                    .unwrap();
+                assert!(
+                    text.starts_with("{\"text\":"),
+                    "answer first: {}",
+                    &text[..80]
+                );
+                let page: Value = serde_json::from_str(&text).unwrap();
+                let chunk = page["text"].as_str().unwrap();
+                assert!(chunk.len() <= OUTPUT_PAGE_BYTES);
+                recovered.push_str(chunk);
+                pages += 1;
+                assert_eq!(page["tool_call_doc_id"], lifecycle.doc_id().unwrap());
+                if page["complete"] == true {
+                    assert!(page.get("next_call").is_none());
+                    break;
+                }
+                params = page["next_call"].clone();
+            }
+            assert_eq!(recovered, raw);
+            assert!(pages > 3);
+        }
+
+        let first = call(
+            &tool,
+            json!({"action":"output","session_id":session,"call_id":"spawn-provider-call"}),
+        )
+        .await;
+        let mut stale = first["next_call"].clone();
+        stale["expected_hash"] = json!("sha256:other-version");
+        let error = call_error(&tool, stale).await;
+        assert!(error.contains("output changed"), "{error}");
+        assert!(error.contains("next call: sessions"), "{error}");
+        let mut unguarded = first["next_call"].clone();
+        unguarded.as_object_mut().unwrap().remove("expected_hash");
+        let error = call_error(&tool, unguarded).await;
+        assert!(error.contains("requires expected_hash"), "{error}");
+
+        let error = call_error(
+            &tool,
+            json!({"action":"output","session_id":session,"call_id":"no-such-call"}),
+        )
+        .await;
+        assert!(
+            error.contains("no tool call with call_id no-such-call"),
+            "{error}"
+        );
+        let next: Value =
+            serde_json::from_str(error.split_once("next call: sessions ").unwrap().1).unwrap();
+        assert_eq!(next, json!({"action":"transcript","session_id":session}));
+
+        let error = call_error(
+            &tool,
+            json!({"action":"output","call_id":"spawn-provider-call"}),
+        )
+        .await;
+        assert!(error.contains("outside a session"), "{error}");
+
+        let foreign = KeyIdentity::load_or_create(fixture.path.join("foreign.key"), None).unwrap();
+        seed(
+            &fixture.node,
+            foreign.did(),
+            None,
+            "foreign-output",
+            "Other",
+            false,
+        )
+        .await;
+        let error = call_error(
+            &tool,
+            json!({"action":"output","session_id":"foreign-output","call_id":"spawn-provider-call"}),
+        )
+        .await;
+        assert!(error.contains("no tool call"), "{error}");
+
+        let help = call(&tool, json!({"action":"help","topic":"output"})).await;
+        assert!(help["help"].as_str().unwrap().contains("next_call"));
+        fixture.node.shutdown().await;
+        std::fs::remove_dir_all(fixture.path).unwrap();
     }
 
     #[tokio::test]
@@ -856,6 +1180,7 @@ resources:
             json!({"action":"search"}),
             json!({"action":"get"}),
             json!({"action":"transcript"}),
+            json!({"action":"output"}),
         ] {
             let error = Tool::call(&tool, serde_json::from_value(missing.clone()).unwrap())
                 .await
@@ -869,6 +1194,8 @@ resources:
             json!({"action":"search","query":"retry"}),
             json!({"action":"get","session_id":"work"}),
             json!({"action":"transcript","session_id":"work"}),
+            json!({"action":"output","call_id":"call-1"}),
+            json!({"action":"output","tool_call_doc_id":"bae-1","offset_bytes":4,"expected_hash":"sha256:x"}),
         ] {
             assert!(validator.is_valid(&valid), "{valid}");
         }
