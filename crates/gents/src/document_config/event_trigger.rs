@@ -179,7 +179,7 @@ pub(crate) async fn update_trigger_runtime_fields(
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct EventSource {
-    pub agent_did: String,
+    pub node_did: String,
     pub event_source_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
