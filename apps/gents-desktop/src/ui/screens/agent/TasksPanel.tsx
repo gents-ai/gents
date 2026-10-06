@@ -1,5 +1,6 @@
 /* Tasks, as the desktop app's Tasks tab: TaskSaveRequest fields, the
    run facts, and a manual run with JSON args. */
+import { setEnabled } from "./enabled";
 import { dependentsWarning } from "./dependents";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -302,9 +303,13 @@ export function TaskEditor({
                   aria-label={`${tr.config.display_name ?? tr.config.trigger_id} enabled`}
                   checked={tr.config.enabled !== false}
                   onCheckedChange={(next) =>
-                    void changeConfig("saveTriggerConfig", {
-                      document: { ...tr.config, enabled: next },
-                    })
+                    void setEnabled(
+                      changeConfig,
+                      deployment.agentDid,
+                      "Trigger",
+                      tr.config.trigger_id,
+                      next,
+                    ).catch((e: unknown) => toastFailure("turn it on or off", e))
                   }
                 />
                 <Button
@@ -497,12 +502,12 @@ export function TasksPanel({
                 enabled={{
                   checked: t.enabled !== false,
                   onChange: (enabled) =>
-                    changeConfig(
-                      "saveTaskConfig",
-                      {
-                        document: { ...taskDocument(deployment, t), enabled },
-                      },
-                      `turn it ${enabled ? "on" : "off"}`,
+                    setEnabled(
+                      changeConfig,
+                      deployment.agentDid,
+                      "Task",
+                      t.taskId,
+                      enabled,
                     ),
                 }}
                 onDuplicate={async () => {

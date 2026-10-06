@@ -1,7 +1,7 @@
-import { act, screen } from "@testing-library/react";
+import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TooltipProvider } from "@gents/ui/components/tooltip";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { AgentScreen } from "../src/ui/screens/agent/AgentScreen";
 import { node, renderIn, testApp } from "./app-fixture";
@@ -44,5 +44,29 @@ describe("the inference route", () => {
     const [toggle] = screen.getAllByRole("button", { name: /^Show what .* serves$/ });
     await userEvent.click(toggle!);
     expect(screen.getAllByText("Add profile").length).toBeGreaterThan(0);
+  });
+});
+
+describe("turning a task off from its row", () => {
+  it("patches only enabled, leaving the rest of the task as stored", async () => {
+    const patchConfigComponents = vi.fn().mockResolvedValue(undefined);
+    const saveTaskConfig = vi.fn().mockResolvedValue(undefined);
+    const app = testApp({
+      api: { patchConfigComponents, saveTaskConfig, fetchClientSnapshot: vi.fn() },
+      deployments: [node({ agentDid: "did:key:a" })],
+    });
+    renderIn(
+      app,
+      <TooltipProvider>
+        <AgentScreen agentDid="did:key:a" section="tasks" />
+      </TooltipProvider>,
+    );
+    await userEvent.click(screen.getByRole("switch", { name: "Task A is on" }));
+    await waitFor(() => expect(patchConfigComponents).toHaveBeenCalledOnce());
+    expect(patchConfigComponents).toHaveBeenCalledWith({
+      agentDid: "did:key:a",
+      patches: [{ collection: "Task", id: "task-a", changes: { enabled: false } }],
+    });
+    expect(saveTaskConfig).not.toHaveBeenCalled();
   });
 });

@@ -1,6 +1,7 @@
 /* Triggers: each read as a sentence, with the task, schedule and event
    source it needs creatable in place. Tasks is the page people start on;
    this is the desktop's own tab. */
+import { setEnabled } from "./enabled";
 import { useState } from "react";
 import { Timer, Zap } from "lucide-react";
 import type {
@@ -486,12 +487,12 @@ export function TriggersPanel({
                 enabled={{
                   checked: t.config.enabled !== false,
                   onChange: (enabled) =>
-                    changeConfig(
-                      "saveTriggerConfig",
-                      {
-                        document: { ...t.config, enabled },
-                      },
-                      `turn it ${enabled ? "on" : "off"}`,
+                    setEnabled(
+                      changeConfig,
+                      deployment.agentDid,
+                      "Trigger",
+                      t.config.trigger_id,
+                      enabled,
                     ),
                 }}
                 onDuplicate={async () => {

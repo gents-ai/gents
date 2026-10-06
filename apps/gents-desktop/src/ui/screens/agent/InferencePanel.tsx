@@ -4,6 +4,7 @@
    ChatGPT/Codex and Grok exist only through a subscription sign-in, so
    the account card sits in the row with connect, cancel and disconnect.
    Everything else is the desktop app's Backends panel field for field. */
+import { setEnabled } from "./enabled";
 import { dependentsWarning } from "./dependents";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { PROVIDER_VISUALS, SetupScreen, type ProviderId } from "../setup/SetupScreen";
@@ -1239,19 +1240,12 @@ export function InferencePanel({
                   enabled={{
                     checked: b.enabled !== false,
                     onChange: (enabled) =>
-                      changeConfig(
-                        "patchConfigComponents",
-                        {
-                          agentDid: deployment.agentDid,
-                          patches: [
-                            {
-                              collection: "InferenceBackend",
-                              id: b.backendId,
-                              changes: { enabled },
-                            },
-                          ],
-                        },
-                        `turn it ${enabled ? "on" : "off"}`,
+                      setEnabled(
+                        changeConfig,
+                        deployment.agentDid,
+                        "InferenceBackend",
+                        b.backendId,
+                        enabled,
                       ),
                   }}
                   /* an added account's backend goes with Remove account */

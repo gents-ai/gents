@@ -3,6 +3,7 @@
    visible block on the behavior: pick one, see who else uses it, duplicate
    it or start empty, and edit its instructions and capabilities in place.
    Everything waits for one Save. */
+import { setEnabled } from "./enabled";
 import { useExclusivePopover } from "@/hooks/useExclusivePopover";
 import { dependentsWarning } from "./dependents";
 import { Fragment, useEffect, useRef, useState } from "react";
@@ -277,25 +278,6 @@ function ContextPicker({
 }
 
 /* one-click changes that a behavior's row and its header share */
-/* the switch changes only `enabled`: a patch, so a behavior with no profile
-   yet is never rewritten with an empty profile reference */
-async function saveEnabled(
-  changeConfig: ShellActions["changeConfig"],
-  deployment: DeploymentView,
-  b: BehaviorView,
-  next: boolean,
-) {
-  await changeConfig(
-    "patchConfigComponents",
-    {
-      agentDid: deployment.agentDid,
-      patches: [
-        { collection: "AgentBehavior", id: b.behaviorId, changes: { enabled: next } },
-      ],
-    },
-    `turn it ${next ? "on" : "off"}`,
-  );
-}
 
 /* One apply enables the behavior and names it the default: publication
    rejects a disabled default, and it decides whether the behavior can run. */
@@ -331,7 +313,13 @@ function RowControls({
   const toggle = async (next: boolean) => {
     setBusy(true);
     try {
-      await saveEnabled(changeConfig, deployment, behavior, next);
+      await setEnabled(
+        changeConfig,
+        deployment.agentDid,
+        "AgentBehavior",
+        behavior.behaviorId,
+        next,
+      );
       toast(`${behavior.displayName} is ${next ? "enabled" : "disabled"}`);
     } catch (e) {
       toastFailure(`turn it ${next ? "on" : "off"}`, e);
