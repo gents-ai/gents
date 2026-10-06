@@ -380,3 +380,114 @@ async fn summary_starter_resolves_physical_cause_outside_latest_request_cache() 
     assert_eq!(starter.cause_request_doc_id, parent_doc_id);
     assert_eq!(starter.agent_did, crate::tests::support::OPERATOR);
 }
+
+/// Every starter in a fleet snapshot resolves through one batched lineage
+/// read, not one read pair per child session, and children sharing a parent
+/// or pointing at a deleted request keep the per-session outcomes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fleet_snapshot_resolves_all_starters_with_one_query_per_build() {
+    let (core, _tmp, parent_a, parent_b) =
+        crate::tests::support::seed_fleet_starter_fixture().await;
+    let access = gents::config_client::ConfigAccess::Local(core.node_arc());
+    let mut sessions = Vec::new();
+    for session_id in [
+        "sess_fleet_parent_a",
+        "sess_fleet_parent_b",
+        "sess_fleet_child_shared_1",
+        "sess_fleet_child_shared_2",
+        "sess_fleet_child_b",
+        "sess_fleet_child_dangling",
+        "sess_fleet_plain",
+    ] {
+        sessions.push(
+            gents::session_origin::load_session(
+                &access,
+                session_id,
+                Some(crate::tests::support::OPERATOR),
+            )
+            .await
+            .unwrap()
+            .unwrap_or_else(|| panic!("fixture session {session_id} must load")),
+        );
+    }
+    let reads = crate::tests::support::CountingRead::new(access);
+    let mut summaries =
+        session_summaries(&sessions, &[], crate::tests::support::OPERATOR, &[], &[]);
+    super::super::runtime_tasks::resolve_summary_starters(&reads, &mut summaries).await;
+    assert_eq!(
+        reads.queries(),
+        1,
+        "starter resolution over four distinct parent ids must issue one batched read"
+    );
+
+    let starter_of = |session_id: &str| {
+        summaries
+            .iter()
+            .find(|summary| summary.session_id == session_id)
+            .unwrap_or_else(|| panic!("summary for {session_id} must exist"))
+            .started_by
+            .clone()
+    };
+    for (child, cause_doc_id, parent_session) in [
+        (
+            "sess_fleet_child_shared_1",
+            &parent_a,
+            "sess_fleet_parent_a",
+        ),
+        (
+            "sess_fleet_child_shared_2",
+            &parent_a,
+            "sess_fleet_parent_a",
+        ),
+        ("sess_fleet_child_b", &parent_b, "sess_fleet_parent_b"),
+    ] {
+        let starter = starter_of(child)
+            .unwrap_or_else(|| panic!("{child} must resolve its stored provenance parent"));
+        assert_eq!(
+            starter.cause_request_doc_id, *cause_doc_id,
+            "{child} must name its own parent request"
+        );
+        assert_eq!(
+            starter.session_id, parent_session,
+            "{child} must resolve into its parent's session"
+        );
+        assert_eq!(
+            starter.agent_did,
+            crate::tests::support::OPERATOR,
+            "{child} starter must carry the parent session's agent"
+        );
+        assert_eq!(
+            starter.requester_did.as_deref(),
+            Some(crate::tests::support::OPERATOR),
+            "{child} starter must carry the parent session's requester"
+        );
+    }
+    for session_id in [
+        "sess_fleet_parent_a",
+        "sess_fleet_parent_b",
+        "sess_fleet_child_dangling",
+        "sess_fleet_plain",
+    ] {
+        assert!(
+            starter_of(session_id).is_none(),
+            "{session_id} must not gain a starter: no provenance, or a parent no store holds"
+        );
+    }
+
+    let mut rebuilt = session_summaries(&sessions, &[], crate::tests::support::OPERATOR, &[], &[]);
+    super::super::runtime_tasks::resolve_summary_starters(&reads, &mut rebuilt).await;
+    assert_eq!(
+        reads.queries(),
+        2,
+        "a second build over the same fleet must add exactly one batched read"
+    );
+    assert!(
+        rebuilt
+            .iter()
+            .find(|summary| summary.session_id == "sess_fleet_child_shared_1")
+            .expect("rebuilt summary must exist")
+            .started_by
+            .is_some(),
+        "a rebuilt summary must resolve its starter identically"
+    );
+}

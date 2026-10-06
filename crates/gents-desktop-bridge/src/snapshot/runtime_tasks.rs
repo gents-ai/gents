@@ -299,36 +299,46 @@ mod trigger_recent_runs_tests {
 
 /// Resolve immutable creation provenance through the runtime lineage owner,
 /// including causing requests outside the bounded client request cache.
-pub(super) async fn resolve_summary_starters(
-    access: &gents::config_client::ConfigAccess,
+pub(super) async fn resolve_summary_starters<R: gents::config_client::ConfigRead + ?Sized>(
+    access: &R,
     summaries: &mut [SessionSummary],
 ) {
+    let parents = summaries
+        .iter()
+        .filter_map(|summary| {
+            summary
+                .provenance
+                .as_ref()
+                .and_then(|p| p.parent_request_doc_id.as_deref())
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    let scopes = match gents::session_origin::request_scopes(access, parents).await {
+        Ok(scopes) => scopes
+            .into_iter()
+            .collect::<std::collections::BTreeMap<_, _>>(),
+        Err(error) => {
+            tracing::warn!(%error, "session starters unavailable");
+            return;
+        }
+    };
     for summary in summaries {
-        if summary
+        let Some(parent) = summary
             .provenance
             .as_ref()
-            .and_then(|p| p.parent_request_doc_id.as_ref())
-            .is_none()
-        {
+            .and_then(|p| p.parent_request_doc_id.as_deref())
+        else {
             continue;
-        }
-        let scope = gents::session_origin::SessionScope {
-            agent_did: summary.agent_did.clone(),
-            session_id: summary.session_id.clone(),
-            requester_did: summary.requester_did.clone(),
         };
-        match gents::session_origin::started_by(access, &scope).await {
-            Ok(link) => {
-                summary.started_by = link.map(|link| super::super::types::LinkedSessionView {
-                    agent_did: link.scope.agent_did,
-                    session_id: link.scope.session_id,
-                    requester_did: link.scope.requester_did,
-                    cause_request_doc_id: link.cause_request_doc_id,
-                })
-            }
-            Err(error) => {
-                tracing::warn!(session_id = %summary.session_id, %error, "session starter unavailable")
-            }
-        }
+        // A parent request no longer readable stays an absent starter, the
+        // same join miss a per-session read produced.
+        summary.started_by =
+            scopes
+                .get(parent)
+                .map(|scope| super::super::types::LinkedSessionView {
+                    agent_did: scope.agent_did.clone(),
+                    session_id: scope.session_id.clone(),
+                    requester_did: scope.requester_did.clone(),
+                    cause_request_doc_id: parent.to_owned(),
+                });
     }
 }
