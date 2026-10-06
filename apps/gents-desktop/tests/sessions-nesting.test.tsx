@@ -4,7 +4,7 @@ import type { SessionSummary } from "@source-inc/gents-desktop-client";
 import { SessionsScreen } from "../src/ui/screens/SessionsScreen";
 import { emptyFilter } from "../src/ui/lib/session-filter";
 import { filterSessions } from "../src/ui/screens/SessionFilters";
-import { publish, testApp, withApp } from "./app-fixture";
+import { node, publish, testApp, withApp } from "./app-fixture";
 
 const session = (overrides: Partial<SessionSummary>): SessionSummary => ({
   sessionId: "parent",
@@ -50,14 +50,14 @@ const child = session({
     causeRequestDocId: "physical-parent-1",
   },
 });
-const deploymentWith = (sessions: SessionSummary[]) => ({
-  agentDid: "did:key:node",
-  sessions,
-  mailboxItems: [],
-  behaviors: [],
-  behaviorConfigs: [],
-  behaviorEnvironments: [],
-});
+const deploymentWith = (sessions: SessionSummary[]) =>
+  node({
+    agentDid: "did:key:node",
+    sessions,
+    behaviors: [],
+    behaviorConfigs: [],
+    behaviorEnvironments: [],
+  });
 
 beforeEach(() =>
   vi.stubGlobal("localStorage", {

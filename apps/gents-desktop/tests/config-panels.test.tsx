@@ -88,7 +88,12 @@ function harness() {
       .fn()
       .mockResolvedValue({ bootstrap, client: { deployments: [deployment] } }),
   };
-  const app = testApp({ api, snapshot: { bootstrap } });
+  /* the node the panels configure is listed, and so selected, as it is
+     whenever the app shows its settings */
+  const app = testApp({
+    api,
+    snapshot: { bootstrap, client: { deployments: [deployment] } },
+  });
   return { api, app };
 }
 

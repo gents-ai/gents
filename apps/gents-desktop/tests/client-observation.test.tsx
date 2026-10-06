@@ -93,4 +93,19 @@ describe("following the client while it runs", () => {
       expect(api.setSelectedAgent).toHaveBeenLastCalledWith("did:key:there"),
     );
   });
+
+  it("selects the first node within the read that lists it, so the host never hears of none", async () => {
+    const api = bridgeApi();
+    const app = testApp({ api, snapshot: running });
+    renderHook(() =>
+      useDesktopRuntime(
+        app,
+        vi.fn(async () => () => {}),
+      ),
+    );
+    await waitFor(() => expect(api.setSelectedAgent).toHaveBeenCalled());
+    await act(async () => {});
+
+    expect(api.setSelectedAgent.mock.calls).toEqual([[AGENT]]);
+  });
 });

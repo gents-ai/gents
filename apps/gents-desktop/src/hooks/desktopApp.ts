@@ -8,6 +8,7 @@ import { createClientLifecycle } from "./clientLifecycle";
 import { clientStatus, createClientStore } from "./clientStore";
 import { createFleetStore } from "./fleetStore";
 import { createSelectionStore } from "./selectionStore";
+import { reconcileSelection } from "./selectionReconcile";
 import { createSessionReads } from "./sessionReads";
 import { createSessionStore } from "./sessionStore";
 import { createShellActions } from "./shellActions";
@@ -79,6 +80,7 @@ export function createDesktopApp({
     client: lifecycle,
     reportFailure: reportAction,
   });
+  reconcileSelection(stores, actions.selectAgent);
   /* the composer's drafts, kept apart so a keystroke reaches only it */
   const drafts = createDraftStore();
   return { api, stores, view, drafts, project, trackedRequestId, lifecycle, actions };

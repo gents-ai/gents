@@ -11,7 +11,7 @@ import type {
 import { applyFleetSnapshot } from "../src/hooks/fleetStore";
 import { readSession, writeSession } from "../src/hooks/sessionStore";
 import { admittingProjection, shellStores } from "./shell-fixture";
-import { useSelectionReconcile } from "../src/hooks/useDesktopRuntime";
+import { reconcileSelection } from "../src/hooks/selectionReconcile";
 import { createDesktopShellSelectionActions } from "../src/hooks/desktopShellSelectionActions";
 import { createSelectionStore, useSelection } from "../src/hooks/selectionStore";
 import { createDesktopShellChatActions } from "../src/hooks/desktopShellChatActions";
@@ -73,7 +73,7 @@ function useHarness(
       reportFailure: vi.fn(),
     }),
   }));
-  useSelectionReconcile({ stores, actions });
+  useState(() => reconcileSelection(stores, actions.selectAgent));
   return {
     agent: current.agentDid,
     selected: current.sessionId,

@@ -1,22 +1,17 @@
 import { useEffect } from "react";
 import { useStore } from "zustand";
 
-import {
-  selectedBehaviorIdForDeployment,
-  type DesktopClientUpdatedListenerFactory,
-} from "@source-inc/gents-desktop-client";
+import type { DesktopClientUpdatedListenerFactory } from "@source-inc/gents-desktop-client";
 
 import type { DesktopApp } from "./desktopApp";
-import { selection } from "./selectionStore";
 import { startClientObservation } from "./clientObservation";
 import { clientStatus } from "./clientStore";
-import { firstNode, nodeOf } from "./fleetStore";
 
 /**
- * What the app does on its own while it runs: starts and recovers the
- * client, observes the bridge, keeps the selection valid against what
- * the nodes list, and tells the host which node is selected. Mounted
- * once, at the root; each part selects only what it reacts to.
+ * What the app does on its own while it is mounted: starts the client and
+ * follows it while it runs. Mounted once, at the root. Recovery, selection
+ * reconciliation and the transcript's workflow are reactions the app sets
+ * up when it is made.
  */
 export function useDesktopRuntime(
   app: DesktopApp,
@@ -24,7 +19,6 @@ export function useDesktopRuntime(
 ) {
   useStartup(app);
   useEffect(() => startClientObservation(app, listenToUpdates), [app, listenToUpdates]);
-  useSelectionReconcile(app);
 }
 
 /** Startup on mount, and where the logs are when the managed server failed
@@ -64,58 +58,4 @@ function useStartup({
       current = false;
     };
   }, [api, needsHint, stores]);
-}
-
-/** The selection kept valid against what the nodes list. */
-export function useSelectionReconcile({
-  stores,
-  actions,
-}: {
-  stores: DesktopApp["stores"];
-  actions: Pick<DesktopApp["actions"], "selectAgent">;
-}) {
-  const store = stores.selection;
-  const agentDid = useStore(store, (state) => state.agentDid);
-  const behaviorId = useStore(store, (state) => state.behaviorId);
-  const composingFor = useStore(store, (state) => state.composingFor);
-  const firstNodeDid = useStore(
-    stores.fleet,
-    (state) => firstNode(state)?.agentDid ?? null,
-  );
-  const node = useStore(stores.fleet, (state) => nodeOf(state, agentDid));
-
-  // Snapshot absence is not an explicit navigation intent. Preserve an
-  // existing principal selection while bounded observations catch up; only
-  // initialize an empty selection through the route owner. The route's
-  // effect runs first in the same commit (it is a child's), so the store,
-  // not this render's value, says whether a node is already selected.
-  useEffect(() => {
-    if (!store.getState().agentDid && firstNodeDid) actions.selectAgent(firstNodeDid);
-  }, [actions, agentDid, firstNodeDid, store]);
-
-  // Read from the stores for the same reason: the route may have selected a
-  // node and behavior in this commit. The subscriptions above only rerun it.
-  useEffect(() => {
-    const current = store.getState();
-    const selected = current.agentDid
-      ? (stores.fleet.getState().nodes[current.agentDid] ?? null)
-      : null;
-    /* a read that lists no such node (one taken while the client restarts)
-       is not a choice either: the behavior, and a mailbox reply armed with
-       it, stay until the node is listed again */
-    if (!selected) return;
-    // A mailbox tap or the new-session screen chose this behavior. Preserve
-    // it while the independently replicated behavior and session rows catch
-    // up; explicit navigation lets go of it in the selection store.
-    if (current.composingFor === selected.agentDid) return;
-    // A snapshot may reconcile behavior availability, never user session
-    // selection. Null is an intentional fresh composer, not a request to open
-    // the first matching session. A missing selected row stays selected while
-    // hydration/error presentation handles its availability (ClientShell's
-    // snapshot_preserves_selection contract).
-    selection.settleBehavior(
-      store,
-      selectedBehaviorIdForDeployment(selected, current.behaviorId),
-    );
-  }, [behaviorId, composingFor, node, store, stores.fleet]);
 }
