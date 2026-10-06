@@ -72,6 +72,32 @@ describe("profile model recommendation ownership", () => {
     expect(screen.getByLabelText("Context window")).toHaveValue(222);
   });
 
+  it("keeps the recommendation when only the backend's concurrency changes", async () => {
+    const api = {
+      getInferenceBackendRecommendation: vi.fn().mockResolvedValue(recommendation(111)),
+      getInferenceSetupCatalog: vi.fn().mockResolvedValue({ executionDefaults: {} }),
+    };
+    const view = renderIn(
+      testApp({ api }),
+      <ProfilesPanel deployment={fixture} item="profile-a" />,
+    );
+    expect(await screen.findByLabelText("Context window")).toBeVisible();
+    /* the lookup asks about the model, not how many requests the backend
+       runs at once */
+    const changed = {
+      ...fixture,
+      inferenceBackends: fixture.inferenceBackends.map((backend) => ({
+        ...backend,
+        maxConcurrent: 4,
+      })),
+    };
+    view.rerender(<ProfilesPanel deployment={changed} item="profile-a" />);
+    await settleLookup();
+
+    expect(api.getInferenceBackendRecommendation).toHaveBeenCalledOnce();
+    expect(screen.getByLabelText("Context window")).toBeVisible();
+  });
+
   it("clears stale controls and reports a failed replacement lookup", async () => {
     const api = {
       getInferenceBackendRecommendation: vi

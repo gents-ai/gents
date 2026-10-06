@@ -532,7 +532,6 @@ export function ProfileEditor({
     d.draft.modelName,
     selectedBackend?.providerKind,
     selectedBackend?.endpoint,
-    selectedBackend?.maxConcurrent,
     advertisedModelKey,
     api,
   ]);
