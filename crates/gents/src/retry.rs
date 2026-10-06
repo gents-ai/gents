@@ -55,11 +55,6 @@ impl RetryPolicy {
     }
 }
 
-pub fn is_retryable_streaming_error(error: &rig::agent::StreamingError) -> bool {
-    let classified = crate::error::classify_completion_error(error);
-    classified.is_retryable()
-}
-
 pub fn retries_exhausted(policy: &RetryPolicy, last_error: &InferenceError) -> InferenceError {
     InferenceError::RetriesExhausted {
         max_retries: policy.max_retries,

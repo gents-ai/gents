@@ -1,3 +1,6 @@
+use crate::error::{
+    classify_loop_failure, CompletionFailure, InferenceError, LoopFailureCause, LoopStreamError,
+};
 use crate::tool::ToolDefinition;
 use crate::ToolChoice;
 
@@ -521,26 +524,38 @@ pub fn from_rig_assistant_content(
     }
 }
 
-/// Native classification of a terminal stream failure, so runtime callers can
-/// act on the cause without matching rig's error enums outside this owner.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StreamFailureKind {
-    MaxTurns,
-    Other,
+/// The native cause of a rig stream failure.
+pub fn loop_failure_cause(error: &rig::agent::StreamingError) -> LoopFailureCause {
+    use rig::completion::{CompletionError, PromptError};
+    match error {
+        rig::agent::StreamingError::Completion(completion) => LoopFailureCause::Completion {
+            failure: match completion {
+                CompletionError::HttpError(_) => CompletionFailure::Http,
+                CompletionError::ProviderError(message) => {
+                    CompletionFailure::Provider(message.clone())
+                }
+                CompletionError::JsonError(_)
+                | CompletionError::UrlError(_)
+                | CompletionError::RequestError(_) => CompletionFailure::Request,
+                CompletionError::ResponseError(_) => CompletionFailure::Response,
+            },
+            reason: completion.to_string(),
+        },
+        rig::agent::StreamingError::Prompt(prompt) => match **prompt {
+            PromptError::MaxTurnsError { .. } => LoopFailureCause::MaxTurns,
+            _ => LoopFailureCause::Prompt,
+        },
+        rig::agent::StreamingError::Tool(_) => LoopFailureCause::Tool,
+    }
 }
 
-pub fn classify_stream_failure(error: &rig::agent::StreamingError) -> StreamFailureKind {
-    match error {
-        rig::agent::StreamingError::Prompt(prompt_error)
-            if matches!(
-                **prompt_error,
-                rig::completion::PromptError::MaxTurnsError { .. }
-            ) =>
-        {
-            StreamFailureKind::MaxTurns
-        }
-        _ => StreamFailureKind::Other,
-    }
+/// Carry a rig stream failure across the loop's output boundary.
+pub fn loop_stream_error(error: rig::agent::StreamingError) -> LoopStreamError {
+    LoopStreamError::new(loop_failure_cause(&error), error)
+}
+
+pub fn classify_completion_error(error: &rig::agent::StreamingError) -> InferenceError {
+    classify_loop_failure(&loop_failure_cause(error), &error.to_string())
 }
 
 #[cfg(test)]
@@ -654,8 +669,8 @@ mod tests {
     #[test]
     fn turn_exhaustion_classifies_as_max_turns() {
         assert_eq!(
-            classify_stream_failure(&max_turns_stream_failure(1_000)),
-            StreamFailureKind::MaxTurns
+            loop_failure_cause(&max_turns_stream_failure(1_000)),
+            LoopFailureCause::MaxTurns
         );
     }
 
@@ -664,7 +679,7 @@ mod tests {
         let error = rig::agent::StreamingError::Completion(
             rig::completion::CompletionError::ProviderError("boom".to_string()),
         );
-        assert_eq!(classify_stream_failure(&error), StreamFailureKind::Other);
+        assert_ne!(loop_failure_cause(&error), LoopFailureCause::MaxTurns);
     }
 
     #[test]
@@ -674,7 +689,23 @@ mod tests {
                 "upstream mentioned MaxTurnError: (reached max turn limit: 1000)".to_string(),
             ),
         );
-        assert_eq!(classify_stream_failure(&error), StreamFailureKind::Other);
+        assert_ne!(loop_failure_cause(&error), LoopFailureCause::MaxTurns);
+    }
+
+    #[test]
+    fn loop_stream_error_keeps_the_rig_rendering_and_chain() {
+        let error = rig::agent::StreamingError::Completion(
+            rig::completion::CompletionError::ProviderError("boom".to_string()),
+        );
+        let expected = format!(
+            "{:#}",
+            anyhow::Error::new(rig::agent::StreamingError::Completion(
+                rig::completion::CompletionError::ProviderError("boom".to_string()),
+            ),)
+        );
+        let native = loop_stream_error(error);
+        assert_eq!(native.to_string(), "CompletionError: ProviderError: boom");
+        assert_eq!(format!("{:#}", anyhow::Error::new(native)), expected);
     }
 
     // ===== #589/#590: argument-shape normalization at both converter seams =====

@@ -30,7 +30,7 @@ pub struct OneShotProviderFailure {
 #[error("one-shot completion produced no visible output")]
 pub struct OneShotNoVisibleOutput {
     #[source]
-    source: StreamingError,
+    source: LoopStreamError,
 }
 
 fn persistence_failure(operation: &'static str, source: anyhow::Error) -> anyhow::Error {
@@ -38,7 +38,7 @@ fn persistence_failure(operation: &'static str, source: anyhow::Error) -> anyhow
 }
 
 fn stream_failure(
-    error: StreamingError,
+    error: LoopStreamError,
     last_attempt_error: Option<InferenceError>,
 ) -> anyhow::Error {
     match last_attempt_error {
@@ -370,86 +370,64 @@ where
                 final_text = None;
                 last_attempt_error = Some(error);
             }
-            LoopStreamItem::Item(item) => match item {
-                MultiTurnStreamItem::StreamAssistantItem(content) => match content {
-                    StreamedAssistantContent::Text(text) => {
-                        if auxiliary_enabled {
-                            let identity = active_auxiliary.ok_or_else(|| {
-                                anyhow::anyhow!("auxiliary text has no active source")
-                            })?;
-                            emit_auxiliary(identity, AuxiliaryOutputEvent::TextDelta(text.text))
-                                .await?;
-                        } else {
-                            accumulator.push_text(&text.text);
-                        }
-                    }
-                    StreamedAssistantContent::Reasoning(reasoning) => {
-                        let reasoning = rig_compat::from_rig_reasoning(&reasoning);
-                        if auxiliary_enabled {
-                            let identity = active_auxiliary.ok_or_else(|| {
-                                anyhow::anyhow!("auxiliary reasoning has no active source")
-                            })?;
-                            emit_auxiliary(identity, AuxiliaryOutputEvent::Reasoning(reasoning))
-                                .await?;
-                        } else {
-                            accumulator.push_provider_reasoning(provider_profile, reasoning)?;
-                        }
-                    }
-                    StreamedAssistantContent::ReasoningDelta { id, reasoning } => {
-                        if auxiliary_enabled {
-                            let identity = active_auxiliary.ok_or_else(|| {
-                                anyhow::anyhow!("auxiliary reasoning delta has no active source")
-                            })?;
-                            emit_auxiliary(
-                                identity,
-                                AuxiliaryOutputEvent::ReasoningDelta {
-                                    id,
-                                    fragment: reasoning,
-                                },
-                            )
-                            .await?;
-                        } else {
-                            accumulator.push_provider_reasoning_delta(
-                                provider_profile,
-                                id,
-                                &reasoning,
-                            );
-                        }
-                    }
-                    StreamedAssistantContent::ToolCall {
-                        tool_call,
-                        internal_call_id: _,
-                    } => {
-                        let tool_call = rig_compat::from_rig_tool_call(&tool_call);
-                        if auxiliary_enabled {
-                            let identity = active_auxiliary.ok_or_else(|| {
-                                anyhow::anyhow!("auxiliary tool call has no active source")
-                            })?;
-                            emit_auxiliary(identity, AuxiliaryOutputEvent::ToolCall(tool_call))
-                                .await?;
-                        } else {
-                            accumulator.push_tool_call(tool_call);
-                        }
-                    }
-                    _ => {}
-                },
-                MultiTurnStreamItem::FinalResponse(final_response) => {
-                    if auxiliary_enabled {
-                        let identity = active_auxiliary.or(last_auxiliary).ok_or_else(|| {
-                            anyhow::anyhow!("auxiliary final response has no source")
-                        })?;
-                        emit_auxiliary(
-                            identity,
-                            AuxiliaryOutputEvent::FinalText(final_response.response().to_string()),
-                        )
-                        .await?;
-                    } else {
-                        accumulator.reconcile_text(final_response.response());
-                    }
-                    final_text = Some(final_response.response().to_string());
+            LoopStreamItem::Text(text) => {
+                if auxiliary_enabled {
+                    let identity = active_auxiliary
+                        .ok_or_else(|| anyhow::anyhow!("auxiliary text has no active source"))?;
+                    emit_auxiliary(identity, AuxiliaryOutputEvent::TextDelta(text)).await?;
+                } else {
+                    accumulator.push_text(&text);
                 }
-                _ => {}
-            },
+            }
+            LoopStreamItem::Reasoning(reasoning) => {
+                if auxiliary_enabled {
+                    let identity = active_auxiliary.ok_or_else(|| {
+                        anyhow::anyhow!("auxiliary reasoning has no active source")
+                    })?;
+                    emit_auxiliary(identity, AuxiliaryOutputEvent::Reasoning(reasoning)).await?;
+                } else {
+                    accumulator.push_provider_reasoning(provider_profile, reasoning)?;
+                }
+            }
+            LoopStreamItem::ReasoningDelta { id, reasoning } => {
+                if auxiliary_enabled {
+                    let identity = active_auxiliary.ok_or_else(|| {
+                        anyhow::anyhow!("auxiliary reasoning delta has no active source")
+                    })?;
+                    emit_auxiliary(
+                        identity,
+                        AuxiliaryOutputEvent::ReasoningDelta {
+                            id,
+                            fragment: reasoning,
+                        },
+                    )
+                    .await?;
+                } else {
+                    accumulator.push_provider_reasoning_delta(provider_profile, id, &reasoning);
+                }
+            }
+            LoopStreamItem::ToolCall { tool_call, .. } => {
+                if auxiliary_enabled {
+                    let identity = active_auxiliary.ok_or_else(|| {
+                        anyhow::anyhow!("auxiliary tool call has no active source")
+                    })?;
+                    emit_auxiliary(identity, AuxiliaryOutputEvent::ToolCall(tool_call)).await?;
+                } else {
+                    accumulator.push_tool_call(tool_call);
+                }
+            }
+            LoopStreamItem::ToolResult { .. } => {}
+            LoopStreamItem::Final { text } => {
+                if auxiliary_enabled {
+                    let identity = active_auxiliary
+                        .or(last_auxiliary)
+                        .ok_or_else(|| anyhow::anyhow!("auxiliary final response has no source"))?;
+                    emit_auxiliary(identity, AuxiliaryOutputEvent::FinalText(text.clone())).await?;
+                } else {
+                    accumulator.reconcile_text(&text);
+                }
+                final_text = Some(text);
+            }
         }
     }
     if active_auxiliary.is_some() {
@@ -695,20 +673,22 @@ mod tests {
         let stream_error =
             || StreamingError::Completion(CompletionError::ProviderError("stream failed".into()));
         let provider = stream_failure(
-            stream_error(),
+            crate::rig_compat::loop_stream_error(stream_error()),
             Some(InferenceError::TransientFailure {
                 reason: "provider failed".into(),
             }),
         );
         assert!(provider.downcast_ref::<OneShotProviderFailure>().is_some());
-        assert!(stream_failure(stream_error(), None)
-            .downcast_ref::<OneShotProviderFailure>()
-            .is_none());
+        assert!(
+            stream_failure(crate::rig_compat::loop_stream_error(stream_error()), None)
+                .downcast_ref::<OneShotProviderFailure>()
+                .is_none()
+        );
         let no_visible = StreamingError::Completion(CompletionError::ProviderError(format!(
             "{}transport retry budget exhausted after 0 attempt(s)",
             super::super::NO_VISIBLE_OUTPUT_PREFIX
         )));
-        let no_visible = stream_failure(no_visible, None);
+        let no_visible = stream_failure(crate::rig_compat::loop_stream_error(no_visible), None);
         assert!(no_visible
             .downcast_ref::<OneShotNoVisibleOutput>()
             .is_some());
@@ -795,7 +775,11 @@ mod tests {
                             "{}transport retry budget exhausted after 0 attempt(s)",
                             super::super::NO_VISIBLE_OUTPUT_PREFIX
                         )));
-                    close_received_auxiliary_after_error(stream_failure(no_visible, None)).await
+                    close_received_auxiliary_after_error(stream_failure(
+                        crate::rig_compat::loop_stream_error(no_visible),
+                        None,
+                    ))
+                    .await
                 }
                 CleanupCase::IdentityError => {
                     let identity_error =

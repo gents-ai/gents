@@ -849,8 +849,9 @@ async fn transport_429_usage_cap_reports_reset_time() {
     .await
     .err()
     .expect("429");
-    let classified =
-        crate::error::classify_completion_error(&rig::agent::StreamingError::Completion(err));
+    let classified = crate::llm::rig_compat::classify_completion_error(
+        &rig::agent::StreamingError::Completion(err),
+    );
     assert!(!classified.is_retryable());
     assert_eq!(
         classified.to_string(),
@@ -975,8 +976,9 @@ async fn unsupported_replay_body_is_a_permanent_request_error() {
     .err()
     .expect("unsupported replay block");
     assert!(matches!(error, CompletionError::RequestError(_)), "{error}");
-    let classified =
-        crate::error::classify_completion_error(&rig::agent::StreamingError::Completion(error));
+    let classified = crate::llm::rig_compat::classify_completion_error(
+        &rig::agent::StreamingError::Completion(error),
+    );
     assert!(matches!(
         classified,
         crate::error::InferenceError::PermanentFailure { .. }
@@ -1014,7 +1016,7 @@ fn unsupported_replay_preflight_is_a_permanent_request_error() {
         "{error}"
     );
     assert!(matches!(
-        crate::error::classify_completion_error(&error),
+        crate::llm::rig_compat::classify_completion_error(&error),
         crate::error::InferenceError::PermanentFailure { .. }
     ));
 }
