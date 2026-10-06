@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import type { MailboxItemView, SessionSummary } from "@source-inc/gents-desktop-client";
 
+import { MailboxScreen } from "../src/ui/screens/MailboxScreen";
 import { SessionsScreen } from "../src/ui/screens/SessionsScreen";
 import { node, publish, renderIn, testApp } from "./app-fixture";
 
@@ -42,7 +43,7 @@ const item = (itemId: string): MailboxItemView => ({
   expectedCollection: null,
   parentItemId: null,
   deadlineAt: null,
-  createdAt: new Date().toISOString(),
+  createdAt: "2026-10-06T00:00:00.000Z",
 });
 
 const here = (over: Record<string, unknown> = {}) =>
@@ -75,5 +76,23 @@ describe("screens read the fleet by what they show", () => {
     const before = commits();
     act(() => publish(app, [here({ sessions: [summary("s-1", "renamed")] })]));
     expect(commits()).toBeGreaterThan(before);
+  });
+
+  it("a session no item names changing does not re-render the mailbox", () => {
+    const app = testApp({
+      deployments: [here({ mailboxItems: [item("m-1")] })],
+      selection: { agentDid: AGENT },
+    });
+    const commits = commitsOf(app, <MailboxScreen />);
+    const before = commits();
+    act(() =>
+      publish(app, [
+        here({
+          mailboxItems: [item("m-1")],
+          sessions: [summary("s-1", "one"), summary("s-2", "elsewhere")],
+        }),
+      ]),
+    );
+    expect(commits()).toBe(before);
   });
 });

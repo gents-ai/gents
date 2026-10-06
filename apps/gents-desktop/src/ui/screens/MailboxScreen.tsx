@@ -48,11 +48,17 @@ import { cn } from "@gents/ui/lib/utils";
 import { href, navigate } from "@/lib/router";
 import { useEffect, useLayoutEffect, useState, type ComponentProps } from "react";
 import { behaviorName } from "./behavior";
-import { defaultScope, knownNodeIds, mailboxInScope, type Scope } from "@/lib/scope";
-import { useHomeDid, useScopeContext } from "@/hooks/useClient";
+import { useShallow } from "zustand/react/shallow";
+import {
+  defaultScope,
+  fleetNodes,
+  knownNodeIds,
+  mailboxInScope,
+  type Scope,
+} from "@/lib/scope";
+import { useHomeDid, useInScope } from "@/hooks/useClient";
 import type { ShellActions } from "@/../hooks/shellActions";
 import { listViews, useListViews } from "@/app/listViews";
-import { nodeDidOf } from "@/lib/nodes";
 import { NodeAxis } from "./NodeAxis";
 import { NodeBehaviorStack } from "./NodeBehaviorStack";
 import { deadlineOf, dueSoon, groupItems, KIND_ORDER, matches } from "./mailbox-triage";
@@ -62,7 +68,6 @@ import { Axis, type Option } from "./SessionFilters";
 import { span, when } from "./time";
 import { useApp } from "@/app/AppContext";
 import { toastFailure } from "@/lib/failure";
-import { useDeployments } from "@/hooks/useClient";
 import { nodeOf } from "../../hooks/fleetStore";
 import { useFleet } from "@/hooks/useFleet";
 
@@ -111,15 +116,14 @@ export function MailboxScreen({
   /** a node named on the route: the list opens narrowed to it */
   nodeDid?: string;
 }) {
-  const deployments = useDeployments();
+  const nodes = useFleet(useShallow(fleetNodes));
   const homeDid = useHomeDid();
   const { dismissMailboxItem, openMailboxItem } = useApp().actions;
   /* the mailbox is what waits on the person wherever it came from: every
      node to start, then whatever the chips choose */
-  const ctx = useScopeContext();
   const nodeIds = knownNodeIds(
     useListViews((v) => v.mailboxNodes),
-    ctx,
+    { nodes },
   );
   /* a node named on the route narrows the list to it, once per route,
      before the list is painted */
@@ -130,12 +134,16 @@ export function MailboxScreen({
     nodes: nodeIds.length ? nodeIds : defaultScope("mailbox").nodes,
     agents: [],
   };
-  const items = mailboxInScope(scope, ctx);
-  const nodeCounts = Object.fromEntries(
-    deployments.map((n) => [
-      nodeDidOf(n),
-      n.mailboxItems.filter((m) => m.status === "open").length,
-    ]),
+  const items = useInScope((ctx) => mailboxInScope(scope, ctx));
+  const nodeCounts = useFleet(
+    useShallow((s) =>
+      Object.fromEntries(
+        s.nodeKeys.map((key) => [
+          key,
+          (s.mailboxOf[key] ?? []).filter((m) => m.status === "open").length,
+        ]),
+      ),
+    ),
   );
   /* "now" is fixed when the screen opens: a countdown does not tick over
      under the reader's eye and reorder the list while they read it */
@@ -234,7 +242,7 @@ export function MailboxScreen({
                 className="ml-auto flex min-w-0 items-center gap-0.5 text-muted-foreground"
               >
                 <NodeAxis
-                  nodes={deployments}
+                  nodes={nodes}
                   homeDid={homeDid}
                   counts={nodeCounts}
                   value={nodeIds}
