@@ -2,6 +2,7 @@ import {
   selectedBehaviorReadinessDecision,
   type ChatSendResult,
   type DesktopApiAdapter,
+  type DesktopInterruptRequestRequest,
   type DesktopSessionSnapshot,
 } from "@source-inc/gents-desktop-client";
 import type { ChatWorkflowState } from "@source-inc/gents-desktop-chat";
@@ -209,6 +210,17 @@ export function createDesktopShellChatActions({
     }
   }
 
+  async function interruptRequest(
+    request: Omit<DesktopInterruptRequestRequest, "cause">,
+  ) {
+    try {
+      await api.interruptRequest({ ...request, cause: "userCancelled" });
+    } catch (err) {
+      setError(actionFailure("stop", err));
+      throw shownFailure(err);
+    }
+  }
+
   function setChatFolder(folder: string | null) {
     const sessionId = store.getState().sessionId;
     writeChatFolders(stores.chat, (folders) => withFolder(folders, sessionId, folder));
@@ -238,6 +250,12 @@ export function createDesktopShellChatActions({
      * session again. A failure is reported once, then rethrown.
      */
     renameSession,
+    /**
+     * Stops one request, as the person asked: sessions it started keep their
+     * own work. The request's screen settles when it is terminal. A failure
+     * is reported once and rethrown.
+     */
+    interruptRequest,
     /**
      * Sets, or clears with null, the folder the selected chat works in; on the
      * new-session screen it is held for the session the first send creates.

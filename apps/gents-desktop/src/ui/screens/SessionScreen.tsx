@@ -1302,12 +1302,12 @@ export function SessionScreen() {
   const activeRequestId = useView((view) => view.shellProjection.activeRequestId);
   const activityStatus = useView((view) => view.shellProjection.activityStatus);
   const {
-    api,
     drafts,
     stores,
     actions: {
       acceptsComposeIntent,
       captureComposeIntent,
+      interruptRequest,
       loadOlderSessionTimeline,
       renameSession,
       retryMessage,
@@ -1423,18 +1423,13 @@ export function SessionScreen() {
   const workerActions = useMemo<WorkerActions>(
     () => ({
       interrupt: (request) => {
-        void api
-          .interruptRequest({
-            requestId: request.requestId,
-            agentDid: request.agentDid,
-            cause: "userCancelled",
-          })
-          .catch((e: unknown) =>
-            toast(`Couldn't stop: ${e instanceof Error ? e.message : String(e)}`),
-          );
+        interruptRequest({
+          requestId: request.requestId,
+          agentDid: request.agentDid,
+        }).catch((e: unknown) => toastFailure("stop", e));
       },
     }),
-    [api],
+    [interruptRequest],
   );
   /* the principal name, or the pairing label while a paired node has not
      replicated its principal yet */
@@ -1643,14 +1638,10 @@ export function SessionScreen() {
     const release = () =>
       setRequestedStop((current) => (current === requestId ? null : current));
     try {
-      await api.interruptRequest({
-        requestId,
-        agentDid: selectedAgentDid,
-        cause: "userCancelled",
-      });
+      await interruptRequest({ requestId, agentDid: selectedAgentDid });
     } catch (e) {
       release();
-      toast(`Couldn't stop: ${e instanceof Error ? e.message : String(e)}`);
+      toastFailure("stop", e);
     }
   };
 

@@ -3,7 +3,7 @@ import { Button } from "@gents/ui/components/button";
 import { Spinner } from "@gents/ui/components/spinner";
 import { cn } from "@gents/ui/lib/utils";
 import { navigate } from "@/lib/router";
-import { toast } from "sonner";
+import { toastFailure } from "@/lib/failure";
 import { useApp, useView } from "@/app/AppContext";
 import { useSelectedAgentDid, useSelectedSessionId } from "@/hooks/useClient";
 
@@ -41,7 +41,7 @@ export function LoadingStatus() {
       if (action === "retryHydration") await retrySessionHydration(selectedSessionId);
       else await refreshSnapshot();
     } catch (e) {
-      toast(String(e));
+      toastFailure("load the session", e);
     } finally {
       setBusy(false);
     }
