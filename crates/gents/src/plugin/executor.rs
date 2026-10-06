@@ -27,7 +27,7 @@ const ADMITTED_BYTES_BUDGET: u64 = 512 * 1024 * 1024;
 struct Admitted {
     granted: Option<Manifold>,
     declaration: crate::pack::PackPlugin,
-    runner: PluginRunner,
+    runner: Arc<PluginRunner>,
     budget: PluginBudget,
     bytes: u64,
 }
@@ -320,23 +320,15 @@ impl PluginExecutor {
         let admitted = self.admit(record)?;
         let coordinate = format!("{}/{}", record.namespace, record.name);
         let (model, binding_note) = self.model_session(record).await?;
-        let calls = HostCalls {
+        let outcome = drive(
+            &coordinate,
+            admitted.runner.clone(),
             model,
-            http: http_calls::Session::for_grant(&coordinate, &admitted.runner.manifold)?,
-        };
-        let budget = admitted.budget;
-        let bound = bound.map(Arc::new);
-        let round: rounds::Round = Arc::new(move |input, budget| match &bound {
-            Some(bound) => admitted.runner.call_bound(&input, &budget, bound),
-            None => admitted.runner.call(&input, &budget),
-        });
-        let outcome = if calls.is_empty() {
-            tokio::task::spawn_blocking(move || round(input, budget))
-                .await
-                .with_context(|| format!("plugin {coordinate} stopped unexpectedly"))??
-        } else {
-            rounds::drive(calls, input, budget, round).await?
-        };
+            input,
+            admitted.budget,
+            bound,
+        )
+        .await?;
         Ok(PluginCall {
             coordinate,
             digest: record.digest.clone(),
@@ -379,7 +371,7 @@ impl PluginExecutor {
         let admitted = Arc::new(Admitted {
             granted: record.granted.clone(),
             declaration: record.declaration.clone(),
-            runner,
+            runner: Arc::new(runner),
             budget,
             bytes: bytes.len() as u64,
         });
@@ -404,5 +396,44 @@ impl PluginExecutor {
     #[cfg(test)]
     pub(crate) fn admitted_len(&self) -> usize {
         self.admitted.len()
+    }
+}
+
+/// Runs a plugin that is not installed, such as a pack author's own under
+/// `gents pack test` or a scenario `prepare` step, once on `input`: the host
+/// serves the network `runner`'s granted manifold allows, exactly as for an
+/// installed call. It has no model binding to serve.
+pub async fn call_runner(
+    coordinate: &str,
+    runner: Arc<PluginRunner>,
+    input: serde_json::Value,
+    budget: PluginBudget,
+    bound: Option<BoundDir>,
+) -> Result<PluginOutcome> {
+    drive(coordinate, runner, None, input, budget, bound).await
+}
+
+async fn drive(
+    coordinate: &str,
+    runner: Arc<PluginRunner>,
+    model: Option<model_calls::Session>,
+    input: serde_json::Value,
+    budget: PluginBudget,
+    bound: Option<BoundDir>,
+) -> Result<PluginOutcome> {
+    let calls = HostCalls {
+        model,
+        http: http_calls::Session::for_grant(coordinate, &runner.manifold)?,
+    };
+    let round: rounds::Round = Arc::new(move |input, budget| match &bound {
+        Some(bound) => runner.call_bound(&input, &budget, bound),
+        None => runner.call(&input, &budget),
+    });
+    if calls.is_empty() {
+        tokio::task::spawn_blocking(move || round(input, budget))
+            .await
+            .with_context(|| format!("plugin {coordinate} stopped unexpectedly"))?
+    } else {
+        rounds::drive(calls, input, budget, round).await
     }
 }

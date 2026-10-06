@@ -30,14 +30,16 @@
 //! Bounds beyond the round loop's: [`MAX_REQUESTS_PER_ROUND`] requests a
 //! round, [`MAX_IN_FLIGHT`] of them at once, [`MAX_REQUESTS_PER_CALL`]
 //! requests and [`MAX_RESPONSE_BYTES_PER_CALL`] response bytes over the call
-//! (a request past either gets an error result), [`MAX_REQUEST_BODY_BYTES`]
+//! (charged as they are read, whether or not the response is then refused;
+//! a request past either gets an error result), [`MAX_REQUEST_BODY_BYTES`]
 //! a request body, [`MAX_RESPONSE_BYTES`] a response body,
 //! [`MAX_REDIRECTS`] redirects a request, and [`REQUEST_TIMEOUT`] a request
-//! (lowered by the manifold's `http_timeout_ms`), inside the call's wall
-//! clock.
+//! (lowered by the manifold's `http_timeout_ms`, which a manifest may not
+//! set to 0), inside the call's wall clock.
 
 use std::collections::BTreeSet;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -190,6 +192,9 @@ fn parse_entry(text: &str) -> Result<Entry, String> {
 
 /// Refuses, at manifest load, a declared network axis the host cannot serve.
 pub(crate) fn validate_declared(manifold: &Manifold) -> Result<(), String> {
+    if manifold.http_timeout_ms == Some(0) {
+        return Err("http_timeout_ms must be at least 1; omit it for the default".to_owned());
+    }
     net_grant(&manifold.net).map(|_| ())
 }
 
@@ -524,7 +529,8 @@ pub(super) struct Session {
     client: reqwest::Client,
     request_timeout: Duration,
     requests_sent: usize,
-    response_bytes: usize,
+    /// Charged by every concurrent request as its body is read.
+    response_bytes: AtomicUsize,
     max_requests: usize,
     max_response_bytes: usize,
 }
@@ -554,19 +560,16 @@ impl Session {
             .dns_resolver(Arc::new(Guarded(lookup)))
             .build()
             .context("building the plugin HTTP client")?;
-        let request_timeout = manifold
-            .http_timeout_ms
-            .filter(|ms| *ms > 0)
-            .map_or(REQUEST_TIMEOUT, |ms| {
-                Duration::from_millis(ms).min(REQUEST_TIMEOUT)
-            });
+        let request_timeout = manifold.http_timeout_ms.map_or(REQUEST_TIMEOUT, |ms| {
+            Duration::from_millis(ms).min(REQUEST_TIMEOUT)
+        });
         Ok(Some(Self {
             coordinate: coordinate.to_owned(),
             grant,
             client,
             request_timeout,
             requests_sent: 0,
-            response_bytes: 0,
+            response_bytes: AtomicUsize::new(0),
             max_requests: MAX_REQUESTS_PER_CALL,
             max_response_bytes: MAX_RESPONSE_BYTES_PER_CALL,
         }))
@@ -580,7 +583,7 @@ impl Session {
         deadline: Instant,
     ) -> Map<String, Value> {
         let mut room = self.max_requests.saturating_sub(self.requests_sent);
-        let bytes_left = self.response_bytes < self.max_response_bytes;
+        let bytes_left = self.response_bytes.load(Ordering::Relaxed) < self.max_response_bytes;
         let plan: Vec<(Request, Option<Refusal>)> = requests
             .into_iter()
             .map(|request| {
@@ -597,7 +600,7 @@ impl Session {
             .collect();
         self.requests_sent += plan.iter().filter(|(_, refusal)| refusal.is_none()).count();
         let this = &*self;
-        let answers: Vec<(String, Result<(Value, usize), String>)> = futures::stream::iter(plan)
+        let answers: Vec<(String, Result<Value, String>)> = futures::stream::iter(plan)
             .map(|(request, refusal)| async move {
                 let id = request.id.clone();
                 let answer = match refusal {
@@ -611,13 +614,6 @@ impl Session {
             .await;
         let mut results = Map::new();
         for (id, answer) in answers {
-            let answer = answer.and_then(|(value, bytes)| {
-                if self.response_bytes.saturating_add(bytes) > self.max_response_bytes {
-                    return Err("this call used up its http response budget".to_owned());
-                }
-                self.response_bytes += bytes;
-                Ok(value)
-            });
             results.insert(
                 id,
                 answer.unwrap_or_else(|error| {
@@ -629,7 +625,7 @@ impl Session {
         results
     }
 
-    async fn fetch(&self, request: Request, deadline: Instant) -> Result<(Value, usize), String> {
+    async fn fetch(&self, request: Request, deadline: Instant) -> Result<Value, String> {
         let wall = tokio::time::Instant::from_std(deadline);
         let limit = (tokio::time::Instant::now() + self.request_timeout).min(wall);
         match tokio::time::timeout_at(limit, self.exchange(request)).await {
@@ -652,7 +648,7 @@ impl Session {
         Ok(())
     }
 
-    async fn exchange(&self, request: Request) -> Result<(Value, usize), String> {
+    async fn exchange(&self, request: Request) -> Result<Value, String> {
         let Request {
             mut method,
             mut url,
@@ -705,6 +701,12 @@ impl Session {
                 .await
                 .map_err(|_| "the http response was cut off".to_owned())?
             {
+                let charged = self
+                    .response_bytes
+                    .fetch_add(chunk.len(), Ordering::Relaxed);
+                if charged + chunk.len() > self.max_response_bytes {
+                    return Err("this call used up its http response budget".to_owned());
+                }
                 bytes.extend_from_slice(&chunk);
                 if bytes.len() > MAX_RESPONSE_BYTES {
                     return Err(format!(
@@ -725,7 +727,6 @@ impl Session {
                     }
                 }
             }
-            let size = bytes.len();
             let mut answer = json!({
                 "status": status.as_u16(),
                 "url": url.as_str(),
@@ -739,7 +740,7 @@ impl Session {
                     )
                 }
             }
-            return Ok((answer, size));
+            return Ok(answer);
         }
     }
 }

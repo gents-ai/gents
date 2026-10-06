@@ -252,12 +252,13 @@ fn a_pack_cannot_declare_a_network_grant_the_host_cannot_serve() {
         "input_schema": {"type": "object"},
     }))
     .unwrap();
-    for net in [
-        json!({"OutboundFull": null}),
-        json!({"OutboundHttp": ["*.10.0.0.1"]}),
+    for (net, timeout) in [
+        (json!({"OutboundFull": null}), Value::Null),
+        (json!({"OutboundHttp": ["*.10.0.0.1"]}), Value::Null),
+        (json!({"OutboundHttp": ["api.example.com"]}), json!(0)),
     ] {
         plugin.manifold = Some(
-            json!({"fs": "None", "net": net, "env": "None", "crypto": false, "child_process": false}),
+            json!({"fs": "None", "net": net, "env": "None", "crypto": false, "child_process": false, "http_timeout_ms": timeout}),
         );
         let error = plugin.validate().unwrap_err();
         assert!(
@@ -557,6 +558,42 @@ async fn caps_bound_bodies_requests_and_time() {
         .err()
         .unwrap();
     assert!(error.contains("larger than"), "{error}");
+}
+
+/// Concurrent requests share one budget, and a response refused for its
+/// size is charged for what was read of it.
+#[tokio::test]
+async fn the_response_budget_is_charged_as_bytes_are_read() {
+    let server = Server::start().await;
+    let mut session = session_bytes(&server, 8);
+    let results = ask(
+        &mut session,
+        json!([
+            {"id": "a", "url": server.url("hello")},
+            {"id": "b", "url": server.url("hello")},
+        ]),
+    )
+    .await;
+    let answered = ["a", "b"]
+        .iter()
+        .filter(|id| results[**id].get("status").is_some())
+        .count();
+    assert_eq!(answered, 1, "{results:?}");
+
+    let mut session = session_bytes(&server, MAX_RESPONSE_BYTES);
+    let results = ask(
+        &mut session,
+        json!([{"id": "big", "url": server.url("big")}]),
+    )
+    .await;
+    error(&results, "big");
+    let results = ask(
+        &mut session,
+        json!([{"id": "a", "url": server.url("hello")}]),
+    )
+    .await;
+    assert!(error(&results, "a").contains("was not sent"));
+    assert_eq!(server.hits(), ["hello", "hello", "big"]);
 }
 
 fn session_bytes(server: &Server, max_response_bytes: usize) -> Session {
