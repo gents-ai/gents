@@ -439,8 +439,9 @@ mod tests {
         .await
     }
 
-    /// [`run_binding`] for any installed plugin, declaring `binding` and
-    /// allowing `allowed` at its access when given.
+    /// [`run_binding`] for any installed plugin, declaring `binding` (over a
+    /// schema of the Job's fields, validated as a pack would be) and allowing
+    /// `allowed` at its access when given.
     async fn run_plugin_binding(
         (home, mut record): (tempfile::TempDir, crate::plugin::store::InstalledPlugin),
         digest: &str,
@@ -449,7 +450,19 @@ mod tests {
         job_path: &str,
     ) -> (std::sync::Arc<EmbeddedNode>, tempfile::TempDir) {
         if binding.is_some() {
+            // The Job fields the binding passes, so the declaration is one a
+            // real pack would carry.
+            record.declaration.input_schema = serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "job_run": {"type": "string"},
+                    "text": {"type": "string"},
+                    "path": {"type": "string"},
+                    "origin": {"type": "string"},
+                },
+            });
             record.declaration.bind_dir = binding;
+            record.declaration.validate().unwrap();
             crate::plugin::store::write_record(home.path(), &record).unwrap();
         }
         if let Some((allowed, access)) = allowed {

@@ -77,8 +77,8 @@ struct ScenarioManifest {
 }
 
 /// One `allowed_folders` entry: `path` is relative to `init.tool_root` unless
-/// absolute, must stay inside it when the scenario declares one, and is made
-/// when missing so an output folder needs no fixture.
+/// absolute, must stay inside it (a scenario with allowed folders declares
+/// one), and is made when missing so an output folder needs no fixture.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ScenarioAllowedFolder {
@@ -3176,20 +3176,13 @@ fn allow_scenario_folders(
     if manifest.allowed_folders.is_empty() {
         return Ok(Vec::new());
     }
-    let ceiling = resolve_prepare_within(pack, manifest)?;
+    let root = resolve_prepare_within(pack, manifest)?
+        .context("allowed_folders needs init.tool_root: every allowed folder stays inside it")?;
     manifest
         .allowed_folders
         .iter()
         .map(|folder| {
-            let declared = Path::new(folder.path.trim());
-            let path = match (&ceiling, declared.is_absolute()) {
-                (_, true) => declared.to_path_buf(),
-                (Some(root), false) => root.join(declared),
-                (None, false) => bail!(
-                    "allowed_folders path {:?} is relative, but the scenario declares no init.tool_root to resolve it against",
-                    folder.path
-                ),
-            };
+            let path = root.join(folder.path.trim());
             anyhow::ensure!(
                 !path
                     .components()
@@ -3199,9 +3192,7 @@ fn allow_scenario_folders(
             );
             // Checked against the existing part before anything is made, then
             // again once it exists, so a symlink cannot lead outside either.
-            let inside = |path: &Path| {
-                ceiling.as_ref().is_none_or(|root| path.starts_with(root))
-            };
+            let inside = |path: &Path| path.starts_with(&root);
             let existing = path
                 .ancestors()
                 .find(|ancestor| ancestor.exists())
@@ -3214,7 +3205,7 @@ fn allow_scenario_folders(
                 anyhow::anyhow!(
                     "allowed_folders path {} is outside init.tool_root {}",
                     path.display(),
-                    ceiling.as_deref().unwrap_or(Path::new("")).display()
+                    root.display()
                 )
             };
             if !inside(&planned) {
@@ -3989,7 +3980,12 @@ mod tests {
             (
                 serde_json::json!([{"path": "out"}]),
                 false,
-                "declares no init.tool_root",
+                "needs init.tool_root",
+            ),
+            (
+                serde_json::json!([{"path": outside.path()}]),
+                false,
+                "needs init.tool_root",
             ),
         ] {
             let error =
