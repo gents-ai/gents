@@ -1121,6 +1121,7 @@ impl<'ast> Visit<'ast> for RigPathVisitor {
         let attributes = match item {
             syn::Item::Const(item) => &item.attrs,
             syn::Item::Enum(item) => &item.attrs,
+            syn::Item::ExternCrate(item) => &item.attrs,
             syn::Item::Fn(item) => &item.attrs,
             syn::Item::Impl(item) => &item.attrs,
             syn::Item::Macro(item) => &item.attrs,
@@ -1138,10 +1139,19 @@ impl<'ast> Visit<'ast> for RigPathVisitor {
     }
 
     fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
-        if matches!(&item.tree, syn::UseTree::Path(path) if path.ident == "rig") {
+        if matches!(&item.tree, syn::UseTree::Path(syn::UsePath { ident, .. })
+            | syn::UseTree::Rename(syn::UseRename { ident, .. }) if ident == "rig")
+        {
             self.sites += 1;
         }
         visit::visit_item_use(self, item);
+    }
+
+    fn visit_item_extern_crate(&mut self, item: &'ast syn::ItemExternCrate) {
+        if item.ident == "rig" {
+            self.sites += 1;
+        }
+        visit::visit_item_extern_crate(self, item);
     }
 
     fn visit_path(&mut self, path: &'ast syn::Path) {
@@ -1209,6 +1219,8 @@ fn rig_fence_counts_paths_uses_and_macros_outside_tests() {
     for (source, sites) in [
         ("use rig::completion::Usage;", 1),
         ("use rig::{client, completion};", 1),
+        ("use rig as provider;", 1),
+        ("extern crate rig as provider;", 1),
         ("fn f(u: rig::completion::Usage) {}", 1),
         (
             "fn f() { let s = try_stream! { rig::streaming::x(); }; }",
