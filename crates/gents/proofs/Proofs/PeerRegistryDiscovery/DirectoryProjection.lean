@@ -5,7 +5,7 @@ import Mathlib.Data.Finset.Image
 namespace DirectoryProjection
 
 /-- The projected row's contents are abstracted as an opaque `payload`
-string: display name, behavior name/id arrays, and runtime state. All of
+string: display name, agent name/id arrays, and runtime state. All of
 these ride below this abstraction; only the (source, did) identity and
 payload-equality drive the projection theorems. -/
 structure Node where
