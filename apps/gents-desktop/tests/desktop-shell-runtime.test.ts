@@ -509,6 +509,33 @@ describe("session timeline page merging", () => {
     expect(afterTipRefresh.timelinePage?.hasOlder).toBe(true);
   });
 
+  it("never adds rows above the first one shown when the tip starts earlier", () => {
+    /* the live tail left the end of the newest page, so the page reaches
+       one row further back */
+    const current = session(["k2", "k3", "live-assistant"], {
+      totalItems: 4,
+      pageItems: 3,
+      hasOlder: true,
+      hasNewer: false,
+      oldestItemKey: "k2",
+      newestItemKey: "live-assistant",
+    });
+    const tip = session(["k1", "k2", "k3"], {
+      totalItems: 3,
+      pageItems: 3,
+      hasOlder: false,
+      hasNewer: false,
+      oldestItemKey: "k1",
+      newestItemKey: "k3",
+    });
+
+    const merged = mergeSessionTipSnapshot(current, tip);
+
+    expect(merged.timelineItems.map((item) => item.itemKey)).toEqual(["k2", "k3"]);
+    expect(merged.timelinePage?.hasOlder).toBe(true);
+    expect(merged.timelinePage?.oldestItemKey).toBe("k2");
+  });
+
   it("keeps an exhausted older-page boundary across a tip refresh", () => {
     const current = session(["k1", "k2", "k8", "k9"], {
       totalItems: -1,

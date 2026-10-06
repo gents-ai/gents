@@ -96,16 +96,35 @@ function reuseUnchangedTimelineItems(
  */
 export function mergeSessionTipSnapshot(
   current: DesktopSessionSnapshot | null,
-  next: DesktopSessionSnapshot,
+  tip: DesktopSessionSnapshot,
 ): DesktopSessionSnapshot {
   if (
     !current ||
-    current.sessionId !== next.sessionId ||
-    !next.timelinePage ||
-    next.timelinePage.hasNewer
+    current.sessionId !== tip.sessionId ||
+    !tip.timelinePage ||
+    tip.timelinePage.hasNewer
   ) {
-    return next;
+    return tip;
   }
+  /* The tip is the newest rows, so when a row leaves its end (a live tail
+     dropped before the message replacing it lands) it starts a row earlier.
+     Rows older than the first one shown would land above the reader and
+     move everything under them; they arrive only through paging, which
+     holds the reader's place. */
+  const firstShown = current.timelineItems[0];
+  const shownFrom = firstShown
+    ? tip.timelineItems.findIndex(
+        (item) => timelineItemIdentity(item) === timelineItemIdentity(firstShown),
+      )
+    : -1;
+  const trimmed = shownFrom > 0;
+  const next = {
+    ...tip,
+    timelineItems: trimmed ? tip.timelineItems.slice(shownFrom) : tip.timelineItems,
+    timelinePage: trimmed
+      ? { ...tip.timelinePage, hasOlder: true, oldestItemKey: firstShown!.itemKey }
+      : tip.timelinePage,
+  };
 
   const firstIncoming = next.timelineItems[0];
   const overlapIndex = firstIncoming
