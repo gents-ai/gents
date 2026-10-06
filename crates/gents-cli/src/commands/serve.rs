@@ -19,6 +19,7 @@ use uuid::Uuid;
 use crate::cli::*;
 use crate::commands::codex_shim::{bind_codex_shim, CodexShimBindArgs};
 use crate::commands::grok_shim::{bind_grok_shim, GrokShimBindArgs};
+use crate::commands::init::tool_package_authors_host_tools;
 use crate::http::router::{RuntimeActivationObservation, ServeLifecycleHandle};
 use crate::http::runtime_contract_router;
 use crate::shared::{P2pAdmissionState, *};
@@ -651,6 +652,7 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
     };
     let recorded_root = init_config
         .as_ref()
+        .filter(|config| tool_package_authors_host_tools(config.tool_package))
         .and_then(|config| config.tool_root.as_deref())
         .map(str::trim)
         .filter(|root| !root.is_empty())

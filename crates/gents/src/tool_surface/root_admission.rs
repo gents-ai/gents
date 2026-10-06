@@ -364,8 +364,10 @@ pub(crate) fn resolve_admitted_tool_root<'a>(
 /// Operator preflight: does the tool root recorded for a home remain admitted
 /// under an explicitly supplied process ceiling? Native callers that preflight
 /// an operator flag must decide through this same admission the runtime later
-/// applies to `Tools.host.root`, so an accepted flag can never be rejected at
-/// behavior resolution.
+/// applies to `Tools.host.root`, so an accepted flag is not rejected at
+/// behavior resolution while the Tools document's `host.root` is still the
+/// recorded root; a `host.root` re-authored away from the recording is decided
+/// by the runtime's own admission, not by this preflight.
 pub fn tool_root_admitted_under_ceiling(recorded: &Path, ceiling: &Path) -> Result<bool> {
     Ok(matches!(
         resolve_admitted_tool_root(recorded, [ceiling])?,

@@ -995,6 +995,53 @@ async fn serve_admits_ancestor_tool_root_for_initialized_home() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn serve_serves_mismatched_tool_root_for_home_without_host_tools() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    let recorded_root = tempdir.path().join("recorded-root");
+    let explicit_root = tempdir.path().join("explicit-root");
+    fs::create_dir_all(&home_dir)?;
+    fs::create_dir_all(&recorded_root)?;
+    fs::create_dir_all(&explicit_root)?;
+    let recorded_root = recorded_root.to_str().context("utf-8 recorded root")?;
+    let explicit_root = explicit_root.to_str().context("utf-8 explicit root")?;
+
+    let model_name = format!("no-host-tools-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let agent_name = format!("cli-no-host-tools-{}", Uuid::new_v4().simple());
+    let port = allocate_port()?;
+    let graphql = graphql_url(port);
+
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            "--tool-package",
+            "minimal",
+            "--tool-root",
+            recorded_root,
+            "--inference-url",
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+
+    let mut serve = spawn_server_with_env(
+        &home_dir,
+        port,
+        &["--tool-ceiling", "readonly", "--tool-root", explicit_root],
+        &[],
+    )?;
+    wait_for_port(port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn init_with_write_tools_bootstraps_write_defaults() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");

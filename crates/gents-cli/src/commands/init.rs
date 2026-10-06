@@ -1221,6 +1221,23 @@ fn tools_for_package(
     }
 }
 
+/// Whether the package recorded for a home authors a host group, mirroring the
+/// host arm of `tools_for_package`; keep the two in lockstep. A serve
+/// `--tool-root` preflight may refuse only through this mapping: the refusal
+/// must fire solely where the runtime would strand a behavior, and a home
+/// whose package authors no host group has no `Tools.host.root` for behavior
+/// resolution to admit, so serving proceeds under any ceiling. A home without
+/// a recorded package cannot prove that, so its recorded root stays
+/// authoritative.
+pub(crate) fn tool_package_authors_host_tools(tool_package: Option<ToolPackageArg>) -> bool {
+    match tool_package {
+        Some(ToolPackageArg::Minimal) | Some(ToolPackageArg::Introspection) => false,
+        Some(ToolPackageArg::Readonly | ToolPackageArg::Write | ToolPackageArg::Yolo) | None => {
+            true
+        }
+    }
+}
+
 /// The seeded permissive preset, migrated to the canonical nested `Tools`
 /// shape: explicitly enabled meta-adjacent and DefraDB query capabilities,
 /// every privilege-bearing host capability absent. Absence grants nothing —
