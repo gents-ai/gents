@@ -358,16 +358,6 @@ async fn seed_failed_request(db: &TestDb, request_id: &str) -> String {
     .await
 }
 
-async fn boot_goal_background_handoff(
-    db: &TestDb,
-    request_id: &str,
-    entered_path: &std::path::Path,
-    release_path: &std::path::Path,
-) -> (crate::support::accepted_turn::AcceptedTurnRuntime, String) {
-    boot_goal_background_handoff_with_plans(db, request_id, entered_path, release_path, Vec::new())
-        .await
-}
-
 async fn boot_goal_background_handoff_with_plans(
     db: &TestDb,
     request_id: &str,
@@ -1879,14 +1869,35 @@ async fn interrupted_terminal_pauses_instead_of_self_continuing() {
 
 #[tokio::test]
 async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_retry() {
+    use crate::support::streaming_backend::{
+        StreamChunk, StreamPlan, StreamResponse, StreamScript,
+    };
+
     for terminal in ["failed", "dead"] {
         let db = test_db(&format!("goal-budget-after-{terminal}")).await;
         let parent = "parent-over-budget";
+        let objective = "Respect the budget even when execution fails";
         let barrier = tempfile::tempdir().unwrap();
         let entered_path = barrier.path().join("entered");
         let release_path = barrier.path().join("release");
-        let (runtime, parent_doc) =
-            boot_goal_background_handoff(&db, parent, &entered_path, &release_path).await;
+        // The pending-wrapup and restart assertions require the wrapup turn to
+        // stay held at the provider, so this marker is never released before
+        // shutdown; backend drop ends the parked stream.
+        let hold_wrapup = StreamPlan::current_authored_user(
+            objective,
+            vec![StreamResponse::Stream(StreamScript::paused_before(
+                objective,
+                vec![StreamChunk::text("goal wrapup reached the provider")],
+            ))],
+        );
+        let (runtime, parent_doc) = boot_goal_background_handoff_with_plans(
+            &db,
+            parent,
+            &entered_path,
+            &release_path,
+            vec![hold_wrapup],
+        )
+        .await;
         set_request_lifecycle_state(db.node.as_ref(), &parent_doc, terminal).await;
         // The accepted spawn has real provider usage before the failed call
         // below. Retain that usage instead of assuming an empty call history.
@@ -1920,7 +1931,7 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
             db.node.as_ref(),
             db.node_identity.did(),
             SESSION,
-            Some("Respect the budget even when execution fails"),
+            Some(objective),
             Some(GoalStatus::Active),
             Some(Some(10)),
         )
@@ -2037,6 +2048,24 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
             background_rows[0]["completion_notification_delivered_at"].is_string(),
             "the physical background row must durably account its notification delivery: {}",
             data["AgentToolCall"]
+        );
+        // The runtime claims the wrapup turn on its own cadence, after the
+        // polls above; wait for the barrier to hold it so the pending-wrapup
+        // assertions below hold by construction, not by scheduling luck.
+        for _ in 0..200 {
+            if runtime.backend.observed_requests(objective) >= 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        assert!(
+            runtime.backend.observed_requests(objective) >= 1,
+            "{terminal}: the Goal wrapup turn must reach the provider"
+        );
+        assert_eq!(
+            runtime.backend.observed_chunks(objective),
+            0,
+            "{terminal}: the Goal wrapup turn must stay held at the provider without streaming"
         );
         let goal = load_canonical_goal(&db.node, db.node_identity.did(), SESSION)
             .await
