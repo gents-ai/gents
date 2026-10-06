@@ -49,7 +49,13 @@ import type { Shell } from "@/hooks/useShell";
 import { href, navigate } from "@/lib/router";
 import { useEffect, useState, type ComponentProps } from "react";
 import { behaviorName } from "./behavior";
-import { defaultScope, mailboxInScope, scopeContextOf, type Scope } from "@/lib/scope";
+import {
+  defaultScope,
+  knownNodeIds,
+  mailboxInScope,
+  scopeContextOf,
+  type Scope,
+} from "@/lib/scope";
 import { useStoredStrings } from "@/lib/stored";
 import { nodeDidOf } from "@/lib/nodes";
 import { NodeAxis } from "./NodeAxis";
@@ -112,10 +118,11 @@ export function MailboxScreen({
   /* the mailbox is what waits on the person wherever it came from: every
      node to start, then whatever the chips choose */
   const ctx = scopeContextOf(shell);
-  const [nodeIds, setNodeIds] = useStoredStrings("gents-prototype-mailbox-nodes");
+  const [storedNodeIds, setNodeIds] = useStoredStrings("gents-prototype-mailbox-nodes");
   useEffect(() => {
     if (nodeDid) setNodeIds([nodeDid]);
   }, [nodeDid, setNodeIds]);
+  const nodeIds = knownNodeIds(storedNodeIds, ctx);
   const scope: Scope = {
     nodes: nodeIds.length ? nodeIds : defaultScope("mailbox").nodes,
     agents: [],

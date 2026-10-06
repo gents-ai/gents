@@ -9,6 +9,7 @@ import type {
 import { describe, expect, it } from "vitest";
 import {
   defaultScope,
+  knownNodeIds,
   mailboxInScope,
   nodesInScope,
   recentInScope,
@@ -116,5 +117,13 @@ describe("lists in scope", () => {
     expect(
       recentInScope({ nodes: "all", agents: [] }, ctx, 2).map((s) => s.sessionId),
     ).toEqual(["s2", "p1"]);
+  });
+});
+
+describe("stored node picks", () => {
+  it("drop DIDs no node has once nodes arrive, and stand before then", () => {
+    expect(knownNodeIds(["did:gone", "did:peer"], ctx)).toEqual(["did:peer"]);
+    expect(knownNodeIds(["did:gone"], ctx)).toEqual([]);
+    expect(knownNodeIds(["did:gone"], { ...ctx, nodes: [] })).toEqual(["did:gone"]);
   });
 });

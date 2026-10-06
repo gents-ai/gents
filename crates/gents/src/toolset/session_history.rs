@@ -563,6 +563,9 @@ impl Tool for SessionHistoryTool {
     type Args = SessionHistoryParams;
     type Output = String;
 
+    /// Anthropic Messages rejects `oneOf`, `allOf` and `anyOf` at the top
+    /// level of `input_schema`, so per-action requirements are enforced by
+    /// `call` with a recovery hint rather than by conditional schema clauses.
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
@@ -583,12 +586,7 @@ impl Tool for SessionHistoryTool {
                     "tool_call_doc_id":{"type":"string","minLength":1,"description":"Output: exact tool call document, when a call_id is ambiguous."},
                     "offset_bytes":{"type":"integer","minimum":0,"description":"Output: from the previous next_call."},
                     "expected_hash":{"type":"string","description":"Output: from the previous next_call."}
-                },
-                "allOf":[
-                    {"if":{"required":["action"],"properties":{"action":{"const":"search"}}},"then":{"required":["query"]}},
-                    {"if":{"required":["action"],"properties":{"action":{"enum":["get","transcript"]}}},"then":{"required":["session_id"]}},
-                    {"if":{"required":["action"],"properties":{"action":{"const":"output"}}},"then":{"anyOf":[{"required":["call_id"]},{"required":["tool_call_doc_id"]}]}}
-                ]
+                }
             }),
         }
     }

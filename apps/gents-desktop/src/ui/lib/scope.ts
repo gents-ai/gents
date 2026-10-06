@@ -59,6 +59,16 @@ export function nodesInScope(scope: Scope, ctx: ScopeContext): DeploymentView[] 
   return nodes.filter((n) => chosen.has(nodeDidOf(n)));
 }
 
+/* A pick kept in local storage outlives its nodes: storage belongs to the
+   app's origin, not to a home, so a reset home or a removed peer leaves
+   DIDs no node has, which would narrow a list to nothing. Only DIDs of
+   nodes this client has count; before any node arrives the pick stands. */
+export function knownNodeIds(ids: readonly NodeDid[], ctx: ScopeContext): NodeDid[] {
+  if (ctx.nodes.length === 0) return [...ids];
+  const known = new Set(ctx.nodes.map(nodeDidOf));
+  return ids.filter((id) => known.has(id));
+}
+
 const agentPasses = (scope: Scope, agentId: string | null | undefined) =>
   scope.agents.length === 0 || (agentId != null && scope.agents.includes(agentId));
 

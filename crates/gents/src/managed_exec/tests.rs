@@ -63,17 +63,6 @@ async fn managed_exec_deadline_kills_process_group() {
     assert_eq!(snapshot.argv0, "/bin/sh");
     chrono::DateTime::parse_from_rfc3339(&snapshot.started_at)
         .expect("active executor snapshot must expose RFC3339 started_at");
-    let snapshot_id = snapshot.id;
-    let first_age = snapshot.age_ms;
-    tokio::time::sleep(Duration::from_millis(25)).await;
-    let aged_snapshot = crate::active_native_executors()
-        .into_iter()
-        .find(|snapshot| snapshot.id == snapshot_id)
-        .expect("executor should remain visible before deadline");
-    assert!(
-        aged_snapshot.age_ms >= first_age,
-        "executor age must not move backwards"
-    );
 
     let outcome = handle.await.expect("managed exec task should join");
 
@@ -127,7 +116,7 @@ async fn managed_exec_cancellation_kills_process_group() {
             argv: vec![
                 "/bin/sh".to_string(),
                 "-c".to_string(),
-                "sleep 5".to_string(),
+                "while :; do sleep 1; done".to_string(),
             ],
             cwd: PathBuf::from("/"),
             deadline_at: None,
@@ -142,6 +131,18 @@ async fn managed_exec_cancellation_kills_process_group() {
     });
     let snapshot = wait_for_native_executor(tool_name).await;
     assert!(snapshot.pid > 0, "active executor snapshot must expose pid");
+    let snapshot_id = snapshot.id;
+    let first_age = snapshot.age_ms;
+    tokio::time::sleep(Duration::from_millis(25)).await;
+    let aged_snapshot = crate::active_native_executors()
+        .into_iter()
+        .find(|snapshot| snapshot.id == snapshot_id)
+        .expect("executor should remain visible until cancellation");
+    assert!(
+        aged_snapshot.age_ms >= first_age,
+        "executor age must not move backwards"
+    );
+
     token.cancel();
 
     match handle.await.expect("managed exec task should join") {

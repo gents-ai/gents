@@ -277,6 +277,7 @@ where
                 self.active_provider_attempt = None;
                 self.active_capture_scope = None;
                 self.assistant_turn = AssistantTurnAccumulator::default();
+                self.pending_tool_internal_ids.clear();
                 self.streamed_text.truncate(self.committed_text_len);
                 self.stream_writer.reset_tail(self.doc_id).await?;
                 Ok(StreamAction::Continue)

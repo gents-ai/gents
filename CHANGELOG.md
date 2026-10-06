@@ -4,7 +4,7 @@ All desktop crates and npm packages release together at `workspace.package.versi
 (lockstep train). The bundled frontend and Rust bridge use generated types and
 source consistency checks, not a separate runtime compatibility version.
 
-## Unreleased
+## 0.20.0 - 2026-10-05
 
 - Trimmed tool results are recoverable: `sessions` gains an `output`
   action that pages a tool call's full stored output by call_id, 16000 bytes

@@ -7,6 +7,17 @@ function timelineItemIdentity(item: RenderedTimelineItem) {
   return `${item.kind}:${item.itemKey}`;
 }
 
+function removeMaterializedPendingTurns(items: RenderedTimelineItem[]) {
+  const materialized = new Set(
+    items.flatMap((item) =>
+      item.kind === "userMessage" && item.requestId ? [item.requestId] : [],
+    ),
+  );
+  return items.filter(
+    (item) => item.kind !== "pendingUserTurn" || !materialized.has(item.requestId),
+  );
+}
+
 function sameOptionalStrings(left: string[] | undefined, right: string[] | undefined) {
   if (left === right) return true;
   if (!left || !right || left.length !== right.length) return false;
@@ -106,10 +117,10 @@ export function mergeSessionTipSnapshot(
     next.timelinePage.hasOlder && overlapIndex >= 0
       ? current.timelineItems.slice(0, overlapIndex)
       : [];
-  const timelineItems = reuseUnchangedTimelineItems(current.timelineItems, [
-    ...retainedPrefix,
-    ...next.timelineItems,
-  ]);
+  const timelineItems = reuseUnchangedTimelineItems(
+    current.timelineItems,
+    removeMaterializedPendingTurns([...retainedPrefix, ...next.timelineItems]),
+  );
 
   const currentPage = current.timelinePage ?? next.timelinePage;
   const currentFirstVisibleKey = current.timelineItems[0]?.itemKey ?? null;
@@ -147,7 +158,10 @@ export function mergeOlderSessionTimelinePage(
   const prefix = older.timelineItems.filter(
     (item) => !currentIdentities.has(timelineItemIdentity(item)),
   );
-  const timelineItems = [...prefix, ...current.timelineItems];
+  const timelineItems = removeMaterializedPendingTurns([
+    ...prefix,
+    ...current.timelineItems,
+  ]);
   const currentPage = current.timelinePage ?? older.timelinePage;
   const totalItemsExact =
     (currentPage.totalItemsExact ?? true) &&
