@@ -25,6 +25,9 @@
         "bash": {
           "mode": "Off"
         }
+      },
+      "built_ins": {
+        "enable_session_history_tool": false
       }
     }
   ]
