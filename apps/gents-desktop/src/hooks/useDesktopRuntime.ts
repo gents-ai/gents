@@ -6,11 +6,10 @@ import {
   type DesktopClientUpdatedListenerFactory,
 } from "@source-inc/gents-desktop-client";
 
-import { isMacTauriShell } from "../lib/shellPlatform";
 import type { DesktopApp } from "./desktopApp";
 import { selection } from "./selectionStore";
-import { useDesktopProjectionEffects } from "./useDesktopProjectionEffects";
-import { clientRunning, clientStatus } from "./clientStore";
+import { startClientObservation } from "./clientObservation";
+import { clientStatus } from "./clientStore";
 import { firstNode, nodeOf } from "./fleetStore";
 
 /**
@@ -24,9 +23,8 @@ export function useDesktopRuntime(
   listenToUpdates: DesktopClientUpdatedListenerFactory,
 ) {
   useStartup(app);
-  useDesktopProjectionEffects(app, listenToUpdates);
+  useEffect(() => startClientObservation(app, listenToUpdates), [app, listenToUpdates]);
   useSelectionReconcile(app);
-  usePublishedSelection(app);
 }
 
 /** Startup on mount, and where the logs are when the managed server failed
@@ -120,31 +118,4 @@ export function useSelectionReconcile({
       selectedBehaviorIdForDeployment(selected, current.behaviorId),
     );
   }, [behaviorId, composingFor, node, store, stores.fleet]);
-}
-
-/** The host narrows its observation to the selected node. */
-function usePublishedSelection({
-  api,
-  stores,
-  lifecycle,
-}: Pick<DesktopApp, "api" | "stores" | "lifecycle">) {
-  const clientAvailable = useStore(stores.client, clientRunning);
-  const agentDid = useStore(stores.selection, (state) => state.agentDid);
-  useEffect(() => {
-    if (!clientAvailable) return;
-    let disposed = false;
-    const publishSelection = () => {
-      void api.setSelectedAgent(agentDid).catch((err) => {
-        if (!disposed) lifecycle.setError(String(err));
-      });
-    };
-    publishSelection();
-    // Closing siblings returns focus to the surviving view. Republish so the
-    // host can narrow observation again after returning to a single window.
-    if (isMacTauriShell()) window.addEventListener("focus", publishSelection);
-    return () => {
-      disposed = true;
-      window.removeEventListener("focus", publishSelection);
-    };
-  }, [api, agentDid, clientAvailable, lifecycle]);
 }
