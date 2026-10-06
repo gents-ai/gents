@@ -20,8 +20,7 @@ import {
 export type ShellView = ShellProjection & {
   /** what the selected session is waiting on, if anything */
   loadingStatus: SessionLoadingStatus | null;
-  /** the sent message shown until the transcript holds its durable row:
-      derived, so it ends whichever arrives first */
+  /** the sent message, shown until the transcript holds a row for it */
   pendingTurn: OptimisticPendingTurn | null;
   /** the composer's draft, by session or by the new-session screen's node
       and behavior */
@@ -33,7 +32,6 @@ export type ShellViewStore = StoreApi<ShellView>;
 type ViewInputs = ProjectionInputs & {
   load: SessionLoadState;
   optimisticPendingTurn: OptimisticPendingTurn | null;
-  userRequestIds: ReadonlySet<string>;
 };
 
 function inputsOf(stores: ShellStores): ViewInputs {
@@ -42,7 +40,6 @@ function inputsOf(stores: ShellStores): ViewInputs {
     ...projectionInputsOf(stores),
     load: session.load,
     optimisticPendingTurn: stores.chat.getState().optimisticPendingTurn,
-    userRequestIds: session.facts.userRequestIds,
   };
 }
 
@@ -66,14 +63,7 @@ function viewOf(inputs: ViewInputs): ShellView {
       sessionLoad: inputs.load,
       operationalState: projection.operationalState,
     }),
-    pendingTurn:
-      turn &&
-      !(
-        turn.sessionId === session?.sessionId &&
-        inputs.userRequestIds.has(turn.requestId)
-      )
-        ? turn
-        : null,
+    pendingTurn: turn,
     draftKey: JSON.stringify(
       selection.sessionId
         ? ["session", selection.agentDid, selection.sessionId]

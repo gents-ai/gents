@@ -24,7 +24,9 @@ export type SessionFacts = {
   toolsRevision: number;
   /** every tool call, in transcript order; the same array until a tool changes */
   tools: readonly RenderedToolCallView[];
-  /** the requests whose user message or pending turn the transcript holds */
+  /** the request ids on the transcript's user rows, as the bridge names
+      them: a pending turn's is the request's id, a saved message's the
+      request's document id */
   userRequestIds: ReadonlySet<string>;
 };
 
@@ -146,6 +148,29 @@ function factsOf(
       : after.flatMap((item) => (item.kind === "toolGroup" ? item.tools : [])),
     userRequestIds,
   };
+}
+
+/**
+ * Whether the bridge holds a request the app sent, by the request's id (what
+ * a send returns): once it does, the transcript has a row for it, its
+ * pending turn or its saved message. A saved message carries the request's
+ * document id instead, so the request is known by the session's latest
+ * request, which names it by its id; and should no read happen to show it as
+ * the latest, by the latest having moved on from `latestWhenSent`, the one
+ * the session showed when the request was sent.
+ */
+export function holdsRequest(
+  state: SessionState,
+  sent: { sessionId: string; requestId: string; latestWhenSent: string | null },
+): boolean {
+  const session = state.session;
+  if (session?.sessionId !== sent.sessionId) return false;
+  const latest = session.latestRequestId;
+  return (
+    latest === sent.requestId ||
+    state.facts.userRequestIds.has(sent.requestId) ||
+    (latest !== null && latest !== sent.latestWhenSent)
+  );
 }
 
 /** The session fields the projection decides with. A streamed chunk changes

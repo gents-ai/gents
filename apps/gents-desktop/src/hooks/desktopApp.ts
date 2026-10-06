@@ -10,7 +10,7 @@ import { createFleetStore } from "./fleetStore";
 import { createSelectionStore } from "./selectionStore";
 import { reconcileSelection } from "./selectionReconcile";
 import { createSessionReads } from "./sessionReads";
-import { createSessionStore } from "./sessionStore";
+import { createSessionStore, holdsRequest } from "./sessionStore";
 import { createProviderStore, type ProviderStore } from "./providerStore";
 import { createProviderReads } from "./providerReads";
 import { createShellActions } from "./shellActions";
@@ -54,6 +54,7 @@ export function createDesktopApp({
   const view = createShellView(stores);
   const project = () => view.getState();
   followTranscript(stores, view);
+  endHeldTurn(stores);
   /** the request being tracked now, read when an update or a read lands */
   const trackedRequestId = () => project().trackedRequestId;
   /* A failed action is reported once, as a toast, by the action itself: it
@@ -93,6 +94,32 @@ export function createDesktopApp({
 }
 
 export type DesktopApp = ReturnType<typeof createDesktopApp>;
+
+/**
+ * The app's copy of a sent message ends once the bridge holds the request,
+ * whichever read shows it, so the copy is never drawn beside the row that
+ * stands for it. Ended in the write that shows it, before anything renders.
+ */
+function endHeldTurn(stores: ShellStores) {
+  /* the session's latest request as first read with the turn showing */
+  let sent: { requestId: string; latestWhenSent: string | null } | null = null;
+  const end = () => {
+    const turn = stores.chat.getState().optimisticPendingTurn;
+    if (!turn) return;
+    const state = stores.session.getState();
+    if (sent?.requestId !== turn.requestId) {
+      if (state.session?.sessionId !== turn.sessionId) return;
+      const latest = state.session.latestRequestId;
+      sent = { requestId: turn.requestId, latestWhenSent: latest };
+    }
+    if (holdsRequest(state, { sessionId: turn.sessionId, ...sent }))
+      chat.endPendingTurn(stores.chat, turn.requestId);
+  };
+  stores.session.subscribe(end);
+  stores.chat.subscribe((state, prev) => {
+    if (state.optimisticPendingTurn !== prev.optimisticPendingTurn) end();
+  });
+}
 
 /**
  * The local workflow follows what the transcript shows once it shows it,

@@ -39,6 +39,7 @@ import {
   drawKeys,
   holdLive,
   noDrawKeys,
+  withSentTurns,
   type DrawKeys,
   type HeldLive,
 } from "./stream-reveal";
@@ -49,7 +50,7 @@ import { readableReasoning, reasoningWithheld } from "./tool-summary";
 import { groupTranscript } from "./transcript-groups";
 import { useCopied } from "@/lib/clipboard";
 import { toastFailure } from "@/lib/failure";
-import { useApp } from "@/app/AppContext";
+import { useApp, useView } from "@/app/AppContext";
 import {
   ActivityGroup,
   GroupStateContext,
@@ -365,13 +366,20 @@ export const TranscriptPanel = memo(function TranscriptPanel({
     }, 3_000);
     return () => clearTimeout(timer);
   }, [holding]);
+  /* the message just sent, drawn from the moment it is sent: one row per
+     message, whatever stands for it as it settles */
+  const localTurn = useView((view) => view.pendingTurn);
+  const turns = useMemo(
+    () => withSentTurns(held.items, localTurn, sessionKey),
+    [held.items, localTurn, sessionKey],
+  );
   const keysRef = useRef<DrawKeys>(noDrawKeys(sessionKey));
   const keys = useMemo(
-    () => drawKeys(keysRef.current, held.items, held.replacedBy, sessionKey),
-    [held, sessionKey],
+    () => drawKeys(keysRef.current, turns, held.replacedBy, sessionKey),
+    [turns, held.replacedBy, sessionKey],
   );
   keysRef.current = keys;
-  const rendered = held.items;
+  const rendered = turns;
   const entries = useMemo(() => groupTranscript(rendered), [rendered]);
   /* A turn's answer is the last thing it said before the person spoke
      again, or before the transcript ends once nothing is running. Only a
