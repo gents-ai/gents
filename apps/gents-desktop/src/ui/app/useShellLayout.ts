@@ -62,15 +62,22 @@ export function useShellLayout(route: Route) {
   const dockVisible = docked && (dockOpen || divider.pos > 0);
   const dockCol = dockVisible ? divider.pos + 8 : 0;
   const paneCol = Math.max(0, shellWidth - rail - dockCol);
-  /* While the divider settles, the pane is laid out once, at the width it is
-     settling to, and the dock slides over it or off it. Laid out at every
-     width on the way, a long transcript re-wrapped every row each frame, and
-     frames took 200 ms and more. A drag stays live: the person is placing it. */
+  /* The pane is laid out once per move of the divider, not at every width
+     on the way: a long transcript re-wraps every row at each width, and real
+     sessions took 100 ms and more a frame. Settling, it takes the width it is
+     settling to and the dock slides over or off it; dragged, it keeps the
+     width it had when the drag began, slides under the moving dock, and
+     re-wraps once where the divider is let go. */
   const settlingTo = docked && !divider.dragging ? divider.target : null;
+  const dragFrom = useRef<number | null>(null);
+  if (!(docked && divider.dragging)) dragFrom.current = null;
+  else dragFrom.current ??= paneCol;
   const paneWidth =
-    settlingTo === null
-      ? null
-      : Math.max(0, shellWidth - rail - (settlingTo > 0 ? settlingTo + 8 : 0));
+    dragFrom.current !== null
+      ? dragFrom.current
+      : settlingTo === null
+        ? null
+        : Math.max(0, shellWidth - rail - (settlingTo > 0 ? settlingTo + 8 : 0));
   /* the dock's surface likewise: laid out once at the width it opens to,
      revealed as its column widens; closing, it keeps the width it had open
      and its column clips it away */
@@ -95,7 +102,8 @@ export function useShellLayout(route: Route) {
     divider,
     dockVisible,
     paneCol,
-    /** the pane's width while the divider settles, held at where it is going */
+    /** the pane's width while the divider moves: where a settle is going, or
+        where a drag began */
     paneWidth,
     dockWidth,
     columns,

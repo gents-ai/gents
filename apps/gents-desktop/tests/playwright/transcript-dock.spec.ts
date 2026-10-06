@@ -12,7 +12,8 @@ async function widthsDuring(page: Page, act: () => Promise<void>) {
     const tick = () => {
       widths.push({
         pane: Math.round(
-          document.querySelector('[data-testid="pane"]')!.getBoundingClientRect().width,
+          document.querySelector('[data-testid="pane"] > main')!.getBoundingClientRect()
+            .width,
         ),
         /* the surface while its column shows any of it */
         dock:
@@ -65,4 +66,42 @@ test("opening and closing the dock lays the pane out once", async ({
   });
   expect(distinct(closing.map((w) => w.pane))).toHaveLength(2);
   expect(distinct(closing.map((w) => w.dock).filter((w) => w > 0))).toHaveLength(1);
+});
+
+/* A drag holds the pane at the width it had when the drag began: the
+   transcript slides under the moving dock and is re-wrapped once, where
+   the divider is let go. */
+test("dragging the divider lays the pane out once, on release", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    !["webkit-desktop", "chromium-desktop"].includes(testInfo.project.name),
+    "one layout per engine",
+  );
+  await page.setViewportSize({ width: 1500, height: 900 });
+  await gotoHarness(page, "mobile-performance");
+  await page.locator('[data-testid="session-session-large"]').click();
+  await page.getByTestId("transcript-panel").getByText("stream-start").last().waitFor();
+  await page.getByRole("button", { name: "More" }).first().click();
+  await page.getByRole("menuitem", { name: "Workers" }).click();
+  await page.waitForTimeout(1200);
+  const handle = page.getByRole("separator", { name: "Resize panel" });
+  const box = (await handle.boundingBox())!;
+  const y = box.y + box.height / 2;
+  let during: number[] = [];
+  const widths = await widthsDuring(page, async () => {
+    await page.mouse.move(box.x + box.width / 2, y);
+    await page.mouse.down();
+    for (let i = 1; i <= 12; i += 1) await page.mouse.move(box.x - i * 10, y);
+    during = await page.evaluate(() =>
+      (window as unknown as { __widths: { pane: number }[] }).__widths.map(
+        (w) => w.pane,
+      ),
+    );
+    await page.mouse.up();
+  });
+  /* held at its width through the drag */
+  expect(distinct(during)).toHaveLength(1);
+  /* then laid out once where the divider was let go */
+  expect(distinct(widths.map((w) => w.pane))).toHaveLength(2);
 });
