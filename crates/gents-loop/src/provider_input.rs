@@ -141,9 +141,8 @@ impl ProviderInputCounter {
     }
 
     /// The wire body as the byte estimate sees it. Claude counts an image by
-    /// its pixels, downscaled to at most about [`CLAUDE_IMAGE_TOKENS`], not by
-    /// its base64 length, so each base64 image's data is charged that fixed
-    /// cost instead.
+    /// its pixels, not its base64 length, so each base64 image's data is
+    /// charged [`CLAUDE_IMAGE_TOKENS`], the ceiling for current models.
     fn estimated_body(&self, request: &CompletionRequest) -> Result<Value> {
         let mut body = self.project_body(request)?;
         if self.profile == ProviderInputProfile::ClaudeMessages {
@@ -348,9 +347,11 @@ impl ProviderInputCounter {
     }
 }
 
-/// Anthropic's ceiling for one image: `width * height / 750` tokens after the
-/// API downscales it to about 1.15 megapixels.
-pub const CLAUDE_IMAGE_TOKENS: usize = 1_600;
+/// The most visual tokens one image costs on current Claude models (4,784 on
+/// Claude 4.7 and later; earlier models stop near 1,600). One ceiling for every
+/// model: an overcount only compacts or refuses earlier, an undercount admits
+/// a request over the context window.
+pub const CLAUDE_IMAGE_TOKENS: usize = 4_784;
 
 fn charge_claude_images(value: &mut Value) {
     match value {
