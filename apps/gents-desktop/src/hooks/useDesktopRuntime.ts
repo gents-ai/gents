@@ -1,14 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { useStore } from "zustand";
 
-import { reconcileProjectedWorkflow } from "@source-inc/gents-desktop-chat";
 import {
   selectedBehaviorIdForDeployment,
   type DesktopClientUpdatedListenerFactory,
 } from "@source-inc/gents-desktop-client";
 
 import { isMacTauriShell, ownsAutomaticRecovery } from "../lib/shellPlatform";
-import { setterOf } from "./chatStore";
 import type { DesktopApp } from "./desktopApp";
 import {
   logShellEvent,
@@ -21,9 +19,8 @@ import { useDesktopProjectionEffects } from "./useDesktopProjectionEffects";
 /**
  * What the app does on its own while it runs: starts and recovers the
  * client, observes the bridge, keeps the selection valid against what
- * the nodes list, tells the host which node is selected, and lets the
- * local workflow follow the transcript. Mounted once, at the root; each
- * part selects only what it reacts to.
+ * the nodes list, and tells the host which node is selected. Mounted
+ * once, at the root; each part selects only what it reacts to.
  */
 export function useDesktopRuntime(
   app: DesktopApp,
@@ -34,7 +31,6 @@ export function useDesktopRuntime(
   useDesktopProjectionEffects(app, listenToUpdates);
   useSelectionReconcile(app);
   usePublishedSelection(app);
-  useWorkflowReconcile(app);
 }
 
 /** Startup on mount, and where the logs are when the managed server failed
@@ -202,21 +198,4 @@ function usePublishedSelection({
       window.removeEventListener("focus", publishSelection);
     };
   }, [api, agentDid, clientAvailable, lifecycle]);
-}
-
-/** The local workflow follows what the transcript shows once it shows it,
-    and a submission that ended without one is released. */
-function useWorkflowReconcile({ stores, view }: Pick<DesktopApp, "stores" | "view">) {
-  const [setLocalWorkflow] = useState(() => setterOf(stores.chat, "localWorkflow"));
-  const projected = useStore(view, (state) => state.shellProjection.workflow);
-  const submitting = useStore(
-    stores.chat,
-    (state) => state.localWorkflow.kind === "submittingRequest" && !state.sending,
-  );
-  useEffect(() => {
-    setLocalWorkflow((current) => reconcileProjectedWorkflow(current, projected));
-  }, [projected, setLocalWorkflow]);
-  useEffect(() => {
-    if (submitting) setLocalWorkflow({ kind: "ready" });
-  }, [submitting, setLocalWorkflow]);
 }

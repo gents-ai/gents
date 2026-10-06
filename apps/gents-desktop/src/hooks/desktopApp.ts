@@ -3,7 +3,9 @@ import type {
   DesktopClientUpdatedListenerFactory,
 } from "@source-inc/gents-desktop-client";
 
-import { createChatStore } from "./chatStore";
+import { reconcileProjectedWorkflow } from "@source-inc/gents-desktop-chat";
+
+import { createChatStore, setterOf, type ChatState } from "./chatStore";
 import { createClientLifecycle } from "./clientLifecycle";
 import { clientSetter, createClientStore } from "./clientStore";
 import { createFleetStore } from "./fleetStore";
@@ -13,7 +15,7 @@ import { createSessionStore } from "./sessionStore";
 import { createShellActions } from "./shellActions";
 import { createDraftStore } from "./draftStore";
 import type { ShellStores } from "./shellProjection";
-import { createShellView } from "./shellView";
+import { createShellView, type ShellViewStore } from "./shellView";
 
 /** What the host gives the app: the bridge's API and its update events. */
 export type DesktopBridge = {
@@ -49,6 +51,7 @@ export function createDesktopApp({
   /** what the shell decides, kept in step with the stores */
   const view = createShellView(stores);
   const project = () => view.getState();
+  followTranscript(stores, view);
   /** the request being tracked now, read when an update or a read lands */
   const trackedRequestId = () => project().trackedRequestId;
   /* A failed action is reported once, as a toast, by the action itself: it
@@ -87,3 +90,23 @@ export function createDesktopApp({
 }
 
 export type DesktopApp = ReturnType<typeof createDesktopApp>;
+
+/**
+ * The local workflow follows what the transcript shows once it shows it,
+ * and a submission whose send has ended is released. Reactions between
+ * stores, so they run as the stores change; the send writes its workflow
+ * and its sending flag together, so no state between them is seen.
+ */
+function followTranscript(stores: ShellStores, view: ShellViewStore) {
+  const setLocalWorkflow = setterOf(stores.chat, "localWorkflow");
+  view.subscribe((state, prev) => {
+    const projected = state.shellProjection.workflow;
+    if (projected !== prev.shellProjection.workflow)
+      setLocalWorkflow((current) => reconcileProjectedWorkflow(current, projected));
+  });
+  const ended = (state: ChatState) =>
+    state.localWorkflow.kind === "submittingRequest" && !state.sending;
+  stores.chat.subscribe((state, prev) => {
+    if (ended(state) && !ended(prev)) setLocalWorkflow({ kind: "ready" });
+  });
+}

@@ -50,7 +50,6 @@ export function createDesktopShellChatActions({
 }: ChatActionParams) {
   const store = stores.selection;
   const setLocalWorkflow = setterOf(stores.chat, "localWorkflow");
-  const setSending = setterOf(stores.chat, "sending");
   const setOptimisticPendingTurn = setterOf(stores.chat, "optimisticPendingTurn");
   /* Synchronous admission implements startSubmit before React renders
      sending. Every send and retry entry point shares it. */
@@ -99,8 +98,9 @@ export function createDesktopShellChatActions({
       agentDid: node.agentDid,
       sessionId: selectedSessionId,
     };
-    setLocalWorkflow(ownedWorkflow);
-    setSending(true);
+    /* one write: the app releases a submission whose send has ended, so the
+       workflow and the send start together */
+    stores.chat.setState({ localWorkflow: ownedWorkflow, sending: true });
     setError(null);
     try {
       const result = await api.sendChatMessage({
@@ -138,10 +138,13 @@ export function createDesktopShellChatActions({
       setError(actionFailure("send the message", err));
       return null;
     } finally {
-      setLocalWorkflow((current) =>
-        releaseOwnedSubmissionWorkflow(current, ownedWorkflow),
-      );
-      setSending(false);
+      stores.chat.setState((state) => ({
+        localWorkflow: releaseOwnedSubmissionWorkflow(
+          state.localWorkflow,
+          ownedWorkflow,
+        ),
+        sending: false,
+      }));
       submissionInFlight = false;
     }
   }
@@ -162,8 +165,9 @@ export function createDesktopShellChatActions({
       agentDid: node.agentDid,
       sessionId: store.getState().sessionId,
     };
-    setLocalWorkflow(ownedWorkflow);
-    setSending(true);
+    /* one write: the app releases a submission whose send has ended, so the
+       workflow and the send start together */
+    stores.chat.setState({ localWorkflow: ownedWorkflow, sending: true });
     setError(null);
     try {
       const result = await api.retryRequest(requestId, node.agentDid);
@@ -180,10 +184,13 @@ export function createDesktopShellChatActions({
       setLocalWorkflow({ kind: "ready" });
       setError(actionFailure("retry the message", err));
     } finally {
-      setLocalWorkflow((current) =>
-        releaseOwnedSubmissionWorkflow(current, ownedWorkflow),
-      );
-      setSending(false);
+      stores.chat.setState((state) => ({
+        localWorkflow: releaseOwnedSubmissionWorkflow(
+          state.localWorkflow,
+          ownedWorkflow,
+        ),
+        sending: false,
+      }));
       submissionInFlight = false;
     }
   }
