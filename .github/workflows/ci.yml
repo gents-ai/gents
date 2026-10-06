@@ -386,6 +386,14 @@ jobs:
           env -u CARGO_TARGET_DIR cargo test --target-dir "$CARGO_TARGET_DIR" \
             --no-fail-fast -p gents-cli -- --nocapture --test-threads=1
 
+      - name: Check the iOS simulator build
+        if: matrix.suite == 'desktop' && github.event_name != 'pull_request'
+        # iOS shares the desktop crates, so desktop-only Tauri APIs break it
+        # silently; a compile check is the cheapest gate (#890).
+        run: |
+          rustup target add aarch64-apple-ios-sim
+          cargo check -p gents-desktop-tauri --lib --target aarch64-apple-ios-sim
+
       - name: Show Rust build cache stats
         # The three heavy suites use runner-local incremental state. Keep one
         # cache-health report for the support shard and non-CI Studio users.
