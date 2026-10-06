@@ -171,32 +171,6 @@ fn generated_plugin_network_cases_drive_admission() {
 }
 
 #[test]
-fn ipv6_internal_ranges_and_embedded_ipv4_are_judged() {
-    for internal in [
-        "::1",
-        "::",
-        "::ffff:127.0.0.1",
-        "::ffff:10.0.0.1",
-        "fe80::1",
-        "fc00::1",
-        "fd12::1",
-        "ff02::1",
-        "2001:db8::1",
-        "2002:7f00:1::",
-        "64:ff9b::7f00:1",
-    ] {
-        assert!(!ip_public(&internal.parse().unwrap()), "{internal}");
-    }
-    for public in [
-        "2606:4700::1111",
-        "::ffff:93.184.216.34",
-        "2002:5db8:d822::",
-    ] {
-        assert!(ip_public(&public.parse().unwrap()), "{public}");
-    }
-}
-
-#[test]
 fn allow_list_entries_parse_and_unservable_grants_are_refused() {
     let grant = net_grant(&NetAccess::OutboundHttp(Some(vec![
         "API.Example.com".into(),
@@ -423,6 +397,12 @@ async fn loopback_and_private_targets_are_refused_unless_named_literally() {
         assert!(refusal.contains("internal address"), "{id}: {refusal}");
         assert!(refusal.contains("exact IP literal"), "{id}: {refusal}");
     }
+    // The literal to add is in the allow-list's own spelling.
+    assert!(
+        error(&results, "mapped").contains("add [::ffff:127.0.0.1] to"),
+        "{}",
+        error(&results, "mapped")
+    );
     assert!(server.hits().is_empty());
 }
 

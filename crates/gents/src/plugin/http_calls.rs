@@ -215,9 +215,8 @@ fn target_host(url: &Url) -> Option<TargetHost> {
     (!domain.is_empty()).then_some(TargetHost::Name(domain))
 }
 
-/// Whether an address is outside every internal range (the ranges are
-/// `ToolPolicy.PluginNetwork.v4Public`'s). An IPv6 address embedding an IPv4
-/// one is judged by it; other special IPv6 ranges are internal.
+/// Whether an address is outside every internal range: the classification
+/// is `ToolPolicy.PluginNetwork.ipPublic`'s.
 pub(crate) fn ip_public(ip: &IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => v4_public(ip),
@@ -249,12 +248,9 @@ fn v6_public(ip: &Ipv6Addr) -> bool {
         let [hi, lo] = [segments[1].to_be_bytes(), segments[2].to_be_bytes()];
         return v4_public(&Ipv4Addr::new(hi[0], hi[1], lo[0], lo[1]));
     }
-    // Global unicast is 2000::/3; within it, Teredo (2001::/32), ORCHID and
-    // documentation ranges are not destinations a plugin needs.
     (segments[0] & 0xe000) == 0x2000
-        && segments[0..2] != [0x2001, 0]
-        && segments[0..2] != [0x2001, 0x0db8]
-        && (segments[0..2] != [0x2001, 0x0010] && segments[0..2] != [0x2001, 0x0020])
+        && !(segments[0] == 0x2001
+            && (segments[1] == 0 || segments[1] == 0x0db8 || (0x10..0x30).contains(&segments[1])))
 }
 
 /// How a target was admitted: whether an entry naming its IP literal admits
@@ -334,10 +330,13 @@ fn internal_refusal(host: Option<&str>, ip: &IpAddr) -> String {
              addresses only, so to reach it, name the IP literal in the request URL and grant \
              that literal"
         ),
-        None => format!(
-            "{ip} is an internal address; only an allow-list entry naming that exact IP \
-             literal grants it, so add {ip} to the plugin's allow-list to reach it"
-        ),
+        None => {
+            let literal = TargetHost::Ip(*ip);
+            format!(
+                "{ip} is an internal address; only an allow-list entry naming that exact IP \
+                 literal grants it, so add {literal} to the plugin's allow-list to reach it"
+            )
+        }
     }
 }
 

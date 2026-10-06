@@ -27,9 +27,18 @@ open ToolPolicy.PluginNetwork
 
 private def renderV4 (ip : V4) : String := s!"{ip.a}.{ip.b}.{ip.c}.{ip.d}"
 
+private def renderV6 (ip : V6) : String :=
+  ":".intercalate <| [ip.s0, ip.s1, ip.s2, ip.s3, ip.s4, ip.s5, ip.s6, ip.s7].map
+    fun n => String.mk (Nat.toDigits 16 n)
+
+private def renderAddr : Addr → String
+  | .v4 ip => renderV4 ip
+  | .v6 ip => renderV6 ip
+
 private def renderHost : Host → String
   | .name n => n
-  | .v4 ip => renderV4 ip
+  | .ip (.v4 ip) => renderV4 ip
+  | .ip (.v6 ip) => "[" ++ renderV6 ip ++ "]"
 
 private def renderEntry (e : Entry) : String :=
   let scheme := if e.plaintext then "http://" else ""
@@ -44,29 +53,41 @@ private def renderEntry (e : Entry) : String :=
 private def renderTarget (t : Target) : String :=
   (if t.https then "https://" else "http://") ++ renderHost t.host ++ s!":{t.port}/"
 
-private def publicIp : V4 := ⟨93, 184, 216, 34⟩
-private def internalIps : List V4 :=
-  [⟨127, 0, 0, 1⟩, ⟨10, 1, 2, 3⟩, ⟨172, 20, 0, 1⟩, ⟨192, 168, 1, 1⟩, ⟨169, 254, 169, 254⟩,
-   ⟨100, 64, 0, 1⟩, ⟨0, 0, 0, 0⟩, ⟨198, 18, 0, 1⟩, ⟨224, 0, 0, 1⟩, ⟨255, 255, 255, 255⟩]
+private def v4 (a b c d : Nat) : Addr := .v4 ⟨a, b, c, d⟩
+private def v6 (s0 s1 s2 s3 s4 s5 s6 s7 : Nat) : Addr := .v6 ⟨s0, s1, s2, s3, s4, s5, s6, s7⟩
+private def publicIp : Addr := v4 93 184 216 34
+private def publicIps : List Addr :=
+  [publicIp, v6 0x2606 0x4700 0 0 0 0 0 0x1111, v6 0 0 0 0 0 0xffff 0x5db8 0xd822,
+   v6 0x2002 0x5db8 0xd822 0 0 0 0 0]
+private def loopback6 : Addr := v6 0 0 0 0 0 0 0 1
+private def internalIps : List Addr :=
+  [v4 127 0 0 1, v4 10 1 2 3, v4 172 20 0 1, v4 192 168 1 1, v4 169 254 169 254,
+   v4 100 64 0 1, v4 0 0 0 0, v4 198 18 0 1, v4 224 0 0 1, v4 255 255 255 255,
+   loopback6, v6 0 0 0 0 0 0 0 0, v6 0 0 0 0 0 0xffff 0x7f00 1, v6 0xfe80 0 0 0 0 0 0 1,
+   v6 0xfc00 0 0 0 0 0 0 1, v6 0xfd12 0 0 0 0 0 0 1, v6 0xff02 0 0 0 0 0 0 1,
+   v6 0x2001 0xdb8 0 0 0 0 0 1, v6 0x2001 0 0 0 0 0 0 1, v6 0x2001 0x10 0 0 0 0 0 1,
+   v6 0x2001 0x2f 0 0 0 0 0 1, v6 0x2002 0x7f00 1 0 0 0 0 0, v6 0x64 0xff9b 0 0 0 0 0x7f00 1]
 
 private def grants : List Grant :=
   [ .sealed, .anyHost
   , .hosts [⟨.exact (.name "api.example.com"), false, none⟩]
   , .hosts [⟨.suffix "example.com", false, none⟩]
   , .hosts [⟨.exact (.name "api.example.com"), true, some 8080⟩]
-  , .hosts [⟨.exact (.v4 ⟨127, 0, 0, 1⟩), true, some 8080⟩]
-  , .hosts [⟨.exact (.v4 ⟨169, 254, 169, 254⟩), true, none⟩, ⟨.exact (.name "example.com"), false, none⟩] ]
+  , .hosts [⟨.exact (.ip (v4 127 0 0 1)), true, some 8080⟩]
+  , .hosts [⟨.exact (.ip loopback6), true, some 8080⟩]
+  , .hosts [⟨.exact (.ip (v4 169 254 169 254)), true, none⟩, ⟨.exact (.name "example.com"), false, none⟩] ]
 
 /-- Hostname targets pair with each resolution shape; an IP literal resolves
 to itself. -/
-private def targets : List (Target × List V4) :=
+private def targets : List (Target × List Addr) :=
   let names := ["api.example.com", "example.com", "deep.api.example.com", "other.test"]
-  let shapes := [[publicIp], [], [publicIp, ⟨10, 0, 0, 5⟩]] ++ internalIps.map ([·])
+  let shapes := [[publicIp], [], [publicIp, v4 10 0 0 5], [publicIp, loopback6]]
+    ++ (publicIps ++ internalIps).map ([·])
   let named := names.flatMap fun n => [(true, 443), (false, 80), (true, 8080), (false, 8080)].flatMap
     fun (https, port) => shapes.map fun addrs => (Target.mk https (.name n) port, addrs)
-  let literal := (publicIp :: internalIps).flatMap fun ip =>
+  let literal := (publicIps ++ internalIps).flatMap fun ip =>
     [(true, 443), (false, 80), (false, 8080)].map fun (https, port) =>
-      (Target.mk https (.v4 ip) port, [ip])
+      (Target.mk https (.ip ip) port, [ip])
   named ++ literal
 
 private def renderGrant : Grant → Json
@@ -77,8 +98,8 @@ private def renderGrant : Grant → Json
 private def networkJson : Json := toJson <| grants.flatMap fun g =>
   targets.map fun (t, addrs) => Json.mkObj [
     ("grant", renderGrant g), ("url", toJson (renderTarget t)),
-    ("addresses", toJson (addrs.map renderV4)),
-    ("public", toJson (addrs.map v4Public)),
+    ("addresses", toJson (addrs.map renderAddr)),
+    ("public", toJson (addrs.map ipPublic)),
     ("expected", toJson (allowed g t addrs))]
 
 end Network

@@ -32,9 +32,47 @@ def v4Public (ip : V4) : Bool :=
     || (ip.a == 198 && (ip.b == 18 || ip.b == 19))
     || 224 ≤ ip.a)
 
+/-- An IPv6 address as its eight 16-bit segments. -/
+structure V6 where
+  s0 : Nat
+  s1 : Nat
+  s2 : Nat
+  s3 : Nat
+  s4 : Nat
+  s5 : Nat
+  s6 : Nat
+  s7 : Nat
+  deriving DecidableEq, Repr
+
+/-- The IPv4 address two segments carry. -/
+def V4.ofSegments (hi lo : Nat) : V4 := ⟨hi / 256, hi % 256, lo / 256, lo % 256⟩
+
+/-- An IPv4-mapped address (`::ffff:0:0/96`) or a 6to4 one (`2002::/16`) is
+judged by the IPv4 address it reaches. Otherwise only global unicast
+(`2000::/3`) is public, less Teredo (`2001::/32`), ORCHID (`2001:10::/28`,
+`2001:20::/28`) and documentation (`2001:db8::/32`); loopback, unspecified,
+unique-local, link-local, multicast and NAT64 fall outside it. -/
+def v6Public (ip : V6) : Bool :=
+  if ip.s0 == 0 && ip.s1 == 0 && ip.s2 == 0 && ip.s3 == 0 && ip.s4 == 0 && ip.s5 == 0xffff then
+    v4Public (V4.ofSegments ip.s6 ip.s7)
+  else if ip.s0 == 0x2002 then
+    v4Public (V4.ofSegments ip.s1 ip.s2)
+  else
+    0x2000 ≤ ip.s0 && ip.s0 < 0x4000
+      && !(ip.s0 == 0x2001 && (ip.s1 == 0 || ip.s1 == 0xdb8 || (0x10 ≤ ip.s1 && ip.s1 < 0x30)))
+
+inductive Addr where
+  | v4 (ip : V4)
+  | v6 (ip : V6)
+  deriving DecidableEq, Repr
+
+def ipPublic : Addr → Bool
+  | .v4 ip => v4Public ip
+  | .v6 ip => v6Public ip
+
 inductive Host where
   | name (domain : String)
-  | v4 (ip : V4)
+  | ip (addr : Addr)
   deriving DecidableEq, Repr
 
 inductive Pattern where
@@ -70,7 +108,7 @@ def defaultPort (https : Bool) : Nat := if https then 443 else 80
 def patternMatches : Pattern → Host → Bool
   | .exact h, t => h == t
   | .suffix d, .name n => n.endsWith ("." ++ d)
-  | .suffix _, .v4 _ => false
+  | .suffix _, .ip _ => false
 
 def entryAdmits (e : Entry) (t : Target) : Bool :=
   patternMatches e.pattern t.host && (t.https || e.plaintext)
@@ -80,31 +118,31 @@ def entryAdmits (e : Entry) (t : Target) : Bool :=
 of a non-public address. -/
 def explicitLiteral (e : Entry) : Bool :=
   match e.pattern with
-  | .exact (.v4 _) => true
+  | .exact (.ip _) => true
   | _ => false
 
 /-- The addresses one connection may use: all of them must be admitted, so a
 resolution that mixes public and internal addresses is refused. -/
-def addressesAllowed (explicit : Bool) (addrs : List V4) : Bool :=
-  !addrs.isEmpty && (explicit || addrs.all v4Public)
+def addressesAllowed (explicit : Bool) (addrs : List Addr) : Bool :=
+  !addrs.isEmpty && (explicit || addrs.all ipPublic)
 
-def allowed : Grant → Target → List V4 → Bool
+def allowed : Grant → Target → List Addr → Bool
   | .sealed, _, _ => false
   | .anyHost, t, addrs => t.https && t.port == 443 && addressesAllowed false addrs
   | .hosts es, t, addrs =>
       es.any fun e => entryAdmits e t && addressesAllowed (explicitLiteral e) addrs
 
-theorem sealed_reaches_nothing (t : Target) (addrs : List V4) :
+theorem sealed_reaches_nothing (t : Target) (addrs : List Addr) :
     allowed .sealed t addrs = false := rfl
 
-theorem allowed_has_addresses (g : Grant) (t : Target) (addrs : List V4)
+theorem allowed_has_addresses (g : Grant) (t : Target) (addrs : List Addr)
     (h : allowed g t addrs = true) : addrs ≠ [] := by
   intro hnil
   subst hnil
   cases g <;> simp [allowed, addressesAllowed] at h
 
 /-- HTTPS unless an entry the target matched names plaintext. -/
-theorem plaintext_needs_entry (g : Grant) (t : Target) (addrs : List V4)
+theorem plaintext_needs_entry (g : Grant) (t : Target) (addrs : List Addr)
     (h : allowed g t addrs = true) (hp : t.https = false) :
     ∃ es e, g = .hosts es ∧ e ∈ es ∧ entryAdmits e t = true ∧ e.plaintext = true := by
   cases g with
@@ -118,11 +156,11 @@ theorem plaintext_needs_entry (g : Grant) (t : Target) (addrs : List V4)
       exact hadmit.1.2
 
 /-- An internal address is reached only through an entry naming an IP literal. -/
-theorem internal_needs_literal (g : Grant) (t : Target) (addrs : List V4)
-    (h : allowed g t addrs = true) (hi : ∃ x ∈ addrs, v4Public x = false) :
+theorem internal_needs_literal (g : Grant) (t : Target) (addrs : List Addr)
+    (h : allowed g t addrs = true) (hi : ∃ x ∈ addrs, ipPublic x = false) :
     ∃ es e, g = .hosts es ∧ e ∈ es ∧ entryAdmits e t = true ∧ explicitLiteral e = true := by
   obtain ⟨x, hx, hpub⟩ := hi
-  have notAll : addrs.all v4Public = false := by
+  have notAll : addrs.all ipPublic = false := by
     rw [List.all_eq_false]
     exact ⟨x, hx, by simp [hpub]⟩
   cases g with
@@ -138,9 +176,9 @@ theorem internal_needs_literal (g : Grant) (t : Target) (addrs : List V4)
 
 /-- Admission never depends on a hostname resolving the same way twice: a
 hostname entry is checked on every address the connection may use. -/
-theorem hostname_entry_public_only (es : List Entry) (t : Target) (addrs : List V4)
+theorem hostname_entry_public_only (es : List Entry) (t : Target) (addrs : List Addr)
     (h : allowed (.hosts es) t addrs = true)
-    (hnolit : ∀ e ∈ es, explicitLiteral e = false) : addrs.all v4Public = true := by
+    (hnolit : ∀ e ∈ es, explicitLiteral e = false) : addrs.all ipPublic = true := by
   simp only [allowed, List.any_eq_true, Bool.and_eq_true] at h
   obtain ⟨e, he, _, haddr⟩ := h
   have := by simpa [addressesAllowed, hnolit e he] using haddr
