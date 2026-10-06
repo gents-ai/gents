@@ -530,17 +530,25 @@ async fn coordinate_twins(
     if cache.sessions.is_none() {
         let escaped = crate::graphql::escape_graphql_string(key);
         let query = format!(
-            r#"{{ AgentMessage(filter: {{ {scope},
-            _or: [{{ message_key: {{ _eq: "{escaped}" }} }}, {{ sequence: {{ _eq: {sequence} }} }}]
-        }}) {{ {AGENT_MESSAGE_FIELDS} }} }}"#
+            r#"{{
+            key_matches: AgentMessage(filter: {{ {scope}, message_key: {{ _eq: "{escaped}" }} }}) {{ {AGENT_MESSAGE_FIELDS} }}
+            sequence_matches: AgentMessage(filter: {{ {scope}, sequence: {{ _eq: {sequence} }} }}) {{ {AGENT_MESSAGE_FIELDS} }}
+        }}"#
         );
         let response = access
             .query(&query, "validate_canonical_header_coordinate")
             .await?;
-        return rows_value(&response, "AgentMessage")?
-            .iter()
-            .map(decode_transcript_message_row)
-            .collect();
+        let mut seen = BTreeSet::new();
+        let mut rows = Vec::new();
+        for selection in ["key_matches", "sequence_matches"] {
+            for value in rows_value(&response, selection)? {
+                let row = decode_transcript_message_row(value)?;
+                if seen.insert(row.doc_id.clone()) {
+                    rows.push(row);
+                }
+            }
+        }
+        return Ok(rows);
     }
     let sessions = cache.sessions.as_mut().expect("bulk coordinate cache");
     if !sessions.contains_key(session_id) {

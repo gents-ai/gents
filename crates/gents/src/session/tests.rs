@@ -1125,6 +1125,7 @@ async fn single_header_transaction_matches_bulk_coordinate_validation() {
         "unrelated",
         "key",
         "sequence",
+        "both",
         "foreign",
         "requester",
         "fork",
@@ -1165,6 +1166,7 @@ async fn single_header_transaction_matches_bulk_coordinate_validation() {
                 match case {
                     "key" => other.sequence = 2,
                     "sequence" => other.message_key = "sequence-twin".into(),
+                    "both" => other.native_id = Some("distinct-physical-twin".into()),
                     "foreign" => other.agent_did = "did:test:foreign".into(),
                     "requester" => other.requester_did = Some("did:test:requester".into()),
                     "fork" => {
@@ -1184,6 +1186,10 @@ async fn single_header_transaction_matches_bulk_coordinate_validation() {
                             &transcript_message_create_variables(&other)?,
                         )
                         .await?;
+                    assert_ne!(
+                        crate::graphql::created_doc_id(&created, "AgentMessage")?,
+                        original.doc_id,
+                    );
                     if case == "fork" {
                         target = crate::graphql::created_doc_id(&created, "AgentMessage")?;
                     }
@@ -1199,7 +1205,7 @@ async fn single_header_transaction_matches_bulk_coordinate_validation() {
                 assert_eq!(single, bulk, "single/bulk mismatch for {case}");
                 assert_eq!(
                     single.is_err(),
-                    matches!(case, "key" | "sequence"),
+                    matches!(case, "key" | "sequence" | "both"),
                     "{case}"
                 );
                 Ok(())
