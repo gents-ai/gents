@@ -31,3 +31,18 @@ describe("switching agents on the configuration screen", () => {
     expect(screen.getByRole("button", { name: "New behavior" })).toBeInTheDocument();
   });
 });
+
+describe("the inference route", () => {
+  it("lists what the Providers page lists, profiles under their backends", async () => {
+    const app = testApp({ deployments: [node({ agentDid: "did:key:a" })] });
+    renderIn(
+      app,
+      <TooltipProvider>
+        <AgentScreen agentDid="did:key:a" section="inference" />
+      </TooltipProvider>,
+    );
+    const [toggle] = screen.getAllByRole("button", { name: /^Show what .* serves$/ });
+    await userEvent.click(toggle!);
+    expect(screen.getAllByText("Add profile").length).toBeGreaterThan(0);
+  });
+});

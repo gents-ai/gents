@@ -1338,11 +1338,13 @@ export function InferencePanel({
           </DropdownMenu>
         }
         detail={(id) => {
-          const backend = deployment.inferenceBackends.find((b) => b.backendId === id)!;
+          /* the list also holds profiles and providers not set up yet;
+             only a backend opens here */
+          const backend = deployment.inferenceBackends.find((b) => b.backendId === id);
+          if (!backend) return null;
           return (
             <BackendEditor
               key={backend.backendId}
-
               deployment={deployment}
               backend={backend}
               accounts={accounts}

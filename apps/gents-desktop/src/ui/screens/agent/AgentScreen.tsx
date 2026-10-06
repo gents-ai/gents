@@ -160,9 +160,14 @@ export function AgentScreen({
             <ContextsPanel deployment={deployment} item={item} />
           )}
           {section === "skills" && <SkillsPanel deployment={deployment} item={item} />}
-          {section === "inference" && (
-            <InferencePanel deployment={deployment} item={item} />
-          )}
+          {/* a backend opens on its own; the list is the Providers page, with
+              each backend's profiles under it */}
+          {section === "inference" &&
+            (item ? (
+              <InferencePanel deployment={deployment} item={item} />
+            ) : (
+              <ProfilesPanel deployment={deployment} />
+            ))}
           {section === "profiles" && (
             <ProfilesPanel deployment={deployment} item={item} />
           )}
