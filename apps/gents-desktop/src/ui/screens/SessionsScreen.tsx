@@ -1,6 +1,7 @@
 /* Sessions: a heading row with search and New, then plain rows on the
    ground: title, the behavior's chip, and when it last moved. */
 import { memo, useLayoutEffect, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import {
   ChevronDown,
   CornerDownRight,
@@ -20,12 +21,14 @@ import { href, navigate } from "@/lib/router";
 import { Age } from "./time";
 import {
   defaultScope,
+  fleetNodes,
   knownNodeIds,
   nodesInScope,
   sessionsInScope,
   type Scope,
 } from "@/lib/scope";
-import { useHomeDid, useScopeContext } from "@/hooks/useClient";
+import { useHomeDid, useInScope, useSelectedAgentDid } from "@/hooks/useClient";
+import { sessionKeyOf } from "../../hooks/fleetStore";
 import { nodeDidOf, nodeOfSession } from "@/lib/nodes";
 import { NodeBehaviorStack } from "./NodeBehaviorStack";
 import { NodeAxis } from "./NodeAxis";
@@ -40,7 +43,6 @@ import {
   useFleet,
   workersOf,
 } from "../hooks/useFleet";
-import { useDeployments } from "@/hooks/useClient";
 
 export function SessionsScreen({
   nodeDid,
@@ -48,8 +50,9 @@ export function SessionsScreen({
   /** a node named on the route: the list opens narrowed to it */
   nodeDid?: string;
 }) {
-  const deployments = useDeployments();
+  const nodes = useFleet(useShallow(fleetNodes));
   const homeDid = useHomeDid();
+  const selectedNodeDid = useSelectedAgentDid();
   const [query, setQuery] = useState<string | null>(null);
   /* the three axes the summary carries: behavior, state, and what started it */
   const filter = useListViews((v) => v.sessionFilter);
@@ -57,9 +60,10 @@ export function SessionsScreen({
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   /* the nodes the list shows: the working node to start, then whatever the
      chips choose; none chosen means every node */
-  const fleet = useFleet((s) => s);
-  const ctx = useScopeContext();
-  const defaultNodeIds = nodesInScope(defaultScope("sessions"), ctx).map(nodeDidOf);
+  const placement = { nodes, selectedNodeDid, homeDid };
+  const defaultNodeIds = nodesInScope(defaultScope("sessions"), placement).map(
+    nodeDidOf,
+  );
   const storedNodeIds = useListViews((v) => v.sessionNodes);
   /* a node named on the route narrows the list to it, once per route,
      before the list is painted */
@@ -67,7 +71,7 @@ export function SessionsScreen({
     if (nodeDid) listViews.setSessionNodes([nodeDid]);
   }, [nodeDid]);
   /* a pick whose nodes are all gone starts over at the working node */
-  const knownIds = storedNodeIds && knownNodeIds(storedNodeIds, ctx);
+  const knownIds = storedNodeIds && knownNodeIds(storedNodeIds, placement);
   const nodeIds =
     !knownIds || (knownIds.length === 0 && storedNodeIds!.length > 0)
       ? defaultNodeIds
@@ -77,9 +81,25 @@ export function SessionsScreen({
     nodeIds.length !== defaultNodeIds.length ||
     nodeIds.some((id) => !defaultNodeIds.includes(id));
   const scope: Scope = { nodes: nodeIds.length ? nodeIds : "all", agents: [] };
-  const inScope = sessionsInScope(scope, ctx);
-  const nodeCounts = Object.fromEntries(
-    fleet.nodeKeys.map((key) => [key, fleet.sessionsOf[key]?.length ?? 0]),
+  const inScope = useInScope((ctx) => sessionsInScope(scope, ctx));
+  const nodeCounts = useFleet(
+    useShallow((s) =>
+      Object.fromEntries(
+        s.nodeKeys.map((key) => [key, s.sessionsOf[key]?.length ?? 0]),
+      ),
+    ),
+  );
+  /* the lineage of the sessions in scope only, so work elsewhere in the
+     fleet does not re-render the list */
+  const parents = useFleet(
+    useShallow((s) =>
+      Object.fromEntries(inScope.map((c) => [sessionKeyOf(c), parentOfIn(s, c)])),
+    ),
+  );
+  const workers = useFleet(
+    useShallow((s) =>
+      Object.fromEntries(inScope.map((c) => [sessionKeyOf(c), workersOf(s, c)])),
+    ),
   );
   const conversations = filterSessions(inScope, filter, query);
   /* an empty list says "yet" only when no node has a session; otherwise
@@ -87,9 +107,9 @@ export function SessionsScreen({
   const narrowed =
     Boolean(query) ||
     hasFilter(filter) ||
-    fleet.nodeKeys.some((key) => (fleet.sessionsOf[key]?.length ?? 0) > 0);
+    Object.values(nodeCounts).some((count) => count > 0);
   /* the session whose latest request spawned this one, by provenance */
-  const parentOf = (c: SessionSummary) => parentOfIn(fleet, c);
+  const parentOf = (c: SessionSummary) => parents[sessionKeyOf(c)] ?? null;
 
   /* Work a session handed out sits under the session that handed it out,
      shown only when the person opens it: a list someone is reading does not
@@ -160,7 +180,7 @@ export function SessionsScreen({
           <h1 className="font-heading text-lg font-medium text-heading">Sessions</h1>
           <div className="ml-auto flex min-w-0 items-center gap-2">
             <NodeAxis
-              nodes={deployments}
+              nodes={nodes}
               homeDid={homeDid}
               counts={nodeCounts}
               value={nodeIds}
@@ -172,7 +192,7 @@ export function SessionsScreen({
             />
             <SessionFilters
               sessions={inScope}
-              nodeDids={nodesInScope(scope, ctx).map(nodeDidOf)}
+              nodeDids={nodesInScope(scope, placement).map(nodeDidOf)}
               value={filter}
               onChange={listViews.setSessionFilter}
               nodes={{
@@ -260,7 +280,11 @@ export function SessionsScreen({
                 child={row.child}
                 delay={row.delay ?? null}
                 parent={parentOf(row.session)}
-                workers={row.child ? NO_SESSIONS : workersOf(fleet, row.session)}
+                workers={
+                  row.child
+                    ? NO_SESSIONS
+                    : (workers[sessionKeyOf(row.session)] ?? NO_SESSIONS)
+                }
               />
             ),
           )}

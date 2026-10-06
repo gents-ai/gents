@@ -126,9 +126,9 @@ export function useToolAuthority() {
   );
 }
 
-/* a value worked out over the fleet in the selection's scope; re-renders
-   when it changes, item by item for a list */
-function useInScope<T>(pick: (ctx: ScopeContext) => T): T {
+/** A value worked out over the fleet in the selection's scope; re-renders
+    when it changes, item by item for a list. */
+export function useInScope<T>(pick: (ctx: ScopeContext) => T): T {
   const selectedNodeDid = useSelectedAgentDid();
   const homeDid = useHomeDid();
   return useFleet(

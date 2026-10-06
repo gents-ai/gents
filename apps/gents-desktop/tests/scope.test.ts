@@ -77,7 +77,7 @@ describe("nodes in scope", () => {
     expect(
       nodesInScope(
         { nodes: "working", agents: [] },
-        { nodes: [peer], selectedNodeDid: "did:peer", homeDid: null, fleet: ctx.fleet },
+        { nodes: [peer], selectedNodeDid: "did:peer", homeDid: null },
       ),
     ).toEqual([peer]);
     expect(workingNode([peer], null)).toBeNull();
@@ -93,7 +93,6 @@ describe("nodes in scope", () => {
           nodes: [peer, home],
           selectedNodeDid: "did:peer",
           homeDid: "did:home",
-          fleet: ctx.fleet,
         },
       ),
     ).toEqual([home]);

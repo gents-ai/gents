@@ -42,7 +42,10 @@ export const scopeContextOf = (
 ): ScopeContext => ({ nodes: fleetNodes(fleet), selectedNodeDid, homeDid, fleet });
 
 /* the nodes a scope names, in the snapshot's order */
-export function nodesInScope(scope: Scope, ctx: ScopeContext): NodeLike[] {
+export function nodesInScope(
+  scope: Scope,
+  ctx: Omit<ScopeContext, "fleet">,
+): NodeLike[] {
   const { nodes } = ctx;
   if (scope.nodes === "all") return [...nodes];
   if (scope.nodes === "working" || scope.nodes === "selected") {
@@ -63,7 +66,10 @@ export function nodesInScope(scope: Scope, ctx: ScopeContext): NodeLike[] {
    app's origin, not to a home, so a reset home or a removed peer leaves
    DIDs no node has, which would narrow a list to nothing. Only DIDs of
    nodes this client has count; before any node arrives the pick stands. */
-export function knownNodeIds(ids: readonly NodeDid[], ctx: ScopeContext): NodeDid[] {
+export function knownNodeIds(
+  ids: readonly NodeDid[],
+  ctx: Pick<ScopeContext, "nodes">,
+): NodeDid[] {
   if (ctx.nodes.length === 0) return [...ids];
   const known = new Set(ctx.nodes.map(nodeDidOf));
   return ids.filter((id) => known.has(id));
