@@ -30,9 +30,6 @@ export function createDesktopShellPeerActions({
   const setStarting = clientSetter(stores.client, "starting");
   /** whether the client runs, as last read */
   const clientRuns = () => Boolean(stores.client.getState().snapshot?.client);
-  /** Provisions the local agent and starts the client on its route. A
-      failure is not reported here: setup shows it in its step log, with a
-      retry. */
   async function initLocalRuntime(label?: string | null) {
     const clientWasRunning = clientRuns();
     setStarting(true);
@@ -106,8 +103,6 @@ export function createDesktopShellPeerActions({
     }
   }
 
-  /** A failure is not reported here: the rename dialog shows it inline and
-      stays open. */
   function renamePeer(peerId: string, label: string) {
     return mutateSnapshot(() => api.renamePeer(peerId, label)).catch((err) => {
       throw new Error(formatPeerConnectionError(err, "rename-peer"));
@@ -115,10 +110,35 @@ export function createDesktopShellPeerActions({
   }
 
   return {
+    /**
+     * Asks a peer for its status, with nothing stored. A failure is reported
+     * once, in the peer's words, then rethrown.
+     */
     fetchPeerStatus,
+    /**
+     * Asks the server at the address to enroll this desktop, starting the
+     * client first if it is not running, then reads the client again. A
+     * failure is reported once, then rethrown.
+     */
     requestStatusEnrollment,
+    /**
+     * Provisions the local agent and starts the client on its route, then
+     * selects it. A running client is stopped first and, if provisioning
+     * fails, started again. A failure is not reported here: setup shows it in
+     * its step log, with a retry.
+     */
     initLocalRuntime,
+    /**
+     * Removes a paired peer and reads the client again; when the removed node
+     * was selected, nothing is selected after. A failure is reported once,
+     * then rethrown.
+     */
     removePeer,
+    /**
+     * Saves a peer's label on this desktop and reads the client again. A
+     * failure is not reported here: the rename dialog shows it inline and
+     * stays open.
+     */
     renamePeer,
   };
 }

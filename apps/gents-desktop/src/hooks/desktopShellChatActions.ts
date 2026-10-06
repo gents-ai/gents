@@ -146,8 +146,6 @@ export function createDesktopShellChatActions({
     }
   }
 
-  /** Retry the persisted interactive predecessor through the fenced retry
-      API, admitted under the session's own behavior. */
   async function retryMessage(requestId: string) {
     if (submissionInFlight) return;
     const node = selectedNode();
@@ -204,11 +202,40 @@ export function createDesktopShellChatActions({
     }
   }
 
-  /** The folder for the selected chat, or for the new chat. */
   function setChatFolder(folder: string | null) {
     const sessionId = store.getState().sessionId;
     writeChatFolders(stores.chat, (folders) => withFolder(folders, sessionId, folder));
   }
 
-  return { sendMessage, retryMessage, renameSession, setChatFolder };
+  return {
+    /**
+     * Sends a message to the selected node (the first node while none is
+     * selected), under the selected behavior or the one given, admitted by
+     * the shell projection as the stores hold it now. Returns null without
+     * sending for empty content or no node, while another send or retry is
+     * in flight, or when admission refuses (whose reason is reported).
+     * Carries the chat's folder and a held mailbox item as the cause; on
+     * acceptance the session becomes the selected one and its turn shows at
+     * once, unless the person has moved on.
+     */
+    sendMessage,
+    /**
+     * Retries a failed request through the bridge's fenced retry, admitted
+     * under the session's own behavior rather than the composer's. Shares
+     * sendMessage's single submission in flight and drops its result if the
+     * person has moved on. A failure is reported once.
+     */
+    retryMessage,
+    /**
+     * Renames a session on the selected node, then reads the client and the
+     * session again. A failure is reported once, then rethrown.
+     */
+    renameSession,
+    /**
+     * Sets, or clears with null, the folder the selected chat works in; on the
+     * new-session screen it is held for the session the first send creates.
+     * Kept in this viewer's storage only.
+     */
+    setChatFolder,
+  };
 }

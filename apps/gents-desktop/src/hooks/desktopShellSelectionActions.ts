@@ -32,8 +32,6 @@ export function createDesktopShellSelectionActions({
       : undefined;
   };
 
-  /** Explicit node navigation resets its session; a snapshot never guesses
-      a replacement session for a newly selected node. */
   function selectAgent(agentDid: string | null) {
     if (selection.selectAgent(store, agentDid)) dropSession();
   }
@@ -42,16 +40,12 @@ export function createDesktopShellSelectionActions({
     selection.selectBehavior(store, behaviorId);
   }
 
-  /** A session on the selected node. Selection is behavior-aware: reopening
-      an older session restores the behavior it was held under. */
   function selectSession(sessionId: string) {
     const listed = listedOnSelected(sessionId);
     selection.selectSession(store, sessionId, listed?.behaviorId);
     if (!listed) dropSession();
   }
 
-  /** The new-session screen on the selected node (or the first one), with
-      the behavior asked for or the node's default. */
   function startNewSession(behaviorId?: string | null) {
     const { nodes, nodeKeys } = fleet();
     const selected = store.getState().agentDid;
@@ -69,18 +63,6 @@ export function createDesktopShellSelectionActions({
     setError(null);
   }
 
-  /**
-   * The selection a route asks for: the new-session screen for null, else
-   * that session, on the node that lists it. A session already selected is
-   * left alone: the route is catching up with a selection made a moment
-   * ago, such as a mailbox item that opened its session, and selecting it
-   * again would reset what was set up for it.
-   *
-   * Called again whenever a snapshot lands (`fromSnapshot`), since a session
-   * on another node can only be followed once that node lists it; then it
-   * acts only on a session some node lists, and never restarts the
-   * new-session screen.
-   */
   function followRoute(sessionId: string | null, fromSnapshot = false) {
     const state = store.getState();
     if (sessionId === null) {
@@ -106,5 +88,42 @@ export function createDesktopShellSelectionActions({
     if (state.sessionId !== sessionId) selectSession(sessionId);
   }
 
-  return { selectAgent, selectBehavior, selectSession, startNewSession, followRoute };
+  return {
+    /**
+     * Selects a node; its session and behavior start over and the session
+     * shown is dropped. Choosing the node already selected changes nothing,
+     * and a snapshot never picks a session for the new node.
+     */
+    selectAgent,
+    /**
+     * Selects the behavior the next message goes to. A navigation: it lets go
+     * of a mailbox item the message was going to answer.
+     */
+    selectBehavior,
+    /**
+     * Selects a session on the selected node. When the node lists it, the
+     * behavior it was held under comes back with it; when it does not yet, the
+     * session shown is dropped until a read finds it.
+     */
+    selectSession,
+    /**
+     * Opens the new-session screen on the selected node, or on the first node
+     * while none is selected, with the behavior asked for or the node's
+     * default. Drops the session shown and any local workflow.
+     */
+    startNewSession,
+    /**
+     * Selects what a route asks for: the new-session screen for null, else
+     * that session on the node that lists it, node and session together. A
+     * session already selected is left alone, since the route is catching up
+     * with a selection made a moment ago (a mailbox item that opened its
+     * session) and selecting it again would reset what was set up for it; for
+     * the same reason an empty route keeps a mailbox item already opened into
+     * a new session. Called again whenever a snapshot lands (fromSnapshot), as
+     * a session on another node can only be followed once that node lists it;
+     * then it acts only on a listed session and never restarts the new-session
+     * screen.
+     */
+    followRoute,
+  };
 }

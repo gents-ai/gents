@@ -51,13 +51,6 @@ export function createDesktopShellConfigActions({
   setError,
   mutateSnapshot,
 }: ConfigActionParams) {
-  /**
-   * A configuration change: the bridge's write, then a fresh read once it
-   * lands, and one report naming what failed: the change's own name, or
-   * what the person did when the screen knows it better (a switch turned
-   * on writes a patch). The caller still sees the failure, to keep what
-   * the person typed.
-   */
   async function changeConfig<K extends ConfigChange>(
     change: K,
     request: ConfigRequest<K>,
@@ -87,15 +80,30 @@ export function createDesktopShellConfigActions({
   }
 
   return {
+    /**
+     * A configuration change: the bridge's write, then a fresh read once it
+     * lands, and one report naming what failed: the change's own name, or
+     * what the person did when the screen knows it better (a switch turned
+     * on writes a patch). The caller still sees the failure, to keep what
+     * the person typed.
+     */
     changeConfig,
+    /** Signs the agent in to Codex in the browser; nothing is stored here.
+        A failure is reported once, then rethrown. */
     codexLogin: (agentDid: string): Promise<CodexLoginResult> =>
       call("sign in to Codex", () => api.codexLogin(agentDid)),
-    /* best-effort abort of a sign-in whose browser was closed; a failure here
-       (nothing in flight, say) must never block closing the wizard */
+    /** Abandons a Codex sign-in whose browser was closed. Best effort: a
+        failure (nothing in flight, say) never blocks closing the wizard. */
     cancelCodexLogin: (): Promise<void> => api.cancelCodexLogin().catch(() => {}),
+    /** Signs the agent in to Grok in the browser; nothing is stored here.
+        A failure is reported once, then rethrown. */
     grokLogin: (agentDid: string) =>
       call("sign in to Grok", () => api.grokLogin(agentDid)),
+    /** Abandons a Grok sign-in whose browser was closed. Best effort, as
+        for Codex. */
     cancelGrokLogin: (): Promise<void> => api.cancelGrokLogin().catch(() => {}),
+    /** Tries a tool service's connection without saving it. A failure is
+        reported once, then rethrown. */
     testToolService: (
       request: ToolServiceTestRequest,
     ): Promise<ToolServiceTestResult> =>

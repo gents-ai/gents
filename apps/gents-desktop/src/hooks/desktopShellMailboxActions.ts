@@ -65,8 +65,6 @@ export function createDesktopShellMailboxActions({
     }
   }
 
-  /* The answer is the item's ordinary reply request; the bridge renders its
-     content from the question so the runtime reply claim consumes the item. */
   async function answerMailboxQuestion(
     item: MailboxItemView,
     answer: MailboxQuestionAnswer,
@@ -93,5 +91,26 @@ export function createDesktopShellMailboxActions({
     }
   }
 
-  return { openMailboxItem, dismissMailboxItem, answerMailboxQuestion };
+  return {
+    /**
+     * Starts the item's reply: selects the node, behavior and session it names
+     * and holds the item as the next message's cause. A navigation: if the
+     * person moves on before the bridge answers, the result is dropped and
+     * null returned. A failure is reported once, then rethrown.
+     */
+    openMailboxItem,
+    /**
+     * Dismisses the item, lets go of it if the next message was going to
+     * answer it, then reads the client again. A failure is reported once, then
+     * rethrown.
+     */
+    dismissMailboxItem,
+    /**
+     * Answers a question item. The answer is the item's ordinary reply
+     * request, whose content the bridge renders from the question, so the
+     * runtime's reply consumes the item; a compose route opened on it is let
+     * go. A failure is reported once, then rethrown.
+     */
+    answerMailboxQuestion,
+  };
 }

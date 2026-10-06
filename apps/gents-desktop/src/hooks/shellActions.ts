@@ -46,8 +46,13 @@ export function createShellActions({
   return {
     ...reads,
     ...route,
+    /** Reads the client again and publishes it to the stores; only the
+        newest read issued publishes. A failure is the client's own state,
+        shown in the banner. */
     refreshSnapshot,
     ...createDesktopShellMailboxActions({ api, stores, refreshSnapshot, setError }),
+    /** Puts down the mailbox item the next message was going to answer; the
+        item stays open, and the next message is an ordinary one. */
     clearMailboxCause: () => selection.releaseMailboxRoute(stores.selection),
     ...createDesktopShellPeerActions({
       api,
@@ -73,7 +78,11 @@ export function createShellActions({
       refreshSnapshot,
       setError,
     }),
+    /** Where the person is now, to check an async result against later
+        with acceptsComposeIntent. */
     captureComposeIntent: () => selection.captureIntent(stores.selection),
+    /** Whether the person is still where they were when `captured` was
+        taken; a result from after they moved on is dropped. */
     acceptsComposeIntent: (captured: number) =>
       selection.acceptsIntent(stores.selection, captured),
   };

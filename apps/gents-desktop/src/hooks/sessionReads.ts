@@ -191,9 +191,30 @@ export function createSessionReads({
   }
 
   return {
+    /**
+     * Reads a session (the selected node's unless another is given) and holds
+     * it, or clears the held session for null. Only the latest read commits,
+     * and only while the selection still asks for that session; a failed read
+     * stays shown while the same session is read again. Its load state is the
+     * session store's.
+     */
     refreshSession,
+    /**
+     * Asks the bridge to hydrate a session again, then reads it. A failure is
+     * the client's own state, shown in the banner.
+     */
     retrySessionHydration,
+    /**
+     * Applies the tracked request's live changes to the held session. Returns
+     * false when there is nothing to follow or the delta does not apply, so
+     * the caller reads the session whole instead.
+     */
     refreshSessionLiveDelta,
+    /**
+     * Loads the held session's next older page, crossing at most a few pages
+     * that add no visible row. Returns whether rows were added; the durable
+     * cursor is kept at every page, so a later ask resumes there.
+     */
     loadOlderSessionTimeline,
   };
 }

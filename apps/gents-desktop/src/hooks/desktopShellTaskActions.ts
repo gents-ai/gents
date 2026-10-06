@@ -59,5 +59,20 @@ export function createDesktopShellTaskActions({
     }
   }
 
-  return { runSchedule, runTask };
+  return {
+    /**
+     * Runs a schedule now and reads the client again once the bridge accepts
+     * it; a failed read after acceptance is logged, not reported, since the
+     * run stands. A failure is reported once, unless the person has moved on,
+     * then rethrown.
+     */
+    runSchedule,
+    /**
+     * Runs a task now and reads the client again once the bridge accepts it; a
+     * failed read after acceptance is logged, not reported, since the run
+     * stands. A failure is reported once, unless the person has moved on, then
+     * rethrown.
+     */
+    runTask,
+  };
 }

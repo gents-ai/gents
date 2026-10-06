@@ -310,15 +310,33 @@ export function createClientLifecycle({
     recovery,
     clientAutostarts,
     home,
+    /** Shows, or clears with null, the client's own failure in the banner. */
     setError,
+    /** Reads the client and publishes it to the client and fleet stores;
+        only the newest read issued publishes, and a read that changed
+        nothing notifies no one. */
     refreshSnapshot,
+    /** Runs a write, then reads the client again; the write's result is
+        returned whether or not that read succeeds. */
     mutateSnapshot,
+    /** Starts the client, sharing one start among every caller while it is
+        in flight. A failure is shown in the banner and rethrown. */
     ensureDesktopClientStarted,
+    /** Starts the client and swallows its failure, which the banner shows. */
     startClient,
+    /** Startup: restores the managed server where this window owns it, then
+        reads the client. One run at a time; a second call joins it. */
     initializeDesktop,
+    /** Stops waiting for the managed server and continues startup without
+        it. */
     skipManagedServerWait,
+    /** Restarts a managed server whose start failed, with the agent and
+        authority that start reported, then runs startup again. */
     restartManagedServer,
+    /** Runs startup again from the beginning. */
     retryStartup,
+    /** Stops and starts the client, a bounded number of times, then reads
+        the session the person still has open. One restart at a time. */
     restartDesktopClient,
   };
 }
