@@ -113,6 +113,7 @@ const NAV_KEYS = new Set([
   "End",
   " ",
 ]);
+const UP_KEYS = new Set(["ArrowUp", "PageUp", "Home"]);
 /* rows that can be held: a step, a group or item, a transcript row */
 const HOLDABLE = "[data-step-key],[data-anchor-key],[data-timeline-key]";
 const KEY_ATTRIBUTES = ["data-step-key", "data-anchor-key", "data-timeline-key"];
@@ -125,6 +126,13 @@ const insetAt = (el: Element) => {
   );
   return Number.isFinite(declared) ? declared : 8;
 };
+
+/* a spinner's frames are drawn in a box sealed off from layout
+   (`contain: strict`): a new frame is not a change to the content */
+const decorative = (node: Node) =>
+  (node instanceof Element ? node : node.parentElement)?.closest(
+    "[data-slot=ascii-loader]",
+  ) != null;
 
 const keyOf = (el: Element) =>
   KEY_ATTRIBUTES.map((name) => el.getAttribute(name)).find((key) => key != null) ??
@@ -221,7 +229,14 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
       const delta = el.getBoundingClientRect().top - top() - anchor.offset;
       if (Math.abs(delta) >= 0.5) scroller.scrollTop += delta;
     };
-    const reconcile = () => (following.current ? pin() : hold());
+    let intentUntil = 0;
+    /* holding the scrollbar, the reader is placing the view themselves */
+    let dragging = false;
+    const reconcile = () => {
+      if (dragging) return;
+      if (following.current) pin();
+      else hold();
+    };
     settleRef.current = reconcile;
     pin();
 
@@ -231,19 +246,48 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
       for (const child of Array.from(scroller.children)) sizes.observe(child);
     };
     watch();
-    /* the content mounts with the subject's first read */
-    const mounts = new MutationObserver(watch);
-    mounts.observe(scroller, { childList: true });
+    /* A change to the content is reconciled right after it is made, before
+       paint, whether or not it changed the content's size: WebKit clamps the
+       position partway through an update that replaces or moves rows, and
+       an update that ends at the same height is never reported as a resize.
+       The content itself mounts with the subject's first read. */
+    const changes = new MutationObserver((records) => {
+      const content = records.filter((record) => !decorative(record.target));
+      if (content.length === 0) return;
+      if (content.some((record) => record.target === scroller)) watch();
+      reconcile();
+    });
+    changes.observe(scroller, { childList: true, subtree: true, characterData: true });
 
-    let intentUntil = 0;
-    let dragging = false;
     const intend = () => {
       intentUntil = performance.now() + INTENT_MS;
+    };
+    /* Moving up the page is leaving the foot. Following stops at the input
+       itself, before a content change can pin the view back down ahead of
+       the scroll the input is about to make. */
+    const release = () => {
+      if (following.current) setFollowing(false);
+    };
+    const onWheel = (event: WheelEvent) => {
+      intend();
+      if (event.deltaY < 0) release();
+    };
+    let touchY: number | undefined;
+    const onTouchStart = (event: TouchEvent) => {
+      touchY = event.touches[0]?.clientY;
+    };
+    const onTouchMove = (event: TouchEvent) => {
+      intend();
+      const y = event.touches[0]?.clientY;
+      if (touchY !== undefined && y !== undefined && y > touchY) release();
+      touchY = y;
     };
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as Element | null;
       if (target?.closest?.('input, textarea, [contenteditable="true"]')) return;
-      if (NAV_KEYS.has(event.key)) intend();
+      if (!NAV_KEYS.has(event.key)) return;
+      intend();
+      if (UP_KEYS.has(event.key)) release();
     };
     const area = scroller.parentElement;
     const onPointerDown = (event: PointerEvent) => {
@@ -278,8 +322,9 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
       }
       anchor = { el, key: keyOf(el), offset };
     };
-    scroller.addEventListener("wheel", intend, { passive: true });
-    scroller.addEventListener("touchmove", intend, { passive: true });
+    scroller.addEventListener("wheel", onWheel, { passive: true });
+    scroller.addEventListener("touchstart", onTouchStart, { passive: true });
+    scroller.addEventListener("touchmove", onTouchMove, { passive: true });
     window.addEventListener("keydown", onKey);
     area?.addEventListener("pointerdown", onPointerDown);
     window.addEventListener("pointerup", onPointerUp);
@@ -288,9 +333,10 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
     return () => {
       settleRef.current = null;
       sizes.disconnect();
-      mounts.disconnect();
-      scroller.removeEventListener("wheel", intend);
-      scroller.removeEventListener("touchmove", intend);
+      changes.disconnect();
+      scroller.removeEventListener("wheel", onWheel);
+      scroller.removeEventListener("touchstart", onTouchStart);
+      scroller.removeEventListener("touchmove", onTouchMove);
       window.removeEventListener("keydown", onKey);
       area?.removeEventListener("pointerdown", onPointerDown);
       window.removeEventListener("pointerup", onPointerUp);

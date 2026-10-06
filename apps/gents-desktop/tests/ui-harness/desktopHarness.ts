@@ -157,6 +157,8 @@ export type MobilePerformanceHarnessController = {
    * turn, then the saved message under its own key, before the live tail.
    */
   userTurn(stage: "pending" | "saved"): void;
+  /** a step the reply takes, after the live tail: running, then done */
+  liveTool(state: "running" | "done"): void;
 };
 
 export type SessionSyncHarnessController = {
@@ -2551,6 +2553,51 @@ export function createDesktopUiHarness(
                 ? [...without, turn]
                 : [...without.slice(0, tailAt), turn, ...without.slice(tailAt)];
             sessions.set("session-large", { ...session, timelineItems });
+            syncSessions();
+            notify("store");
+          },
+          liveTool(state) {
+            const session = sessions.get("session-large");
+            if (!session) {
+              throw new Error("mobile performance fixture lost session-large");
+            }
+            const group = {
+              kind: "toolGroup" as const,
+              itemKey: "large-tools",
+              messageSequence: session.timelineItems.length,
+              tools: [
+                {
+                  itemKey: "large-exec",
+                  toolName: "gents_exec",
+                  statusKind: state === "running" ? "running" : "success",
+                  reconstruction: HARNESS_READY_RECONSTRUCTION,
+                  presentation: {
+                    kind: "command" as const,
+                    command: "cargo test -p gents",
+                    exitCode: state === "running" ? null : 0,
+                    timedOut: false,
+                    failed: false,
+                    durationMs: null,
+                    cwd: null,
+                    executionMode: "read_only",
+                    networkMode: "disabled",
+                    stdout: "",
+                    stderr: "",
+                    fallbackOutput: null,
+                  },
+                  partialOutputTail: null,
+                },
+              ],
+            };
+            sessions.set("session-large", {
+              ...session,
+              timelineItems: [
+                ...session.timelineItems.filter(
+                  (item) => item.itemKey !== group.itemKey,
+                ),
+                group,
+              ],
+            });
             syncSessions();
             notify("store");
           },

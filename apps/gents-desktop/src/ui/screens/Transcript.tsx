@@ -29,7 +29,7 @@ import {
 } from "@gents/ui/components/collapsible";
 import { Hint } from "./Hint";
 
-import { Thinking } from "./Thinking";
+import { ActivityLine } from "./Thinking";
 import { activityStatus } from "./activity-status";
 import { BehaviorAvatar } from "./parts";
 import { Markdown } from "./Markdown";
@@ -88,13 +88,9 @@ const ParentContext = createContext<ParentWork | null>(null);
 
 const TranscriptItem = memo(function TranscriptItem({
   item,
-  status = null,
   final = false,
 }: {
   item: RenderedTimelineItem;
-  /* the run's status while this is the live tail: what it is doing between
-     actions, or Stopping, from the activity-status owner */
-  status?: string | null;
   /* the answer a finished turn ended on: it carries the response actions */
   final?: boolean;
 }) {
@@ -143,7 +139,7 @@ const TranscriptItem = memo(function TranscriptItem({
     }
     case "assistantMessage":
     case "liveAssistant":
-      return <Reply item={item} status={status} final={final} />;
+      return <Reply item={item} final={final} />;
     case "toolGroup":
       /* placed by the transcript into an ActivityGroup; never reaches here */
       return null;
@@ -210,11 +206,9 @@ function StoppedNotice({ cause }: { cause: DerivedCancelCauseView | null }) {
    prose would be. */
 function Reply({
   item,
-  status,
   final,
 }: {
   item: Extract<RenderedTimelineItem, { kind: "assistantMessage" | "liveAssistant" }>;
-  status: string | null;
   final: boolean;
 }) {
   const live = item.kind === "liveAssistant";
@@ -238,7 +232,6 @@ function Reply({
           </p>
         ) : null}
         {item.content ? <ReplyText content={item.content} live={live} /> : null}
-        {status && <Thinking label={status} />}
       </AssistantMessage>
       {final && item.content ? <ResponseActions text={item.content} /> : null}
     </div>
@@ -318,7 +311,6 @@ export const TranscriptPanel = memo(function TranscriptPanel({
 
   /* the latest request's terminal facts; the bridge sends no response row */
   const latest = session?.latestRequestOutcome;
-  const live = session?.timelineItems.find((item) => item.kind === "liveAssistant");
   const status = inFlight
     ? activityStatus(session?.timelineItems ?? [], stopping)
     : null;
@@ -450,11 +442,7 @@ export const TranscriptPanel = memo(function TranscriptPanel({
                   data-timeline-key={entry.key}
                   className="group/response"
                 >
-                  <TranscriptItem
-                    item={entry.item}
-                    status={entry.item.kind === "liveAssistant" ? status : null}
-                    final={finalKeys.has(entry.key)}
-                  />
+                  <TranscriptItem item={entry.item} final={finalKeys.has(entry.key)} />
                 </div>
               ) : (
                 <ActivityGroup key={entry.key} entry={entry} workers={workers} />
@@ -465,9 +453,7 @@ export const TranscriptPanel = memo(function TranscriptPanel({
           {continuing &&
             session?.timelineItems
               .filter((item) => item.kind === "liveAssistant")
-              .map((item) => (
-                <TranscriptItem key={item.itemKey} item={item} status={status} />
-              ))}
+              .map((item) => <TranscriptItem key={item.itemKey} item={item} />)}
         </ParentContext.Provider>
       </WorkerActionsContext.Provider>
       {wasInterrupted && !inFlight && (
@@ -494,11 +480,13 @@ export const TranscriptPanel = memo(function TranscriptPanel({
           )}
         </div>
       )}
-      {status && !live && (
-        <AssistantMessage>
-          <Thinking label={status} />
-        </AssistantMessage>
-      )}
+      {/* the run's line, in the place kept for it at the foot: laid out as a
+          reply is, but not one, so nothing reading the transcript counts it */}
+      <div className="relative min-w-0">
+        <div data-slot="activity-line" className="prose-app px-2">
+          <ActivityLine status={status} />
+        </div>
+      </div>
     </div>
   );
 });

@@ -26,12 +26,17 @@ test.describe("a reader scrolled up in a transcript", () => {
     await expect(viewport).toHaveAttribute("data-following", "false");
 
     const moved = await viewport.evaluate(async (scroller) => {
-      const line = scroller.getBoundingClientRect().top + 200;
+      const top = scroller.getBoundingClientRect().top;
       const rows = Array.from(
         scroller.querySelectorAll<HTMLElement>("[data-timeline-key]"),
       );
-      const reader = rows.find((row) => row.getBoundingClientRect().bottom > line)!;
-      const above = rows[rows.indexOf(reader) - 2]!;
+      const reader = rows.find(
+        (row) => row.getBoundingClientRect().bottom > top + 200,
+      )!;
+      /* a row wholly above the view, out of the reader's sight */
+      const above = rows
+        .filter((row) => row.getBoundingClientRect().bottom < top)
+        .at(-1)!;
       const before = reader.getBoundingClientRect().top;
       /* something above the reader grows, as a step's output would */
       above.style.paddingTop = "300px";
@@ -95,4 +100,69 @@ test("stays at the foot when a sent message is saved", async ({ page }, testInfo
     () => (window as unknown as { __footGaps: number[] }).__footGaps,
   );
   expect([...new Set(gaps)].filter((gap) => gap > 1)).toEqual([]);
+});
+
+/* Following at the foot through a whole turn, nothing at the foot changes
+   height: the run's line keeps its place whether it is thinking, writing,
+   blank while a step runs, reviewing, or done. So the page only grows, and
+   the view only ever moves down it. */
+test("only moves down the page through a whole turn", async ({ page }, testInfo) => {
+  test.skip(
+    !["webkit-desktop", "chromium-desktop"].includes(testInfo.project.name),
+    "one layout per engine",
+  );
+  await gotoHarness(page, "mobile-performance");
+  await page.locator('[data-testid="session-session-large"]').click();
+  await page.getByTestId("transcript-panel").getByText("stream-start").last().waitFor();
+  await page.waitForTimeout(300);
+  await page.evaluate(() => {
+    const scroller = document
+      .querySelector('[data-testid="transcript-panel"]')!
+      .closest<HTMLElement>('[data-slot="scroll-area-viewport"]')!;
+    const frames: { top: number; height: number }[] = [];
+    const tick = () => {
+      frames.push({ top: scroller.scrollTop, height: scroller.scrollHeight });
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+    Object.assign(window, { __turnFrames: frames });
+  });
+  const harness = (step: string, arg?: unknown) =>
+    page.evaluate(
+      ([step, arg]) =>
+        (
+          window.__GENTS_MOBILE_PERFORMANCE__ as unknown as Record<
+            string,
+            (a?: unknown) => void
+          >
+        )[step as string]!(arg),
+      [step, arg] as const,
+    );
+  const phases: [string, unknown][] = [
+    ["userTurn", "pending"],
+    ["userTurn", "saved"],
+    ["streamText", " and the reply begins to say something about it."],
+    ["liveTool", "running"],
+    ["liveTool", "done"],
+    ["streamText", " Then it carries on writing after the step."],
+    ["endReply", { live: "drop", saved: true, completed: true }],
+  ];
+  for (const [step, arg] of phases) {
+    await harness(step, arg);
+    await page.waitForTimeout(500);
+  }
+  const frames = await page.evaluate(
+    () =>
+      (window as unknown as { __turnFrames: { top: number; height: number }[] })
+        .__turnFrames,
+  );
+  const shrinks = frames
+    .slice(1)
+    .map((frame, i) => Math.round(frames[i]!.height - frame.height))
+    .filter((by) => by > 0);
+  const stepsBack = frames
+    .slice(1)
+    .map((frame, i) => Math.round(frames[i]!.top - frame.top))
+    .filter((by) => by > 0);
+  expect({ shrinks, stepsBack }).toEqual({ shrinks: [], stepsBack: [] });
 });

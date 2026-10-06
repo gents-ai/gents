@@ -94,6 +94,27 @@ describe("transcript streaming follow", () => {
     expect(fixture.viewport.scrollTop).toBe(foot(800));
   });
 
+  it("stops following at an upward wheel, before the scroll it makes", () => {
+    const fixture = transcriptFixture();
+    const { result } = renderHook(() => useFollowTail(fixture.viewport, "session-1"));
+    act(() => {
+      fixture.viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -40 }));
+    });
+    expect(result.current.atBottom).toBe(false);
+  });
+
+  it("puts a following view back at the foot after a change that keeps the height", async () => {
+    const fixture = transcriptFixture();
+    renderHook(() => useFollowTail(fixture.viewport, "session-1"));
+    // WebKit clamps partway through an update that replaces a row; the
+    // content ends at the same height, so no resize is reported
+    fixture.viewport.scrollTop = foot(500) - 72;
+    await act(async () => {
+      fixture.viewport.firstElementChild!.append(document.createElement("p"));
+    });
+    expect(fixture.viewport.scrollTop).toBe(foot(500));
+  });
+
   it("leaves a scroll the reader did not make where it lands", () => {
     const fixture = transcriptFixture();
     const { result } = renderHook(() => useFollowTail(fixture.viewport, "session-1"));
