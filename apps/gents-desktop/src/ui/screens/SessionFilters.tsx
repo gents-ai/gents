@@ -8,7 +8,10 @@ import { useExclusivePopover } from "@/hooks/useExclusivePopover";
 import { Activity, CircleX, CornerDownRight, Play, User, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { ComponentType, ReactNode } from "react";
-import type { DeploymentView, SessionSummary } from "@source-inc/gents-desktop-client";
+import type { SessionSummary } from "@source-inc/gents-desktop-client";
+import { nodeKeyOf } from "../../hooks/fleetStore";
+import { useFleet } from "@/hooks/useFleet";
+import { behaviorName } from "./behavior";
 import { Button } from "@gents/ui/components/button";
 import {
   DropdownMenu,
@@ -335,13 +338,14 @@ function BehaviorAxis({
 
 export function SessionFilters({
   sessions,
-  deployment,
+  nodeDids,
   value,
   onChange,
   nodes,
 }: {
   sessions: SessionSummary[];
-  deployment: DeploymentView | null;
+  /** the nodes the list spans: their behaviors are the axis's options */
+  nodeDids: readonly string[];
   value: SessionFilter;
   onChange: (next: SessionFilter) => void;
   /** the node pick beside this row, so one clear empties the whole bar */
@@ -361,10 +365,26 @@ export function SessionFilters({
       countFor("sources", (c) => matchesSource(c, s.value)),
     ]),
   );
-  const behaviors = (deployment?.behaviors ?? []).map((b) => ({
-    id: b.behaviorId,
-    name: b.displayName,
-    count: countFor("behaviors", (c) => c.behaviorId === b.behaviorId),
+  /* every behavior of the nodes the list spans, named by its node, offered
+     with its count even at zero; then any a listed session runs that its
+     node no longer lists, and any stored pick none of them is, so a pick
+     can always be seen and cleared */
+  const fleetNodes = useFleet((state) => state.nodes);
+  const names = new Map<string, string>();
+  for (const did of nodeDids)
+    for (const b of fleetNodes[nodeKeyOf({ agentDid: did })]?.behaviors ?? [])
+      if (!names.has(b.behaviorId)) names.set(b.behaviorId, b.displayName);
+  for (const c of sessions)
+    if (c.behaviorId && !names.has(c.behaviorId))
+      names.set(
+        c.behaviorId,
+        behaviorName(c.behaviorId, fleetNodes[nodeKeyOf(c)] ?? null),
+      );
+  for (const id of value.behaviors) if (!names.has(id)) names.set(id, id);
+  const behaviors = [...names].map(([id, name]) => ({
+    id,
+    name,
+    count: countFor("behaviors", (c) => c.behaviorId === id),
   }));
 
   /* a node pick that empties the list still needs its clear */

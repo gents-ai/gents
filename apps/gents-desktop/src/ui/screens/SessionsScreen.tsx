@@ -44,7 +44,7 @@ import {
   useFleet,
   workersOf,
 } from "../hooks/useFleet";
-import { useDeployments, useSelectedDeployment } from "@/hooks/useClient";
+import { useDeployments } from "@/hooks/useClient";
 
 export function SessionsScreen({
   nodeDid,
@@ -54,7 +54,6 @@ export function SessionsScreen({
 }) {
   const deployments = useDeployments();
   const homeDid = useHomeDid();
-  const deployment = useSelectedDeployment();
   const [query, setQuery] = useState<string | null>(null);
   /* the three axes the summary carries: behavior, state, and what started it */
   const [filter, setFilter] = useSessionFilter();
@@ -205,7 +204,7 @@ export function SessionsScreen({
             />
             <SessionFilters
               sessions={inScope}
-              deployment={deployment}
+              nodeDids={nodesInScope(scope, ctx).map(nodeDidOf)}
               value={filter}
               onChange={setFilter}
               nodes={{
