@@ -160,15 +160,13 @@ export function TaskEditor({
           label="Name"
           value={d.draft.name}
           onChange={(v) => d.set("name", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <RefRow
           id={id("behavior")}
           label="Behavior"
           description="Runs the prompt with its instructions, tools and model."
           value={d.draft.behaviorId}
-          onChange={(v) => d.choose("behaviorId", v)}
+          onChange={(v) => d.set("behaviorId", v)}
           items={behaviors}
           none="Unset"
           createLabel="New behavior…"
@@ -195,14 +193,13 @@ export function TaskEditor({
           id={id("enabled")}
           label="Enabled"
           checked={d.draft.enabled}
-          onChange={(v) => d.choose("enabled", v)}
+          onChange={(v) => d.set("enabled", v)}
         />
         <AreaRow
           id={id("desc")}
           label="Description"
           value={d.draft.description}
           onChange={(v) => d.set("description", v)}
-          onCommit={d.commit}
           rows={2}
         />
         <AreaRow
@@ -211,7 +208,6 @@ export function TaskEditor({
           description="Use {{ session.session_id }} and {{ request.request_id }} for this invocation’s identity."
           value={d.draft.promptTemplate}
           onChange={(v) => d.set("promptTemplate", v)}
-          onCommit={d.commit}
           rows={5}
           stacked
         />
@@ -221,7 +217,6 @@ export function TaskEditor({
           description="Optional. Applies this goal when the queued request starts."
           value={d.draft.goalObjectiveTemplate}
           onChange={(v) => d.set("goalObjectiveTemplate", v)}
-          onCommit={d.commit}
           rows={2}
           stacked
         />
@@ -231,8 +226,6 @@ export function TaskEditor({
           description="Optional positive whole number; blank leaves the goal unlimited. Needs an objective."
           value={d.draft.goalTokenBudget}
           onChange={(v) => d.set("goalTokenBudget", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
           placeholder="Optional"
         />
         <SwitchRow
@@ -240,22 +233,19 @@ export function TaskEditor({
           label="Emit outcome"
           description="Publish one FireOutcome when the request finishes, or when its goal completes, blocks or exhausts its budget. Leave off for tasks that consume outcomes."
           checked={d.draft.emitOutcome}
-          onChange={(v) => d.choose("emitOutcome", v)}
+          onChange={(v) => d.set("emitOutcome", v)}
         />
         <TextRow
           id={id("schema")}
           label="Output schema ref"
           value={d.draft.outputSchemaRef}
           onChange={(v) => d.set("outputSchemaRef", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
           mono
         />
         <HooksRows
           id={id("hooks")}
           value={d.draft.hooks}
           onChange={(v) => d.set("hooks", v)}
-          onCommit={d.commit}
         />
         <TagsRow
           id={id("tags")}
@@ -264,13 +254,7 @@ export function TaskEditor({
           onChange={(v) => d.set("tags", v)}
         />
       </Group>
-      <DraftActions
-        dirty={d.dirty}
-        saving={d.saving}
-        error={d.error}
-        onSave={d.save}
-        onCancel={d.reset}
-      />
+      <DraftActions draft={d} />
       <Group
         title="When it runs"
         action={

@@ -301,8 +301,6 @@ export function ToolsEditor({
           label="Display name"
           value={d.draft.displayName}
           onChange={(v) => d.set("displayName", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <PathRow
           id={id("root")}
@@ -310,14 +308,12 @@ export function ToolsEditor({
           description="The directory file and command tools are confined to."
           value={d.draft.root}
           onChange={(v) => d.set("root", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <ChoiceRow
           id={id("files")}
           label="Files"
           value={d.draft.files}
-          onChange={(v) => d.choose("files", v as "Off" | "ReadOnly" | "ReadWrite")}
+          onChange={(v) => d.set("files", v as "Off" | "ReadOnly" | "ReadWrite")}
           items={[
             { value: "Off", label: "Off" },
             { value: "ReadOnly", label: "Read only" },
@@ -328,7 +324,7 @@ export function ToolsEditor({
           id={id("bash")}
           label="Bash"
           value={d.draft.bash}
-          onChange={(v) => d.choose("bash", v as "Off" | "ReadOnly" | "Unrestricted")}
+          onChange={(v) => d.set("bash", v as "Off" | "ReadOnly" | "Unrestricted")}
           items={[
             { value: "Off", label: "Off" },
             { value: "ReadOnly", label: "Read only" },
@@ -340,7 +336,7 @@ export function ToolsEditor({
           label="Background processes"
           description="Permit background execution for the selected bash capability."
           checked={d.draft.background}
-          onChange={(v) => d.choose("background", v)}
+          onChange={(v) => d.set("background", v)}
         />
       </Group>
       <ToolGroupControls
@@ -392,15 +388,14 @@ export function ToolsEditor({
             description="Host limits, MCP grants, subagents, built-ins, datastore, integrations, self-config, and tags. Invalid or unknown fields are rejected before persistence."
             value={d.draft.advanced}
             onChange={(v) => d.set("advanced", v)}
-            onCommit={d.commit}
             rows={12}
             mono
           />
         </details>
       </Group>
       <DraftActions
+        draft={d}
         dirty={d.dirty || limitError !== null}
-        saving={d.saving}
         error={limitError ?? d.error}
         saveLabel={draftMode ? "Create" : undefined}
         onSave={() => {

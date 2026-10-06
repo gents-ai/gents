@@ -112,14 +112,12 @@ export function ScheduleEditor({
           label="Display name"
           value={d.draft.displayName}
           onChange={(v) => d.set("displayName", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <ChoiceRow
           id={id("cadence")}
           label="Cadence"
           value={d.draft.cadenceKind}
-          onChange={(v) => d.choose("cadenceKind", v as "interval" | "cron")}
+          onChange={(v) => d.set("cadenceKind", v as "interval" | "cron")}
           items={[
             { value: "interval", label: "Interval" },
             { value: "cron", label: "Cron" },
@@ -132,8 +130,6 @@ export function ScheduleEditor({
             description="Positive whole number."
             value={d.draft.intervalSecs}
             onChange={(v) => d.set("intervalSecs", v)}
-            onCommit={d.commit}
-            onEnter={d.onEnter}
           />
         ) : (
           <>
@@ -142,16 +138,12 @@ export function ScheduleEditor({
               label="Cron"
               value={d.draft.expression}
               onChange={(v) => d.set("expression", v)}
-              onCommit={d.commit}
-              onEnter={d.onEnter}
             />
             <TextRow
               id={id("tz")}
               label="Timezone"
               value={d.draft.timezone}
               onChange={(v) => d.set("timezone", v)}
-              onCommit={d.commit}
-              onEnter={d.onEnter}
             />
           </>
         )}
@@ -162,13 +154,7 @@ export function ScheduleEditor({
           onChange={(v) => d.set("tags", v)}
         />
       </Group>
-      <DraftActions
-        dirty={d.dirty}
-        saving={d.saving}
-        error={d.error}
-        onSave={d.save}
-        onCancel={d.reset}
-      />
+      <DraftActions draft={d} />
       <Group
         title="Manual run"
         action={

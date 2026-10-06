@@ -113,15 +113,12 @@ function Editor({
           label="Display name"
           value={d.draft.displayName}
           onChange={(v) => d.set("displayName", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <AreaRow
           id={id("description")}
           label="Description"
           value={d.draft.description}
           onChange={(v) => d.set("description", v)}
-          onCommit={d.commit}
           rows={2}
         />
         <TextRow
@@ -129,16 +126,12 @@ function Editor({
           label="Hostname"
           value={d.draft.hostname}
           onChange={(v) => d.set("hostname", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <TextRow
           id={id("tailscale")}
           label="Tailscale IP"
           value={d.draft.tailscaleIp}
           onChange={(v) => d.set("tailscaleIp", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
           mono
         />
         <TextRow
@@ -146,8 +139,6 @@ function Editor({
           label="LAN IP"
           value={d.draft.lanIp}
           onChange={(v) => d.set("lanIp", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
           mono
         />
         <NumberRow
@@ -155,8 +146,6 @@ function Editor({
           label="MCP port"
           value={d.draft.mcpPort}
           onChange={(v) => d.set("mcpPort", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <TextRow
           id={id("path")}
@@ -164,21 +153,19 @@ function Editor({
           description="Empty uses the endpoint root; otherwise start with /."
           value={d.draft.mcpPath}
           onChange={(v) => d.set("mcpPath", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
           mono
         />
         <SwitchRow
           id={id("send-agent")}
           label="Send agent DID"
           checked={d.draft.sendAgentDid}
-          onChange={(v) => d.choose("sendAgentDid", v)}
+          onChange={(v) => d.set("sendAgentDid", v)}
         />
         <SwitchRow
           id={id("enabled")}
           label="Enabled"
           checked={d.draft.enabled}
-          onChange={(v) => d.choose("enabled", v)}
+          onChange={(v) => d.set("enabled", v)}
         />
         <TagsRow
           id={id("tags")}
@@ -192,13 +179,7 @@ function Editor({
           Test connection
         </Button>
       </div>
-      <DraftActions
-        dirty={d.dirty}
-        saving={d.saving}
-        error={d.error}
-        onSave={d.save}
-        onCancel={d.reset}
-      />
+      <DraftActions draft={d} />
       <DeleteButton
         label={service.display_name ?? service.service_id}
         warning={dependentsWarning(deployment, "tool-service", service.service_id)}

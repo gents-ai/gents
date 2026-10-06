@@ -82,8 +82,6 @@ function SkillEditor({
           label="Name"
           value={d.draft.name}
           onChange={(v) => d.set("name", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <PathRow
           id={id("sourceDirectory")}
@@ -91,22 +89,18 @@ function SkillEditor({
           description="Where the skill's files live."
           value={d.draft.sourceDirectory}
           onChange={(v) => d.set("sourceDirectory", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <TextRow
           id={id("display")}
           label="Display name"
           value={d.draft.displayName}
           onChange={(v) => d.set("displayName", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <SwitchRow
           id={id("enabled")}
           label="Enabled"
           checked={d.draft.enabled}
-          onChange={(v) => d.choose("enabled", v)}
+          onChange={(v) => d.set("enabled", v)}
         />
         <AreaRow
           id={id("description")}
@@ -114,7 +108,6 @@ function SkillEditor({
           description="Shown in the skills catalog."
           value={d.draft.description}
           onChange={(v) => d.set("description", v)}
-          onCommit={d.commit}
           rows={2}
         />
         <AreaRow
@@ -123,7 +116,6 @@ function SkillEditor({
           description="Loaded on demand via load_skill."
           value={d.draft.instructions}
           onChange={(v) => d.set("instructions", v)}
-          onCommit={d.commit}
           rows={6}
           stacked
         />
@@ -141,7 +133,6 @@ function SkillEditor({
           description="Optional structured interface metadata. Must be valid JSON."
           value={d.draft.interfaceJson}
           onChange={(v) => d.set("interfaceJson", v)}
-          onCommit={d.commit}
           rows={4}
           mono
           stacked
@@ -153,13 +144,7 @@ function SkillEditor({
           onChange={(v) => d.set("tags", v)}
         />
       </Group>
-      <DraftActions
-        dirty={d.dirty}
-        saving={d.saving}
-        error={d.error}
-        onSave={d.save}
-        onCancel={d.reset}
-      />
+      <DraftActions draft={d} />
       <DeleteButton
         label={skill.name ?? skill.skillId}
         warning={dependentsWarning(deployment, "skill", skill.skillId)}

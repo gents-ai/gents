@@ -60,8 +60,6 @@ function WholeNumberRow({
       label={label}
       value={raw}
       placeholder={placeholder}
-      onCommit={() => {}}
-      onEnter={() => {}}
       onChange={(text) => {
         setRaw(text);
         const valid =
@@ -430,7 +428,6 @@ export function ToolGroupControls({
               label={`${deployment.toolServiceRegistries.find((row) => row.service_id === service.mcp_service_id)?.display_name ?? service.mcp_service_id} tool names`}
               description="Exact tool names, one per line. Empty grants no tools; discovery never grants new tools automatically."
               value={(service.tool_names ?? []).join("\n")}
-              onCommit={() => {}}
               onChange={(value) => {
                 const names = value
                   .split("\n")
@@ -627,7 +624,6 @@ export function ToolGroupControls({
               label="Language server configuration"
               description="Runtime-owned language-server flags and catalog overrides."
               value={groups.integrations.lsp.config ?? ""}
-              onCommit={() => {}}
               onChange={(config) =>
                 update("integrations", {
                   lsp: { ...groups.integrations?.lsp, config: config || null },

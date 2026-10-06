@@ -70,25 +70,13 @@ export function useDraft<T extends object>(
     setError(null);
     setDraft((d) => ({ ...d, [k]: v }));
   };
-  const choose = <K extends keyof T>(k: K, v: T[K]) => {
-    set(k, v);
-  };
-  // Kept as the field blur callback so existing editors do not accidentally
-  // submit. Save is intentionally owned by the explicit action below.
-  const commit = () => undefined;
   const reset = () => {
     setDraft(baseline);
     setError(null);
   };
-  const onEnter = (e: React.KeyboardEvent<HTMLElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) (e.target as HTMLElement).blur();
-  };
   return {
     draft,
     set,
-    choose,
-    commit,
-    onEnter,
     dirty,
     saving,
     error,

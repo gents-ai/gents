@@ -58,15 +58,13 @@ export function AgentPanel({ deployment }: { deployment: DeploymentView }) {
           description="How this agent is named across the desktop."
           value={d.draft.displayName}
           onChange={(v) => d.set("displayName", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <RefRow
           id="agent-default"
           label="Default behavior"
           description="Used when a session does not choose one."
           value={d.draft.defaultBehaviorId}
-          onChange={(v) => d.choose("defaultBehaviorId", v)}
+          onChange={(v) => d.set("defaultBehaviorId", v)}
           items={behaviors}
           createLabel="New behavior…"
           openRoute={(behaviorId) => ({
@@ -81,7 +79,7 @@ export function AgentPanel({ deployment }: { deployment: DeploymentView }) {
           label="Enabled"
           description="A disabled agent accepts no requests."
           checked={d.draft.enabled}
-          onChange={(v) => d.choose("enabled", v)}
+          onChange={(v) => d.set("enabled", v)}
         />
         <TagsRow
           id="agent-tags"
@@ -91,13 +89,7 @@ export function AgentPanel({ deployment }: { deployment: DeploymentView }) {
           onChange={(v) => d.set("tags", v)}
         />
       </Group>
-      <DraftActions
-        dirty={d.dirty}
-        saving={d.saving}
-        error={d.error}
-        onSave={d.save}
-        onCancel={d.reset}
-      />
+      <DraftActions draft={d} />
 
       <Group title="Identity">
         <Row

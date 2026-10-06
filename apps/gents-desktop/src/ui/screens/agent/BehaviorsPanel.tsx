@@ -874,8 +874,6 @@ export function BehaviorEditor({
           label="Display name"
           value={d.draft.displayName}
           onChange={(v) => d.set("displayName", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
           error={errors.displayName}
         />
         <AreaRow
@@ -884,7 +882,6 @@ export function BehaviorEditor({
           description="One or two sentences, shown in the behavior picker."
           value={d.draft.description}
           onChange={(v) => d.set("description", v)}
-          onCommit={d.commit}
           rows={2}
         />
         <TagsRow
@@ -1031,7 +1028,6 @@ export function BehaviorEditor({
                 description="What the agent is told at the start of every session."
                 value={d.draft.systemPrompt}
                 onChange={(v) => d.set("systemPrompt", v)}
-                onCommit={d.commit}
                 rows={6}
                 stacked
               />
@@ -1042,7 +1038,7 @@ export function BehaviorEditor({
                 label="Tools"
                 description={toolsNote}
                 value={d.draft.toolsId}
-                onChange={(v) => d.choose("toolsId", v)}
+                onChange={(v) => d.set("toolsId", v)}
                 none="None"
                 error={errors.toolsId}
                 items={deployment.tools.map((t) => ({
@@ -1082,7 +1078,7 @@ export function BehaviorEditor({
                 label="Compaction"
                 description="How a long session is summarized."
                 value={d.draft.compactionId}
-                onChange={(v) => d.choose("compactionId", v)}
+                onChange={(v) => d.set("compactionId", v)}
                 none="Runtime default"
                 error={errors.compactionId}
                 items={deployment.compactions.map((c) => ({
@@ -1101,7 +1097,7 @@ export function BehaviorEditor({
           label="Inference profile"
           description="The backend, model and sampling this behavior runs on."
           value={d.draft.inferenceProfileId}
-          onChange={(v) => d.choose("inferenceProfileId", v)}
+          onChange={(v) => d.set("inferenceProfileId", v)}
           none="None"
           error={errors.inferenceProfileId}
           items={deployment.inferenceProfiles.map((p) => ({
@@ -1245,9 +1241,7 @@ export function BehaviorEditor({
         />
       )}
       <DraftActions
-        dirty={d.dirty}
-        saving={d.saving}
-        error={d.error}
+        draft={d}
         saveLabel={draftMode ? "Create" : undefined}
         onSave={() => save()}
         onCancel={() => {

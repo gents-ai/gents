@@ -825,15 +825,13 @@ export function BackendEditor({
           label="Name"
           value={d.draft.name}
           onChange={(v) => d.set("name", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <ChoiceRow
           id={id("kind")}
           label="Provider kind"
           description="Decides how it is paid for: a key, or a subscription sign-in."
           value={d.draft.providerKind}
-          onChange={(v) => d.choose("providerKind", v)}
+          onChange={(v) => d.set("providerKind", v)}
           items={KINDS}
         />
         {!subscription && (
@@ -842,7 +840,7 @@ export function BackendEditor({
             label="OpenAI wire API"
             description="Leave automatic unless the endpoint requires one protocol."
             value={d.draft.openaiWireApi}
-            onChange={(v) => d.choose("openaiWireApi", v)}
+            onChange={(v) => d.set("openaiWireApi", v)}
             items={[
               { value: "responses", label: "Responses" },
               { value: "chat_completions", label: "Chat completions" },
@@ -874,8 +872,6 @@ export function BackendEditor({
               description="Read from the environment at start."
               value={d.draft.apiKeyEnvVar}
               onChange={(v) => d.set("apiKeyEnvVar", v)}
-              onCommit={d.commit}
-              onEnter={d.onEnter}
               placeholder="OPENAI_API_KEY"
               mono
             />
@@ -889,8 +885,6 @@ export function BackendEditor({
               }
               value={d.draft.apiKey}
               onChange={(v) => d.set("apiKey", v)}
-              onCommit={d.commit}
-              onEnter={d.onEnter}
               placeholder={backend.apiKeyConfigured ? "Configured" : "sk-…"}
               password
             />
@@ -948,8 +942,6 @@ export function BackendEditor({
           label="Endpoint"
           value={d.draft.endpoint}
           onChange={(v) => d.set("endpoint", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
           placeholder="https://…/v1"
           mono
           wide
@@ -977,8 +969,6 @@ export function BackendEditor({
           value={d.draft.connectTimeoutSecs}
           placeholder="Runtime default (10)"
           onChange={(v) => d.set("connectTimeoutSecs", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <NumberRow
           id={id("discovery-timeout")}
@@ -987,8 +977,6 @@ export function BackendEditor({
           value={d.draft.discoveryTimeoutSecs}
           placeholder="Runtime default (10)"
           onChange={(v) => d.set("discoveryTimeoutSecs", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <NumberRow
           id={id("conc")}
@@ -996,8 +984,6 @@ export function BackendEditor({
           description="Whole number of 1 or more."
           value={d.draft.maxConcurrent}
           onChange={(v) => d.set("maxConcurrent", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <NumberRow
           id={id("queue")}
@@ -1005,14 +991,12 @@ export function BackendEditor({
           description="Whole number of 0 or more; 0 disables queueing."
           value={d.draft.maxQueueDepth}
           onChange={(v) => d.set("maxQueueDepth", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <SwitchRow
           id={id("enabled")}
           label="Enabled"
           checked={d.draft.enabled}
-          onChange={(v) => d.choose("enabled", v)}
+          onChange={(v) => d.set("enabled", v)}
         />
         <TagsRow
           id={id("tags")}
@@ -1021,13 +1005,7 @@ export function BackendEditor({
           onChange={(v) => d.set("tags", v)}
         />
       </Group>
-      <DraftActions
-        dirty={d.dirty}
-        saving={d.saving}
-        error={d.error}
-        onSave={d.save}
-        onCancel={d.reset}
-      />
+      <DraftActions draft={d} />
       {!embedded && removable && (
         <DeleteButton
           label={removable.label}

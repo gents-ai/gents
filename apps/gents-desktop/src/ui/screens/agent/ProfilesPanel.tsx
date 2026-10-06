@@ -628,8 +628,6 @@ export function ProfileEditor({
           label="Display name"
           value={d.draft.displayName}
           onChange={(v) => d.set("displayName", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <details>
           <summary className="cursor-pointer px-4 py-3 text-sm text-muted-foreground">
@@ -640,7 +638,6 @@ export function ProfileEditor({
             label="Description"
             value={d.draft.description}
             onChange={(v) => d.set("description", v)}
-            onCommit={d.commit}
             rows={2}
           />
         </details>
@@ -681,7 +678,7 @@ export function ProfileEditor({
           value={d.draft.modelName}
           onChange={(v) => {
             beginModelSelection(d.draft.backendId, v);
-            d.choose("modelName", v);
+            d.set("modelName", v);
           }}
           items={[
             ...new Set([
@@ -741,8 +738,6 @@ export function ProfileEditor({
               }
               value={d.draft.contextWindow}
               onChange={(v) => d.set("contextWindow", v)}
-              onCommit={d.commit}
-              onEnter={d.onEnter}
             />
           )}
           {!recommendation.maxOutputTokens && (
@@ -752,8 +747,6 @@ export function ProfileEditor({
               description="Empty uses the runtime default."
               value={d.draft.maxOutputTokens}
               onChange={(v) => d.set("maxOutputTokens", v)}
-              onCommit={d.commit}
-              onEnter={d.onEnter}
             />
           )}
         </Group>
@@ -776,8 +769,6 @@ export function ProfileEditor({
           value={d.draft.executionId}
           placeholder="Created when limits are customized"
           onChange={(v) => d.set("executionId", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
           mono
         />
         <NumberRow
@@ -792,8 +783,6 @@ export function ProfileEditor({
                   : String(executionDefaults.maxTurns))
           }
           onChange={(v) => setExecution("maxTurns", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <NumberRow
           id={id("max-total")}
@@ -801,8 +790,6 @@ export function ProfileEditor({
           value={d.draft.maxTotalTokens}
           placeholder={executionDefault("maxTotalTokens")}
           onChange={(v) => setExecution("maxTotalTokens", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <NumberRow
           id={id("batch")}
@@ -816,8 +803,6 @@ export function ProfileEditor({
                   : String(executionDefaults.streamBatchMs))
           }
           onChange={(v) => setExecution("streamBatchMs", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <NumberRow
           id={id("liveness")}
@@ -831,8 +816,6 @@ export function ProfileEditor({
                   : String(executionDefaults.streamLivenessSecs))
           }
           onChange={(v) => setExecution("streamLivenessSecs", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <NumberRow
           id={id("provider-idle")}
@@ -846,8 +829,6 @@ export function ProfileEditor({
                   : String(executionDefaults.providerIdleSecs))
           }
           onChange={(v) => setExecution("providerIdleSecs", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <NumberRow
           id={id("deadline")}
@@ -861,8 +842,6 @@ export function ProfileEditor({
                   : String(executionDefaults.deadlineSecs))
           }
           onChange={(v) => setExecution("deadlineSecs", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <TextRow
           id={id("retry")}
@@ -870,8 +849,6 @@ export function ProfileEditor({
           value={d.draft.retryPolicyId}
           placeholder="Runtime default"
           onChange={(v) => d.set("retryPolicyId", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
           mono
         />
       </Group>
@@ -884,9 +861,7 @@ export function ProfileEditor({
         />
       </Group>
       <DraftActions
-        dirty={d.dirty}
-        saving={d.saving}
-        error={d.error}
+        draft={d}
         saveLabel={draftMode ? "Create" : undefined}
         onSave={() =>
           draftMode

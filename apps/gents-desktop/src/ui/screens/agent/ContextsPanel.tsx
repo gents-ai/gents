@@ -157,15 +157,12 @@ function Editor({
           label="Display name"
           value={d.draft.displayName}
           onChange={(v) => d.set("displayName", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <AreaRow
           id={id("description")}
           label="Description"
           value={d.draft.description}
           onChange={(v) => d.set("description", v)}
-          onCommit={d.commit}
           rows={2}
         />
         <AreaRow
@@ -173,7 +170,6 @@ function Editor({
           label="System prompt"
           value={d.draft.systemPrompt}
           onChange={(v) => d.set("systemPrompt", v)}
-          onCommit={d.commit}
           rows={6}
           stacked
         />
@@ -182,7 +178,7 @@ function Editor({
           label="Tools"
           description="What every behavior on this context may touch."
           value={d.draft.toolsId}
-          onChange={(v) => d.choose("toolsId", v)}
+          onChange={(v) => d.set("toolsId", v)}
           none="None"
           items={deployment.tools.map((t) => ({
             value: t.tools_id,
@@ -200,7 +196,7 @@ function Editor({
           id={id("compact")}
           label="Compaction"
           value={d.draft.compactionId}
-          onChange={(v) => d.choose("compactionId", v)}
+          onChange={(v) => d.set("compactionId", v)}
           items={[
             { value: "", label: "Runtime default" },
             ...deployment.compactions.map((c) => ({
@@ -229,13 +225,7 @@ function Editor({
           onChange={(v) => d.set("tags", v)}
         />
       </Group>
-      <DraftActions
-        dirty={d.dirty}
-        saving={d.saving}
-        error={d.error}
-        onSave={d.save}
-        onCancel={d.reset}
-      />
+      <DraftActions draft={d} />
       <DeleteButton
         label={context.display_name ?? context.context_id}
         base={base}

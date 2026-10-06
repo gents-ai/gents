@@ -240,15 +240,12 @@ export function TriggerEditor({
           label="Display name"
           value={d.draft.displayName}
           onChange={(v) => d.set("displayName", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <AreaRow
           id={id("description")}
           label="Description"
           value={d.draft.description}
           onChange={(v) => d.set("description", v)}
-          onCommit={d.commit}
           rows={2}
         />
         <RefRow
@@ -256,7 +253,7 @@ export function TriggerEditor({
           label="Task"
           description="The prompt that runs, and the behavior that runs it."
           value={d.draft.taskId}
-          onChange={(v) => d.choose("taskId", v)}
+          onChange={(v) => d.set("taskId", v)}
           items={[
             ...deployment.tasks.map((t) => ({
               value: t.taskId,
@@ -299,7 +296,7 @@ export function TriggerEditor({
             id={id("sid")}
             label="Schedule"
             value={d.draft.sourceId}
-            onChange={(v) => d.choose("sourceId", v)}
+            onChange={(v) => d.set("sourceId", v)}
             items={[
               ...deployment.schedules.map((s) => ({
                 value: s.schedule_id,
@@ -323,7 +320,7 @@ export function TriggerEditor({
             id={id("sid")}
             label="Event source"
             value={d.draft.sourceId}
-            onChange={(v) => d.choose("sourceId", v)}
+            onChange={(v) => d.set("sourceId", v)}
             items={[
               ...deployment.eventSources.map((s) => ({
                 value: s.event_source_id,
@@ -347,7 +344,7 @@ export function TriggerEditor({
           id={id("enabled")}
           label="Enabled"
           checked={d.draft.enabled}
-          onChange={(v) => d.choose("enabled", v)}
+          onChange={(v) => d.set("enabled", v)}
         />
         <TextRow
           id={id("session")}
@@ -355,15 +352,13 @@ export function TriggerEditor({
           description="Optional session ID or template such as {{ doc.lead_session_id }}. Busy sessions queue the request. Blank starts a new session."
           value={d.draft.sessionIdTemplate}
           onChange={(v) => d.set("sessionIdTemplate", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
           mono
         />
         <ChoiceRow
           id={id("concurrency")}
           label="Concurrency"
           value={d.draft.concurrency}
-          onChange={(v) => d.choose("concurrency", v)}
+          onChange={(v) => d.set("concurrency", v)}
           items={[
             { value: "parallel", label: "Parallel" },
             { value: "serial", label: "Serial (skip when busy)" },
@@ -389,10 +384,7 @@ export function TriggerEditor({
         />
       </Group>
       <DraftActions
-        dirty={d.dirty}
-        saving={d.saving}
-        error={d.error}
-        onSave={d.save}
+        draft={d}
         onCancel={() => {
           d.reset();
           setPending({});

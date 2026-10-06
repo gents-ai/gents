@@ -132,32 +132,24 @@ export function EventSourceEditor({
           label="Display name"
           value={d.draft.displayName}
           onChange={(v) => d.set("displayName", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <TextRow
           id={id("collection")}
           label="Source collection"
           value={d.draft.sourceCollection}
           onChange={(v) => d.set("sourceCollection", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <TextRow
           id={id("kind")}
           label="Event kind"
           value={d.draft.eventKind}
           onChange={(v) => d.set("eventKind", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <TextRow
           id={id("filter")}
           label="Filter"
           value={d.draft.filter}
           onChange={(v) => d.set("filter", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <TextRow
           id={id("correlation")}
@@ -165,14 +157,12 @@ export function EventSourceEditor({
           description="Required when events are grouped."
           value={d.draft.correlationField}
           onChange={(v) => d.set("correlationField", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <ChoiceRow
           id={id("authority")}
           label="Workspace authority"
           value={d.draft.workspaceAuthority}
-          onChange={(v) => d.choose("workspaceAuthority", v)}
+          onChange={(v) => d.set("workspaceAuthority", v)}
           items={[
             { value: "readOnly", label: "Read only" },
             { value: "readWrite", label: "Read / write" },
@@ -187,32 +177,24 @@ export function EventSourceEditor({
           label="Expected count"
           value={d.draft.expectedCount}
           onChange={(v) => d.set("expectedCount", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <TextRow
           id={id("expected-field")}
           label="Expected count source field"
           value={d.draft.expectedCountField}
           onChange={(v) => d.set("expectedCountField", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <NumberRow
           id={id("timeout")}
           label="Timeout seconds"
           value={d.draft.timeoutSecs}
           onChange={(v) => d.set("timeoutSecs", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <NumberRow
           id={id("min-count")}
           label="Minimum count"
           value={d.draft.minCount}
           onChange={(v) => d.set("minCount", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
       </Group>
       <Group title="Metadata">
@@ -223,13 +205,7 @@ export function EventSourceEditor({
           onChange={(v) => d.set("tags", v)}
         />
       </Group>
-      <DraftActions
-        dirty={d.dirty}
-        saving={d.saving}
-        error={d.error}
-        onSave={d.save}
-        onCancel={d.reset}
-      />
+      <DraftActions draft={d} />
       {!embedded && (
         <DeleteButton
           label={source.display_name ?? source.event_source_id}
