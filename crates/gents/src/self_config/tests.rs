@@ -105,6 +105,49 @@ fn tool_names_follow_enabled_categories() {
     assert!(self_config_tool_names(&disabled).is_empty());
 }
 
+#[tokio::test]
+async fn graph_tool_definitions_are_the_registered_definitions() {
+    let node = build_persona_node().await;
+    let mut tool_config = config(&[]);
+    tool_config.enabled = false;
+    tool_config.enable_graph_tools = true;
+    let tools = build_self_config_tools(
+        node,
+        "did:key:zGraphDefinitions".to_owned(),
+        None,
+        &tool_config,
+        test_plugins(),
+    );
+    let mut registered = Vec::new();
+    for tool in &tools {
+        registered.push(tool.definition(String::new()).await);
+    }
+    assert_eq!(registered, graph_tool_definitions().to_vec());
+}
+
+#[test]
+fn graph_tool_definitions_name_only_the_reads_for_other_transports() {
+    let offered: Vec<String> = graph_tool_definitions()
+        .into_iter()
+        .map(|definition| definition.name)
+        .filter(|name| MCP_GRAPH_READ_TOOL_NAMES.contains(&name.as_str()))
+        .collect();
+    assert_eq!(
+        offered,
+        [
+            LIST_GRAPHS_TOOL_NAME,
+            GET_GRAPH_RUN_TOOL_NAME,
+            GET_GRAPH_RESULT_TOOL_NAME
+        ]
+    );
+    for tool in [RUN_GRAPH_TOOL_NAME, CANCEL_GRAPH_RUN_TOOL_NAME] {
+        assert!(
+            !MCP_GRAPH_READ_TOOL_NAMES.contains(&tool),
+            "{tool} starts or stops a run"
+        );
+    }
+}
+
 #[test]
 fn pack_install_requires_its_separate_opt_in() {
     let without_install = config(&["behavior"]);
@@ -1097,6 +1140,90 @@ async fn graph_tools_start_observe_and_cancel_on_the_current_node() {
     assert_eq!(cancelled["cancellation_requested_by"], agent_did);
     assert_eq!(cancelled["cancellation_reason"], "test cleanup");
     assert_ne!(cancelled["status"], "succeeded");
+}
+
+/// The in-session `list_graphs` reply is the text of `list_graphs_value`
+/// with the run tool; without one, as on `/mcp`, no listed graph names a
+/// run tool.
+#[tokio::test]
+async fn list_graphs_value_is_the_in_session_reply_and_names_no_run_tool_without_one() {
+    let node = build_persona_node().await;
+    let identity = persona_identity("list-graphs-value");
+    let agent_did = identity.did().to_string();
+    crate::test_support::install_test_behavior(&node, &agent_did, "setup").await;
+    let mut tool_config = config(&["tools"]);
+    tool_config.behavior_id = "setup".to_owned();
+    tool_config.enable_pack_install = true;
+    tool_config.enable_graph_tools = true;
+    let (_home, plugins) = crate::test_support::home_with_fixture_pack("review_graph");
+    let tools = build_self_config_tools(
+        node.clone(),
+        agent_did.clone(),
+        Some(identity),
+        &tool_config,
+        plugins,
+    );
+    let call = |name: &str, args: Value| {
+        let tool = tools
+            .iter()
+            .find(|tool| tool.name() == name)
+            .unwrap_or_else(|| panic!("missing tool {name}"));
+        tool.call(args.to_string())
+    };
+    let slots = [
+        "--inference-slot",
+        "coordinator=setup:inference",
+        "--inference-slot",
+        "worker=setup:inference",
+        "--inference-slot",
+        "verifier=setup:inference",
+    ];
+    let mut preview = vec!["pack", "preview", "install", "fixture/review_graph"];
+    preview.extend(slots);
+    let previewed = call(CONFIG_TOOL_NAME, json!({ "argv": preview }))
+        .await
+        .expect("review_graph previews");
+    let previewed: Value = serde_json::from_str(&previewed).unwrap();
+    let digest = previewed["artifact_digest"].as_str().unwrap().to_owned();
+    let mut install = vec![
+        "pack",
+        "install",
+        "fixture/review_graph",
+        "--digest",
+        digest.as_str(),
+    ];
+    install.extend(slots);
+    call(CONFIG_TOOL_NAME, json!({ "argv": install }))
+        .await
+        .expect("review_graph installs");
+
+    let in_session: Value =
+        serde_json::from_str(&call(LIST_GRAPHS_TOOL_NAME, json!({})).await.unwrap()).unwrap();
+    let access = graph_access(&node);
+    let shared: Value = serde_json::from_str(
+        &list_graphs_value(&access, &agent_did, Some(RUN_GRAPH_TOOL_NAME))
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(in_session, shared);
+    let graphs = shared["graphs"].as_array().unwrap();
+    assert!(!graphs.is_empty(), "{shared}");
+    assert!(
+        graphs
+            .iter()
+            .all(|graph| graph["run_with"]["tool"] == RUN_GRAPH_TOOL_NAME),
+        "{shared}"
+    );
+
+    let read_only: Value =
+        serde_json::from_str(&list_graphs_value(&access, &agent_did, None).await.unwrap()).unwrap();
+    let listed = read_only["graphs"].as_array().unwrap();
+    assert_eq!(listed.len(), graphs.len());
+    assert!(
+        listed.iter().all(|graph| graph.get("run_with").is_none()),
+        "a surface without a run tool names none: {read_only}"
+    );
 }
 
 /// `RunGraphTool`'s host-ceiling gate for an entry whose `prepare` declares a

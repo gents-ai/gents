@@ -52,6 +52,16 @@ pub const GET_GRAPH_RUN_TOOL_NAME: &str = "get_graph_run";
 pub const GET_GRAPH_RESULT_TOOL_NAME: &str = "get_graph_result";
 pub const CANCEL_GRAPH_RUN_TOOL_NAME: &str = "cancel_graph_run";
 
+/// The graph tools a transport outside a model turn offers: the reads, each
+/// made under the caller's own DefraDB identity. Starting or cancelling a run
+/// there would need an authorization decision that DefraDB does not make for
+/// the graph collections, and gents adds no authorization layer of its own.
+pub const MCP_GRAPH_READ_TOOL_NAMES: [&str; 3] = [
+    LIST_GRAPHS_TOOL_NAME,
+    GET_GRAPH_RUN_TOOL_NAME,
+    GET_GRAPH_RESULT_TOOL_NAME,
+];
+
 /// Model-facing names reserved by the runtime. Configuration is one coherent
 /// argv-style surface; graph execution remains a separate operational surface.
 pub const SELF_CONFIG_TOOL_NAMES: [&str; 7] = [
@@ -2514,6 +2524,63 @@ fn graph_access(node: &Arc<EmbeddedNode>) -> crate::config_client::ConfigAccess 
     crate::config_client::ConfigAccess::Local(node.clone())
 }
 
+/// The `list_graphs` reply text for `owner_did`, read through `access`:
+/// every graph definition the owner holds with its verified active plan,
+/// sorted by graph id, as pretty-printed JSON. `run_tool` names the tool that
+/// starts a listed graph; a surface that offers no run tool passes `None`,
+/// and the reply then carries no `run_with`. Every read runs with
+/// `access`'s identity.
+pub async fn list_graphs_value(
+    access: &crate::config_client::ConfigAccess,
+    owner_did: &str,
+    run_tool: Option<&'static str>,
+) -> Result<String> {
+    let owner = escape_graphql_string(owner_did);
+    let response = access
+        .execute(&format!(
+            r#"{{ GraphDefinition(filter: {{agent_did: {{_eq: "{owner}"}}}}) {{ graph_id agent_did enabled active_revision_digest generation created_at updated_at tags }} }}"#
+        ))
+        .await?;
+    let rows = response
+        .get("data")
+        .and_then(|data| data.get("GraphDefinition"))
+        .and_then(Value::as_array)
+        .context("GraphDefinition query returned no rows array")?;
+    let mut graphs = Vec::with_capacity(rows.len());
+    for definition in rows {
+        let graph_id = definition
+            .get("graph_id")
+            .and_then(Value::as_str)
+            .context("GraphDefinition is missing graph_id")?;
+        let plan =
+            crate::graph_pipeline::load_active_graph_plan_with_access(access, owner_did, graph_id)
+                .await?;
+        let mut graph = json!({ "definition": definition, "active_plan": &plan });
+        if let Some(tool) = run_tool {
+            graph["run_with"] = json!({
+                "tool": tool,
+                "package": plan
+                    .as_ref()
+                    .and_then(|plan| plan.package.as_ref())
+                    .map(|package| package.name.clone()),
+                "graph_id": graph_id,
+                "revision_digest": plan.as_ref().map(|plan| plan.digest.clone()),
+            });
+        }
+        graphs.push(graph);
+    }
+    graphs.sort_by(|left, right| {
+        left["definition"]["graph_id"]
+            .as_str()
+            .cmp(&right["definition"]["graph_id"].as_str())
+    });
+    Ok(serde_json::to_string_pretty(&json!({
+        "agent_did": owner_did,
+        "node_bound": true,
+        "graphs": graphs,
+    }))?)
+}
+
 pub struct ListGraphsTool {
     core: SelfConfigCore,
     node: Arc<EmbeddedNode>,
@@ -2530,65 +2597,16 @@ impl Tool for ListGraphsTool {
     type Output = String;
 
     async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_owned(),
-            description: "Discover installed graphs on this managed node for the current principal. Returns exact active revision digests, package attribution, entry schemas/input contracts, results, limits, and activation state; it never searches a home directory or another endpoint.".to_owned(),
-            parameters: json!({"type":"object","properties":{},"additionalProperties":false}),
-        }
+        list_graphs_definition()
     }
 
     async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let owner = escape_graphql_string(self.core.agent_did());
-        let access = graph_access(&self.node);
-        let response = access
-            .execute(&format!(
-                r#"{{ GraphDefinition(filter: {{agent_did: {{_eq: "{owner}"}}}}) {{ graph_id agent_did enabled active_revision_digest generation created_at updated_at tags }} }}"#
-            ))
-            .await?;
-        let rows = response
-            .get("data")
-            .and_then(|data| data.get("GraphDefinition"))
-            .and_then(Value::as_array)
-            .context("GraphDefinition query returned no rows array")?;
-        let mut graphs = Vec::with_capacity(rows.len());
-        for definition in rows {
-            let graph_id = definition
-                .get("graph_id")
-                .and_then(Value::as_str)
-                .context("GraphDefinition is missing graph_id")?;
-            let plan = crate::graph_pipeline::load_active_graph_plan_with_access(
-                &access,
-                self.core.agent_did(),
-                graph_id,
-            )
-            .await?;
-            let package = plan
-                .as_ref()
-                .and_then(|plan| plan.package.as_ref())
-                .map(|package| package.name.clone());
-            let revision_digest = plan.as_ref().map(|plan| plan.digest.clone());
-            graphs.push(json!({
-                "definition": definition,
-                "active_plan": &plan,
-                "run_with": {
-                    "tool": RUN_GRAPH_TOOL_NAME,
-                    "package": package,
-                    "graph_id": graph_id,
-                    "revision_digest": revision_digest,
-                },
-            }));
-        }
-        graphs.sort_by(|left, right| {
-            left["definition"]["graph_id"]
-                .as_str()
-                .cmp(&right["definition"]["graph_id"].as_str())
-        });
-        serde_json::to_string_pretty(&json!({
-            "agent_did": self.core.agent_did(),
-            "node_bound": true,
-            "graphs": graphs,
-        }))
-        .map_err(|error| SelfConfigError(anyhow!(error)))
+        Ok(list_graphs_value(
+            &graph_access(&self.node),
+            self.core.agent_did(),
+            Some(RUN_GRAPH_TOOL_NAME),
+        )
+        .await?)
     }
 }
 
@@ -2620,21 +2638,7 @@ impl Tool for RunGraphTool {
     type Output = String;
 
     async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_owned(),
-            description: "Start an installed graph on this managed node as the current principal. Supply package (and, if the package has more than one entry, entry) plus input matching that entry's advertised input_schema for a package run; list_graphs returns each entry's input_schema. For another graph, supply the exact graph_id, revision_digest, entry, and input returned by list_graphs. Returns a durable run receipt and observed initial state.".to_owned(),
-            parameters: json!({
-                "type":"object",
-                "properties":{
-                    "package":{"type":"string"},
-                    "graph_id":{"type":"string"},
-                    "revision_digest":{"type":"string"},
-                    "entry":{"type":"string"},
-                    "input":{"type":"object"}
-                },
-                "additionalProperties":false
-            }),
-        }
+        run_graph_definition()
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -2782,11 +2786,7 @@ impl Tool for GetGraphRunTool {
     type Output = String;
 
     async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_owned(),
-            description: "Inspect durable status, stages, requests, cancellation, and result-contract progress for one exact run on this managed node and principal.".to_owned(),
-            parameters: json!({"type":"object","properties":{"run_id":{"type":"string"}},"required":["run_id"],"additionalProperties":false}),
-        }
+        get_graph_run_definition()
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -2812,11 +2812,7 @@ impl Tool for GetGraphResultTool {
     type Output = String;
 
     async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_owned(),
-            description: "Load terminal graph results and their durable documents for one exact run on this managed node and principal. A nonterminal run is reported honestly as not ready.".to_owned(),
-            parameters: json!({"type":"object","properties":{"run_id":{"type":"string"}},"required":["run_id"],"additionalProperties":false}),
-        }
+        get_graph_result_definition()
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -2850,11 +2846,7 @@ impl Tool for CancelGraphRunTool {
     type Output = String;
 
     async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_owned(),
-            description: "Persist cancellation intent and interrupt active requests for one exact graph run on this managed node and principal. Returns the observed durable run state.".to_owned(),
-            parameters: json!({"type":"object","properties":{"run_id":{"type":"string"},"reason":{"type":"string"}},"required":["run_id"],"additionalProperties":false}),
-        }
+        cancel_graph_run_definition()
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -2866,6 +2858,69 @@ impl Tool for CancelGraphRunTool {
         )
         .await?;
         serde_json::to_string_pretty(&view).map_err(|error| SelfConfigError(anyhow!(error)))
+    }
+}
+
+/// The model-facing definitions of the five graph tools, in registration
+/// order. The in-session tools present exactly these, and the `/mcp` reads
+/// present the entries named in [`MCP_GRAPH_READ_TOOL_NAMES`].
+pub fn graph_tool_definitions() -> [ToolDefinition; 5] {
+    [
+        list_graphs_definition(),
+        run_graph_definition(),
+        get_graph_run_definition(),
+        get_graph_result_definition(),
+        cancel_graph_run_definition(),
+    ]
+}
+
+fn list_graphs_definition() -> ToolDefinition {
+    ToolDefinition {
+        name: LIST_GRAPHS_TOOL_NAME.to_owned(),
+        description: "Discover installed graphs on this managed node for the current principal. Returns exact active revision digests, package attribution, entry schemas/input contracts, results, limits, and activation state; it never searches a home directory or another endpoint.".to_owned(),
+        parameters: json!({"type":"object","properties":{},"additionalProperties":false}),
+    }
+}
+
+fn run_graph_definition() -> ToolDefinition {
+    ToolDefinition {
+        name: RUN_GRAPH_TOOL_NAME.to_owned(),
+        description: "Start an installed graph on this managed node as the current principal. Supply package (and, if the package has more than one entry, entry) plus input matching that entry's advertised input_schema for a package run; list_graphs returns each entry's input_schema. For another graph, supply the exact graph_id, revision_digest, entry, and input returned by list_graphs. Returns a durable run receipt and observed initial state.".to_owned(),
+        parameters: json!({
+            "type":"object",
+            "properties":{
+                "package":{"type":"string"},
+                "graph_id":{"type":"string"},
+                "revision_digest":{"type":"string"},
+                "entry":{"type":"string"},
+                "input":{"type":"object"}
+            },
+            "additionalProperties":false
+        }),
+    }
+}
+
+fn get_graph_run_definition() -> ToolDefinition {
+    ToolDefinition {
+        name: GET_GRAPH_RUN_TOOL_NAME.to_owned(),
+        description: "Inspect durable status, stages, requests, cancellation, and result-contract progress for one exact run on this managed node and principal.".to_owned(),
+        parameters: json!({"type":"object","properties":{"run_id":{"type":"string"}},"required":["run_id"],"additionalProperties":false}),
+    }
+}
+
+fn get_graph_result_definition() -> ToolDefinition {
+    ToolDefinition {
+        name: GET_GRAPH_RESULT_TOOL_NAME.to_owned(),
+        description: "Load terminal graph results and their durable documents for one exact run on this managed node and principal. A nonterminal run is reported honestly as not ready.".to_owned(),
+        parameters: json!({"type":"object","properties":{"run_id":{"type":"string"}},"required":["run_id"],"additionalProperties":false}),
+    }
+}
+
+fn cancel_graph_run_definition() -> ToolDefinition {
+    ToolDefinition {
+        name: CANCEL_GRAPH_RUN_TOOL_NAME.to_owned(),
+        description: "Persist cancellation intent and interrupt active requests for one exact graph run on this managed node and principal. Returns the observed durable run state.".to_owned(),
+        parameters: json!({"type":"object","properties":{"run_id":{"type":"string"},"reason":{"type":"string"}},"required":["run_id"],"additionalProperties":false}),
     }
 }
 
