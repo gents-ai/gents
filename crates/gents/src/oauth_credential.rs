@@ -1714,6 +1714,16 @@ pub fn account_failure_state(text: &str) -> Option<&'static str> {
     .flatten()
 }
 
+/// Bounds each token-endpoint exchange, not the persist that follows it: a
+/// hung token endpoint must fail the refresh (classified as a transport error)
+/// instead of stalling every caller, including the serial backend prober, while
+/// cancelling after the response could drop a rotated refresh token.
+const REFRESH_REQUEST_TIMEOUT: std::time::Duration = if cfg!(test) {
+    std::time::Duration::from_secs(5)
+} else {
+    std::time::Duration::from_secs(30)
+};
+
 pub struct DbCredentialBearer {
     node: Arc<EmbeddedNode>,
     agent_did: String,
@@ -1768,7 +1778,10 @@ impl DbCredentialBearer {
             agent_did: agent_did.into(),
             provider: provider.into(),
             credential_id: credential_id.into(),
-            http: reqwest::Client::new(),
+            http: reqwest::Client::builder()
+                .timeout(REFRESH_REQUEST_TIMEOUT)
+                .build()
+                .expect("reqwest client with a timeout builds like Client::new()"),
             cache: Mutex::new(cache_seed),
             refresh_lock: Mutex::new(None),
             is_owner,
