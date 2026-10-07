@@ -1951,6 +1951,83 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_hung_token_endpoint_does_not_stall_the_next_backend_probe() {
+        let node = Arc::new(test_node().await);
+        let did = "did:key:z6MkProbeHungRefresh";
+        let provider = crate::claude_oauth::CLAUDE_OAUTH_PROVIDER;
+        seed_credential_with_refresh_token(
+            &node,
+            did,
+            provider,
+            Utc::now() - chrono::Duration::minutes(1),
+            "refresh-TEST",
+        )
+        .await;
+        let (options, client, health_map) = (
+            probe_options(),
+            reqwest::Client::new(),
+            BackendHealthMap::new(),
+        );
+        let models = ModelsListener::start();
+        let mut claude = claude_backend();
+        claude.agent_did = did.to_string();
+        claude.endpoint = models.endpoint();
+        let mut next = backend("next", models.endpoint());
+        next.agent_did = did.to_string();
+        seed_backend_observation(&node, &claude, "unknown").await;
+        seed_backend_observation(&node, &next, "unknown").await;
+
+        let _env = TOKEN_URL_ENV.lock().await;
+        let _guard =
+            TokenUrlOverrideGuard(crate::claude_oauth::CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV);
+        let (received_tx, _received) = oneshot::channel();
+        let (_never_release, release_rx) = oneshot::channel();
+        let (url, _server) = crate::oauth_credential::test_support::gated_token_server(
+            200,
+            r#"{"access_token":"access-REFRESHED","expires_in":28800}"#,
+            Some((received_tx, release_rx)),
+        )
+        .await;
+        std::env::set_var(
+            crate::claude_oauth::CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV,
+            &url,
+        );
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(30),
+            probe_backends_cycle(
+                &node,
+                &client,
+                &[claude.clone(), next.clone()],
+                Utc::now(),
+                &health_map,
+                &options,
+                Some(OAuthProbeContext {
+                    node: node.clone(),
+                    principal_did: did,
+                }),
+            ),
+        )
+        .await
+        .expect("a token endpoint that never answers must not stall the probe cycle");
+        assert_eq!(outcome.promotable, vec!["next".to_string()]);
+        let claude_health = health_map.get("claude").await.expect("claude entry");
+        assert_eq!(claude_health.failure_count, 1);
+        assert!(
+            claude_health
+                .last_error
+                .as_deref()
+                .is_some_and(|error| error.contains("timed out")),
+            "{:?}",
+            claude_health.last_error
+        );
+        assert_eq!(
+            health_map.get("next").await.expect("next entry").state,
+            BackendHealthState::Healthy
+        );
+        models.shutdown().await;
+    }
+
+    #[tokio::test]
     async fn oauth_kinds_missing_credential_fails_with_login_hint() {
         let node = Arc::new(test_node().await);
         let (options, client, health_map) = (
