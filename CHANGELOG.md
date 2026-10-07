@@ -16,6 +16,55 @@ source consistency checks, not a separate runtime compatibility version.
   against the field commit the manifest pinned. Captures already stored in the
   earlier formats keep decoding unchanged.
 
+- Plugins reach the network through the host (#2300). A plugin whose granted
+  manifold carries an `OutboundHttp` allow-list answers a call with
+  `http_calls` request batches; the host performs the admitted ones and
+  resumes it with `http_results`, for model tools and graph stages alike.
+  Entries are hosts, `*.domain`, or IP literals, with optional `http://` and
+  `:port`. Hostname entries reach public addresses only, checked on the
+  addresses each connection resolves. The host follows no redirect; a 3xx
+  goes back to the plugin, whose next request is admitted afresh. Only a
+  literal IP entry grants an internal address. Requests carry no host proxy,
+  cookies or credentials. Rounds, requests, body bytes and per-request time
+  are capped. The guest never runs with `net`, and a pack
+  declaring `OutboundFull` or a malformed entry is refused. Granting still
+  goes through `--grant-authority`.
+
+- Rig's completion-model and client traits, usage and error types no longer
+  leak into the daemon, one-shot, title, compaction or backend admission code:
+  those owners use native `ProviderModel`/`ProviderClient` handles and admission
+  errors and usage, and a structure test keeps Rig paths behind their owners
+  (#438). No behavior change.
+- The owned loop's output stream is native: `LoopStreamItem` carries native
+  text, reasoning, tool-call, tool-result and final items, and stream failures
+  are `LoopStreamError` with a `LoopFailureCause`, so error classification,
+  retry and stream processing no longer name Rig (#438). Failure messages are
+  unchanged.
+- iOS builds again: the DB Explorer window keeps its desktop-only title, size and
+  focus calls off mobile targets, and CI checks the iOS simulator build on main.
+
+- Pack scenarios can allow folders for plugins (#2303). `experiment.json`
+  takes `allowed_folders: [{"path", "access"}]`. Each path is relative to
+  `init.tool_root`, stays inside it, and is created when missing. The folders
+  are written to the run's home the way `gents plugin dirs add` writes them,
+  before the server starts. A graph stage, which binds with no working folder,
+  can then write where the scenario allows `read_write`, such as a data_tables
+  export or a charts `chart-save` node.
+- One plugin can read and write (#2301). `bind_dir.access` is now the most a
+  plugin may use, and `bind_dir.write_fields` names the inputs that make a call
+  write. A call that sets none of them asks only for `read`: it binds under a
+  read-only or working folder and runs read-only even where writing is allowed.
+  A writing call under a read-only folder is refused with the
+  `gents plugin dirs add ... --access read_write` command, or the advice to call
+  again without the write field. Packs no longer need a second `*_write`
+  plugin.
+- Plugin tools can return images (#2302). A result shaped
+  `{"response", "parts": [{"type": "image", "data", "mimeType"}]}` reaches a
+  Claude model as one text part plus whole image parts. Before this change, an
+  image past the 50 KiB tool-result text bound was cut into broken text. OpenAI,
+  Responses, Codex and xAI backends, which refuse images in tool results, get a
+  note in place of each image. Before, the whole request failed. The shape is
+  now part of the documented plugin ABI.
 - Grok subscription backends advertise client version 1.0.46, above the
   proxy's floor (#2274). A 426 version gate now fails fast instead of burning
   the retry ladder, and `grok-auth-probe` and model discovery name the version

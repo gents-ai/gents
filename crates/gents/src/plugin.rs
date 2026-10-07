@@ -15,6 +15,30 @@
 //! is diagnostics for a human. Nothing else carries the call: no second
 //! channel, no shared memory, no side import for passing data.
 //!
+//! Called as a model tool ([`tool::PluginTool`]), that value is the tool's
+//! output, which the loop splits the way it splits every tool's output
+//! (`gents_protocol::message::ToolResultContent::from_tool_output`):
+//!
+//! - `{"response": <any JSON>, "parts": [...]}` (either key alone is enough)
+//!   is split into parts. `response` becomes one text part, written as compact
+//!   JSON. Each `parts` entry `{"type": "image", "data": "<base64>",
+//!   "mimeType": "image/png"}` becomes one image part, in order. Other entries
+//!   are dropped.
+//! - A lone `{"type": "image", "data", "mimeType"}` is one image part.
+//! - Anything else is one text part holding the value as JSON.
+//!
+//! Text parts are held to the loop's tool-result text bound. Image parts are
+//! passed whole and are bounded only by the plugin's output limit
+//! (`limits.max_output_mib`). Only a provider whose wire carries images in
+//! tool results receives them (Claude Messages today, see
+//! `ProviderInputProfile::carries_tool_result_images`). For any other provider
+//! the loop puts a short note in place of each image instead of failing the
+//! request. The model sees an image only within the request that ran the call.
+//! Later requests do not carry it, because the transcript records tool output
+//! as text, presented within the same text bound.
+//! Called as a graph stage ([`crate::callback::plugin`]), the value is the
+//! stage's output documents and is never split.
+//!
 //! Seven invariants hold for every call, each enforced here rather than
 //! trusted from the caller:
 //!
@@ -30,11 +54,12 @@
 //!    on every axis, and forces `listen` to `None` regardless of either
 //!    side. See [`PluginRunner::compile`] for why the ceiling is
 //!    `Manifold::sealed()` today.
-//! 3. **A plugin never listens.** WASI preview 1 command modules (what
-//!    every bounded dispatch path in `run_afb_bytes` runs) have no socket
-//!    import wired at all, so this holds structurally; [`narrow_manifold`]
-//!    enforces it a second time regardless, as defense in depth against a
-//!    manifold that somehow reached this file unvalidated.
+//! 3. **A plugin never listens and never holds a socket.** WASI preview 1
+//!    command modules (what every bounded dispatch path in `run_afb_bytes`
+//!    runs) have no socket import wired at all, so this holds structurally;
+//!    [`narrow_manifold`] forces `listen` off and every run strips `net`
+//!    regardless, as defense in depth. A granted `net` axis is served by the
+//!    host instead ([`http_calls`]).
 //! 4. **A plugin that cannot be run with every bound enforced is refused
 //!    before it is ever called, not run with the bound silently dropped.**
 //!    `run_afb_bytes` does not enforce `stdin`, `fuel`, `memory_bytes`, or
@@ -405,17 +430,20 @@ impl PluginRunner {
             // this artifact's dispatch path can honour that grant at all,
             // independent of whether one was declared here.
             let supported = afterburner::afb_run::bounds_for(&afb);
-            let (enforced, kind) = match binding.access {
-                BindAccess::Read => (supported.manifold_fs_ro, "read-only"),
-                BindAccess::ReadWrite => (supported.manifold_fs_rw, "read-write"),
-            };
-            anyhow::ensure!(
-                enforced,
-                "plugin {:?} declares bind_dir, but its dispatch path cannot enforce a \
-                 {kind} filesystem grant, so a caller-bound directory would not actually be \
-                 contained",
-                plugin.name
-            );
+            let reads = binding.access == BindAccess::Read || !binding.write_fields.is_empty();
+            let writes = binding.access == BindAccess::ReadWrite;
+            for (needed, enforced, kind) in [
+                (reads, supported.manifold_fs_ro, "read-only"),
+                (writes, supported.manifold_fs_rw, "read-write"),
+            ] {
+                anyhow::ensure!(
+                    !needed || enforced,
+                    "plugin {:?} declares bind_dir, but its dispatch path cannot enforce a \
+                     {kind} filesystem grant, so a caller-bound directory would not actually be \
+                     contained",
+                    plugin.name
+                );
+            }
         }
 
         Ok(Self {
@@ -436,10 +464,11 @@ impl PluginRunner {
     }
 
     /// Runs it once, binding `bound` into `plugin.bind_dir`'s declared
-    /// input field, with the access the plugin declared, and only for this
-    /// one call. Refuses outright when the plugin declares no `bind_dir`
-    /// (the field it would overwrite does not exist) or when `bound` was
-    /// allowed less access than the plugin declared.
+    /// input field, with the access this call asks for
+    /// ([`crate::pack::PluginDirBinding::call_access`]), and only for this one
+    /// call. Refuses outright when the plugin declares no `bind_dir` (the
+    /// field it would overwrite does not exist) or when `bound` was allowed
+    /// less access than the call asks for.
     ///
     /// `arguments[bind_dir.input_field]` is overwritten with `bound`'s own
     /// canonical target regardless of what the caller passed, so a plugin
@@ -449,7 +478,7 @@ impl PluginRunner {
     /// a missing operator input is treated as an empty object rather than
     /// refused; any other non-object value is still refused. The manifold
     /// this call actually runs under is the admitted one with `fs` replaced
-    /// by exactly `bound`'s directory - never wider, and never recorded as a
+    /// by exactly `bound`'s directory at the call's access - never wider, and never recorded as a
     /// standing grant (the install record's `granted` is untouched; see
     /// [`BoundDir`]'s own doc).
     pub fn call_bound(
@@ -464,11 +493,12 @@ impl PluginRunner {
                 self.plugin.name
             )
         })?;
+        let access = bind_dir.call_access(arguments);
         anyhow::ensure!(
-            bound.access() >= bind_dir.access,
-            "plugin {:?} needs {} access, but {} is only allowed {}",
+            bound.access() >= access,
+            "plugin {:?} needs {} access for this call, but {} is only allowed {}",
             self.plugin.name,
-            bind_dir.access.as_str(),
+            access.as_str(),
             bound.path().display(),
             bound.access().as_str()
         );
@@ -505,7 +535,7 @@ impl PluginRunner {
         }
         let roots = vec![bound.path().to_path_buf()];
         let manifold = Manifold {
-            fs: match bind_dir.access {
+            fs: match access {
                 BindAccess::Read => FsAccess::ReadOnly(roots),
                 BindAccess::ReadWrite => FsAccess::ReadWrite(roots),
             },
@@ -534,6 +564,13 @@ impl PluginRunner {
             matches!(manifold.listen, ListenAccess::None),
             "a granted manifold must never carry a listen capability"
         );
+        // The guest never holds network authority, even on a dispatch path
+        // that might honour it: the host serves the grant through
+        // `http_calls`, where its allow-list and address checks apply.
+        let manifold = Manifold {
+            net: NetAccess::None,
+            ..manifold
+        };
 
         start_wasm_trap_handler_with_signals_blocked()?;
         let stdin =
@@ -715,36 +752,41 @@ fn start_wasm_trap_handler_with_signals_blocked(
 /// that ran fully bounded was reported as unsafe.
 fn unbounded_dispatch_reason(afb: &afterburner_afb::Afb, granted: &Manifold) -> Option<String> {
     let supported = afterburner::afb_run::bounds_for(afb);
-    let mut missing: Vec<&str> = Vec::new();
+    let mut missing: Vec<String> = Vec::new();
 
     // Every call carries its arguments on stdin and all three budget axes
     // (see [`PluginRunner::call`]), so these are always asked for.
     if !supported.stdin {
-        missing.push("the arguments on stdin");
+        missing.push("the arguments on stdin".to_owned());
     }
     if !supported.fuel {
-        missing.push("the fuel ceiling");
+        missing.push("the fuel ceiling".to_owned());
     }
     if !supported.memory_bytes {
-        missing.push("the memory ceiling");
+        missing.push("the memory ceiling".to_owned());
     }
     if !supported.timeout {
-        missing.push("the wall-clock budget");
+        missing.push("the wall-clock budget".to_owned());
     }
 
     // The manifold axes are asked for only when this plugin was actually
     // granted them. An empty grant list is not a grant.
     match &granted.fs {
         FsAccess::ReadOnly(paths) if !paths.is_empty() && !supported.manifold_fs_ro => {
-            missing.push("the read-only filesystem grant")
+            missing.push("the read-only filesystem grant".to_owned())
         }
         FsAccess::ReadWrite(paths) if !paths.is_empty() && !supported.manifold_fs_rw => {
-            missing.push("the read-write filesystem grant")
+            missing.push("the read-write filesystem grant".to_owned())
         }
         _ => {}
     }
     if !matches!(granted.env, EnvAccess::None) && !supported.manifold_env {
-        missing.push("the environment grant");
+        missing.push("the environment grant".to_owned());
+    }
+    // The network axis is the host's to enforce on every dispatch path, so
+    // only a grant the host cannot serve is unbounded.
+    if let Err(why) = http_calls::net_grant(&granted.net) {
+        missing.push(format!("the network grant ({why})"));
     }
 
     if missing.is_empty() {
@@ -959,8 +1001,10 @@ pub fn retry_backoff(attempts: u32) -> std::time::Duration {
         .min(std::time::Duration::from_secs(60))
 }
 pub mod executor;
+pub mod http_calls;
 pub mod install;
 pub mod model_calls;
+mod rounds;
 pub mod store;
 pub mod tool;
 

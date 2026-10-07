@@ -42,77 +42,81 @@ impl ToolCallLifecycle {
         requester_did: Option<&str>,
         require_complete: bool,
     ) -> Result<AcceptedToolCall> {
-        ConfigAccess::transact_local(node, None, "tool_call.load_direct_admission", |txn| {
-            Box::pin(async move {
-                let scope =
-                    crate::session::session_scope_filter(agent_did, session_id, requester_did);
-                let tool_id = escape_graphql_string(tool_doc_id);
-                let response = txn
-                    .execute(&format!(
-                        r#"{{ AgentToolCall(filter: {{
+        ConfigAccess::transact_local_readonly(
+            node,
+            None,
+            "tool_call.load_direct_admission",
+            |txn| {
+                Box::pin(async move {
+                    let scope =
+                        crate::session::session_scope_filter(agent_did, session_id, requester_did);
+                    let tool_id = escape_graphql_string(tool_doc_id);
+                    let response = txn
+                        .execute(&format!(
+                            r#"{{ AgentToolCall(filter: {{
                     {scope}, _docID: {{ _eq: "{tool_id}" }}
                 }}, limit: 2) {{ _docID request_doc_id tool_call_id tool_name
                     message_sequence lifecycle_state await_mode spawned_by_tool_call_doc_id }} }}"#
-                    ))
-                    .await?;
-                let rows = response["data"]["AgentToolCall"]
-                    .as_array()
-                    .context("direct admission lookup omitted tool rows")?;
-                anyhow::ensure!(
-                    rows.len() == 1,
-                    "direct admission tool is missing or ambiguous"
-                );
-                let tool = &rows[0];
-                anyhow::ensure!(
-                    tool["spawned_by_tool_call_doc_id"].is_null(),
-                    "spawned process admission belongs to its accepted meta-call owner"
-                );
-                let request_doc_id = tool["request_doc_id"]
-                    .as_str()
-                    .filter(|id| !id.is_empty())
-                    .context("accepted tool lacks request document identity")?;
-                let native_id = tool["tool_call_id"]
-                    .as_str()
-                    .context("accepted tool lacks native ID")?;
-                let name = tool["tool_name"]
-                    .as_str()
-                    .context("accepted tool lacks name")?;
-                let sequence = tool["message_sequence"]
-                    .as_u64()
-                    .and_then(|value| u32::try_from(value).ok())
-                    .context("accepted tool lacks valid message sequence")?;
-                let await_mode = crate::tool_call_lifecycle::AwaitMode::from_persisted(
-                    tool["await_mode"].as_str().unwrap_or("foreground"),
-                )
-                .context("accepted tool has an invalid await mode")?;
-                let request = escape_graphql_string(request_doc_id);
-                let response = txn
-                    .execute(&format!(
-                        r#"{{ AgentMessage(filter: {{
+                        ))
+                        .await?;
+                    let rows = response["data"]["AgentToolCall"]
+                        .as_array()
+                        .context("direct admission lookup omitted tool rows")?;
+                    anyhow::ensure!(
+                        rows.len() == 1,
+                        "direct admission tool is missing or ambiguous"
+                    );
+                    let tool = &rows[0];
+                    anyhow::ensure!(
+                        tool["spawned_by_tool_call_doc_id"].is_null(),
+                        "spawned process admission belongs to its accepted meta-call owner"
+                    );
+                    let request_doc_id = tool["request_doc_id"]
+                        .as_str()
+                        .filter(|id| !id.is_empty())
+                        .context("accepted tool lacks request document identity")?;
+                    let native_id = tool["tool_call_id"]
+                        .as_str()
+                        .context("accepted tool lacks native ID")?;
+                    let name = tool["tool_name"]
+                        .as_str()
+                        .context("accepted tool lacks name")?;
+                    let sequence = tool["message_sequence"]
+                        .as_u64()
+                        .and_then(|value| u32::try_from(value).ok())
+                        .context("accepted tool lacks valid message sequence")?;
+                    let await_mode = crate::tool_call_lifecycle::AwaitMode::from_persisted(
+                        tool["await_mode"].as_str().unwrap_or("foreground"),
+                    )
+                    .context("accepted tool has an invalid await mode")?;
+                    let request = escape_graphql_string(request_doc_id);
+                    let response = txn
+                        .execute(&format!(
+                            r#"{{ AgentMessage(filter: {{
                     {scope}, request_doc_id: {{ _eq: "{request}" }}, sequence: {{ _eq: {sequence} }}
                 }}, limit: 2) {{ {AGENT_MESSAGE_FIELDS} }} }}"#
-                    ))
+                        ))
+                        .await?;
+                    let headers = response["data"]["AgentMessage"]
+                        .as_array()
+                        .context("direct admission lookup omitted header rows")?;
+                    anyhow::ensure!(
+                        headers.len() == 1,
+                        "accepted header is missing or ambiguous"
+                    );
+                    let header = decode_transcript_message_row(&headers[0])?;
+                    let (message, _) = crate::session::load_canonical_message_in_txn(
+                        txn,
+                        &header.doc_id,
+                        agent_did,
+                        requester_did,
+                    )
                     .await?;
-                let headers = response["data"]["AgentMessage"]
-                    .as_array()
-                    .context("direct admission lookup omitted header rows")?;
-                anyhow::ensure!(
-                    headers.len() == 1,
-                    "accepted header is missing or ambiguous"
-                );
-                let header = decode_transcript_message_row(&headers[0])?;
-                let (message, _) = crate::session::load_canonical_message_in_txn(
-                    txn,
-                    &header.doc_id,
-                    agent_did,
-                    requester_did,
-                )
-                .await?;
-                anyhow::ensure!(
-                    message.role == MessageRole::Assistant,
-                    "direct tool binding requires assistant publication"
-                );
-                anyhow::ensure!(
+                    anyhow::ensure!(
+                        message.role == MessageRole::Assistant,
+                        "direct tool binding requires assistant publication"
+                    );
+                    anyhow::ensure!(
                     message.outcome == OutputOutcome::Complete
                         || (!require_complete
                             && matches!(
@@ -121,52 +125,53 @@ impl ToolCallLifecycle {
                             )),
                     "partial diagnostic tool bindings must already be terminal and cannot dispatch"
                 );
-                let MessagePublication::RequestExecution {
-                    execution_generation,
-                } = &message.publication
-                else {
-                    anyhow::bail!("direct dispatch requires provider execution publication");
-                };
-                let matches = message
-                    .blocks
-                    .iter()
-                    .filter_map(|block| match block {
-                        MessageBlock::ToolCall {
-                            tool_call_doc_id,
-                            id,
-                            call_id,
-                            name: block_name,
-                            arguments,
-                            ..
-                        } if tool_call_doc_id == tool_doc_id
-                            && id == native_id
-                            && block_name == name =>
-                        {
-                            Some((call_id, arguments))
-                        }
-                        _ => None,
+                    let MessagePublication::RequestExecution {
+                        execution_generation,
+                    } = &message.publication
+                    else {
+                        anyhow::bail!("direct dispatch requires provider execution publication");
+                    };
+                    let matches = message
+                        .blocks
+                        .iter()
+                        .filter_map(|block| match block {
+                            MessageBlock::ToolCall {
+                                tool_call_doc_id,
+                                id,
+                                call_id,
+                                name: block_name,
+                                arguments,
+                                ..
+                            } if tool_call_doc_id == tool_doc_id
+                                && id == native_id
+                                && block_name == name =>
+                            {
+                                Some((call_id, arguments))
+                            }
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>();
+                    anyhow::ensure!(
+                        matches.len() == 1,
+                        "accepted header does not uniquely bind this physical tool"
+                    );
+                    let (call_id, arguments) = matches[0];
+                    Ok(AcceptedToolCall {
+                        tool_call_doc_id: tool_doc_id.to_owned(),
+                        request_doc_id: request_doc_id.to_owned(),
+                        session_id: session_id.to_owned(),
+                        accepted_header_doc_id: header.doc_id,
+                        message_sequence: sequence,
+                        id: native_id.to_owned(),
+                        call_id: call_id.clone(),
+                        tool_name: name.to_owned(),
+                        execution_generation: execution_generation.clone(),
+                        arguments: arguments.clone(),
+                        await_mode,
                     })
-                    .collect::<Vec<_>>();
-                anyhow::ensure!(
-                    matches.len() == 1,
-                    "accepted header does not uniquely bind this physical tool"
-                );
-                let (call_id, arguments) = matches[0];
-                Ok(AcceptedToolCall {
-                    tool_call_doc_id: tool_doc_id.to_owned(),
-                    request_doc_id: request_doc_id.to_owned(),
-                    session_id: session_id.to_owned(),
-                    accepted_header_doc_id: header.doc_id,
-                    message_sequence: sequence,
-                    id: native_id.to_owned(),
-                    call_id: call_id.clone(),
-                    tool_name: name.to_owned(),
-                    execution_generation: execution_generation.clone(),
-                    arguments: arguments.clone(),
-                    await_mode,
                 })
-            })
-        })
+            },
+        )
         .await
     }
 }

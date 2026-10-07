@@ -1715,6 +1715,17 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "plugin_resource_cases".into(),
         "PluginModelSlotCases".into(),
     ));
+    assert!(snapshot.plugin_resource_cases["network"]
+        .as_array()
+        .is_some_and(|rows| !rows.is_empty()));
+    emitted.insert(("plugin_resource_cases".into(), "PluginNetworkCases".into()));
+    assert!(snapshot.plugin_resource_cases["call_access"]
+        .as_array()
+        .is_some_and(|rows| !rows.is_empty()));
+    emitted.insert((
+        "plugin_resource_cases".into(),
+        "PluginCallAccessCases".into(),
+    ));
     assert!(snapshot.configuration_scope_cases["cases"]
         .as_array()
         .is_some_and(|rows| !rows.is_empty()));

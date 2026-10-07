@@ -32,6 +32,41 @@ fn ping_snapshot(generation: u64, emit_outcome: bool) -> Arc<ActiveRuntimeSnapsh
     )
 }
 
+#[tokio::test]
+async fn seeded_arrival_delivery_does_not_wait_for_the_mutation_gate() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(&node).await.unwrap();
+    node.add_schema("type OutcomePing { message: String }")
+        .await
+        .unwrap();
+    let snapshot = ping_snapshot(1, false);
+    persist_event_bindings(&node, &snapshot).await;
+    let (_tx, rx) = watch::channel(snapshot.clone());
+    let mut source = EventSource::new(rx, node.clone(), CancellationToken::new());
+    source.reconcile_subscriptions(&snapshot).await;
+    let response = crate::config_client::ConfigAccess::Local(node.clone())
+        .write(
+            "test.cursor_gate_source",
+            r#"mutation { create_OutcomePing(input: {message: "ready"}) {_docID} }"#,
+        )
+        .await
+        .unwrap();
+    let doc_id = crate::graphql::created_doc_id(&response, "OutcomePing").unwrap();
+    let held = crate::config_client::ConfigApplyTxn::begin_local(&node, None)
+        .await
+        .unwrap();
+    let intent = tokio::time::timeout(Duration::from_secs(5), source.next_fire())
+        .await
+        .expect("seeded arrival reads must not wait for the mutation gate")
+        .expect("source remains open");
+    held.discard().await.unwrap();
+    assert_eq!(
+        intent.event_vars["source_doc_id"].as_str(),
+        Some(doc_id.as_str())
+    );
+    assert_eq!(intent.trigger_id.as_deref(), Some("ping-trigger"));
+}
+
 /// One `OutcomePing` without `handoff_id`, created after the trigger's cursor
 /// is seeded, delivered once through the durable arrival path.
 async fn first_delivery(emit_outcome: bool) -> (Delivery, FireIntent) {

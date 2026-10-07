@@ -662,6 +662,20 @@ async fn first_seen_source_create_materializes_owner_invocation() {
     let response = node.execute(&binding_mutation).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
 
+    let held = crate::config_client::ConfigApplyTxn::begin_local(&node, None)
+        .await
+        .unwrap();
+    let source = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        super::documents::load_event_source(&node, "events-scan", &owner_agent_did),
+    )
+    .await
+    .expect("callback configuration lookup must not wait for the mutation gate")
+    .unwrap()
+    .expect("configured event source");
+    assert_eq!(source.event_source_id, "events-scan");
+    held.discard().await.unwrap();
+
     let cancel = tokio_util::sync::CancellationToken::new();
     let mut engine =
         super::CallbackEngine::new(node.clone(), owner_agent_did.clone(), None, cancel);

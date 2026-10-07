@@ -35,6 +35,14 @@ pub enum ProviderInputProfile {
 }
 
 impl ProviderInputProfile {
+    /// Whether this wire carries an image inside a tool result. Only Claude
+    /// Messages does: rig's OpenAI Chat Completions and Responses converters
+    /// refuse the whole request over one, and its OpenRouter converter turns
+    /// it into a note.
+    pub fn carries_tool_result_images(self) -> bool {
+        self == Self::ClaudeMessages
+    }
+
     /// The wire on which this profile replays reasoning; Chat Completions
     /// carries none.
     pub fn replay_wire(self) -> Option<crate::claude_messages_body::ReplayWire> {
@@ -112,13 +120,13 @@ impl ProviderInputCounter {
     }
 
     pub fn project_request(&self, request: &CompletionRequest) -> Result<ProviderInputProjection> {
-        let body = self.project_body(request)?;
+        let body = self.estimated_body(request)?;
         let documentless_body = if request.documents.is_empty() {
             None
         } else {
             let mut documentless = request.clone();
             documentless.documents.clear();
-            Some(self.project_body(&documentless)?)
+            Some(self.estimated_body(&documentless)?)
         };
 
         projected_accounting(body, documentless_body, self.profile.estimator_name())
@@ -129,7 +137,20 @@ impl ProviderInputCounter {
     /// path; rendered-request accounting calls `project_request` once for the
     /// request that may actually be dispatched.
     pub fn estimate_request(&self, request: &CompletionRequest) -> Result<usize> {
-        estimate_input_body(self.project_body(request)?)
+        estimate_input_body(self.estimated_body(request)?)
+    }
+
+    /// The wire body as the byte estimate sees it. Claude counts an image by
+    /// its pixels, not its base64 length or URL, so each image source is charged
+    /// [`CLAUDE_IMAGE_TOKENS`], the ceiling for current models.
+    fn estimated_body(&self, request: &CompletionRequest) -> Result<Value> {
+        let mut body = self.project_body(request)?;
+        if self.profile == ProviderInputProfile::ClaudeMessages {
+            if let Some(messages) = body.get_mut("messages") {
+                charge_claude_images(messages);
+            }
+        }
+        Ok(body)
     }
 
     // pub, not private: gents' own provider_input tests project a request
@@ -323,6 +344,25 @@ impl ProviderInputCounter {
             }
         }
         Ok(Value::Object(body))
+    }
+}
+
+/// The most visual tokens one image costs on current Claude models (4,784 on
+/// Claude 4.7 and later; earlier models stop near 1,600). One ceiling for every
+/// model: an overcount only compacts or refuses earlier, an undercount admits
+/// a request over the context window.
+pub const CLAUDE_IMAGE_TOKENS: usize = 4_784;
+
+fn charge_claude_images(value: &mut Value) {
+    match value {
+        Value::Object(map) if map.get("type").and_then(Value::as_str) == Some("image") => {
+            if let Some(source) = map.get_mut("source") {
+                *source = Value::String("x".repeat(CLAUDE_IMAGE_TOKENS * 4));
+            }
+        }
+        Value::Object(map) => map.values_mut().for_each(charge_claude_images),
+        Value::Array(items) => items.iter_mut().for_each(charge_claude_images),
+        _ => {}
     }
 }
 

@@ -4,13 +4,15 @@
 //! The SSE response parser and the OAuth-bearing HTTP client stay native.
 
 use gents_protocol::message::{
-    AssistantContent, Message, ReasoningContent, ToolResultContent, UserContent,
+    AssistantContent, DocumentSourceKind, ImageMediaType, Message, ReasoningContent,
+    ToolResultContent, UserContent,
 };
 use gents_protocol::output::OutputSource;
 use rig::completion::{CompletionRequest, ToolDefinition};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use crate::loop_stream::TOOL_RESULT_IMAGE_OMITTED;
 use crate::provider_input::replay_frontier::{
     admissible_turn_drop, anchored, ords, FlatItem, Turn,
 };
@@ -667,19 +669,10 @@ fn anthropic_messages(history: &[Message]) -> anyhow::Result<Vec<Value>> {
                             blocks.push(json!({"type": "text", "text": text.text}));
                         }
                         UserContent::ToolResult(result) => {
-                            let body: String = result
-                                .content
-                                .iter()
-                                .filter_map(|item| match item {
-                                    ToolResultContent::Text(text) => Some(text.text.as_str()),
-                                    _ => None,
-                                })
-                                .collect::<Vec<_>>()
-                                .join("");
                             blocks.push(json!({
                                 "type": "tool_result",
                                 "tool_use_id": result.id,
-                                "content": body,
+                                "content": tool_result_content(&result.content),
                             }));
                         }
                         _ => {}
@@ -700,6 +693,56 @@ fn anthropic_messages(history: &[Message]) -> anyhow::Result<Vec<Value>> {
         }
     }
     Ok(out)
+}
+
+/// A text-only result is one string, as it always was. A result with an image
+/// is Anthropic's block array: text blocks, and an image block per image in a
+/// source the API accepts (base64 JPEG/PNG/GIF/WebP, or a URL). Any other
+/// image becomes [`TOOL_RESULT_IMAGE_OMITTED`] rather than a request the API
+/// refuses whole.
+fn tool_result_content(content: &[ToolResultContent]) -> Value {
+    if !content
+        .iter()
+        .any(|item| matches!(item, ToolResultContent::Image(_)))
+    {
+        return Value::String(
+            content
+                .iter()
+                .filter_map(|item| match item {
+                    ToolResultContent::Text(text) => Some(text.text.as_str()),
+                    _ => None,
+                })
+                .collect(),
+        );
+    }
+    let text = |text: &str| json!({"type": "text", "text": text});
+    content
+        .iter()
+        .filter_map(|item| match item {
+            ToolResultContent::Text(item) if item.text.is_empty() => None,
+            ToolResultContent::Text(item) => Some(text(&item.text)),
+            ToolResultContent::Image(image) => {
+                let media_type = match image.media_type {
+                    Some(ImageMediaType::JPEG) => Some("image/jpeg"),
+                    Some(ImageMediaType::PNG) => Some("image/png"),
+                    Some(ImageMediaType::GIF) => Some("image/gif"),
+                    Some(ImageMediaType::WEBP) => Some("image/webp"),
+                    _ => None,
+                };
+                Some(match (&image.data, media_type) {
+                    (DocumentSourceKind::Base64(data), Some(media_type)) => json!({
+                        "type": "image",
+                        "source": {"type": "base64", "media_type": media_type, "data": data},
+                    }),
+                    (DocumentSourceKind::Url(url), _) => json!({
+                        "type": "image",
+                        "source": {"type": "url", "url": url},
+                    }),
+                    _ => text(TOOL_RESULT_IMAGE_OMITTED),
+                })
+            }
+        })
+        .collect()
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]

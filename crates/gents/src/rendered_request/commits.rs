@@ -21,7 +21,6 @@ use anyhow::{Context, Result};
 
 use crate::config_client::ConfigAccess;
 use crate::graphql::escape_graphql_string;
-use defra_node::EmbeddedNode;
 
 /// The field-commit witness for a stored rendered-request field value.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,20 +78,6 @@ pub(crate) async fn field_commit_in_txn(
     select_field_commit(&response, field_name)
 }
 
-pub(crate) async fn field_commit_embedded(
-    node: &EmbeddedNode,
-    doc_id: &str,
-    field_name: &str,
-) -> Result<Option<RequestJsonCommit>> {
-    let query = format!(
-        r#"query {{ _commits(docID: "{doc_id}") {{ cid height fieldName }} }}"#,
-        doc_id = escape_graphql_string(doc_id),
-    );
-    let response = node.execute(&query).await;
-    crate::graphql::ensure_no_errors(&response, "reading rendered-request field commit")?;
-    select_field_commit(&serde_json::json!({"data": response.data}), field_name)
-}
-
 /// Pure selection over a `_commits` response: pick the highest
 /// `request_json` field commit, in Rust rather than in a query filter.
 #[cfg(test)]
@@ -100,7 +85,7 @@ fn select_request_json_commit(response: &serde_json::Value) -> Result<Option<Req
     select_field_commit(response, "request_json")
 }
 
-fn select_field_commit(
+pub(super) fn select_field_commit(
     response: &serde_json::Value,
     field_name: &str,
 ) -> Result<Option<RequestJsonCommit>> {

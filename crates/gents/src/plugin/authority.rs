@@ -202,6 +202,7 @@ mod tests {
             original_field: None,
             description: "The directory to scan".to_owned(),
             access: Default::default(),
+            write_fields: Vec::new(),
         });
         declaration.limits = Some(crate::pack::PluginLimits {
             memory_mib: Some(512),
@@ -224,6 +225,7 @@ mod tests {
             original_field: None,
             description: "scan target".to_owned(),
             access: Default::default(),
+            write_fields: Vec::new(),
         });
         let manifold = Manifold {
             net: NetAccess::OutboundHttp(None),

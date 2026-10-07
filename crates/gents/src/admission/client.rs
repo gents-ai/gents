@@ -2,167 +2,90 @@ use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use gents_loop::rig_compat::cached_input_tokens_observation;
-use rig::client::CompletionClient;
-use rig::completion::{CompletionError, CompletionModel, CompletionRequest, CompletionResponse};
-use rig::streaming::StreamingCompletionResponse;
 use tokio_util::sync::CancellationToken;
 
 use super::controller::PendingCallMetadata;
-use super::stream_guard::hold_stream_guard;
+use super::permit::AdmissionPermit;
 use super::AdmissionRegistry;
 use crate::watcher::AgentRequest;
 
 const CANCELLED_BY_INTERRUPT_MSG: &str = "inference cancelled by request interrupt";
 
-/// A provider client admitted through the backend it was built for.
+/// Admission refused, cancelled, or could not record a provider call.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("{0}")]
+pub(crate) struct AdmissionError(pub(crate) String);
+
+/// A provider call that did not complete under admission.
+#[derive(Debug)]
+pub(crate) enum AdmittedCallError<E> {
+    Admission(AdmissionError),
+    Provider(E),
+}
+
+/// A provider model admitted through the backend it was built for.
 /// `connection` is that backend's `backend_connection_fingerprint` at build
 /// time. It only attributes calls: after a connection change, calls through
-/// this client still share the backend's pool and finish on this connection.
-#[derive(Clone)]
-pub(crate) struct AdmittedCompletionClient<C> {
-    inner: C,
-    admission: AdmissionRegistry,
-    connection: Arc<str>,
-}
-
-impl<C> AdmittedCompletionClient<C> {
-    pub(crate) fn new(inner: C, admission: AdmissionRegistry, connection: String) -> Self {
-        Self {
-            inner,
-            admission,
-            connection: connection.into(),
-        }
-    }
-}
-
-impl<C> CompletionClient for AdmittedCompletionClient<C>
-where
-    C: CompletionClient,
-    C::CompletionModel: 'static,
-    <C::CompletionModel as CompletionModel>::Response: 'static,
-    <C::CompletionModel as CompletionModel>::StreamingResponse: 'static,
-{
-    type CompletionModel = AdmittedCompletionModel<C::CompletionModel>;
-}
-
+/// this model still share the backend's pool and finish on this connection.
 #[derive(Clone)]
 pub(crate) struct AdmittedCompletionModel<M> {
-    inner: M,
+    pub(crate) inner: M,
     admission: AdmissionRegistry,
     connection: Arc<str>,
 }
 
-#[cfg(test)]
 impl<M> AdmittedCompletionModel<M> {
-    pub(crate) fn for_test(inner: M, admission: AdmissionRegistry, connection: &str) -> Self {
+    pub(crate) fn new(
+        inner: M,
+        admission: AdmissionRegistry,
+        connection: impl Into<Arc<str>>,
+    ) -> Self {
         Self {
             inner,
             admission,
             connection: connection.into(),
         }
     }
-}
 
-impl<M> CompletionModel for AdmittedCompletionModel<M>
-where
-    M: CompletionModel + 'static,
-    M::Response: 'static,
-    M::StreamingResponse: 'static,
-{
-    type Response = M::Response;
-    type StreamingResponse = M::StreamingResponse;
-    type Client = AdmittedCompletionClient<M::Client>;
-
-    fn make(client: &Self::Client, model: impl Into<String>) -> Self {
-        Self {
-            inner: M::make(&client.inner, model),
-            admission: client.admission.clone(),
-            connection: client.connection.clone(),
-        }
-    }
-
-    async fn completion(
+    /// Run one provider call under an admission permit, racing the request's
+    /// interrupt token. A provider failure finishes the permit as failed; on
+    /// success the caller owns the permit's terminal.
+    pub(crate) async fn admit<T, E: std::fmt::Display>(
         &self,
-        request: CompletionRequest,
-    ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
+        observe_provider_activity: bool,
+        call: impl Future<Output = Result<T, E>>,
+    ) -> Result<(T, AdmissionPermit), AdmittedCallError<E>> {
         let mut permit = self
             .admission
             .acquire_current_call(&self.connection)
-            .await?;
-        let token = current_context().ok().and_then(|c| c.inference_token);
-        match token {
+            .await
+            .map_err(AdmittedCallError::Admission)?;
+        if observe_provider_activity {
+            permit.observe_provider_activity(
+                crate::rendered_request::scope::current_attempt_activity(),
+            );
+        }
+        let result = match current_context().ok().and_then(|c| c.inference_token) {
             Some(token) => {
                 tokio::select! {
                     biased;
                     _ = token.cancelled() => {
                         permit.mark_interrupted();
-                        Err(CompletionError::ProviderError(CANCELLED_BY_INTERRUPT_MSG.into()))
+                        return Err(AdmittedCallError::Admission(AdmissionError(
+                            CANCELLED_BY_INTERRUPT_MSG.into(),
+                        )));
                     }
-                    result = self.inner.completion(request) => match result {
-                        Ok(response) => {
-                            let cached = cached_input_tokens_observation(&response.raw_response);
-                            permit.finish_success_with_cache(Some(response.usage), cached).await?;
-                            Ok(response)
-                        }
-                        Err(error) => {
-                            let _ = permit.finish_failure(&error.to_string()).await;
-                            Err(error)
-                        }
-                    }
+                    result = call => result,
                 }
             }
-            None => match self.inner.completion(request).await {
-                Ok(response) => {
-                    let cached = cached_input_tokens_observation(&response.raw_response);
-                    permit
-                        .finish_success_with_cache(Some(response.usage), cached)
-                        .await?;
-                    Ok(response)
-                }
-                Err(error) => {
-                    let _ = permit.finish_failure(&error.to_string()).await;
-                    Err(error)
-                }
-            },
-        }
-    }
-
-    async fn stream(
-        &self,
-        request: CompletionRequest,
-    ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-        let mut permit = self
-            .admission
-            .acquire_current_call(&self.connection)
-            .await?;
-        permit
-            .observe_provider_activity(crate::rendered_request::scope::current_attempt_activity());
-        let token = current_context().ok().and_then(|c| c.inference_token);
-        match token {
-            Some(token) => {
-                tokio::select! {
-                    biased;
-                    _ = token.cancelled() => {
-                        permit.mark_interrupted();
-                        Err(CompletionError::ProviderError(CANCELLED_BY_INTERRUPT_MSG.into()))
-                    }
-                    result = self.inner.stream(request) => match result {
-                        Ok(stream) => Ok(hold_stream_guard(stream, permit)),
-                        Err(error) => {
-                            let _ = permit.finish_failure(&error.to_string()).await;
-                            Err(error)
-                        }
-                    }
-                }
+            None => call.await,
+        };
+        match result {
+            Ok(value) => Ok((value, permit)),
+            Err(error) => {
+                let _ = permit.finish_failure(&error.to_string()).await;
+                Err(AdmittedCallError::Provider(error))
             }
-            None => match self.inner.stream(request).await {
-                Ok(stream) => Ok(hold_stream_guard(stream, permit)),
-                Err(error) => {
-                    let _ = permit.finish_failure(&error.to_string()).await;
-                    Err(error)
-                }
-            },
         }
     }
 }
@@ -364,10 +287,10 @@ pub(crate) async fn scope_call_with_token_and_failure_reason<T>(
     ADMISSION_CALL_CONTEXT.scope(context, future).await
 }
 
-pub(super) fn current_context() -> Result<AdmissionCallContext, CompletionError> {
+pub(super) fn current_context() -> Result<AdmissionCallContext, AdmissionError> {
     ADMISSION_CALL_CONTEXT
         .try_with(Clone::clone)
-        .map_err(|_| CompletionError::ProviderError("missing inference admission context".into()))
+        .map_err(|_| AdmissionError("missing inference admission context".into()))
 }
 
 pub(crate) fn current_session_id() -> Option<String> {

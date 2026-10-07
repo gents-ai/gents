@@ -234,7 +234,7 @@ struct SignalledPermitFinalizer {
 impl super::super::stream_guard::StreamGuardLifecycle for SignalledPermitFinalizer {
     fn mark_stream_success(
         &mut self,
-        usage: Option<rig::completion::Usage>,
+        usage: Option<super::super::ProviderCallUsage>,
         cached_input_tokens: gents_loop::rig_compat::CachedInputTokensObservation,
     ) {
         super::super::stream_guard::StreamGuardLifecycle::mark_stream_success(
@@ -244,14 +244,14 @@ impl super::super::stream_guard::StreamGuardLifecycle for SignalledPermitFinaliz
         );
     }
 
-    fn mark_stream_error(&mut self, error: &rig::completion::CompletionError) {
+    fn mark_stream_error(&mut self, error: &str) {
         super::super::stream_guard::StreamGuardLifecycle::mark_stream_error(
             &mut self.permit,
             error,
         );
     }
 
-    fn finish_stream(self) -> BoxFuture<'static, Result<(), rig::completion::CompletionError>> {
+    fn finish_stream(self) -> BoxFuture<'static, Result<(), super::super::AdmissionError>> {
         Box::pin(async move {
             let _ = self.invoked.send(());
             super::super::stream_guard::StreamGuardLifecycle::finish_stream(self.permit).await
@@ -324,7 +324,7 @@ async fn aborting_terminal_finalizer_returns_real_permit_and_repairs_call_once()
     let inner = StreamingCompletionResponse::stream(Box::pin(futures::stream::iter(vec![Ok(
         RawStreamingChoice::FinalResponse(()),
     )])));
-    let mut stream = super::super::stream_guard::hold_stream_guard(
+    let mut stream = crate::llm::rig_compat::hold_stream_guard(
         inner,
         SignalledPermitFinalizer {
             permit,
@@ -397,12 +397,10 @@ async fn recovery_winner_preserves_terminal_stamp_and_rehydrates_late_usage() {
     let call = super::super::controller::InferenceCallRecord::without_controller(pending_call(
         "recovery-cas-call",
     ));
-    let usage = rig::completion::Usage {
+    let usage = super::super::ProviderCallUsage {
         input_tokens: 17,
         output_tokens: 9,
-        total_tokens: 26,
         cached_input_tokens: 3,
-        cache_creation_input_tokens: 0,
     };
     super::super::persistence::persist_existing_call_terminal(
         node.clone(),

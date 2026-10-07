@@ -420,8 +420,9 @@ pub struct AssistantMessageId {
 /// tool call.
 ///
 /// One of the four unrecoverable inputs. The loop threads
-/// `truncate_text(outcome.model_facing_text(), tool_result_truncation_mode(name),
-/// &TruncationLimits::default())` (`agent/loop_stream.rs:655-658`). Persistence
+/// `bounded_tool_result(name, outcome.model_facing_text())`
+/// (`gents-loop/src/loop_stream/turn_threading.rs`): text bounded by
+/// `TruncationLimits::default()`, image parts whole. Persistence
 /// re-derives its text from the stored `AgentToolCall.result` with
 /// `TruncationMode::Head`, the hook's own `truncation_limits`, and
 /// `model_observation_for_tool_result`

@@ -263,6 +263,58 @@ fn messages_body_threads_tool_result() {
     assert_eq!(body["messages"][1]["content"][0]["content"], "ECHOED");
 }
 
+/// A tool result's image parts (the plugin result ABI) reach the HTTP body as
+/// Anthropic image blocks inside the `tool_result` content array.
+#[test]
+fn tool_result_images_reach_the_wire_body() {
+    let image = |data: &str, mime: &str| {
+        ToolResultContent::Image(Image {
+            data: crate::llm::message::DocumentSourceKind::Base64(data.into()),
+            media_type: crate::llm::message::ImageMediaType::from_mime_type(mime),
+            detail: None,
+            additional_params: None,
+        })
+    };
+    let request = request_from_native(
+        None,
+        vec![
+            Message::user("draw it"),
+            Message::Assistant {
+                id: None,
+                content: vec![AssistantContent::ToolCall(ToolCall::new(
+                    "toolu_1".into(),
+                    ToolFunction::new("echo".into(), json!({})),
+                ))],
+            },
+            Message::User {
+                content: vec![UserContent::tool_result(
+                    "toolu_1",
+                    vec![
+                        ToolResultContent::text(r#"{"height":2,"width":2}"#),
+                        image("iVBORw0KGgo=", "image/png"),
+                        image("PHN2Zy8+", "image/svg+xml"),
+                    ],
+                )],
+            },
+        ],
+        vec![echo_tool()],
+    );
+    let bearer = crate::claude_subscription::ApiKeyBearer::new("placeholder-key");
+    let wire = captured_request(&bearer, &request);
+    let (_, body) = wire.split_once("\r\n\r\n").expect("HTTP body");
+    let body: Value = serde_json::from_str(body).expect("JSON body");
+    assert_eq!(
+        body["messages"][2]["content"][0]["content"],
+        json!([
+            {"type": "text", "text": r#"{"height":2,"width":2}"#},
+            {"type": "image", "source": {
+                "type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo=",
+            }},
+            {"type": "text", "text": gents_loop::loop_stream::TOOL_RESULT_IMAGE_OMITTED},
+        ])
+    );
+}
+
 /// Lean `ClaudeMap.toolsField`: the wire never carries `tools: []`.
 #[test]
 fn messages_body_omits_tools_key_when_surface_is_empty() {
@@ -849,8 +901,9 @@ async fn transport_429_usage_cap_reports_reset_time() {
     .await
     .err()
     .expect("429");
-    let classified =
-        crate::error::classify_completion_error(&rig::agent::StreamingError::Completion(err));
+    let classified = crate::llm::rig_compat::classify_completion_error(
+        &rig::agent::StreamingError::Completion(err),
+    );
     assert!(!classified.is_retryable());
     assert_eq!(
         classified.to_string(),
@@ -895,7 +948,10 @@ async fn transport_401_invalidates_the_bearer_once() {
     );
 }
 
-fn captured_request<S: crate::oauth_credential::BearerSource>(bearer: &S) -> String {
+fn captured_request<S: crate::oauth_credential::BearerSource>(
+    bearer: &S,
+    request: &CompletionRequest,
+) -> String {
     // The fixture lock spans the request, so it is held outside the
     // runtime: a std guard must not live across an await.
     let _guard = lock_fixtures_for_test();
@@ -912,7 +968,7 @@ fn captured_request<S: crate::oauth_credential::BearerSource>(bearer: &S) -> Str
             let _ = stream_messages_at(
                 &url,
                 "claude-sonnet-5",
-                &echo_request(),
+                request,
                 HashSet::new(),
                 bearer,
                 &ReqwestClient::new(),
@@ -927,7 +983,7 @@ fn captured_request<S: crate::oauth_credential::BearerSource>(bearer: &S) -> Str
 #[test]
 fn api_key_request_sends_bearer_and_version_without_oauth_beta() {
     let bearer = crate::claude_subscription::ApiKeyBearer::new("placeholder-key");
-    let request = captured_request(&bearer);
+    let request = captured_request(&bearer, &echo_request());
     let has = |expected: &str| {
         request
             .lines()
@@ -947,7 +1003,7 @@ fn api_key_request_sends_bearer_and_version_without_oauth_beta() {
 #[test]
 fn sign_in_request_keeps_the_oauth_beta() {
     let bearer = crate::claude_subscription::StaticBearer::new("access");
-    let request = captured_request(&bearer);
+    let request = captured_request(&bearer, &echo_request());
     assert!(
         request
             .lines()
@@ -975,8 +1031,9 @@ async fn unsupported_replay_body_is_a_permanent_request_error() {
     .err()
     .expect("unsupported replay block");
     assert!(matches!(error, CompletionError::RequestError(_)), "{error}");
-    let classified =
-        crate::error::classify_completion_error(&rig::agent::StreamingError::Completion(error));
+    let classified = crate::llm::rig_compat::classify_completion_error(
+        &rig::agent::StreamingError::Completion(error),
+    );
     assert!(matches!(
         classified,
         crate::error::InferenceError::PermanentFailure { .. }
@@ -1014,7 +1071,7 @@ fn unsupported_replay_preflight_is_a_permanent_request_error() {
         "{error}"
     );
     assert!(matches!(
-        crate::error::classify_completion_error(&error),
+        crate::llm::rig_compat::classify_completion_error(&error),
         crate::error::InferenceError::PermanentFailure { .. }
     ));
 }

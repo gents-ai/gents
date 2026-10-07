@@ -483,6 +483,20 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_plugin_resource_cases_bind_budget_and_consent",
         },
         ConformanceConsumer::RustTest {
+            id: "plugin::http_calls::tests::generated_plugin_network_cases_drive_admission",
+            package: "gents",
+            source_path: "crates/gents/src/plugin/http_calls_tests.rs",
+            module_path: "plugin::http_calls::tests",
+            function: "generated_plugin_network_cases_drive_admission",
+        },
+        ConformanceConsumer::RustTest {
+            id: "plugin::tests::generated_plugin_call_access_cases_drive_bind_admission",
+            package: "gents",
+            source_path: "crates/gents/src/plugin/tests.rs",
+            module_path: "plugin::tests",
+            function: "generated_plugin_call_access_cases_drive_bind_admission",
+        },
+        ConformanceConsumer::RustTest {
             id: "pack::tests::generated_plugin_model_slots_require_optional_behavior_free_declarations",
             package: "gents",
             source_path: "crates/gents/src/pack.rs",

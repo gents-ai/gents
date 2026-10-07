@@ -141,20 +141,12 @@ mod tests {
         async fn execute_capture_query(&self, _query: &str) -> Result<Value> {
             anyhow::bail!("store unavailable")
         }
-        async fn capture_field_commit(
-            &self,
-            _doc_id: &str,
-            _field: &str,
-        ) -> Result<Option<commits::RequestJsonCommit>> {
-            anyhow::bail!("store unavailable")
-        }
     }
 
     struct MissingBase;
 
     struct CountingBase {
         reads: std::sync::atomic::AtomicUsize,
-        commits: std::sync::atomic::AtomicUsize,
         cid: std::sync::Mutex<String>,
     }
 
@@ -173,20 +165,7 @@ mod tests {
                 "capture_version":2, "agent_did":"did:test", "requester_did":"",
                 "session_id":"session", "source":"openai_responses", "capture_scope":"inference.1",
                 "request_json":encoded
-            }]}}))
-        }
-
-        async fn capture_field_commit(
-            &self,
-            _doc_id: &str,
-            _field: &str,
-        ) -> Result<Option<commits::RequestJsonCommit>> {
-            self.commits
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            Ok(Some(commits::RequestJsonCommit {
-                cid: self.cid.lock().unwrap().clone(),
-                height: 1,
-            }))
+            }], "_commits":[{"cid":self.cid.lock().unwrap().clone(), "height":1, "fieldName":"request_json"}]}}))
         }
     }
 
@@ -194,7 +173,6 @@ mod tests {
     async fn replay_batch_reuses_witnessed_bases_without_skipping_witness_checks() {
         let reader = CountingBase {
             reads: std::sync::atomic::AtomicUsize::new(0),
-            commits: std::sync::atomic::AtomicUsize::new(0),
             cid: std::sync::Mutex::new("base-commit".into()),
         };
         let stored = delta_capture();
@@ -215,7 +193,6 @@ mod tests {
             );
         }
         assert_eq!(reader.reads.load(std::sync::atomic::Ordering::Relaxed), 1);
-        assert_eq!(reader.commits.load(std::sync::atomic::Ordering::Relaxed), 1);
         for changed in [
             stored.replace("base-commit", "foreign-commit"),
             stored.replace("session", "foreign-session"),
@@ -237,7 +214,6 @@ mod tests {
                 .is_err()
         );
         assert_eq!(reader.reads.load(std::sync::atomic::Ordering::Relaxed), 2);
-        assert_eq!(reader.commits.load(std::sync::atomic::Ordering::Relaxed), 2);
     }
 
     #[async_trait::async_trait]
@@ -245,13 +221,59 @@ mod tests {
         async fn execute_capture_query(&self, _query: &str) -> Result<Value> {
             Ok(serde_json::json!({"data": {"RenderedRequest": []}}))
         }
-        async fn capture_field_commit(
-            &self,
-            _doc_id: &str,
-            _field: &str,
-        ) -> Result<Option<commits::RequestJsonCommit>> {
-            Ok(None)
-        }
+    }
+
+    #[tokio::test]
+    async fn batched_base_read_decodes_through_local_and_embedded_access() {
+        use crate::config_client::ConfigAccess;
+        use crate::graphql::escape_graphql_string;
+        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        crate::ensure_runtime_schemas(&node).await.unwrap();
+        let access = ConfigAccess::Local(node.clone());
+        let value = serde_json::json!({"model":"m", "stream":false, "padding":"x".repeat(4096)});
+        let container = encoding::encode_container(
+            &encoding::encode_full(&value).unwrap(),
+            &encoding::encode_full(&serde_json::json!({})).unwrap(),
+        )
+        .unwrap();
+        let mutation = format!(
+            r#"mutation {{ create_RenderedRequest(input: {{
+                capture_key: "batched-base", capture_version: 2,
+                agent_did: "did:test", requester_did: "", session_id: "session",
+                source: "openai_responses", capture_scope: "inference.1",
+                request_json: "{}"
+            }}) {{ _docID }} }}"#,
+            escape_graphql_string(&container),
+        );
+        let created = ConfigAccess::write_local_response(&node, "test.capture_base", &mutation)
+            .await
+            .unwrap();
+        let data = created.data.unwrap();
+        let doc_id = data.as_object().unwrap().values().next().unwrap()[0]["_docID"]
+            .as_str()
+            .unwrap();
+        let commit = commits::request_json_commit(&access, doc_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let stored = delta_capture()
+            .replace("bae-base", doc_id)
+            .replace("base-commit", &commit.cid);
+        let mut expected = value;
+        expected["stream"] = serde_json::json!(true);
+        assert_eq!(
+            decode_capture_json(&access, 2, &stored, CapturePayloadKind::RequestBody)
+                .await
+                .unwrap(),
+            expected
+        );
+        assert_eq!(
+            decode_capture_json_embedded(&node, 2, &stored, CapturePayloadKind::RequestBody)
+                .await
+                .unwrap(),
+            expected
+        );
+        node.shutdown().await;
     }
 
     /// Replay drops a turn only for a capture that fails verification; a store
@@ -325,6 +347,14 @@ mod tests {
     /// field commit the store reports for it.
     type BlockAnswer = Option<(Vec<u8>, String)>;
 
+    /// The `docID` argument of a `_commits` query, so the fake stores can
+    /// answer the commit read for the block document it names.
+    fn commit_query_doc_id(query: &str) -> Option<&str> {
+        let (_, rest) = query.split_once("docID: \"")?;
+        let (doc_id, _) = rest.split_once('"')?;
+        Some(doc_id)
+    }
+
     /// A block store whose failures the test selects: `fail_queries` turns every
     /// read into a store error, `None` reports no row for a block, and a pair
     /// reports a payload and commit the manifest may disagree with.
@@ -361,6 +391,23 @@ mod tests {
             if self.fail_queries {
                 anyhow::bail!("store unavailable");
             }
+            if let Some(doc_id) = commit_query_doc_id(query) {
+                let commits = doc_id
+                    .strip_prefix("block-")
+                    .and_then(|value| value.parse::<usize>().ok())
+                    .map(|index| {
+                        let cid = self
+                            .answers
+                            .get(&index)
+                            .cloned()
+                            .flatten()
+                            .map(|(_, cid)| cid)
+                            .unwrap_or_else(|| self.blocks[index].0.clone());
+                        serde_json::json!([{ "cid": cid, "height": 1, "fieldName": "payload" }])
+                    })
+                    .unwrap_or_default();
+                return Ok(serde_json::json!({"data": {"_commits": commits}}));
+            }
             if !query.contains("RenderedRequestBlock") {
                 return Ok(serde_json::json!({"data": {"RenderedRequest": []}}));
             }
@@ -384,27 +431,6 @@ mod tests {
                 })
                 .collect::<Vec<_>>();
             Ok(serde_json::json!({"data": {"RenderedRequestBlock": rows}}))
-        }
-
-        async fn capture_field_commit(
-            &self,
-            doc_id: &str,
-            _field: &str,
-        ) -> Result<Option<commits::RequestJsonCommit>> {
-            let Some(index) = doc_id
-                .strip_prefix("block-")
-                .and_then(|value| value.parse::<usize>().ok())
-            else {
-                return Ok(None);
-            };
-            let cid = self
-                .answers
-                .get(&index)
-                .cloned()
-                .flatten()
-                .map(|(_, cid)| cid)
-                .unwrap_or_else(|| self.blocks[index].0.clone());
-            Ok(Some(commits::RequestJsonCommit { cid, height: 1 }))
         }
     }
 
@@ -482,6 +508,17 @@ mod tests {
     #[async_trait::async_trait]
     impl CaptureBaseReader for MisreferencingBlockStore {
         async fn execute_capture_query(&self, query: &str) -> Result<Value> {
+            if let Some(doc_id) = commit_query_doc_id(query) {
+                let commits = self
+                    .docs
+                    .iter()
+                    .find(|(named, _, _)| named == doc_id)
+                    .map(|(_, _, cid)| {
+                        serde_json::json!([{ "cid": cid, "height": 1, "fieldName": "payload" }])
+                    })
+                    .unwrap_or_default();
+                return Ok(serde_json::json!({"data": {"_commits": commits}}));
+            }
             if !query.contains("RenderedRequestBlock") {
                 return Ok(serde_json::json!({"data": {"RenderedRequest": []}}));
             }
@@ -497,21 +534,6 @@ mod tests {
                 })
                 .collect::<Vec<_>>();
             Ok(serde_json::json!({"data": {"RenderedRequestBlock": rows}}))
-        }
-
-        async fn capture_field_commit(
-            &self,
-            doc_id: &str,
-            _field: &str,
-        ) -> Result<Option<commits::RequestJsonCommit>> {
-            Ok(self
-                .docs
-                .iter()
-                .find(|(named, _, _)| named == doc_id)
-                .map(|(_, _, cid)| commits::RequestJsonCommit {
-                    cid: cid.clone(),
-                    height: 1,
-                }))
         }
     }
 
@@ -707,25 +729,12 @@ pub struct CaptureStoreReadError(pub anyhow::Error);
 #[async_trait::async_trait]
 trait CaptureBaseReader {
     async fn execute_capture_query(&self, query: &str) -> Result<Value>;
-    async fn capture_field_commit(
-        &self,
-        doc_id: &str,
-        field: &str,
-    ) -> Result<Option<commits::RequestJsonCommit>>;
 }
 
 #[async_trait::async_trait]
 impl CaptureBaseReader for crate::config_client::ConfigAccess {
     async fn execute_capture_query(&self, query: &str) -> Result<Value> {
         self.execute(query).await
-    }
-
-    async fn capture_field_commit(
-        &self,
-        doc_id: &str,
-        field: &str,
-    ) -> Result<Option<commits::RequestJsonCommit>> {
-        commits::field_commit(self, doc_id, field).await
     }
 }
 
@@ -740,14 +749,6 @@ impl CaptureBaseReader for defra_node::EmbeddedNode {
         .await?;
         crate::graphql::ensure_no_errors(&response, "reading rendered-request capture dependency")?;
         Ok(serde_json::json!({"data": response.data}))
-    }
-
-    async fn capture_field_commit(
-        &self,
-        doc_id: &str,
-        field: &str,
-    ) -> Result<Option<commits::RequestJsonCommit>> {
-        commits::field_commit_embedded(self, doc_id, field).await
     }
 }
 
@@ -793,7 +794,9 @@ async fn decode_capture_json_from_cached<R: CaptureBaseReader + Sync>(
                     let query = format!(
                         r#"{{ RenderedRequest(filter: {{_docID: {{_eq: "{doc_id}"}}}}, limit: 2) {{
                             capture_version agent_did requester_did session_id source capture_scope request_json
-                        }} }}"#,
+                        }}
+                        _commits(docID: "{doc_id}") {{ cid height fieldName }}
+                        }}"#,
                         doc_id = crate::graphql::escape_graphql_string(&base.doc_id),
                     );
                     let response = reader
@@ -810,9 +813,7 @@ async fn decode_capture_json_from_cached<R: CaptureBaseReader + Sync>(
                     let [row] = rows.as_slice() else {
                         anyhow::bail!("rendered-request delta base did not resolve uniquely");
                     };
-                    let actual = reader
-                        .capture_field_commit(&base.doc_id, "request_json")
-                        .await
+                    let actual = commits::select_field_commit(&response, "request_json")
                         .map_err(|error| anyhow::Error::new(CaptureStoreReadError(error)))?
                         .context("rendered-request delta base lacks field commit")?
                         .cid;
@@ -955,9 +956,15 @@ async fn read_manifest_blocks<R: CaptureBaseReader + Sync>(
             .get("byte_len")
             .and_then(Value::as_u64)
             .context("capture manifest block row lacks byte_len")?;
-        let commit = reader
-            .capture_field_commit(&entry.doc_id, "payload")
+        let commit_query = format!(
+            r#"query {{ _commits(docID: "{doc_id}") {{ cid height fieldName }} }}"#,
+            doc_id = crate::graphql::escape_graphql_string(&entry.doc_id),
+        );
+        let commit_response = reader
+            .execute_capture_query(&commit_query)
             .await
+            .map_err(|error| anyhow::Error::new(CaptureStoreReadError(error)))?;
+        let commit = commits::select_field_commit(&commit_response, "payload")
             .map_err(|error| anyhow::Error::new(CaptureStoreReadError(error)))?
             .with_context(|| {
                 format!(

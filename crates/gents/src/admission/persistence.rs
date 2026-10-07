@@ -4,10 +4,20 @@ use std::sync::Arc;
 use anyhow::Result;
 use defra_node::EmbeddedNode;
 use gents_loop::rig_compat::CachedInputTokensObservation;
-use rig::completion::{CompletionError, Usage};
 
+use super::client::AdmissionError;
 use super::controller::InferenceCallRecord;
 use crate::graphql::escape_graphql_string;
+
+/// The provider usage components an `InferenceCall` row stores.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ProviderCallUsage {
+    pub(crate) input_tokens: u64,
+    pub(crate) output_tokens: u64,
+    /// The provider client's cached-input count, zero when unreported; the
+    /// paired `CachedInputTokensObservation` decides what is persisted.
+    pub(crate) cached_input_tokens: u64,
+}
 
 pub(super) fn spawn_persistence<F>(future: F)
 where
@@ -18,8 +28,8 @@ where
     }
 }
 
-pub(super) fn completion_persistence_error(error: anyhow::Error) -> CompletionError {
-    CompletionError::ProviderError(format!("persisting InferenceCall failed: {error:#}"))
+pub(super) fn completion_persistence_error(error: anyhow::Error) -> AdmissionError {
+    AdmissionError(format!("persisting InferenceCall failed: {error:#}"))
 }
 
 fn extract_inference_call_doc_id(data: Option<&serde_json::Value>) -> Result<String> {
@@ -58,7 +68,7 @@ pub(super) async fn persist_call_queued(
 pub(super) async fn persist_call_started(
     node: Arc<EmbeddedNode>,
     call: &InferenceCallRecord,
-) -> Result<String, CompletionError> {
+) -> Result<String, AdmissionError> {
     let now = chrono::Utc::now().to_rfc3339();
     let mutation = add_call_mutation(call, "running", None, Some(&now), Some(&now), None, None);
     let resp = crate::config_client::ConfigAccess::write_local_response(
@@ -103,7 +113,7 @@ pub(super) async fn persist_terminal_call(
     call: InferenceCallRecord,
     call_state: &str,
     failure_reason: Option<&str>,
-    usage: Option<Usage>,
+    usage: Option<ProviderCallUsage>,
 ) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
     let mutation = add_call_mutation(
@@ -129,7 +139,7 @@ pub(super) async fn persist_existing_call_terminal(
     call: &InferenceCallRecord,
     call_state: &str,
     failure_reason: Option<&str>,
-    usage: Option<Usage>,
+    usage: Option<ProviderCallUsage>,
     cache_observation: CachedInputTokensObservation,
 ) -> Result<()> {
     // Proofs/InferenceCall/Persistence.lean: only an existing legal source
@@ -207,7 +217,7 @@ fn add_call_mutation(
     queued_at: Option<&str>,
     started_at: Option<&str>,
     ended_at: Option<&str>,
-    usage: Option<Usage>,
+    usage: Option<ProviderCallUsage>,
 ) -> String {
     let queued_at = optional_graphql_string("queued_at", queued_at);
     let started_at = optional_graphql_string("started_at", started_at);
@@ -273,7 +283,7 @@ fn optional_graphql_string(field: &str, value: Option<&str>) -> String {
 }
 
 fn usage_fields(
-    usage: Option<Usage>,
+    usage: Option<ProviderCallUsage>,
     cache_observation: CachedInputTokensObservation,
 ) -> (String, String, String) {
     match usage {
@@ -366,12 +376,10 @@ mod tests {
     #[test]
     fn usage_columns_preserve_provider_components_verbatim() {
         let fields = usage_fields(
-            Some(Usage {
+            Some(ProviderCallUsage {
                 input_tokens: 100,
                 output_tokens: 50,
-                total_tokens: 200,
                 cached_input_tokens: 40,
-                cache_creation_input_tokens: 10,
             }),
             CachedInputTokensObservation::NotAvailable,
         );
@@ -383,12 +391,10 @@ mod tests {
 
     #[test]
     fn cached_input_tokens_distinguish_missing_zero_and_positive_responses_usage() {
-        let usage = Some(Usage {
+        let usage = Some(ProviderCallUsage {
             input_tokens: 100,
             output_tokens: 50,
-            total_tokens: 150,
             cached_input_tokens: 0,
-            cache_creation_input_tokens: 0,
         });
         assert_eq!(
             usage_fields(usage, CachedInputTokensObservation::Unreported).2,

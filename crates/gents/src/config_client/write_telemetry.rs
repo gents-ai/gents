@@ -8,6 +8,22 @@ use std::time::Duration;
 
 pub(crate) const WRITE_ATTEMPT_EVENT_TARGET: &str = "gents.defradb.write_attempt";
 
+pub(super) fn record_slow_native_phase(
+    operation: Option<&'static str>,
+    phase: &'static str,
+    elapsed: Duration,
+) {
+    if elapsed >= Duration::from_secs(1) {
+        tracing::warn!(
+            target: "gents.defradb.transaction_phase",
+            operation = operation.unwrap_or("unlabeled"),
+            phase,
+            elapsed_ms = millis(elapsed),
+            "slow native transaction phase"
+        );
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct WriteOperation(&'static str);
 

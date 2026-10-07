@@ -411,16 +411,27 @@ impl DefraSessionHook {
                 .take_prepared_presentation(&tool_call_doc_id, result)
                 .await?;
 
-            match outcome {
-                ToolOutcome::Completed(_) => lc.complete_with_presentation(result, presentation).await?,
-                ToolOutcome::Failed { class, denial, .. } => {
-                    if let Some(denial) = denial.as_ref() {
-                        lc.fail_with_command_denial(result, denial).await?;
-                    } else {
-                        lc.fail_with_presentation(result, *class, presentation).await?;
-                    }
+            // A tool with no prepared presentation is presented as the loop
+            // bounded it, so a replayed transcript carries what the model saw.
+            let bounded = presentation
+                .is_none()
+                .then(|| bounded_tool_result_with_presentation(tool_name, result, &self.truncation_limits))
+                .and_then(|(bounded, presentation)| Some((bounded, presentation?)));
+            match (outcome, bounded) {
+                (ToolOutcome::Failed { denial: Some(denial), .. }, _) => {
+                    lc.fail_with_command_denial(result, denial).await?;
                 }
-                ToolOutcome::TimedOut { .. } | ToolOutcome::Cancelled => {
+                (ToolOutcome::Completed(_), Some((bounded, presentation))) => {
+                    lc.complete_raw_with_presentation(result, &bounded, presentation).await?;
+                }
+                (ToolOutcome::Failed { class, .. }, Some((bounded, presentation))) => {
+                    lc.fail_raw_with_presentation(result, &bounded, *class, presentation).await?;
+                }
+                (ToolOutcome::Completed(_), None) => lc.complete_with_presentation(result, presentation).await?,
+                (ToolOutcome::Failed { class, .. }, None) => {
+                    lc.fail_with_presentation(result, *class, presentation).await?;
+                }
+                (ToolOutcome::TimedOut { .. } | ToolOutcome::Cancelled, _) => {
                     unreachable!("managed terminals returned above")
                 }
             }
