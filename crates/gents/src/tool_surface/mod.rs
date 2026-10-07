@@ -19,7 +19,6 @@ pub use policy::{
     EndpointScope, RuntimeToolAvailability, ToolPolicyBash, ToolPolicySurface, ToolPolicyVersion,
     TOOL_POLICY_V1,
 };
-pub use root_admission::tool_root_admitted_under_ceiling;
 pub(crate) use root_admission::{
     canonicalize_tools_root, load_workspace_root_policy_in_txn, resolve_admitted_tool_root,
     resolve_configured_tool_root, RootAdmission, RootExecutionGuard,

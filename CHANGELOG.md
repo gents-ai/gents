@@ -6,11 +6,9 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
-- `gents server` refuses an explicit `--tool-root` that does not admit the
-  tool root recorded for the initialized home, naming both roots and the
-  remedy; a recorded root at or below `--tool-root` still serves, a home whose
-  tool package authors no host tools is exempt, and a startup failure that
-  used to hide its cause now logs the diagnostic (#2296).
+- A runtime that cannot start because a behavior is unavailable now logs each
+  blocking behavior's diagnostic; a `--tool-root` that does not admit the
+  live `Tools.host.root` names both roots (#2296).
 
 - Plugins reach the network through the host (#2300). A plugin whose granted
   manifold carries an `OutboundHttp` allow-list answers a call with

@@ -361,20 +361,6 @@ pub(crate) fn resolve_admitted_tool_root<'a>(
     })
 }
 
-/// Operator preflight: does the tool root recorded for a home remain admitted
-/// under an explicitly supplied process ceiling? Native callers that preflight
-/// an operator flag must decide through this same admission the runtime later
-/// applies to `Tools.host.root`, so an accepted flag is not rejected at
-/// behavior resolution while the Tools document's `host.root` is still the
-/// recorded root; a `host.root` re-authored away from the recording is decided
-/// by the runtime's own admission, not by this preflight.
-pub fn tool_root_admitted_under_ceiling(recorded: &Path, ceiling: &Path) -> Result<bool> {
-    Ok(matches!(
-        resolve_admitted_tool_root(recorded, [ceiling])?,
-        RootAdmission::Admitted(_)
-    ))
-}
-
 fn resolve_path_with_canonical_prefix(path: &Path) -> Result<ResolvedToolRoot> {
     let mut resolved = PathBuf::new();
     let mut missing_tail = false;
@@ -436,39 +422,6 @@ fn resolve_path_with_canonical_prefix(path: &Path) -> Result<ResolvedToolRoot> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn ceiling_admission_wrapper_admits_the_recorded_root_itself() {
-        let root = tempfile::tempdir().expect("tempdir");
-        assert!(
-            tool_root_admitted_under_ceiling(root.path(), root.path()).expect("paths resolve"),
-            "an explicit ceiling equal to the recorded root must keep serving"
-        );
-    }
-
-    #[test]
-    fn ceiling_admission_wrapper_admits_a_recorded_descendant() {
-        let parent = tempfile::tempdir().expect("tempdir");
-        let leaf = parent.path().join("leaf");
-        std::fs::create_dir_all(&leaf).expect("leaf");
-        assert!(
-            tool_root_admitted_under_ceiling(&leaf, parent.path()).expect("paths resolve"),
-            "a wider explicit ceiling must keep admitting a narrower recorded root"
-        );
-    }
-
-    #[test]
-    fn ceiling_admission_wrapper_denies_a_recorded_sibling_root() {
-        let base = tempfile::tempdir().expect("tempdir");
-        let recorded = base.path().join("recorded");
-        let explicit = base.path().join("explicit");
-        std::fs::create_dir_all(&recorded).expect("recorded root");
-        std::fs::create_dir_all(&explicit).expect("explicit root");
-        assert!(
-            !tool_root_admitted_under_ceiling(&recorded, &explicit).expect("paths resolve"),
-            "a recorded root outside the explicit ceiling must be refused before startup"
-        );
-    }
 
     #[test]
     fn nonexistent_descendant_is_retained_and_admitted() {
