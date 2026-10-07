@@ -55,23 +55,26 @@ def TopologyFault.wireName : TopologyFault → String
 def topologyFaults : List TopologyFault := [.valid, .missingInputBinding, .cycle]
 
 /-- Which native compiler diagnostic realizes `withinBounds = false`: an
-intent that exceeds its own node limit (`node_limit_exceeded`). The model
-keeps `withinBounds` opaque and orders no graph limits; the native compiler
-compares them. -/
+intent that exceeds its own node limit (`node_limit_exceeded`), or one that
+asks for more invocations than the platform ceiling
+(`platform_limit_exceeded`). The model keeps `withinBounds` opaque and orders
+no graph limits; the native compiler compares them. -/
 inductive BoundsFault where
   | within
   | nodeLimit
+  | invocationCeiling
   deriving DecidableEq, Repr
 
 def BoundsFault.withinBounds : BoundsFault → Bool
   | .within => true
-  | .nodeLimit => false
+  | .nodeLimit | .invocationCeiling => false
 
 def BoundsFault.wireName : BoundsFault → String
   | .within => "within"
   | .nodeLimit => "node_limit"
+  | .invocationCeiling => "invocation_ceiling"
 
-def boundsFaults : List BoundsFault := [.within, .nodeLimit]
+def boundsFaults : List BoundsFault := [.within, .nodeLimit, .invocationCeiling]
 
 structure ValidationCase where
   name : String
@@ -113,7 +116,7 @@ def validationCases : List ValidationCase :=
             , terminalResultDeclared := terminalResultDeclared
             }
 
-theorem validationCases_count : validationCases.length = 48 := by native_decide
+theorem validationCases_count : validationCases.length = 72 := by native_decide
 
 /-- The executable gate agrees with the Prop-level whole-graph predicate. -/
 theorem validationCases_agree_with_wholeGraphValid :

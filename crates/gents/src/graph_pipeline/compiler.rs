@@ -5,10 +5,10 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use super::types::{
-    CapabilityManifestEntry, DeliveryMode, Diagnostic, DiagnosticCode, GraphIntent, GraphPlan,
-    GroupCount, HostInput, PackagePlan, PlannedEdge, PlannedEntry, PlannedNode, PlannedResult,
-    PortCardinality, PortRef, PortSpec, ResultCardinality, StageCapability, StageTarget,
-    COMPILER_VERSION,
+    CapabilityManifestEntry, DeliveryMode, Diagnostic, DiagnosticCode, GraphIntent, GraphLimits,
+    GraphPlan, GroupCount, HostInput, PackagePlan, PlannedEdge, PlannedEntry, PlannedNode,
+    PlannedResult, PortCardinality, PortRef, PortSpec, ResultCardinality, StageCapability,
+    StageTarget, COMPILER_VERSION,
 };
 use crate::document_config::reject_protected_collection_name;
 use crate::graphql::{
@@ -104,37 +104,102 @@ fn sorted_diagnostics(diagnostics: &mut [Diagnostic]) {
     });
 }
 
+/// One requested limit outside its platform range `minimum..=ceiling`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LimitViolation {
+    pub field: &'static str,
+    pub requested: u64,
+    pub minimum: u64,
+    pub ceiling: u64,
+}
+
+impl LimitViolation {
+    fn message(&self) -> String {
+        if self.minimum == 0 {
+            format!(
+                "requested {}, platform ceiling is {}",
+                self.requested, self.ceiling
+            )
+        } else {
+            format!(
+                "requested {}, platform range is {}..={}",
+                self.requested, self.minimum, self.ceiling
+            )
+        }
+    }
+}
+
+/// Every requested limit outside the platform policy, in `GraphLimits` field
+/// order: the one comparison table for graph intents and operator ranges.
+/// The invocation and runtime budgets must be at least 1, because a zero
+/// budget fails every run at its first request or at once; the structural
+/// limits accept zero and leave it to the graph-content checks
+/// (`NodeLimitExceeded` and its siblings).
+pub(crate) fn platform_limit_violations(
+    limits: &GraphLimits,
+    policy: &CompilerPolicy,
+) -> Vec<LimitViolation> {
+    [
+        (
+            "max_nodes",
+            u64::from(limits.max_nodes),
+            0,
+            u64::from(policy.max_nodes),
+        ),
+        (
+            "max_edges",
+            u64::from(limits.max_edges),
+            0,
+            u64::from(policy.max_edges),
+        ),
+        (
+            "max_depth",
+            u64::from(limits.max_depth),
+            0,
+            u64::from(policy.max_depth),
+        ),
+        (
+            "max_fan_out",
+            u64::from(limits.max_fan_out),
+            0,
+            u64::from(policy.max_fan_out),
+        ),
+        (
+            "max_total_invocations",
+            u64::from(limits.max_total_invocations),
+            1,
+            u64::from(policy.max_total_invocations),
+        ),
+        (
+            "max_runtime_secs",
+            limits.max_runtime_secs,
+            1,
+            policy.max_runtime_secs,
+        ),
+    ]
+    .into_iter()
+    .filter(|&(_, requested, minimum, ceiling)| requested < minimum || requested > ceiling)
+    .map(|(field, requested, minimum, ceiling)| LimitViolation {
+        field,
+        requested,
+        minimum,
+        ceiling,
+    })
+    .collect()
+}
+
 fn check_requested_limits(
     intent: &GraphIntent,
     policy: &CompilerPolicy,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let requested = &intent.limits;
-    let platform = [
-        ("max_nodes", requested.max_nodes, policy.max_nodes),
-        ("max_edges", requested.max_edges, policy.max_edges),
-        ("max_depth", requested.max_depth, policy.max_depth),
-        ("max_fan_out", requested.max_fan_out, policy.max_fan_out),
-    ];
-    for (name, value, ceiling) in platform {
-        if value > ceiling {
-            diagnostic(
-                diagnostics,
-                DiagnosticCode::PlatformLimitExceeded,
-                format!("/limits/{name}"),
-                format!("requested {value}, platform ceiling is {ceiling}"),
-            );
-        }
-    }
-    if requested.max_runtime_secs == 0 || requested.max_runtime_secs > policy.max_runtime_secs {
+    for violation in platform_limit_violations(requested, policy) {
         diagnostic(
             diagnostics,
             DiagnosticCode::PlatformLimitExceeded,
-            "/limits/max_runtime_secs",
-            format!(
-                "requested {}, platform range is 1..={}",
-                requested.max_runtime_secs, policy.max_runtime_secs
-            ),
+            format!("/limits/{}", violation.field),
+            violation.message(),
         );
     }
 

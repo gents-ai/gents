@@ -374,6 +374,7 @@ pub(crate) enum LeanGraphTopologyFault {
 pub(crate) enum LeanGraphBoundsFault {
     Within,
     NodeLimit,
+    InvocationCeiling,
 }
 
 #[derive(Debug, Clone, Deserialize)]

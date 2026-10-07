@@ -117,7 +117,7 @@ fn generated_validation_cases_fence_whole_graph_compilation_gate() {
     let cases = &lean_contract_snapshot().graph_pipeline_validation_cases;
     assert_eq!(
         cases.len(),
-        48,
+        72,
         "Lean must emit the full topology and bounds fault matrix"
     );
 
@@ -151,6 +151,11 @@ fn generated_validation_cases_fence_whole_graph_compilation_gate() {
             LeanGraphBoundsFault::NodeLimit => {
                 intent.limits.max_nodes = 0;
                 expected_codes.push(DiagnosticCode::NodeLimitExceeded);
+            }
+            LeanGraphBoundsFault::InvocationCeiling => {
+                intent.limits.max_total_invocations =
+                    CompilerPolicy::default().max_total_invocations + 1;
+                expected_codes.push(DiagnosticCode::PlatformLimitExceeded);
             }
         }
         if !test_case.terminal_result_declared {

@@ -520,6 +520,83 @@ fn platform_limit_messages_name_the_requested_value_and_the_range() {
 }
 
 #[test]
+fn rejects_requested_invocations_outside_the_platform_range() {
+    let ceiling = CompilerPolicy::default().max_total_invocations;
+    let mut at_ceiling = linear_intent();
+    at_ceiling.limits.max_total_invocations = ceiling;
+    assert!(compile(&at_ceiling, &catalog()).is_ok());
+
+    for requested in [0, ceiling + 1] {
+        let mut intent = linear_intent();
+        intent.limits.max_total_invocations = requested;
+        let error = compile(&intent, &catalog()).unwrap_err();
+        let diagnostic = error
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.path == "/limits/max_total_invocations")
+            .unwrap_or_else(|| panic!("requested {requested}: {:?}", error.diagnostics));
+        assert_eq!(diagnostic.code, DiagnosticCode::PlatformLimitExceeded);
+        assert_eq!(
+            diagnostic.message,
+            format!("requested {requested}, platform range is 1..={ceiling}")
+        );
+    }
+
+    let narrowed = CompilerPolicy {
+        max_total_invocations: 4,
+        ..CompilerPolicy::default()
+    };
+    let mut intent = linear_intent();
+    intent.limits.max_total_invocations = 5;
+    let error = compile_graph(&intent, &catalog(), "did:key:composer", &narrowed).unwrap_err();
+    assert!(
+        error
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.path == "/limits/max_total_invocations"),
+        "the check follows the policy, not a constant: {:?}",
+        error.diagnostics
+    );
+}
+
+#[test]
+fn platform_limit_violations_report_every_field_outside_its_range() {
+    use super::compiler::{platform_limit_violations, LimitViolation};
+    let policy = CompilerPolicy::default();
+    let limits = GraphLimits {
+        max_nodes: policy.max_nodes + 1,
+        max_edges: 0,
+        max_depth: policy.max_depth,
+        max_fan_out: 0,
+        max_total_invocations: 0,
+        max_runtime_secs: policy.max_runtime_secs + 1,
+    };
+    assert_eq!(
+        platform_limit_violations(&limits, &policy),
+        vec![
+            LimitViolation {
+                field: "max_nodes",
+                requested: u64::from(policy.max_nodes) + 1,
+                minimum: 0,
+                ceiling: u64::from(policy.max_nodes),
+            },
+            LimitViolation {
+                field: "max_total_invocations",
+                requested: 0,
+                minimum: 1,
+                ceiling: u64::from(policy.max_total_invocations),
+            },
+            LimitViolation {
+                field: "max_runtime_secs",
+                requested: policy.max_runtime_secs + 1,
+                minimum: 1,
+                ceiling: policy.max_runtime_secs,
+            },
+        ]
+    );
+}
+
+#[test]
 fn rejects_depth_and_fan_out_over_intent_limits() {
     let mut depth = linear_intent();
     depth.limits.max_depth = 1;
