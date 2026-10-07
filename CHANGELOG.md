@@ -165,6 +165,12 @@ source consistency checks, not a separate runtime compatibility version.
   supersedes the trigger's in-flight requests and would cancel fan-out
   items, and on a grouped edge it never applies.
 
+### Fixed
+
+- Self-configuration no longer refuses edits of Tools that already carry
+  `self_config.enable_pack_install`; a write may still raise the grant only
+  when the invoking agent holds it.
+
 ## 0.20.0 - 2026-10-05
 
 - Trimmed tool results are recoverable: `sessions` gains an `output`
