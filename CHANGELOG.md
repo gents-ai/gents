@@ -6,6 +6,10 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- Agent-scoped OAuth backends (Claude, ChatGPT, Grok) heal an expired access
+  token on their own: the scheduled prober resolves its bearer through the
+  credential owner, refreshing and persisting when stale, so an idle runtime no
+  longer demotes a signed-in backend to unhealthy until restart (#2289).
 - One tool-result image Claude would reject no longer fails the whole
   request. The Claude Messages body reads each image's size from its PNG,
   GIF, WebP or JPEG header and puts a note naming the reason in place of an
