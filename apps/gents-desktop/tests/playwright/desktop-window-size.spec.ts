@@ -177,16 +177,26 @@ test.describe("half-screen window", () => {
   }) => {
     await page.setViewportSize({ width: 900, height: 800 });
     await gotoHarness(page);
-    await page.evaluate(() => localStorage.setItem("gents-prototype-nav", "expanded"));
+    await page.evaluate(() =>
+      localStorage.setItem(
+        "gents-preferences",
+        JSON.stringify({ state: { nav: "expanded" }, version: 1 }),
+      ),
+    );
     await page.reload();
     await openConfig(page);
     /* the canvas keeps the room the expanded nav would take */
     const canvas = await boxOf(page.getByTestId("agent-screen"));
     expect(canvas.width).toBeGreaterThan(800);
+    expect((await boxOf(page.getByTestId("pane"))).x).toBeLessThan(100);
     await expect(page.getByRole("combobox", { name: "Section" })).toBeVisible();
     await expectNoPageHorizontalOverflow(page);
 
+    /* a wide window shows the expanded nav as a column beside the pane */
     await page.setViewportSize({ width: 1440, height: 900 });
+    await expect
+      .poll(async () => (await boxOf(page.getByTestId("pane"))).x)
+      .toBeGreaterThanOrEqual(300);
     await expect(page.getByRole("link", { name: "New session" }).first()).toBeVisible();
     await expect(page.getByRole("combobox", { name: "Section" })).toBeHidden();
   });
