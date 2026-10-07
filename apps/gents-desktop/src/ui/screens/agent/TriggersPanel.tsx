@@ -83,54 +83,73 @@ export function TriggerEditor({
   } | null>(null);
   const draftNew = (kind: NewReference["kind"]) =>
     new Promise<string | null>((resolve) => setDrafting({ kind, resolve }));
-  const d = useDraft(saved, async (next) => {
-    const newTask = pending.task?.task_id === next.taskId ? pending.task : undefined;
-    const newSchedule =
+  /* the documents drafted from the fields that the draft points at */
+  const drafted = (next: typeof saved) => ({
+    newTask: pending.task?.task_id === next.taskId ? pending.task : undefined,
+    newSchedule:
       next.sourceKind === "schedule" && pending.schedule?.schedule_id === next.sourceId
         ? pending.schedule
-        : undefined;
-    const newEvent =
+        : undefined,
+    newEvent:
       next.sourceKind === "event" && pending.event?.event_source_id === next.sourceId
         ? pending.event
-        : undefined;
-    if (!newTask && !deployment.tasks.some((task) => task.taskId === next.taskId))
-      throw new Error("Choose an existing task");
-    const sourceExists =
-      next.sourceKind === "schedule"
-        ? Boolean(newSchedule) ||
-          deployment.schedules.some((row) => row.schedule_id === next.sourceId)
-        : Boolean(newEvent) ||
-          deployment.eventSources.some((row) => row.event_source_id === next.sourceId);
-    if (!sourceExists) throw new Error("Choose an existing source");
-    const document: Trigger = {
-      ...cfg,
-      display_name: next.displayName.trim() || null,
-      description: next.description.trim() || null,
-      task_id: next.taskId,
-      enabled: next.enabled,
-      concurrency: (next.concurrency || null) as Trigger["concurrency"],
-      session_id_template: next.sessionIdTemplate.trim() || null,
-      source:
-        next.sourceKind === "schedule"
-          ? { kind: "schedule", schedule_id: next.sourceId }
-          : { kind: "event", event_source_id: next.sourceId },
-      tags: next.tags.length ? next.tags : null,
-    };
-    /* anything drafted from the fields lands with the trigger, in one
-       transaction, or not at all */
-    if (newTask || newSchedule || newEvent)
-      await changeConfig("applyConfigComponents", {
-        document: {
-          agent_principal: { agent_did: deployment.agentDid },
-          ...(newTask ? { tasks: [newTask] } : {}),
-          ...(newSchedule ? { schedules: [newSchedule] } : {}),
-          ...(newEvent ? { event_sources: [newEvent] } : {}),
-          triggers: [document],
-        },
-      });
-    else await changeConfig("saveTriggerConfig", { document });
-    setPending({});
+        : undefined,
   });
+  const d = useDraft(
+    saved,
+    async (next) => {
+      const { newTask, newSchedule, newEvent } = drafted(next);
+      const document: Trigger = {
+        ...cfg,
+        display_name: next.displayName.trim() || null,
+        description: next.description.trim() || null,
+        task_id: next.taskId,
+        enabled: next.enabled,
+        concurrency: (next.concurrency || null) as Trigger["concurrency"],
+        session_id_template: next.sessionIdTemplate.trim() || null,
+        source:
+          next.sourceKind === "schedule"
+            ? { kind: "schedule", schedule_id: next.sourceId }
+            : { kind: "event", event_source_id: next.sourceId },
+        tags: next.tags.length ? next.tags : null,
+      };
+      /* anything drafted from the fields lands with the trigger, in one
+       transaction, or not at all */
+      if (newTask || newSchedule || newEvent)
+        await changeConfig("applyConfigComponents", {
+          document: {
+            agent_principal: { agent_did: deployment.agentDid },
+            ...(newTask ? { tasks: [newTask] } : {}),
+            ...(newSchedule ? { schedules: [newSchedule] } : {}),
+            ...(newEvent ? { event_sources: [newEvent] } : {}),
+            triggers: [document],
+          },
+        });
+      else await changeConfig("saveTriggerConfig", { document });
+      setPending({});
+    },
+    {
+      /* the task and the source are ones the node lists, or ones just drafted */
+      problems: (next) => {
+        const { newTask, newSchedule, newEvent } = drafted(next);
+        const sourceExists =
+          next.sourceKind === "schedule"
+            ? Boolean(newSchedule) ||
+              deployment.schedules.some((row) => row.schedule_id === next.sourceId)
+            : Boolean(newEvent) ||
+              deployment.eventSources.some(
+                (row) => row.event_source_id === next.sourceId,
+              );
+        return {
+          taskId:
+            newTask || deployment.tasks.some((task) => task.taskId === next.taskId)
+              ? undefined
+              : "Choose an existing task",
+          sourceId: sourceExists ? undefined : "Choose an existing source",
+        };
+      },
+    },
+  );
   const id = (f: string) => `${cfg.trigger_id}-${f}`;
   const readiness = triggerReadiness(deployment, trigger);
   /* a referenced document's full editor, open beside the automation */
@@ -250,6 +269,7 @@ export function TriggerEditor({
           label="Task"
           description="The prompt that runs, and the behavior that runs it."
           value={d.draft.taskId}
+          error={d.problems.taskId}
           onChange={(v) => d.set("taskId", v)}
           items={[
             ...deployment.tasks.map((t) => ({
@@ -293,6 +313,7 @@ export function TriggerEditor({
             id={id("sid")}
             label="Schedule"
             value={d.draft.sourceId}
+            error={d.problems.sourceId}
             onChange={(v) => d.set("sourceId", v)}
             items={[
               ...deployment.schedules.map((s) => ({
@@ -317,6 +338,7 @@ export function TriggerEditor({
             id={id("sid")}
             label="Event source"
             value={d.draft.sourceId}
+            error={d.problems.sourceId}
             onChange={(v) => d.set("sourceId", v)}
             items={[
               ...deployment.eventSources.map((s) => ({
@@ -382,6 +404,7 @@ export function TriggerEditor({
       </Group>
       <DraftActions
         draft={d}
+        fields={{ taskId: id("task"), sourceId: id("sid") }}
         onCancel={() => {
           d.reset();
           setPending({});

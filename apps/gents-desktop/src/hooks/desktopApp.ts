@@ -11,6 +11,8 @@ import { createSelectionStore } from "./selectionStore";
 import { reconcileSelection } from "./selectionReconcile";
 import { createSessionReads } from "./sessionReads";
 import { createSessionStore } from "./sessionStore";
+import { createProviderStore, type ProviderStore } from "./providerStore";
+import { createProviderReads } from "./providerReads";
 import { createShellActions } from "./shellActions";
 import { createDraftStore } from "./draftStore";
 import type { ShellStores } from "./shellProjection";
@@ -38,7 +40,7 @@ export function createDesktopApp({
   supportsManagedServer = false,
   reportFailure,
 }: DesktopAppParams) {
-  const stores: ShellStores = {
+  const stores: ShellStores & { providers: ProviderStore } = {
     selection: createSelectionStore(),
     session: createSessionStore(),
     fleet: createFleetStore(),
@@ -46,6 +48,7 @@ export function createDesktopApp({
       supportsManagedServer ? "checking-managed-server" : "loading-configuration",
     ),
     chat: createChatStore(),
+    providers: createProviderStore(),
   };
   /** what the shell decides, kept in step with the stores */
   const view = createShellView(stores);
@@ -72,14 +75,17 @@ export function createDesktopApp({
     stores,
     refreshSession: reads.refreshSession,
   });
-  const actions = createShellActions({
-    api,
-    stores,
-    project,
-    reads,
-    client: lifecycle,
-    reportFailure: reportAction,
-  });
+  const actions = {
+    ...createShellActions({
+      api,
+      stores,
+      project,
+      reads,
+      client: lifecycle,
+      reportFailure: reportAction,
+    }),
+    ...createProviderReads({ api, store: stores.providers, client: stores.client }),
+  };
   reconcileSelection(stores, actions.selectAgent);
   /* the composer's drafts, kept apart so a keystroke reaches only it */
   const drafts = createDraftStore();

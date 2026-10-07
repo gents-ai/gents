@@ -1,6 +1,6 @@
 /* The OS-managed local agent service. The desktop observes and controls it,
    but does not own its process lifetime. */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import type {
   ManagedServerStatus,
@@ -43,17 +43,28 @@ export function LocalServer() {
   const [selectedDirectory, setSelectedDirectory] = useState<string | null>(null);
   const [authorityError, setAuthorityError] = useState<string | null>(null);
   const [wait, setWait] = useState<ManagedServerWait | null>(null);
-  const load = () =>
-    api.managedServerStatus?.().then(
+  /* only the newest status asked for is shown: a read begun before a start,
+     stop or restart may answer after it with what it replaced */
+  const asked = useRef(0);
+  const ask = () => {
+    const read = ++asked.current;
+    return () => read === asked.current;
+  };
+  const load = () => {
+    const current = ask();
+    return api.managedServerStatus?.().then(
       (next) => {
+        if (!current()) return;
         setStatus(next);
         setStatusError(null);
       },
       (error: unknown) => {
+        if (!current()) return;
         setStatus(null);
         setStatusError(`Could not check the background agent: ${String(error)}`);
       },
     );
+  };
   useEffect(() => {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -64,9 +75,10 @@ export function LocalServer() {
     run: () => Promise<ManagedServerStatus> | undefined,
   ) => {
     setBusy(true);
+    const current = ask();
     try {
       const next = await run();
-      if (next) setStatus(next);
+      if (next && current()) setStatus(next);
       await refreshSnapshot();
       toast(label);
     } catch (e) {
@@ -95,6 +107,7 @@ export function LocalServer() {
     if (!authority || !api.restartManagedServer) return;
     setBusy(true);
     setAuthorityError(null);
+    const current = ask();
     try {
       const restartManagedServer = api.restartManagedServer;
       let next = await observeManagedServerOperation(
@@ -102,12 +115,12 @@ export function LocalServer() {
         () => restartManagedServer(name, authority),
         setWait,
       );
-      setStatus(next);
+      if (current()) setStatus(next);
       const deadline = Date.now() + 30_000;
       while (!next.pairingReady && Date.now() < deadline) {
         await new Promise((resolve) => window.setTimeout(resolve, 250));
         next = (await api.managedServerStatus?.()) ?? next;
-        setStatus(next);
+        if (current()) setStatus(next);
       }
       if (!next.pairingReady) {
         throw new Error("The runtime restarted, but background pairing is not ready.");

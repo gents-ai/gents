@@ -18,7 +18,7 @@ import {
   TextRow,
   TagsRow,
 } from "./editors";
-import { optionalInteger, str, useDraft } from "./draft";
+import { optionalInteger, problemOf, str, useDraft } from "./draft";
 import { HooksRows, hooksFromDraft, toHookDraft } from "./HooksRows";
 import { DeleteButton, ListDetail } from "./ListDetail";
 import { newId } from "./draft";
@@ -69,36 +69,51 @@ export function TaskEditor({
     hooks: (task.hooks ?? []).map(toHookDraft),
     tags: task.tags ?? [],
   };
-  const d = useDraft(saved, (n) => {
-    if (!deployment.behaviors.some((behavior) => behavior.behaviorId === n.behaviorId))
-      return Promise.reject(new Error("Choose an existing behavior"));
-    if (!n.promptTemplate.trim())
-      return Promise.reject(new Error("Prompt template is required"));
-    if (n.goalTokenBudget.trim() && !n.goalObjectiveTemplate.trim()) {
-      return Promise.reject(new Error("A goal budget needs a goal objective"));
-    }
-    const hooks = hooksFromDraft(n.hooks);
-    if (typeof hooks === "string") return Promise.reject(new Error(hooks));
-    return changeConfig("saveTaskConfig", {
-      document: {
-        agent_did: deployment.agentDid,
-        task_id: task.taskId,
-        display_name: n.name.trim() || task.taskId,
-        description: n.description || null,
-        behavior_id: n.behaviorId,
-        prompt_template: n.promptTemplate,
-        emit_outcome: n.emitOutcome,
-        goal_objective_template: n.goalObjectiveTemplate || null,
-        goal_token_budget: optionalInteger("Goal token budget", n.goalTokenBudget, {
-          min: 1,
-        }),
-        enabled: n.enabled,
-        output_schema_ref: n.outputSchemaRef || null,
-        hooks: hooks.length ? hooks : null,
-        tags: n.tags.length ? n.tags : null,
+  const budget = (n: typeof saved) =>
+    optionalInteger("Goal token budget", n.goalTokenBudget, { min: 1 });
+  const d = useDraft(
+    saved,
+    (n) => {
+      const hooks = hooksFromDraft(n.hooks);
+      if (typeof hooks === "string") return Promise.reject(new Error(hooks));
+      return changeConfig("saveTaskConfig", {
+        document: {
+          agent_did: deployment.agentDid,
+          task_id: task.taskId,
+          display_name: n.name.trim() || task.taskId,
+          description: n.description || null,
+          behavior_id: n.behaviorId,
+          prompt_template: n.promptTemplate,
+          emit_outcome: n.emitOutcome,
+          goal_objective_template: n.goalObjectiveTemplate || null,
+          goal_token_budget: budget(n),
+          enabled: n.enabled,
+          output_schema_ref: n.outputSchemaRef || null,
+          hooks: hooks.length ? hooks : null,
+          tags: n.tags.length ? n.tags : null,
+        },
+      });
+    },
+    {
+      problems: (n) => {
+        const hooks = hooksFromDraft(n.hooks);
+        return {
+          behaviorId: deployment.behaviors.some((b) => b.behaviorId === n.behaviorId)
+            ? undefined
+            : "Choose an existing behavior",
+          promptTemplate: n.promptTemplate.trim()
+            ? undefined
+            : "Prompt template is required",
+          goalObjectiveTemplate:
+            n.goalTokenBudget.trim() && !n.goalObjectiveTemplate.trim()
+              ? "A goal budget needs a goal objective"
+              : undefined,
+          goalTokenBudget: problemOf(() => budget(n)),
+          hooks: typeof hooks === "string" ? hooks : undefined,
+        };
       },
-    });
-  });
+    },
+  );
   /* the New behavior dialog's resolver while it is open */
   const [newBehavior, setNewBehavior] = useState<((id: string | null) => void) | null>(
     null,
@@ -167,6 +182,7 @@ export function TaskEditor({
           label="Behavior"
           description="Runs the prompt with its instructions, tools and model."
           value={d.draft.behaviorId}
+          error={d.problems.behaviorId}
           onChange={(v) => d.set("behaviorId", v)}
           items={behaviors}
           none="Unset"
@@ -208,6 +224,7 @@ export function TaskEditor({
           label="Prompt template"
           description="Use {{ session.session_id }} and {{ request.request_id }} for this invocation’s identity."
           value={d.draft.promptTemplate}
+          error={d.problems.promptTemplate}
           onChange={(v) => d.set("promptTemplate", v)}
           rows={5}
           stacked
@@ -217,6 +234,7 @@ export function TaskEditor({
           label="Durable goal objective"
           description="Optional. Applies this goal when the queued request starts."
           value={d.draft.goalObjectiveTemplate}
+          error={d.problems.goalObjectiveTemplate}
           onChange={(v) => d.set("goalObjectiveTemplate", v)}
           rows={2}
           stacked
@@ -226,6 +244,7 @@ export function TaskEditor({
           label="Goal token budget"
           description="Optional positive whole number; blank leaves the goal unlimited. Needs an objective."
           value={d.draft.goalTokenBudget}
+          error={d.problems.goalTokenBudget}
           onChange={(v) => d.set("goalTokenBudget", v)}
           placeholder="Optional"
         />
@@ -246,6 +265,7 @@ export function TaskEditor({
         <HooksRows
           id={id("hooks")}
           value={d.draft.hooks}
+          error={d.problems.hooks}
           onChange={(v) => d.set("hooks", v)}
         />
         <TagsRow
@@ -255,7 +275,16 @@ export function TaskEditor({
           onChange={(v) => d.set("tags", v)}
         />
       </Group>
-      <DraftActions draft={d} />
+      <DraftActions
+        draft={d}
+        fields={{
+          behaviorId: id("behavior"),
+          promptTemplate: id("prompt"),
+          goalObjectiveTemplate: id("goal"),
+          goalTokenBudget: id("budget"),
+          hooks: `${id("hooks")}-0-id`,
+        }}
+      />
       <Group
         title="When it runs"
         action={

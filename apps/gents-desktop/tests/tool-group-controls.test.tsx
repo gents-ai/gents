@@ -349,8 +349,12 @@ describe("canonical tool selections", () => {
     const user = userEvent.setup();
     renderIn(app, <ToolsPanel deployment={deployment} item="tools-a" />);
     await user.clear(screen.getByRole("textbox", { name: "Canonical JSON" }));
-    expect(screen.getByRole("alert")).toHaveTextContent("Repair");
+    /* the controls ask for a repair, and the field says what is wrong */
+    const alerts = screen.getAllByRole("alert").map((alert) => alert.textContent);
+    expect(alerts.some((text) => text?.includes("Repair"))).toBe(true);
+    expect(alerts).toContain("Advanced configuration must be valid JSON");
     await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(screen.getByRole("textbox", { name: "Canonical JSON" })).toHaveFocus();
     expect(api.saveToolsConfig).not.toHaveBeenCalled();
   });
 

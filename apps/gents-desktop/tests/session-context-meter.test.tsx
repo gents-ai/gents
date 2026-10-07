@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
-import { SessionContext } from "../src/ui/screens/SessionScreen";
+import { SessionContext } from "../src/ui/screens/SessionContextMeter";
 
 type Context = DesktopSessionSnapshot["context"];
 

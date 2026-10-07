@@ -6,19 +6,18 @@ import { publishSnapshot, renderIn, testApp, withApp } from "./app-fixture";
 
 import type { DesktopClientSnapshot } from "@source-inc/gents-desktop-client";
 import { AgentPanel } from "../src/ui/screens/agent/AgentPanel";
-import {
-  BehaviorEditor,
-  BehaviorsPanel,
-  newBehaviorView,
-} from "../src/ui/screens/agent/BehaviorsPanel";
+import { BehaviorEditor } from "../src/ui/screens/agent/BehaviorEditor";
+import { BehaviorsPanel } from "../src/ui/screens/agent/BehaviorsPanel";
+import { newBehaviorView } from "../src/ui/screens/agent/behaviorDraft";
 import { ContextsPanel } from "../src/ui/screens/agent/ContextsPanel";
 import { EventSourcesPanel } from "../src/ui/screens/agent/EventSourcesPanel";
-import { InferencePanel, useAccounts } from "../src/ui/screens/agent/InferencePanel";
+import { InferencePanel } from "../src/ui/screens/agent/InferencePanel";
+import { useAccounts } from "../src/ui/hooks/useProviders";
 import {
   ProfileEditor,
-  ProfilesPanel,
   newProfileDocument,
-} from "../src/ui/screens/agent/ProfilesPanel";
+} from "../src/ui/screens/agent/ProfileEditor";
+import { ProfilesPanel } from "../src/ui/screens/agent/ProfilesPanel";
 import { ProfileSheet } from "../src/ui/screens/agent/ProfileSheet";
 import { SetupScreen } from "../src/ui/screens/setup/SetupScreen";
 import { SchedulesPanel } from "../src/ui/screens/agent/SchedulesPanel";
@@ -1716,9 +1715,13 @@ describe("configuration panels", () => {
     const user = await replace("Endpoint", "file:///tmp/model");
     await replace("Max concurrent", "0");
     await user.click(screen.getByRole("button", { name: "Save" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent(
+    /* each problem at its own field, and Save at the first of them */
+    const alerts = screen.getAllByRole("alert").map((alert) => alert.textContent);
+    expect(alerts).toEqual([
       "Endpoint must use http or https",
-    );
+      "Max concurrent must be 1 or more",
+    ]);
+    expect(screen.getByLabelText("Endpoint")).toHaveFocus();
     expect(api.patchConfigComponents).not.toHaveBeenCalled();
   });
 
@@ -2010,6 +2013,24 @@ describe("configuration panels", () => {
         }),
       }),
     );
+  });
+
+  it("says a schedule's problem at its field, and Save goes there instead of saving", async () => {
+    const { api, app } = harness();
+    renderIn(app, <SchedulesPanel deployment={deployment} item="timer-a" />);
+    const user = await replace("Interval seconds", "ninety");
+
+    /* said where it is, before any Save */
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Interval seconds must be a whole number",
+    );
+    expect(screen.getByLabelText("Interval seconds")).toHaveAttribute(
+      "aria-invalid",
+      "true",
+    );
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(screen.getByLabelText("Interval seconds")).toHaveFocus();
+    expect(api.saveScheduleConfig).not.toHaveBeenCalled();
   });
 
   it("runs a configured schedule through the typed bridge command", async () => {

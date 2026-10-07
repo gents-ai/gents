@@ -53,38 +53,53 @@ function Editor({
     skillIds: context.skill_ids ?? [],
     tags: context.tags ?? [],
   };
-  const d = useDraft(saved, async (next) => {
-    if (next.toolsId && !deployment.tools.some((row) => row.tools_id === next.toolsId))
-      throw new Error("Choose an existing Tools document");
-    if (
-      next.compactionId &&
-      !deployment.compactions.some((row) => row.compaction_id === next.compactionId)
-    )
-      throw new Error("Choose an existing compaction document");
-    const skillIds = next.skillIds;
-    const missingSkill = skillIds.find(
-      (skillId) => !deployment.skills.some((row) => row.skillId === skillId),
-    );
-    if (missingSkill) throw new Error(`Unknown skill ID: ${missingSkill}`);
-    await changeConfig("patchConfigComponents", {
-      agentDid: deployment.agentDid,
-      patches: [
-        {
-          collection: "AgentContext",
-          id: context.context_id,
-          changes: {
-            display_name: next.displayName || null,
-            description: next.description || null,
-            system_prompt: next.systemPrompt || null,
-            tools_id: next.toolsId || null,
-            compaction_id: next.compactionId || null,
-            skill_ids: skillIds.length ? skillIds : null,
-            tags: next.tags.length ? next.tags : null,
+  const d = useDraft(
+    saved,
+    async (next) => {
+      const skillIds = next.skillIds;
+      await changeConfig("patchConfigComponents", {
+        agentDid: deployment.agentDid,
+        patches: [
+          {
+            collection: "AgentContext",
+            id: context.context_id,
+            changes: {
+              display_name: next.displayName || null,
+              description: next.description || null,
+              system_prompt: next.systemPrompt || null,
+              tools_id: next.toolsId || null,
+              compaction_id: next.compactionId || null,
+              skill_ids: skillIds.length ? skillIds : null,
+              tags: next.tags.length ? next.tags : null,
+            },
           },
-        },
-      ],
-    });
-  });
+        ],
+      });
+    },
+    {
+      /* each reference names a document the node still lists */
+      problems: (next) => {
+        const missingSkill = next.skillIds.find(
+          (skillId) => !deployment.skills.some((row) => row.skillId === skillId),
+        );
+        return {
+          toolsId:
+            next.toolsId &&
+            !deployment.tools.some((row) => row.tools_id === next.toolsId)
+              ? "Choose an existing Tools document"
+              : undefined,
+          compactionId:
+            next.compactionId &&
+            !deployment.compactions.some(
+              (row) => row.compaction_id === next.compactionId,
+            )
+              ? "Choose an existing compaction document"
+              : undefined,
+          skillIds: missingSkill ? `Unknown skill ID: ${missingSkill}` : undefined,
+        };
+      },
+    },
+  );
   const id = (f: string) => `${context.context_id}-${f}`;
   const users = deployment.behaviors.filter((b) => b.contextId === context.context_id);
   /* New tools… from the field, and the chosen document's editor beside the page */
@@ -179,6 +194,7 @@ function Editor({
           label="Tools"
           description="What every behavior on this context may touch."
           value={d.draft.toolsId}
+          error={d.problems.toolsId}
           onChange={(v) => d.set("toolsId", v)}
           none="None"
           items={deployment.tools.map((t) => ({
@@ -197,6 +213,7 @@ function Editor({
           id={id("compact")}
           label="Compaction"
           value={d.draft.compactionId}
+          error={d.problems.compactionId}
           onChange={(v) => d.set("compactionId", v)}
           items={[
             { value: "", label: "Runtime default" },
@@ -211,6 +228,7 @@ function Editor({
           label="Skills"
           description="None means the behavior runs without skills."
           value={d.draft.skillIds}
+          error={d.problems.skillIds}
           onChange={(v) => d.set("skillIds", v)}
           items={deployment.skills.map((sk) => ({
             value: sk.skillId,
@@ -226,7 +244,14 @@ function Editor({
           onChange={(v) => d.set("tags", v)}
         />
       </Group>
-      <DraftActions draft={d} />
+      <DraftActions
+        draft={d}
+        fields={{
+          toolsId: id("tools"),
+          compactionId: id("compact"),
+          skillIds: id("skills"),
+        }}
+      />
       <DeleteButton
         label={context.display_name ?? context.context_id}
         base={base}
