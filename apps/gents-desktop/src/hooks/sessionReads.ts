@@ -168,9 +168,10 @@ export function createSessionReads({
       if (!next) return false;
       setSession(next);
       return true;
-    } catch (error) {
+    } catch {
       if (!stillCurrent()) return true;
-      setError(String(error));
+      // The authoritative full read owns failure reporting. A transient delta
+      // failure must not leave a global error after that read recovers.
       return false;
     }
   }

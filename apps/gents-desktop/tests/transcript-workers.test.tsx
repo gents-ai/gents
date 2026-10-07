@@ -339,7 +339,7 @@ describe("subagent lineage freshness", () => {
       const observe = (storeVersion: number) =>
         writeSession(app.stores.session, (session) =>
           session
-            ? { ...session, projectionRevision: { storeVersion, reconcileVersion: 1 } }
+            ? { ...session, projectionRevision: { storeVersion } }
             : session,
         );
       observe(1);
@@ -374,7 +374,7 @@ describe("subagent lineage freshness", () => {
     const observe = (storeVersion: number) =>
       writeSession(app.stores.session, (session) =>
         session
-          ? { ...session, projectionRevision: { storeVersion, reconcileVersion: 1 } }
+          ? { ...session, projectionRevision: { storeVersion } }
           : session,
       );
     observe(1);
@@ -419,7 +419,7 @@ describe("subagent lineage freshness", () => {
                   reasoning: null,
                 } as RenderedTimelineItem,
               ],
-              projectionRevision: { storeVersion, reconcileVersion: 1 },
+              projectionRevision: { storeVersion },
             }
           : session,
       );

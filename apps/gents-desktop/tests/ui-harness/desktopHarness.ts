@@ -294,7 +294,7 @@ export function createDesktopUiHarness(
   let hydrationRetryCalls = 0;
   let updateEvents = 0;
   let storeVersion = 1;
-  let reconcileVersion = 1;
+  let liveSourceEpoch = 1;
   let streamSequence = 0;
   let bridgeCalls: MobilePerformanceBridgeCall[] = [];
   let commits: MobilePerformanceCommit[] = [];
@@ -560,14 +560,13 @@ export function createDesktopUiHarness(
     updateEvents += 1;
     if (reason === "store") {
       storeVersion += 1;
-      if (!responseOnly) reconcileVersion += 1;
+      if (!responseOnly) liveSourceEpoch += 1;
     }
     window.setTimeout(() => {
       for (const listener of listeners) {
         void listener({
           reason,
           storeVersion,
-          reconcileVersion,
         });
       }
     }, 0);
@@ -579,13 +578,12 @@ export function createDesktopUiHarness(
       for (let index = 0; index < count; index += 1) {
         if (reason === "store") {
           storeVersion += 1;
-          if (!responseOnly) reconcileVersion += 1;
+          if (!responseOnly) liveSourceEpoch += 1;
         }
         for (const listener of listeners) {
           void listener({
             reason,
             storeVersion,
-            reconcileVersion,
           });
         }
       }
@@ -1101,11 +1099,11 @@ export function createDesktopUiHarness(
       const session = sessions.get(sessionId);
       if (!session) return null;
       const snapshot = clone(session);
-      snapshot.projectionRevision = { storeVersion, reconcileVersion };
+      snapshot.projectionRevision = { storeVersion };
       snapshot.liveCursor = session.timelineItems.some(
         (item) => item.kind === "liveAssistant",
       )
-        ? `${session.agentDid}:${sessionId}:${session.latestRequestId}:${reconcileVersion}`
+        ? `${session.agentDid}:${sessionId}:${session.latestRequestId}:${liveSourceEpoch}`
         : null;
       if (!timelinePage) return snapshot;
 
@@ -1160,8 +1158,8 @@ export function createDesktopUiHarness(
     async fetchSessionLiveDelta(request) {
       const session = sessions.get(request.sessionId);
       if (!session || session.latestRequestId !== request.requestId) return null;
-      const revision = { storeVersion, reconcileVersion };
-      const liveCursor = `${session.agentDid}:${request.sessionId}:${session.latestRequestId}:${reconcileVersion}`;
+      const revision = { storeVersion };
+      const liveCursor = `${session.agentDid}:${request.sessionId}:${session.latestRequestId}:${liveSourceEpoch}`;
       if (request.baseLiveCursor !== liveCursor) {
         return {
           outcome: "snapshotRequired",

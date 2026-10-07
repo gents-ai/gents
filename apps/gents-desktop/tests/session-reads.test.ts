@@ -56,6 +56,7 @@ function session(
 function readsFor(
   api: DesktopApiAdapter,
   store = createSelectionStore({ agentDid: "did:key:test", sessionId: "session-1" }),
+  setError = vi.fn(),
 ) {
   const sessionStore = createSessionStore();
   const reads = createSessionReads({
@@ -63,12 +64,41 @@ function readsFor(
     store,
     sessionStore,
     trackedRequestId: () => "request-1",
-    setError: vi.fn(),
+    setError,
   });
   return { ...reads, sessionStore };
 }
 
 describe("createSessionReads", () => {
+  it("recovers a failed live read through a snapshot without a sticky global error", async () => {
+    const tip = session([], {
+      totalItems: 0,
+      pageItems: 0,
+      hasOlder: false,
+      hasNewer: false,
+      oldestItemKey: null,
+      newestItemKey: null,
+    });
+    tip.projectionRevision = { storeVersion: 1 };
+    const fetchSessionSnapshot = vi.fn(async () => tip);
+    const fetchSessionLiveDelta = vi.fn(async () => {
+      throw new Error("operator restarted");
+    });
+    const setError = vi.fn();
+    const reads = readsFor(
+      { fetchSessionSnapshot, fetchSessionLiveDelta } as unknown as DesktopApiAdapter,
+      createSelectionStore({ agentDid: "did:key:test", sessionId: "session-1" }),
+      setError,
+    );
+    await reads.refreshSession("session-1");
+    expect(await reads.refreshSessionLiveDelta()).toBe(false);
+    await reads.refreshSession("session-1");
+    expect(fetchSessionLiveDelta).toHaveBeenCalledTimes(1);
+    expect(fetchSessionSnapshot).toHaveBeenCalledTimes(2);
+    expect(reads.sessionStore.getState().load.phase).toBe("loaded");
+    expect(setError).not.toHaveBeenCalled();
+  });
+
   it("keeps rendered replies while a database refresh stalls and then fails", async () => {
     const page = {
       totalItems: 1,
@@ -244,7 +274,7 @@ describe("createSessionReads", () => {
       oldestItemKey: "k8",
       newestItemKey: "k8",
     });
-    tip.projectionRevision = { storeVersion: 7, reconcileVersion: 3 };
+    tip.projectionRevision = { storeVersion: 7 };
     tip.timelineItems.push({
       kind: "liveAssistant",
       itemKey: "live-assistant",
@@ -279,7 +309,7 @@ describe("createSessionReads", () => {
     resolveDelta({
       outcome: "delta",
       liveCursor: "cursor",
-      revision: { storeVersion: 8, reconcileVersion: 3 },
+      revision: { storeVersion: 8 },
       requestId: "request-1",
       turnState: "running",
       status: null,
@@ -315,7 +345,7 @@ describe("createSessionReads", () => {
       oldestItemKey: null,
       newestItemKey: null,
     });
-    tip.projectionRevision = { storeVersion: 7, reconcileVersion: 3 };
+    tip.projectionRevision = { storeVersion: 7 };
     tip.timelineItems = [
       { kind: "liveAssistant", itemKey: "live", content: "hello", reasoning: null },
     ];
@@ -337,7 +367,7 @@ describe("createSessionReads", () => {
       outcome: "delta",
       liveCursor: "cursor",
       requestId: "request-1",
-      revision: { storeVersion: 8, reconcileVersion: 8 },
+      revision: { storeVersion: 8 },
       turnState: "running",
       status: null,
       content: { mode: "replace", value: "old", byteLen: 3, hash: "bd2b9bd6" },
@@ -376,7 +406,7 @@ describe("createSessionReads", () => {
         oldestItemKey: null,
         newestItemKey: null,
       });
-      tip.projectionRevision = { storeVersion: 1, reconcileVersion: 1 };
+      tip.projectionRevision = { storeVersion: 1 };
       tip.timelineItems = [
         { kind: "liveAssistant", itemKey: "live", content: "hello", reasoning: null },
       ];
@@ -384,7 +414,7 @@ describe("createSessionReads", () => {
         outcome: "unchanged",
         liveCursor: "cursor",
         requestId: "request-1",
-        revision: { storeVersion: 2, reconcileVersion: 2 },
+        revision: { storeVersion: 2 },
         turnState: "running",
         status: null,
         content: { mode: "unchanged", value: "", byteLen: 5, hash: "4f9f2cab" },

@@ -325,6 +325,10 @@ fn decode_prompt_ownership(
     Ok(())
 }
 
+/// DefraDB extracts index candidates from conjunctive fields, while a
+/// disjunction remains a residual filter. Keep the exact namespace in one
+/// residual disjunct so it applies before the row limit without competing with
+/// the physical-request index under the planner's capped cardinality estimates.
 fn tip_query(request: &AgentRequestRow, include_request: bool) -> Result<String> {
     let doc = escape_graphql_string(
         request
@@ -349,11 +353,9 @@ fn tip_query(request: &AgentRequestRow, include_request: bool) -> Result<String>
         .as_deref()
         .map(|value| format!("\"{}\"", escape_graphql_string(value)))
         .unwrap_or_else(|| "null".into());
-    // DefraDB's capped cardinality estimates can tie once a request exceeds
-    // 1024 segments and choose an agent-wide index. One indexed predicate
-    // fixes the scan to this physical request; the canonical row owner checks the
-    // remaining namespace before decoding. ACP stays with ConfigAccess.
-    let scope = format!(r#"request_doc_id: {{ _eq: "{doc}" }}"#);
+    let scope = format!(
+        r#"request_doc_id: {{ _eq: "{doc}" }}, _or: [{{ agent_did: {{ _eq: "{agent}" }}, session_id: {{ _eq: "{session}" }}, requester_did: {{ _eq: {requester} }} }}]"#
+    );
     let live = include_request
         || request
             .lifecycle_state
@@ -369,8 +371,16 @@ fn tip_query(request: &AgentRequestRow, include_request: bool) -> Result<String>
         format!(r#"{scope}, message_key: {{ _eq: "{key}" }}"#)
     };
     let segments = if live {
+        // select_live_target only considers inference provider turns. These
+        // unindexed JSON predicates exclude inert payloads before transport
+        // and the row cap, without hiding twins or closure-only records.
+        let source = if include_request {
+            r#", source: { kind: { _eq: "provider_turn" }, scope: { _like: "inference.%" } }"#
+        } else {
+            ""
+        };
         format!(
-            r#"AgentOutputSegment(filter: {{ {scope} }}, limit: {limit}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }}"#
+            r#"AgentOutputSegment(filter: {{ {scope}{source} }}, limit: {limit}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }}"#
         )
     } else {
         String::new()

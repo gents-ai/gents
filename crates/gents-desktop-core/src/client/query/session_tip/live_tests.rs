@@ -61,11 +61,54 @@ async fn live_read_observes_exact_request_lifecycle_and_every_crdt_record_withou
     )
     .await
     .unwrap();
+    let large_payload = escape_graphql_string(&"inert payload ".repeat(16_384));
+    for inert_source in [
+        r#"{kind:"tool_call", tool_call_doc_id:"tool"}"#,
+        r#"{kind:"authored", key:"prompt"}"#,
+        r#"{kind:"provider_turn", scope:"compaction.0", turn_index:0, attempt:0}"#,
+    ] {
+        ConfigAccess::write_local(
+            &node,
+            "test.inert_payload",
+            &format!(
+                r#"mutation {{
+            create_AgentOutputSegment(input: {{agent_did:"agent", requester_did:"reader",
+                session_id:"session", request_doc_id:"{doc}", source:{inert_source},
+                payload:"{large_payload}"}}) {{ _docID }}
+        }}"#
+            ),
+        )
+        .await
+        .unwrap();
+    }
+    // Both the principal and request indexes exceed DefraDB's 1024-entry
+    // estimation cap. A broad-index tie must not scan unrelated history.
+    const INERT_ROWS: usize = 1_030;
+    for start in (0..INERT_ROWS).step_by(32) {
+        let batch = (start..(start + 32).min(INERT_ROWS)).map(|i| {
+            let key = escape_graphql_string(&format!("tool-{i}"));
+            format!(r#"s{i}: create_AgentOutputSegment(input: {{agent_did:"agent", requester_did:"reader",
+                session_id:"session", request_doc_id:"{doc}", source:{{kind:"tool_call", tool_call_doc_id:"{key}"}},
+                payload:"inert"}}) {{ _docID }}"#)
+        }).collect::<Vec<_>>().join("\n");
+        ConfigAccess::write_local(
+            &node,
+            "test.request_cardinality",
+            &format!("mutation {{ {batch} }}"),
+        )
+        .await
+        .unwrap();
+    }
     let history = (0..32).map(|i| {
         let history_id = escape_graphql_string(&format!("history-{i}"));
         format!(r#"h{i}: create_AgentOutputSegment(input: {{
             agent_did:"agent", requester_did:"reader", session_id:"session", request_doc_id:"{history_id}",
-            source:{{kind:"invalid"}}, payload:"unrelated history"}}) {{ _docID }}"#)
+            source:{{kind:"invalid"}}, payload:"unrelated history"}}) {{ _docID }}
+            m{i}: create_AgentMessage(input: {{message_key:"{history_id}",
+                agent_did:"agent", requester_did:"reader", session_id:"session", request_doc_id:"{history_id}",
+                publication:{{kind:"invalid"}}, blocks:"must not be decoded"}}) {{ _docID }}
+            r{i}: create_AgentRequest(input: {{request_id:"{history_id}", purpose:"normal",
+                agent_did:"agent", requester_did:"reader", session_id:"session", lifecycle_state:"completed"}}) {{ _docID }}"#)
     }).collect::<Vec<_>>().join("\n");
     ConfigAccess::write_local(
         &node,
@@ -113,19 +156,50 @@ async fn live_read_observes_exact_request_lifecycle_and_every_crdt_record_withou
             _ => (0, 0),
         }
     }
-    let segment_plan = plan["explain"]["operationNode"]
-        .as_array()
-        .unwrap()
-        .last()
-        .unwrap();
-    let (indexes, docs) = scan_cost(segment_plan);
+    let roots = plan["explain"]["operationNode"].as_array().unwrap();
+    assert_eq!(roots.len(), 3, "{plan}");
+    let request_cost = scan_cost(&roots[0]);
+    assert_eq!(
+        request_cost,
+        (0, 1),
+        "request must use its point read: {plan}"
+    );
+    assert_eq!(
+        scan_cost(&roots[1]),
+        (0, 0),
+        "no headers in this request: {plan}"
+    );
+    let (indexes, docs) = scan_cost(&roots[2]);
+    let request_rows = INERT_ROWS as u64 + 8;
     assert!(
-        indexes > 0 && indexes <= 5 && docs > 0 && docs <= 5,
-        "live output must touch only the selected request, regardless of history: {plan}"
+        indexes > 0 && indexes <= request_rows && docs > 0 && docs <= request_rows,
+        "live output must touch only the selected request above the estimate cap: {plan}"
     );
     let mut oversized = execute_local_graphql_query(&node, &query, "live cap fixture")
         .await
         .unwrap();
+    assert_eq!(
+        oversized[AGENT_OUTPUT_SEGMENT_NAME]
+            .as_array()
+            .unwrap()
+            .len(),
+        4
+    );
+    assert!(
+        serde_json::to_vec(&oversized).unwrap().len() < 8_192,
+        "inert payloads must not cross the query boundary"
+    );
+    let limited = execute_local_graphql_query(
+        &node,
+        &query.replace(&format!("limit: {}", MAX_TIP_REQUEST_ROWS + 1), "limit: 4"),
+        "live scope before limit",
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        limited[AGENT_OUTPUT_SEGMENT_NAME].as_array().unwrap().len(),
+        4
+    );
     let server = wiremock::MockServer::start().await;
     wiremock::Mock::given(wiremock::matchers::method("POST"))
         .and(wiremock::matchers::path("/api/v0/graphql"))

@@ -70,10 +70,7 @@ fn cursor(store: &ClientStore) -> String {
 fn delta(store: &ClientStore, cursor: &str) -> SessionLiveDeltaView {
     build_session_live_delta_from_store(
         store,
-        StoreProjectionRevision {
-            store_version: 900,
-            reconcile_version: 800,
-        },
+        StoreProjectionRevision { store_version: 900 },
         "session",
         Some("agent"),
         "logical",
@@ -200,10 +197,7 @@ fn snapshot_and_delta_preserve_the_same_markdown_bytes() {
     assert_eq!(content, "hello\r\n\r\n\r\nworld");
     let result = build_session_live_delta_from_store(
         &store,
-        StoreProjectionRevision {
-            store_version: 1,
-            reconcile_version: 1,
-        },
+        StoreProjectionRevision { store_version: 1 },
         "session",
         Some("agent"),
         "logical",
@@ -214,4 +208,134 @@ fn snapshot_and_delta_preserve_the_same_markdown_bytes() {
         "811c9dc5",
     );
     assert_eq!(result.outcome, "unchanged");
+}
+
+#[tokio::test]
+async fn operator_delta_uses_fresh_rows_with_a_payload_free_observer_and_snapshot_cursor() {
+    use gents_desktop_core::client::{ClientCoreOptions, DesktopPaths};
+    let home = tempfile::tempdir().unwrap();
+    let core = ClientCore::start_with_paths_and_options(
+        DesktopPaths::from_root(home.path()),
+        ClientCoreOptions::local_simulated_route(),
+    )
+    .await
+    .unwrap();
+    let server = wiremock::MockServer::start().await;
+    core.add_local_standard_peer_route_for_test(
+        "Live test",
+        "127.0.0.1:56000/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb",
+        "agent",
+        &format!("{}/api/v0/graphql", server.uri()),
+        home.path().to_str().unwrap(),
+    )
+    .await
+    .unwrap();
+    let mut rows = rows();
+    rows.requests[0].requester_did = Some("agent".into());
+    rows.output_segments[0].segment.requester_did = Some("agent".into());
+    rows.sessions.push(gents_protocol::session::AgentSession {
+        session_id: "session".into(),
+        agent_did: "agent".into(),
+        requester_did: Some("agent".into()),
+        behavior_id: "default".into(),
+        created_at: "2026-10-07T12:00:00Z".into(),
+        closed_at: None,
+        title: None,
+        tags: Vec::new(),
+        provenance: None,
+        observation: None,
+    });
+    let full = ClientStore::from_rows(rows.clone());
+    core.store().merge_observer_patch(full.clone());
+    let observed = core.store().snapshot();
+    assert!(observed.output_segments.is_empty());
+    let cursor = canonical_live_text(&observed, &full, "session", Some("agent"), "logical")
+        .unwrap()
+        .cursor;
+    rows.requests[0].execution_lease_expires_at = Some("2026-10-07T12:10:00Z".into());
+    let mut append = segment(1, " world");
+    append.segment.requester_did = Some("agent".into());
+    rows.output_segments.push(append);
+    let segments: Vec<_> = rows
+        .output_segments
+        .iter()
+        .map(|row| {
+            let mut value = serde_json::to_value(&row.segment).unwrap();
+            value["_docID"] = serde_json::json!(row.doc_id);
+            value
+        })
+        .collect();
+    let mut body = serde_json::json!({"data": {
+        "AgentRequest": rows.requests,
+        "AgentMessage": [],
+        "AgentOutputSegment": segments,
+    }});
+    body["data"]["AgentRequest"][0]["_docID"] = serde_json::json!(full.requests[0].doc_id);
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path("/api/v0/graphql"))
+        .and(wiremock::matchers::body_string_contains(
+            "DesktopSessionTip",
+        ))
+        .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(&body))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let result = build_session_live_delta(
+        &core,
+        "session",
+        Some("agent"),
+        "logical",
+        &cursor,
+        5,
+        &live_text_hash("hello"),
+        0,
+        &live_text_hash(""),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.outcome, "delta");
+    assert_eq!(result.content.unwrap().value, " world");
+    assert_eq!(result.live_cursor.as_deref(), Some(cursor.as_str()));
+    let missing = build_session_live_delta(
+        &core,
+        "session",
+        Some("agent"),
+        "missing",
+        &cursor,
+        5,
+        &live_text_hash("hello"),
+        0,
+        &live_text_hash(""),
+    )
+    .await
+    .unwrap();
+    assert_eq!(missing.outcome, "snapshotRequired");
+    server.verify().await;
+    server.reset().await;
+    body["data"]["AgentRequest"][0]["lifecycle_state"] = serde_json::json!("completed");
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path("/api/v0/graphql"))
+        .and(wiremock::matchers::body_string_contains(
+            "DesktopSessionTip",
+        ))
+        .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(body))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let terminal = build_session_live_delta(
+        &core,
+        "session",
+        Some("agent"),
+        "logical",
+        &cursor,
+        5,
+        &live_text_hash("hello"),
+        0,
+        &live_text_hash(""),
+    )
+    .await
+    .unwrap();
+    assert_eq!(terminal.outcome, "snapshotRequired");
+    assert!(core.store().snapshot().output_segments.is_empty());
+    core.shutdown().await.unwrap();
 }

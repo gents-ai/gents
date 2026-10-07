@@ -424,7 +424,6 @@ pub struct SessionTimelinePageView {
 #[serde(rename_all = "camelCase")]
 pub struct SessionProjectionRevisionView {
     pub store_version: u64,
-    pub reconcile_version: u64,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
