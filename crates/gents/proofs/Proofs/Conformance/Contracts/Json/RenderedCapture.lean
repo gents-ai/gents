@@ -37,7 +37,10 @@ def renderedCaptureStorageCaseJson (witness : RenderedCaptureStorageCase) : Stri
     ++ "\"base_depth\":" ++ toString witness.baseDepth ++ ","
     ++ "\"max_depth\":" ++ toString witness.maxDepth ++ ","
     ++ "\"base_verified\":" ++ boolString witness.baseVerified ++ ","
-    ++ "\"block_count\":" ++ toString witness.blockCount ++ ","
+    ++ "\"manifest_blocks\":" ++ jsonArray (witness.manifestBlocks.map fun block =>
+      "{\"ref\":" ++ toString block.ref
+        ++ ",\"pinned_witness\":" ++ toString block.pinnedWitness
+        ++ ",\"stored_witness\":" ++ jsonOptionalNat block.storedWitness ++ "}") ++ ","
     ++ "\"decoded_request\":" ++ jsonOptionalNat witness.decodedRequest ++ ","
     ++ "\"send_permitted\":" ++ boolString witness.sendPermitted
     ++ "}"

@@ -65,32 +65,24 @@ pub async fn field_commit(
 /// documents issues further statements rather than one unbounded query.
 pub const FIELD_COMMIT_ALIAS_BATCH: usize = 32;
 
-/// Read the field commits of many documents inside the caller's transaction,
-/// one aliased `_commits` field per document and at most
-/// [`FIELD_COMMIT_ALIAS_BATCH`] aliases per statement.
+/// Read the field commits of many documents through `execute`, one aliased
+/// `_commits` field per document and at most [`FIELD_COMMIT_ALIAS_BATCH`]
+/// aliases per statement. Results answer one-for-one in `doc_ids` order.
 ///
-/// The capture sink uses this to pin the `payload` witness of every block
-/// document in the same transaction that creates the blocks and the manifest
-/// referencing them, so the pinned CIDs and the block writes commit as one
-/// unit; the CID a transaction observes for its own create is the CID every
-/// later reader observes, which is what makes the pin meaningful. Reading
-/// them batched changes only the round-trip count: same snapshot, same
-/// per-document selection discipline (the `fieldName` match happens in Rust
-/// over the returned commits), and results answering one-for-one in `doc_ids`
-/// order, so a caller that errors on `None` per entry keeps exactly the
-/// guarantees one-read-per-document gave. A response that omits an alias, or
-/// answers one with something other than a commits array, is an error — never
-/// a silently skipped document.
-pub(crate) async fn field_commits_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+/// The capture sink reads inside the transaction that creates the blocks and
+/// the manifest pinning them, so the pins commit as one unit; the reader
+/// re-checks them through its own executor with the same selection.
+pub(crate) async fn field_commits<F, Fut>(
     doc_ids: &[String],
     field_name: &str,
-) -> Result<Vec<Option<RequestJsonCommit>>> {
+    mut execute: F,
+) -> Result<Vec<Option<RequestJsonCommit>>>
+where
+    F: FnMut(String) -> Fut,
+    Fut: std::future::Future<Output = Result<serde_json::Value>>,
+{
     let mut commits = Vec::with_capacity(doc_ids.len());
     for batch in doc_ids.chunks(FIELD_COMMIT_ALIAS_BATCH) {
-        if batch.is_empty() {
-            continue;
-        }
         let mut query = String::from("query {");
         for (index, doc_id) in batch.iter().enumerate() {
             query.push_str(&format!(
@@ -99,13 +91,24 @@ pub(crate) async fn field_commits_in_txn(
             ));
         }
         query.push_str(" }");
-        let response = txn
-            .execute(&query)
-            .await
-            .with_context(|| "reading batched _commits in transaction")?;
+        let response = execute(query).await?;
         commits.extend(select_batched_field_commits(&response, batch, field_name)?);
     }
     Ok(commits)
+}
+
+/// [`field_commits`] inside the caller's transaction.
+pub(crate) async fn field_commits_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    doc_ids: &[String],
+    field_name: &str,
+) -> Result<Vec<Option<RequestJsonCommit>>> {
+    field_commits(doc_ids, field_name, |query| async move {
+        txn.execute(&query)
+            .await
+            .context("reading batched _commits in transaction")
+    })
+    .await
 }
 
 /// Pure selection over one batched `_commits` response: for every document of
