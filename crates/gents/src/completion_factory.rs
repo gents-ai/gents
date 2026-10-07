@@ -121,6 +121,7 @@ pub(crate) fn loop_config(
         active_reduction_keys: Vec::new(),
         reduction_chain_keys: Vec::new(),
         initial_turn_index: 0,
+        resume_from_history: false,
         context_window: behavior.context_window,
         compaction_threshold: behavior.compaction_threshold(),
         retry_policy: CompletionRetryPolicy::scheduled_default(),

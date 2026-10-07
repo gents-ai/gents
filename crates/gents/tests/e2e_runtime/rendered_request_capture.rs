@@ -1229,6 +1229,132 @@ async fn a_retried_attempt_is_its_own_durable_fact() {
     agent.shutdown().await;
 }
 
+#[tokio::test]
+async fn retry_continues_recorded_tool_progress_without_republishing_input() {
+    let marker = "capture-retry-frontier";
+    let output = "RETRY_RECORDED_TOOL_RESULT";
+    let backend = MockStreamingBackend::start_with_plans(
+        CAPTURE_MODEL,
+        vec![StreamPlan::new(
+            marker,
+            vec![
+                StreamResponse::streams(
+                    marker,
+                    vec![StreamChunk::tool_call(
+                        "retry-call",
+                        CAPTURE_TOOL,
+                        r#"{"note":"first"}"#,
+                    )],
+                ),
+                StreamResponse::bad_request(r#"{"error":{"message":"invalid test parameter","type":"invalid_request_error"}}"#),
+                StreamResponse::completes(marker, ["continued"]),
+            ],
+        )],
+    )
+    .unwrap();
+    let db = test_db(marker).await;
+    let agent = boot_capture_agent_with(&db, marker, backend.endpoint(), None, |behavior| {
+        behavior.custom_tool(FixedOutputTool::new(CAPTURE_TOOL, output))
+    })
+    .await;
+    let content = format!("please use the tool {marker}");
+    let parent = create_runtime_request(
+        db.node.as_ref(),
+        &agent.agent_did,
+        CAPTURE_BEHAVIOR_ID,
+        "retry-parent",
+        marker,
+        &content,
+    )
+    .await;
+    assert_eq!(
+        wait_for_request_terminal_state(db.node.as_ref(), &parent).await,
+        RequestLifecycleState::Failed
+    );
+    let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
+        "retry-successor",
+        &agent.agent_did,
+        &agent.agent_did,
+        CAPTURE_BEHAVIOR_ID,
+        marker,
+        &content,
+        "interactive",
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
+            &agent.agent_did,
+        ),
+    );
+    create.retry_parent_request = Some("retry-parent".into());
+    create.retry_parent_request_doc_id = Some(parent.clone());
+    create.retry_root_request = Some("retry-parent".into());
+    create.retry_count = 1;
+    create.max_retries = 3;
+    gents::sign_agent_request_create_as_registered_target(&mut create)
+        .await
+        .unwrap();
+    let response = gents::config_client::ConfigAccess::Local(db.node.clone())
+        .write("test.retry_successor", &create.graphql_mutation().unwrap())
+        .await
+        .unwrap();
+    let response: gents::defra_node::QueryResponse = serde_json::from_value(response).unwrap();
+    let doc_id = gents::graphql::single_mutation_document(&response, "create_AgentRequest")
+        .unwrap()
+        .unwrap()["_docID"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        wait_for_request_terminal_state(db.node.as_ref(), &doc_id).await,
+        RequestLifecycleState::Completed
+    );
+    let observed = backend.observed_completion_bodies();
+    let captures = wait_for_rendered_requests(db.node.as_ref(), "retry-successor", 1).await;
+    let captured = parse_json(&captures[0]["request_json"]);
+    let retry_body = observed
+        .iter()
+        .find(|body| canonical(body) == captured)
+        .expect("the successor capture must match an actual provider request");
+    let messages = retry_body["messages"].as_array().unwrap();
+    let contract: Value = gents_lean_contract::load_contract_snapshot().unwrap();
+    let case = contract["retry_entry_cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| {
+            case["resume"] == true
+                && case["history"] == serde_json::json!([1, 2, 3])
+                && case["context"].is_null()
+        })
+        .unwrap();
+    let expected = case["expected"].as_array().unwrap();
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|row| row["content"].to_string().contains(&content))
+            .count(),
+        expected.iter().filter(|value| **value == 1).count(),
+        "{messages:?}"
+    );
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|row| row["role"] == "tool" && row["tool_call_id"] == "retry-call")
+            .count(),
+        expected.iter().filter(|value| **value == 3).count(),
+        "{messages:?}"
+    );
+    let retry_doc = escape_graphql_string(&doc_id);
+    let rows = gents::graphql::graphql_with_transaction_retry(db.node.as_ref(), &format!(
+        r#"{{ AgentMessage(filter: {{request_doc_id: {{_eq:"{retry_doc}"}}, message_key: {{_eq:"authored:{retry_doc}:prompt"}}}}) {{_docID}} }}"#
+    ), "test.retry_authored_input").await.unwrap();
+    assert_eq!(
+        rows.data.unwrap()["AgentMessage"].as_array().unwrap().len(),
+        usize::from(case["publish"].as_bool().unwrap())
+    );
+    agent.shutdown().await;
+}
+
 /// Every turn of a multi-turn, tool-using request is its own ordered fact, and
 /// each one is the body the provider received.
 ///
