@@ -855,63 +855,21 @@ async fn control_watcher_settles_when_an_unselected_behavior_is_permanently_inva
     );
 }
 
-/// Writes (or refreshes) the PackInstallation record a pack install leaves,
-/// reading and writing in one transaction the way the install owner does, so
-/// a reinstall updates the record it finds instead of racing its own index.
-async fn write_pack_installation_record(
-    node: &defra_node::EmbeddedNode,
-    agent_did: &str,
-    installed_at: &str,
-) {
-    let owner = escape_graphql_string(agent_did);
-    let coordinate = escape_graphql_string("fixture/bind_plugin_fixture");
-    let version = escape_graphql_string("0.1.0");
-    let digest = escape_graphql_string("sha256:pack-digest");
-    let stamped = escape_graphql_string(installed_at);
-    crate::config_client::ConfigAccess::transact_local(
-        node,
-        None,
-        "test.pack.installation.record",
-        move |txn| {
-            let (owner, coordinate, version, digest, stamped) = (
-                owner.clone(),
-                coordinate.clone(),
-                version.clone(),
-                digest.clone(),
-                stamped.clone(),
-            );
-            Box::pin(async move {
-                let existing = txn
-                    .execute(&format!(
-                        r#"{{ PackInstallation(
-                            filter: {{ agent_did: {{ _eq: "{owner}" }}, coordinate: {{ _eq: "{coordinate}" }} }},
-                            limit: 1
-                        ) {{ _docID }} }}"#
-                    ))
-                    .await?;
-                let doc_id = existing["data"]["PackInstallation"]
-                    .as_array()
-                    .and_then(|rows| rows.first())
-                    .and_then(|row| row.get("_docID"))
-                    .and_then(Value::as_str)
-                    .map(ToOwned::to_owned);
-                let mutation = match doc_id {
-                    Some(doc_id) => format!(
-                        r#"mutation {{ update_PackInstallation(docID: "{}", input: {{
-                            installed_at: "{stamped}"
-                        }}) {{ _docID }} }}"#,
-                        escape_graphql_string(&doc_id)
-                    ),
-                    None => format!(
-                        r#"mutation {{ create_PackInstallation(input: {{
-                            agent_did: "{owner}", coordinate: "{coordinate}",
-                            version: "{version}", digest: "{digest}", installed_at: "{stamped}"
-                        }}) {{ _docID }} }}"#
-                    ),
-                };
-                txn.execute(&mutation).await.map(|_| ())
-            })
-        },
+/// Writes (or refreshes) the PackInstallation record a plugin-store install
+/// leaves, through the same owner the home install path records through, so
+/// the watcher tests observe the document that install actually writes.
+async fn write_pack_installation_record(node: &Arc<defra_node::EmbeddedNode>, agent_did: &str) {
+    let identity = crate::pack::PackIdentity {
+        coordinate: "fixture/bind_plugin_fixture".to_owned(),
+        version: "0.1.0".to_owned(),
+        digest: "sha256:pack-digest".to_owned(),
+        plugins: Vec::new(),
+        dependencies: Vec::new(),
+    };
+    crate::pack::record_plugin_store_install(
+        &crate::config_client::ConfigAccess::Local(node.clone()),
+        agent_did,
+        &identity,
     )
     .await
     .unwrap();
@@ -1031,7 +989,7 @@ async fn control_watcher_proposes_a_new_fingerprint_when_the_named_plugin_instal
     // The install: the plugin store record, then the only document an
     // install writes.
     crate::plugin::store::write_record(plugin_home.path(), &installed_record()).unwrap();
-    write_pack_installation_record(node.as_ref(), &agent_did, "2026-10-08T00:00:00Z").await;
+    write_pack_installation_record(&node, &agent_did).await;
     let installed = tokio::time::timeout(PROPOSAL_TIMEOUT, proposal_rx.recv())
         .await
         .expect("a pack install must wake the reconcile owner")
@@ -1042,10 +1000,11 @@ async fn control_watcher_proposes_a_new_fingerprint_when_the_named_plugin_instal
         "the installed plugin identity must change the resolved fingerprint"
     );
 
-    // A same-digest reinstall refreshes the record's installed_at only; the
-    // resolved identity is unchanged, so the proposal repeats the fingerprint
-    // the reconciler already holds and nothing new can apply.
-    write_pack_installation_record(node.as_ref(), &agent_did, "2026-10-08T00:00:01Z").await;
+    // A same-digest reinstall rewrites the same record (a fresh
+    // installed_at); the resolved identity is unchanged, so the proposal
+    // repeats the fingerprint the reconciler already holds and nothing new
+    // can apply.
+    write_pack_installation_record(&node, &agent_did).await;
     let reinstalled = tokio::time::timeout(PROPOSAL_TIMEOUT, proposal_rx.recv())
         .await
         .expect("the reinstall observation must reach the reconcile owner")
@@ -1124,8 +1083,8 @@ async fn control_watcher_keeps_one_fingerprint_while_the_named_plugin_stays_miss
         .expect("proposal channel");
     let fingerprint = named.configuration_fingerprint();
 
-    for stamp in ["2026-10-08T00:00:00Z", "2026-10-08T00:00:01Z"] {
-        write_pack_installation_record(node.as_ref(), &agent_did, stamp).await;
+    for _ in 0..2 {
+        write_pack_installation_record(&node, &agent_did).await;
         let observed = tokio::time::timeout(PROPOSAL_TIMEOUT, proposal_rx.recv())
             .await
             .expect("each install-record observation must reach the reconcile owner")

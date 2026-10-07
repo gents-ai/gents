@@ -47,6 +47,15 @@ pub(crate) async fn remove(args: PackRemoveArgs) -> Result<()> {
         gents::pack::remove_pack(&access, &owner, &coordinate, args.drift.policy()).await?;
 
     let mut plugin_digests = BTreeSet::new();
+    // The documents and the record went first (remove_pack above, in one
+    // transaction); the host plugin store is released only now, because
+    // which records this remove may release is known only from the record
+    // that transaction deleted. The record deletion's wake resolves a store
+    // that still holds every plugin, so it proposes the same fingerprint
+    // and no-ops; the release below then leaves the resolved surface stale
+    // only until the next control write, and a call through it against the
+    // released plugin fails closed at the store — the same gate a missing
+    // plugin fails at build time.
     let pack_plugin_records = release_plugin_records(
         &home,
         &report.pack,
@@ -209,6 +218,23 @@ async fn remove_home_install(
     let plugin_records =
         release_plugin_records(home, coordinate, &record.plugins, &mut plugin_digests)?;
     let plugin_bytes = plugin_release_result(home, &plugin_digests)?;
+
+    // A plugins pack recorded its install in the node (the wake that
+    // re-admits a behavior demoted on a missing plugin). The store is
+    // released above; the record goes now, after it — the removal mirror
+    // of install's record-after-store order, so the deletion's wake
+    // resolves a store that is already final. A home with no node scope
+    // wrote no record, and an assets pack (no plugins) never opened one.
+    if !record.plugins.is_empty() {
+        if let Some(scope) = super::plugin_store_wake_scope(home).await? {
+            gents::pack::remove_plugin_store_install_record(
+                &scope.access,
+                &scope.wake_owner,
+                coordinate,
+            )
+            .await?;
+        }
+    }
 
     // Forget the record before scanning for unreferenced archives: the scan
     // reads every file record currently on disk, and this one must not count

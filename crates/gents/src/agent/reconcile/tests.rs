@@ -2305,7 +2305,7 @@ async fn plugin_resolution_surfaces(
 }
 
 #[tokio::test]
-async fn plugin_install_alone_changes_the_fingerprint_and_recreates_the_slot() {
+async fn a_changed_plugin_resolution_changes_the_fingerprint_and_recreates_the_slot() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let principal = stub_principal();

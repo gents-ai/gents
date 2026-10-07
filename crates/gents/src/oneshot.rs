@@ -49,8 +49,8 @@ pub async fn run_openai_oneshot_with_tools(
         .resolve(
             node.as_ref(),
             behavior.agent_did(),
-            // The oneshot path has no host plugin store of its own; plugin
-            // tools it names fail closed at build time, exactly as before.
+            // The oneshot path has no host plugin store; a plugin tool it
+            // names resolves no identity and fails closed at build time.
             &Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
         )
         .await?;

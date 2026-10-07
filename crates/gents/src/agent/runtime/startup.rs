@@ -167,7 +167,7 @@ impl crate::agent::reconcile::SlotFailurePolicy for StartupSlotFailurePolicy {
             .await;
         tracing::error!(
             target: BEHAVIOR_DEMOTED_EVENT_TARGET,
-            behavior_id = %behavior_id,
+            behavior_id,
             budget = self.build_failure_budget(),
             error = %error,
             "{}{BEHAVIOR_DEMOTION_GUIDANCE}",

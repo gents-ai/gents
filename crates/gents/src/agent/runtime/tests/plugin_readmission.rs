@@ -5,10 +5,8 @@ use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
-
-use tracing::instrument::WithSubscriber;
 
 // These timeouts detect deadlocks; they are not latency assertions.
 const READMISSION_DEADLOCK_GUARD: Duration = Duration::from_secs(30);
@@ -208,9 +206,10 @@ async fn wait_for_readiness(
 }
 
 /// #2338 end to end: a behavior whose Tools document names a missing plugin
-/// burns its build budget and is demoted; installing that plugin through the
-/// real pack-install owner mid-run re-admits the behavior on the next
-/// reconcile, and a request then completes against the behavior.
+/// burns its build budget and is demoted; installing that plugin mid-run
+/// the way the issue's repro did — a plugins-kind pack installed into the
+/// home, which writes no pack documents of its own — re-admits the
+/// behavior on the next reconcile, and a request then completes against it.
 #[tokio::test]
 async fn demoted_behavior_is_readmitted_when_its_named_plugin_installs_midrun() {
     crate::test_support::enable_scoped_event_capture();
@@ -297,7 +296,20 @@ async fn demoted_behavior_is_readmitted_when_its_named_plugin_installs_midrun() 
         BehaviorReadinessProcessState::Ready,
         "a demoted behavior degrades readiness without stopping the process"
     );
-    let messages = crate::test_support::captured_behavior_demotions("fixture/list_files");
+    // The demotion becomes durable before its event is logged, so the
+    // message is waited for, not assumed to be captured already.
+    let messages = loop {
+        let messages =
+            crate::test_support::captured_behavior_demotions(&behavior_id, "fixture/list_files");
+        if !messages.is_empty() {
+            break messages;
+        }
+        assert!(
+            tokio::time::Instant::now() < demoted_deadline,
+            "timed out waiting for the demotion of the missing-plugin behavior to be logged"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    };
     assert_eq!(
         messages.len(),
         1,
@@ -314,35 +326,60 @@ async fn demoted_behavior_is_readmitted_when_its_named_plugin_installs_midrun() 
         messages[0]
     );
 
-    // Install the plugin mid-run through the real pack-install owner: the
-    // plugin store record, its bytes, and the only document an install writes.
+    // Install the plugin mid-run the way the issue did — `gents pack
+    // install` of a plugins-kind pack into the home, which writes no pack
+    // documents at all: the plugin store records and bytes, the home file
+    // record, then the PackInstallation wake record through the same owner
+    // a documents install uses.
     let (_pack_guard, pack_root) =
         crate::test_support::fixture_pack_copy("bind_plugin_fixture", &serde_json::json!({}));
     let (pack_bytes, _) = crate::pack_archive::pack_dir(&pack_root).unwrap();
     let archive = crate::pack_archive::PackArchive::from_bytes(&pack_bytes).unwrap();
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
-    let empty_config: crate::document_config::PackConfig =
-        serde_json::from_value(serde_json::json!({"agent_principal": {"agent_did": agent_did}}))
-            .unwrap();
-    let prepared = crate::pack::prepare_document_pack_install(
-        &access,
-        &agent_did,
+    let installed_plugins = crate::plugin::install::install_pack_plugins(
+        plugin_home.path(),
         archive.manifest(),
-        &empty_config,
-        &BTreeMap::new(),
-        &[],
-        &|_| None,
-    )
-    .await
-    .unwrap();
-    crate::pack::install_prepared_document_pack(
-        &access,
-        &agent_did,
-        &archive,
-        &prepared,
-        Some(plugin_home.path()),
+        archive.digest(),
+        |path| archive.asset(path),
         false,
-        crate::pack::DriftPolicy::Refuse,
+    )
+    .unwrap();
+    crate::plugin::install::bind_plugin_slots(
+        plugin_home.path(),
+        archive.manifest(),
+        &agent_did,
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    let home_record = crate::pack::HomePackInstall {
+        coordinate: format!(
+            "{}/{}",
+            archive.manifest().metadata.namespace,
+            archive.manifest().name
+        ),
+        version: archive.manifest().version.clone(),
+        digest: archive.digest().to_owned(),
+        kind: archive.manifest().metadata.kind.clone(),
+        assets: format!(
+            "packs/.materialized/{}/{}",
+            archive.manifest().metadata.namespace,
+            archive.manifest().name
+        ),
+        plugins: installed_plugins
+            .iter()
+            .map(|plugin| crate::pack::InstalledPackPlugin {
+                name: plugin.name.clone(),
+                digest: plugin.digest.clone(),
+            })
+            .collect(),
+        installed_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+    };
+    crate::pack::write_home_install(plugin_home.path(), &home_record).unwrap();
+    let identity =
+        crate::pack::PackIdentity::new(archive.manifest(), archive.digest(), home_record.plugins);
+    crate::pack::record_plugin_store_install(
+        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &agent_did,
+        &identity,
     )
     .await
     .unwrap();

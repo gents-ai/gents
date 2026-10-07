@@ -60,9 +60,9 @@ const DEFAULT_CLI_TIMEOUT_SECS: u64 = 10;
 /// tell an install, an update and a removal apart without reading the plugin
 /// store again.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PluginRecordIdentity {
-    pub version: String,
-    pub digest: String,
+pub(crate) struct PluginRecordIdentity {
+    pub(crate) version: String,
+    pub(crate) digest: String,
 }
 
 #[derive(Clone)]

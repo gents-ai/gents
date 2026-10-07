@@ -128,23 +128,30 @@ pub(crate) mod test_support {
         });
     }
 
-    /// Demotion events recorded by the global capture subscriber, each as the
-    /// error that exhausted the budget with the logged message, so concurrent
-    /// tests can pick out their own.
-    static CAPTURED_DEMOTIONS: std::sync::Mutex<Vec<(String, String)>> =
+    /// Demotion events recorded by the global capture subscriber — the
+    /// behavior, the error that exhausted the budget, and the logged
+    /// message — so concurrent tests pick out their own by behavior: two
+    /// behaviors can fail on the same missing plugin, and error text alone
+    /// cannot tell their demotions apart.
+    static CAPTURED_DEMOTIONS: std::sync::Mutex<Vec<(String, String, String)>> =
         std::sync::Mutex::new(Vec::new());
 
-    /// Every recorded demotion message whose exhausting error contains
-    /// `error_fragment`. A demotion is logged by a slot-worker task, which no
-    /// scoped subscriber can observe, so the global capture subscriber records
-    /// it instead.
-    pub(crate) fn captured_behavior_demotions(error_fragment: &str) -> Vec<String> {
+    /// Every recorded demotion message of `behavior_id` whose exhausting
+    /// error contains `error_fragment`. A demotion is logged by a
+    /// slot-worker task, which no scoped subscriber can observe, so the
+    /// global capture subscriber records it instead.
+    pub(crate) fn captured_behavior_demotions(
+        behavior_id: &str,
+        error_fragment: &str,
+    ) -> Vec<String> {
         CAPTURED_DEMOTIONS
             .lock()
             .expect("captured demotions mutex poisoned")
             .iter()
-            .filter(|(error, _)| error.contains(error_fragment))
-            .map(|(_, message)| message.clone())
+            .filter(|(behavior, error, _)| {
+                behavior == behavior_id && error.contains(error_fragment)
+            })
+            .map(|(_, _, message)| message.clone())
             .collect()
     }
 
@@ -169,11 +176,13 @@ pub(crate) mod test_support {
             }
             let mut fields = DemotionFields::default();
             event.record(&mut fields);
-            if let (Some(error), Some(message)) = (fields.error, fields.message) {
+            if let (Some(behavior_id), Some(error), Some(message)) =
+                (fields.behavior_id, fields.error, fields.message)
+            {
                 CAPTURED_DEMOTIONS
                     .lock()
                     .expect("captured demotions mutex poisoned")
-                    .push((error, message));
+                    .push((behavior_id, error, message));
             }
         }
 
@@ -184,6 +193,7 @@ pub(crate) mod test_support {
 
     #[derive(Default)]
     struct DemotionFields {
+        behavior_id: Option<String>,
         error: Option<String>,
         message: Option<String>,
     }
@@ -197,7 +207,11 @@ pub(crate) mod test_support {
             }
         }
 
-        fn record_str(&mut self, _field: &tracing::field::Field, _value: &str) {}
+        fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+            if field.name() == "behavior_id" {
+                self.behavior_id = Some(value.to_owned());
+            }
+        }
     }
 
     /// Scripted providers have no HTTP transport. Persist their actual request

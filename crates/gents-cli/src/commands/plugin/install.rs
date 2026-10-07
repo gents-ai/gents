@@ -30,6 +30,7 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
         !manifest.metadata.plugins.is_empty(),
         "{namespace}/{name} carries no plugins; install the whole pack with gents pack install"
     );
+    let rollback = crate::commands::pack::snapshot_pack_plugin_records(&home, manifest);
     let installed = crate::commands::pack::install_pack_plugins(
         &home,
         manifest,
@@ -37,6 +38,34 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
         |path| pack.archive.asset(path),
         args.grant_authority,
     )?;
+    // The plugin store is final; record the install in the node the same
+    // way a pack install does, so a behavior demoted on this missing plugin
+    // re-admits on the next reconcile. A home with no node scope records
+    // nothing: the next start resolves the fresh plugin store anyway. Any
+    // failure past the store write undoes it, so the operator never sees a
+    // half-recorded install.
+    let recorded = async {
+        let Some(scope) = crate::commands::pack::plugin_store_wake_scope(&home).await? else {
+            return anyhow::Ok(());
+        };
+        let identity = gents::pack::PackIdentity::new(
+            manifest,
+            &pack.digest,
+            installed
+                .iter()
+                .map(|plugin| gents::pack::InstalledPackPlugin {
+                    name: plugin.name.clone(),
+                    digest: plugin.digest.clone(),
+                })
+                .collect(),
+        );
+        gents::pack::record_plugin_store_install(&scope.access, &scope.wake_owner, &identity).await
+    }
+    .await;
+    if let Err(error) = recorded {
+        crate::commands::pack::rollback_pack_plugin_records(&home, &rollback);
+        return Err(error);
+    }
 
     crate::print_json(&json!({
         "pack": format!("{namespace}/{name}"),
@@ -50,6 +79,7 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
 mod tests {
     use super::*;
     use crate::commands::pack::registry::tests::serve_fake_pack;
+    use clap::Parser;
     use std::sync::atomic::Ordering;
 
     use super::super::store;
@@ -141,6 +171,57 @@ mod tests {
             "{error:#}"
         );
         assert!(store::list_records(home.path()).unwrap().is_empty());
+    }
+
+    /// #2338: installing into an initialized home also writes the
+    /// `PackInstallation` record a demoted behavior's re-admission waits
+    /// for, for the home's principal; an uninitialized home (every other
+    /// test here) records none.
+    #[tokio::test]
+    async fn installing_into_an_initialized_home_records_the_wake_record() {
+        let (bytes, digest) = echo_pack();
+        let archive = gents::pack_archive::PackArchive::from_bytes(&bytes).unwrap();
+        let (namespace, version) = (
+            archive.manifest().metadata.namespace.clone(),
+            archive.manifest().version.clone(),
+        );
+        let (base_url, _state) = serve_fake_pack("echo", &version, bytes, digest).await;
+        let home = tempfile::tempdir().unwrap();
+        let home_path = home.path().to_path_buf();
+        let cli = crate::cli::Cli::try_parse_from([
+            "gents",
+            "init",
+            "--store-key-custody",
+            "file",
+            "--agent-name",
+            "pluginner",
+            "--home",
+            home_path.to_str().unwrap(),
+        ])
+        .unwrap();
+        let crate::cli::Command::Init(init_args) = cli.command else {
+            panic!("expected init")
+        };
+        crate::commands::init::init(init_args)
+            .await
+            .expect("identity-only init");
+
+        install(args(&format!("{namespace}/echo"), base_url, home.path()))
+            .await
+            .expect("install must succeed");
+
+        let owner = crate::read_init_config(&home_path)
+            .unwrap()
+            .expect("initialized home")
+            .agent_did;
+        let (access, _) = crate::resolve_config_access(Some(&home_path), None)
+            .await
+            .unwrap();
+        let wake = gents::pack::read_installed_pack(&access, &owner, &format!("{namespace}/echo"))
+            .await
+            .unwrap()
+            .expect("the plugin install writes the wake record for the home principal");
+        assert_eq!(wake.version, version);
     }
 
     #[test]

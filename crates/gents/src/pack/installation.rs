@@ -7,9 +7,10 @@
 //! holds the content digest the install wrote and whether the install created
 //! it (a document that already existed is adopted, never later deleted).
 //! `documents` and `history` and mutation writers are shared by the
-//! documents installer ([`install_in_txn`]) and the graph installer
-//! ([`graph::record_graph_install_in_txn`]) through [`write_record_in_txn`],
-//! so the two paths cannot diverge on how a record is written.
+//! documents installer ([`install_in_txn`]), the graph installer
+//! ([`graph::record_graph_install_in_txn`]) and the plugin-store installer
+//! ([`record_plugin_store_install`]) through [`write_record_in_txn`],
+//! so the three paths cannot diverge on how a record is written.
 //!
 //! On install, a document the record lists whose live content no longer
 //! matches the recorded digest was edited by someone else. Install stops and
@@ -306,7 +307,7 @@ async fn write_record_in_txn(
         "coordinate": pack.coordinate,
         "version": pack.version,
         "digest": pack.digest,
-        "documents": documents,
+        "documents": if documents.is_empty() { Value::Null } else { json!(documents) },
         "plugins": pack.plugins,
         "history": history,
         // A nanosecond, process-monotonic stamp, not a plain timestamp: a
@@ -513,6 +514,60 @@ pub(crate) async fn install_in_txn(
     .await?;
     dependencies::claim_in_txn(txn, owner, &pack.coordinate, &pack.dependencies, policy).await?;
     Ok(report)
+}
+
+/// Writes (or refreshes) the installation record for a plugin-store install
+/// that ships no documents of its own: a plugins pack installed into a home,
+/// or `gents plugin install`. The record is what wakes the control watcher
+/// (the `PackInstallation` match in `agent::document_view`) so a behavior
+/// demoted on a missing plugin re-admits on the next reconcile, so it goes
+/// through the same writer as a documents install and carries the same
+/// identity: the pack the plugins came from, its version and digest, and
+/// the plugins now in the host store. `documents` is empty — nothing for a
+/// later upgrade to drift-check and nothing for a removal to delete but
+/// the record itself.
+///
+/// Callers write the plugin store first and this record last: the wake it
+/// emits must resolve a store that already holds what the record names.
+pub async fn record_plugin_store_install(
+    access: &ConfigAccess,
+    owner: &str,
+    pack: &PackIdentity,
+) -> Result<()> {
+    access
+        .transact("pack.record_plugin_store", |txn| {
+            Box::pin(async move {
+                let prior = read_record(txn, owner, &pack.coordinate).await?;
+                write_record_in_txn(txn, owner, pack, &prior, Vec::new(), true).await
+            })
+        })
+        .await
+}
+
+/// Deletes the record a plugin-store install wrote
+/// ([`record_plugin_store_install`]), after the plugin store itself was
+/// released — the removal mirror of install's record-after-store order, so
+/// the wake this deletion emits resolves a store that is already final. A
+/// missing record is not an error: a plugin-store install against a home
+/// with no node scope writes none.
+pub async fn remove_plugin_store_install_record(
+    access: &ConfigAccess,
+    owner: &str,
+    coordinate: &str,
+) -> Result<()> {
+    access
+        .transact("pack.remove_plugin_store_record", |txn| {
+            Box::pin(async move {
+                let record = read_record(txn, owner, coordinate).await?;
+                if record.doc_id.is_none() {
+                    return Ok(());
+                }
+                remove_record_in_txn(txn, owner, coordinate, &record, DriftPolicy::Refuse)
+                    .await
+                    .map(|_| ())
+            })
+        })
+        .await
 }
 
 /// Removes what `record` lists for `coordinate`/`owner`: a graph-owned
