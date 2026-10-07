@@ -700,9 +700,14 @@ async fn create_block_in_txn(
         }
         Err(error) => return Err(error),
     };
+    // The result field is taken as the response's single mutation entry
+    // rather than by name, for the same reason the capture-row verification
+    // above avoids both spellings: DefraDB answers a `create_X` mutation
+    // under an `add_X` key, and hard-coding either would turn a rename into
+    // a silently unverified write.
     response
         .get("data")
-        .and_then(|data| data.get("add_RenderedRequestBlock"))
+        .and_then(single_mutation_result)
         .and_then(Value::as_array)
         .and_then(|rows| rows.first())
         .and_then(|row| row.get("_docID"))
