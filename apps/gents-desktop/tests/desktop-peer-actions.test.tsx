@@ -1,14 +1,15 @@
 import { act, renderHook } from "@testing-library/react";
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import type {
   DesktopApiAdapter,
   DesktopClientSnapshot,
-  DesktopSessionSnapshot,
 } from "@source-inc/gents-desktop-client";
 import { createDesktopShellPeerActions } from "../src/hooks/desktopShellPeerActions";
-import { useDesktopMailboxRoute } from "../src/hooks/useDesktopMailboxRoute";
+import { createDesktopShellSelectionActions } from "../src/hooks/desktopShellSelectionActions";
+import { useSelection } from "../src/hooks/selectionStore";
+import { shellStores } from "./shell-fixture";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -22,37 +23,35 @@ function usePeerRoute(
   api: DesktopApiAdapter,
   ensureDesktopClientStarted = async () => ({ client: {} }) as DesktopClientSnapshot,
 ) {
-  const [agent, setAgent] = useState<string | null>("agent-a");
-  const [behavior, setBehavior] = useState<string | null>("behavior-a");
-  const [sessionId, setSessionId] = useState<string | null>("session-a");
-  const [, setSession] = useState<DesktopSessionSnapshot | null>(null);
-  const selectedAgentDidRef = useRef(agent);
-  selectedAgentDidRef.current = agent;
-  const route = useDesktopMailboxRoute({
-    api,
-    refreshSnapshot: async () => {},
-    selectedAgentDid: agent,
-    selectedBehaviorId: behavior,
-    selectedSessionId: sessionId,
-    setError: vi.fn(),
-    setSelectedAgentDid: setAgent,
-    setSelectedBehaviorId: setBehavior,
-    setSelectedSessionId: setSessionId,
-    setSession,
-  });
-  const actions = createDesktopShellPeerActions({
-    api,
-    ensureDesktopClientStarted,
-    mutateSnapshot: async <T,>(operation: () => Promise<T>) => operation(),
-    refreshSnapshot: async () => {},
-    selectedAgentDidRef,
-    selectAgent: route.selectAgent,
-    setAddingPeer: vi.fn(),
-    setError: vi.fn(),
-    setStarting: vi.fn(),
-    snapshot: null,
-  });
-  return { actions, agent, behavior, route, sessionId };
+  const [stores] = useState(() =>
+    shellStores({
+      selection: {
+        agentDid: "agent-a",
+        behaviorId: "behavior-a",
+        sessionId: "session-a",
+      },
+    }),
+  );
+  const current = useSelection(stores.selection);
+  const [route] = useState(() => createDesktopShellSelectionActions({ stores }));
+  const [actions] = useState(() =>
+    createDesktopShellPeerActions({
+      api,
+      stores,
+      ensureDesktopClientStarted,
+      mutateSnapshot: async <T,>(operation: () => Promise<T>) => operation(),
+      refreshSnapshot: async () => {},
+      selectAgent: route.selectAgent,
+      reportFailure: vi.fn(),
+    }),
+  );
+  return {
+    actions,
+    agent: current.agentDid,
+    behavior: current.behaviorId,
+    route,
+    sessionId: current.sessionId,
+  };
 }
 
 describe("peer action route ownership", () => {
@@ -62,7 +61,7 @@ describe("peer action route ownership", () => {
     } as unknown as DesktopApiAdapter;
     const { result } = renderHook(() => usePeerRoute(api));
 
-    await act(async () => result.current.actions.onInitLocalRuntime("Local"));
+    await act(async () => result.current.actions.initLocalRuntime("Local"));
 
     expect(result.current.agent).toBe("agent-local");
     expect(result.current.sessionId).toBeNull();
@@ -81,7 +80,7 @@ describe("peer action route ownership", () => {
     );
 
     await expect(
-      act(async () => result.current.actions.onInitLocalRuntime("Local")),
+      act(async () => result.current.actions.initLocalRuntime("Local")),
     ).rejects.toThrow("opening desktop identity key: permission denied");
   });
 
@@ -92,7 +91,7 @@ describe("peer action route ownership", () => {
     } as unknown as DesktopApiAdapter;
     const { result } = renderHook(() => usePeerRoute(api));
 
-    const completion = result.current.actions.onRemovePeer("peer-a", "agent-a");
+    const completion = result.current.actions.removePeer("peer-a", "agent-a");
     act(() => result.current.route.selectAgent("agent-b"));
     await act(async () => {
       pending.resolve({} as DesktopClientSnapshot);
@@ -108,7 +107,7 @@ describe("peer action route ownership", () => {
     } as unknown as DesktopApiAdapter;
     const { result } = renderHook(() => usePeerRoute(api));
 
-    await act(async () => result.current.actions.onRemovePeer("peer-a", "agent-a"));
+    await act(async () => result.current.actions.removePeer("peer-a", "agent-a"));
 
     expect(result.current.agent).toBeNull();
     expect(result.current.sessionId).toBeNull();

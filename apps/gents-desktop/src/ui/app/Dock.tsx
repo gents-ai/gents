@@ -6,12 +6,12 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { Columns2, MessageSquare, X } from "lucide-react";
 import { Button } from "@gents/ui/components/button";
 import { Hint } from "@/screens/Hint";
-import { useShellContext } from "./ShellContext";
 import { PanelMenu } from "./PanelMenu";
 import { cn } from "@gents/ui/lib/utils";
 import { dockView } from "./dock-scope";
-import type { Placement } from "./surfaces";
+import { useSurfaces, type Placement, type Surface } from "./surfaces";
 import { dockScopeOf, useDockFor } from "./workspace";
+import { useFleet } from "../hooks/useFleet";
 
 /* the window bar's tabs and the dock's card are drawn apart, and joined by these */
 const DOCK_PANEL_ID = "dock-panel";
@@ -27,7 +27,7 @@ export function Dock({
   placement?: Placement;
 }) {
   const { dock, closeDock } = useDockFor(dockScopeOf(routeName, sessionId));
-  const view = dockView(dock, routeName, placement);
+  const view = dockView(dock, routeName, useSurfaces(), placement);
   /* the card keeps showing its last surface while the divider settles shut
      after the store has closed the dock; the shell unmounts it at 0 */
   const last = useRef(view.active);
@@ -51,7 +51,7 @@ export function Dock({
             {active.title}
           </span>
           {/* the sheet is modal, so the session's menu is out of reach: the same menu here switches surfaces */}
-          <PanelMenu routeName={routeName} size="icon-sm" />
+          <PanelMenu routeName={routeName} />
           <Button
             variant="ghost"
             size="icon-sm"
@@ -96,13 +96,11 @@ export function DockTabs({
      title at the strip's start brings it back */
   paneTab?: { onShow: () => void; progress: number } | null;
 }) {
-  const shell = useShellContext();
   const { dock, activate, moveTab, closeTab, closeDock } = useDockFor(
     dockScopeOf(routeName, sessionId),
   );
   const paneTitle =
-    shell.deployments.flatMap((n) => n.sessions).find((x) => x.sessionId === sessionId)
-      ?.title ?? "Session";
+    useFleet((s) => (sessionId ? s.bySessionId[sessionId]?.title : null)) ?? "Session";
   /* reordering, the way a browser does it: a press shows the tab; moved past
      a few pixels it follows the pointer while the others slide aside, and the
      order is written when it is let go. The strip's tabs share one width, so
@@ -165,7 +163,7 @@ export function DockTabs({
     if (drag.to <= index && index < drag.from) return step;
     return 0;
   };
-  const view = dockView(dock, routeName, "dock");
+  const view = dockView(dock, routeName, useSurfaces(), "dock");
   /* the tablist's keys (APG tabs, automatic activation): arrows, Home and
      End move between tabs and show the one reached; Delete closes the tab,
      and focus follows to the one showing next */
@@ -296,14 +294,7 @@ export function DockTabs({
                 <span className={cn("truncate", active && "font-medium")}>
                   {s.title}
                 </span>
-                {(() => {
-                  const n = s.badge?.(shell.deployments, sessionId) ?? null;
-                  return n === null ? null : (
-                    <span className="ml-0.5 font-mono text-[10px] leading-none text-muted-foreground">
-                      {n}
-                    </span>
-                  );
-                })()}
+                <TabBadge surface={s} sessionId={sessionId} />
               </button>
               {/* the close is always there for the tab showing, on hover for
                   the rest. A tablist holds only tabs, so it is the pointer's
@@ -342,5 +333,22 @@ export function DockTabs({
         </Button>
       </Hint>
     </div>
+  );
+}
+
+/* a tab's count from the fleet; a number, so the tab re-renders only when
+   it changes */
+function TabBadge({
+  surface,
+  sessionId,
+}: {
+  surface: Surface;
+  sessionId: string | null;
+}) {
+  const n = useFleet((fleet) => surface.badge?.(fleet, sessionId) ?? null);
+  return n === null ? null : (
+    <span className="ml-0.5 font-mono text-[10px] leading-none text-muted-foreground">
+      {n}
+    </span>
   );
 }

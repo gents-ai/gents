@@ -2,18 +2,19 @@
    in one list. A row is a backend; its kind decides the credential
    section. OpenAI-compatible and OpenRouter take a key or an env var;
    ChatGPT/Codex and Grok exist only through a subscription sign-in, so
-   the account card sits in the row with connect, cancel and disconnect.
-   Everything else is the desktop app's Backends panel field for field. */
+   the account card sits in the row with connect, cancel and disconnect. */
+import type { NodeView } from "../../../hooks/fleetStore";
+import { setEnabled } from "./enabled";
 import { dependentsWarning } from "./dependents";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { PROVIDER_VISUALS, SetupScreen, type ProviderId } from "../setup/SetupScreen";
 import type { InferenceProviderOption } from "@source-inc/gents-desktop-client";
 import { toast } from "sonner";
 import type {
+  DesktopApiAdapter,
   BackendProviderKind,
   BackendSaveRequest,
   BackendUsageView,
-  DeploymentView,
   InferenceBackend,
   InferenceBackendView,
   OpenAiWireApi,
@@ -24,7 +25,6 @@ import type {
 } from "@source-inc/gents-desktop-client";
 import { Badge } from "@gents/ui/components/badge";
 import { Button } from "@gents/ui/components/button";
-import type { Shell } from "@/hooks/useShell";
 import {
   bridgeErrorCode,
   CREDENTIAL_NOT_SAVED,
@@ -62,6 +62,8 @@ import {
 import { Plus } from "lucide-react";
 import { ProviderLogo } from "../ProviderLogo";
 import { RenameDialog } from "../AgentsScreen";
+import { useApp } from "@/app/AppContext";
+import { toastFailure } from "@/lib/failure";
 
 export function backendSave(
   agentDid: string,
@@ -157,44 +159,50 @@ const SUBSCRIPTION: Record<
   },
 };
 
-export function useAccounts(shell: Shell, agentDid: string) {
-  const [accounts, setAccounts] = useState<ProviderAccountView[]>([]);
-  const api = shell.api;
+const NO_ACCOUNTS: ProviderAccountView[] = [];
+
+export function useAccounts(agentDid: string) {
+  const { api, stores } = useApp();
+  const snapshot = stores.client.use.snapshot();
+  /* held with the agent they were read for: another agent's never show */
+  const [held, setHeld] = useState<{
+    agentDid: string;
+    views: ProviderAccountView[];
+  } | null>(null);
+  const accounts = held?.agentDid === agentDid ? held.views : NO_ACCOUNTS;
   const latest = useRef(0);
   const load = useCallback(() => {
     const read = ++latest.current;
     return (api.listProviderAccounts?.(agentDid) ?? Promise.resolve([])).then(
       (views) => {
-        if (latest.current === read) setAccounts(views);
+        if (latest.current === read) setHeld({ agentDid, views });
       },
       () => {
-        if (latest.current === read) setAccounts([]);
+        if (latest.current === read) setHeld({ agentDid, views: [] });
       },
     );
-  }, [api, agentDid]);
-  useEffect(() => {
-    setAccounts([]);
   }, [api, agentDid]);
   useEffect(() => {
     void load();
     return () => {
       latest.current += 1;
     };
-  }, [load, shell.snapshot]);
+  }, [load, snapshot]);
   return { accounts, reload: load };
 }
 
 /* usage, read when the panel opens and on Refresh (both skip accounts read
    in the last five minutes); nothing polls, and a snapshot change does not
    read again */
-function useProviderUsage(shell: Shell, agentDid: string) {
+function useProviderUsage(agentDid: string) {
+  const { api } = useApp();
   const [usage, setUsage] = useState<BackendUsageView[]>([]);
   /* only the latest read draws: an older one, or another agent's, may land later */
   const latest = useRef(0);
   useEffect(() => {
     const read = ++latest.current;
     setUsage([]);
-    shell.api.readProviderUsage?.(agentDid, false, null).then(
+    api.readProviderUsage?.(agentDid, false, null).then(
       (views) => {
         if (latest.current === read) setUsage(views);
       },
@@ -203,10 +211,10 @@ function useProviderUsage(shell: Shell, agentDid: string) {
     return () => {
       latest.current += 1;
     };
-  }, [shell.api, agentDid]);
+  }, [api, agentDid]);
   const refresh = async (provider: string | null) => {
     const read = ++latest.current;
-    const views = await shell.api.readProviderUsage?.(agentDid, true, provider);
+    const views = await api.readProviderUsage?.(agentDid, true, provider);
     if (views && latest.current === read) setUsage(views);
   };
   return { usage, refresh };
@@ -331,7 +339,7 @@ export function profileBackend(
    turn, in the CLI's words, and for remove which backends go with it (an
    added account's backends that no profile uses, as the CLI's remove) */
 function accountWarnings(
-  deployment: DeploymentView,
+  deployment: NodeView,
   accounts: ProviderAccountView[],
   account: ProviderAccountView,
 ) {
@@ -368,22 +376,20 @@ type AccountAction = {
 /* rename, disconnect and remove for an account, opened from its row's menu;
    none of them edits a profile or a backend */
 function AccountDialogs({
-  shell,
   deployment,
   accounts,
   reload,
   acting,
   onClose,
 }: {
-  shell: Shell;
-  deployment: DeploymentView;
+  deployment: NodeView;
   accounts: ProviderAccountView[];
   reload: () => Promise<void>;
   acting: AccountAction | null;
   onClose: () => void;
 }) {
+  const { api } = useApp();
   const [busy, setBusy] = useState(false);
-  const api = shell.api;
   const account = acting?.account;
   const warnings = account && accountWarnings(deployment, accounts, account);
   const rename = async (label: string) => {
@@ -455,7 +461,7 @@ function AccountDialogs({
           noun="account"
           open={acting?.action === "remove"}
           onOpenChange={(open) => !open && onClose()}
-          onDelete={() => removeAccount(shell, deployment, account, reload)}
+          onDelete={() => removeAccount(api, deployment, account, reload)}
           warning={warnings?.remove}
         />
       )}
@@ -464,31 +470,30 @@ function AccountDialogs({
 }
 
 async function removeAccount(
-  shell: Shell,
-  deployment: DeploymentView,
+  api: DesktopApiAdapter,
+  deployment: NodeView,
   account: ProviderAccountView,
   reload: () => Promise<void>,
 ) {
-  await shell.api.removeProviderAccount?.(deployment.agentDid, account.credentialId);
+  await api.removeProviderAccount?.(deployment.agentDid, account.credentialId);
   await reload();
 }
 
 /* the account card for a subscription backend */
 function AccountRows({
-  shell,
   deployment,
   kind,
   accountRef,
   accounts,
   reload,
 }: {
-  shell: Shell;
-  deployment: DeploymentView;
+  deployment: NodeView;
   kind: string;
   accountRef: string | null;
   accounts: ProviderAccountView[];
   reload: () => Promise<void>;
 }) {
+  const { api } = useApp();
   const sub = SUBSCRIPTION[kind]!;
   const stored = referencedAccount(accounts, sub.provider, accountRef);
   const account = stored?.enabled ? stored : undefined;
@@ -497,7 +502,6 @@ function AccountRows({
   const unsaved = accounts.some((a) => a.provider === sub.provider && a.pendingSave);
   const [busy, setBusy] = useState(false);
   const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
-  const api = shell.api;
   const signIn = async () => {
     setBusy(true);
     try {
@@ -618,7 +622,6 @@ function AccountRows({
 }
 
 export function BackendEditor({
-  shell,
   deployment,
   backend,
   accounts,
@@ -626,8 +629,7 @@ export function BackendEditor({
   usage,
   embedded = false,
 }: {
-  shell: Shell;
-  deployment: DeploymentView;
+  deployment: NodeView;
   backend: InferenceBackendView;
   accounts: ProviderAccountView[];
   reload: () => Promise<void>;
@@ -639,6 +641,10 @@ export function BackendEditor({
   /* in a sheet beside another page: no Danger zone */
   embedded?: boolean;
 }) {
+  const {
+    api,
+    actions: { changeConfig },
+  } = useApp();
   const base = {
     name: "agent" as const,
     agentDid: deployment.agentDid,
@@ -709,12 +715,10 @@ export function BackendEditor({
       tags: next.tags.length ? next.tags : null,
     };
     if (auth) changes.auth = auth;
-    await shell.applyConfig((api) =>
-      api.patchConfigComponents({
-        agentDid: deployment.agentDid,
-        patches: [{ collection: "InferenceBackend", id: backend.backendId, changes }],
-      }),
-    );
+    await changeConfig("patchConfigComponents", {
+      agentDid: deployment.agentDid,
+      patches: [{ collection: "InferenceBackend", id: backend.backendId, changes }],
+    });
   });
   const [probe, setProbe] = useState<string | null>(null);
   const [discoveredModels, setDiscoveredModels] = useState<string[] | null>(null);
@@ -769,7 +773,7 @@ export function BackendEditor({
                   if (subscription) {
                     setProbe("Discovering models…");
                     const connection = SUBSCRIPTION[d.draft.providerKind]!;
-                    const result = await shell.api.discoverInferenceModels({
+                    const result = await api.discoverInferenceModels({
                       requestKey: `backend-${backend.backendId}-${Date.now()}`,
                       agentDid: deployment.agentDid,
                       provider: connection.providerId,
@@ -789,7 +793,7 @@ export function BackendEditor({
                   }
                   const endpoint = requiredHttpUrl("Endpoint", d.draft.endpoint);
                   setProbe("probing…");
-                  const r = await shell.api.probeInferenceEndpoint(endpoint);
+                  const r = await api.probeInferenceEndpoint(endpoint);
                   if (discoveryRevision.current !== revision) return;
                   setProbe(
                     r.reachable
@@ -819,15 +823,13 @@ export function BackendEditor({
           label="Name"
           value={d.draft.name}
           onChange={(v) => d.set("name", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <ChoiceRow
           id={id("kind")}
           label="Provider kind"
           description="Decides how it is paid for: a key, or a subscription sign-in."
           value={d.draft.providerKind}
-          onChange={(v) => d.choose("providerKind", v)}
+          onChange={(v) => d.set("providerKind", v)}
           items={KINDS}
         />
         {!subscription && (
@@ -836,7 +838,7 @@ export function BackendEditor({
             label="OpenAI wire API"
             description="Leave automatic unless the endpoint requires one protocol."
             value={d.draft.openaiWireApi}
-            onChange={(v) => d.choose("openaiWireApi", v)}
+            onChange={(v) => d.set("openaiWireApi", v)}
             items={[
               { value: "responses", label: "Responses" },
               { value: "chat_completions", label: "Chat completions" },
@@ -854,7 +856,6 @@ export function BackendEditor({
       <Group title={subscription ? "Subscription" : "Credential"}>
         {subscription ? (
           <AccountRows
-            shell={shell}
             deployment={deployment}
             kind={d.draft.providerKind}
             accountRef={backend.accountRef ?? null}
@@ -869,8 +870,6 @@ export function BackendEditor({
               description="Read from the environment at start."
               value={d.draft.apiKeyEnvVar}
               onChange={(v) => d.set("apiKeyEnvVar", v)}
-              onCommit={d.commit}
-              onEnter={d.onEnter}
               placeholder="OPENAI_API_KEY"
               mono
             />
@@ -884,8 +883,6 @@ export function BackendEditor({
               }
               value={d.draft.apiKey}
               onChange={(v) => d.set("apiKey", v)}
-              onCommit={d.commit}
-              onEnter={d.onEnter}
               placeholder={backend.apiKeyConfigured ? "Configured" : "sk-…"}
               password
             />
@@ -895,25 +892,22 @@ export function BackendEditor({
                   size="sm"
                   variant="quiet"
                   onClick={() =>
-                    shell
-                      .applyConfig((api) =>
-                        api.patchConfigComponents({
-                          agentDid: deployment.agentDid,
-                          patches: [
-                            {
-                              collection: "InferenceBackend",
-                              id: backend.backendId,
-                              changes: { auth: { kind: "unauthenticated" } },
-                            },
-                          ],
-                        }),
-                      )
+                    changeConfig(
+                      "patchConfigComponents",
+                      {
+                        agentDid: deployment.agentDid,
+                        patches: [
+                          {
+                            collection: "InferenceBackend",
+                            id: backend.backendId,
+                            changes: { auth: { kind: "unauthenticated" } },
+                          },
+                        ],
+                      },
+                      "clear the stored key",
+                    )
                       .then(() => toast("Stored key cleared"))
-                      .catch((error) =>
-                        toast(
-                          `Clear failed: ${error instanceof Error ? error.message : String(error)}`,
-                        ),
-                      )
+                      .catch((error) => toastFailure("clear the stored key", error))
                   }
                 >
                   Clear stored key
@@ -946,8 +940,6 @@ export function BackendEditor({
           label="Endpoint"
           value={d.draft.endpoint}
           onChange={(v) => d.set("endpoint", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
           placeholder="https://…/v1"
           mono
           wide
@@ -975,8 +967,6 @@ export function BackendEditor({
           value={d.draft.connectTimeoutSecs}
           placeholder="Runtime default (10)"
           onChange={(v) => d.set("connectTimeoutSecs", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <NumberRow
           id={id("discovery-timeout")}
@@ -985,8 +975,6 @@ export function BackendEditor({
           value={d.draft.discoveryTimeoutSecs}
           placeholder="Runtime default (10)"
           onChange={(v) => d.set("discoveryTimeoutSecs", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <NumberRow
           id={id("conc")}
@@ -994,8 +982,6 @@ export function BackendEditor({
           description="Whole number of 1 or more."
           value={d.draft.maxConcurrent}
           onChange={(v) => d.set("maxConcurrent", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <NumberRow
           id={id("queue")}
@@ -1003,14 +989,12 @@ export function BackendEditor({
           description="Whole number of 0 or more; 0 disables queueing."
           value={d.draft.maxQueueDepth}
           onChange={(v) => d.set("maxQueueDepth", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <SwitchRow
           id={id("enabled")}
           label="Enabled"
           checked={d.draft.enabled}
-          onChange={(v) => d.choose("enabled", v)}
+          onChange={(v) => d.set("enabled", v)}
         />
         <TagsRow
           id={id("tags")}
@@ -1019,20 +1003,14 @@ export function BackendEditor({
           onChange={(v) => d.set("tags", v)}
         />
       </Group>
-      <DraftActions
-        dirty={d.dirty}
-        saving={d.saving}
-        error={d.error}
-        onSave={d.save}
-        onCancel={d.reset}
-      />
+      <DraftActions draft={d} />
       {!embedded && removable && (
         <DeleteButton
           label={removable.label}
           noun="account"
           warning={accountWarnings(deployment, accounts, removable).remove}
           base={base}
-          onDelete={() => removeAccount(shell, deployment, removable, reload)}
+          onDelete={() => removeAccount(api, deployment, removable, reload)}
         />
       )}
       {!embedded && !removable && (
@@ -1041,12 +1019,10 @@ export function BackendEditor({
           warning={dependentsWarning(deployment, "backend", backend.backendId)}
           base={base}
           onDelete={() =>
-            shell.applyConfig((api) =>
-              api.deleteBackendConfig({
-                backendId: backend.backendId,
-                agentDid: deployment.agentDid,
-              }),
-            )
+            changeConfig("deleteBackendConfig", {
+              backendId: backend.backendId,
+              agentDid: deployment.agentDid,
+            })
           }
         />
       )}
@@ -1056,14 +1032,15 @@ export function BackendEditor({
 
 /* the provider catalog the bridge publishes, once per mount */
 /* the provider catalog; a failed read is said, with a way to ask again */
-function useSetupCatalog(shell: Shell) {
+function useSetupCatalog() {
+  const { api } = useApp();
   const [providers, setProviders] = useState<InferenceProviderOption[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     let live = true;
     setError(null);
-    const read = shell.api.getInferenceSetupCatalog?.();
+    const read = api.getInferenceSetupCatalog?.();
     if (!read) return;
     read.then(
       (c) => {
@@ -1076,7 +1053,7 @@ function useSetupCatalog(shell: Shell) {
     return () => {
       live = false;
     };
-  }, [shell.api, attempt]);
+  }, [api, attempt]);
   return { providers, error, retry: () => setAttempt((n) => n + 1) };
 }
 
@@ -1104,23 +1081,19 @@ function providerOf(b: InferenceBackendView): ProviderId {
    provider step with it chosen. The editor sits behind the `inference`
    route; Back from it goes to Models. */
 export function InferencePanel({
-  shell,
   deployment,
   item,
-  onAddingChange,
   under,
   orphans = [],
 }: {
-  shell: Shell;
-  deployment: DeploymentView;
+  deployment: NodeView;
   item?: string;
-  /* tells the Models page the New backend form is open, so it steps aside */
-  onAddingChange?: (adding: boolean) => void;
   /* rows to nest under a configured backend: its models */
   under?: (b: InferenceBackendView) => ListRow[];
   /* profiles whose backend no longer exists, listed after the backends */
   orphans?: ListRow[];
 }) {
+  const { changeConfig } = useApp().actions;
   const base = {
     name: "agent" as const,
     agentDid: deployment.agentDid,
@@ -1131,23 +1104,18 @@ export function InferencePanel({
     agentDid: deployment.agentDid,
     section: "profiles",
   };
-  const { accounts, reload } = useAccounts(shell, deployment.agentDid);
+  const { accounts, reload } = useAccounts(deployment.agentDid);
   const [acting, setActing] = useState<AccountAction | null>(null);
-  const providerUsage = useProviderUsage(shell, deployment.agentDid);
+  const providerUsage = useProviderUsage(deployment.agentDid);
   const usageOf = (backendId: string) =>
     providerUsage.usage.find((u) => u.backendId === backendId);
-  const catalog = useSetupCatalog(shell);
+  const catalog = useSetupCatalog();
   const providers = catalog.providers;
   /* the provider whose inputs are open, from a catalog row or Add another */
-  const [adding, setAddingState] = useState<ProviderId | null>(null);
-  const setAdding = (next: ProviderId | null) => {
-    setAddingState(next);
-    onAddingChange?.(next !== null);
-  };
+  const [adding, setAdding] = useState<ProviderId | null>(null);
   if (adding)
     return (
       <SetupScreen
-        shell={shell}
         initialStep="inference"
         purpose="add-backend"
         provider={adding}
@@ -1241,17 +1209,12 @@ export function InferencePanel({
                   enabled={{
                     checked: b.enabled !== false,
                     onChange: (enabled) =>
-                      shell.applyConfig((api) =>
-                        api.patchConfigComponents({
-                          agentDid: deployment.agentDid,
-                          patches: [
-                            {
-                              collection: "InferenceBackend",
-                              id: b.backendId,
-                              changes: { enabled },
-                            },
-                          ],
-                        }),
+                      setEnabled(
+                        changeConfig,
+                        deployment.agentDid,
+                        "InferenceBackend",
+                        b.backendId,
+                        enabled,
                       ),
                   }}
                   /* an added account's backend goes with Remove account */
@@ -1259,12 +1222,10 @@ export function InferencePanel({
                     b.accountRef && stored
                       ? undefined
                       : () =>
-                          shell.applyConfig((api) =>
-                            api.deleteBackendConfig({
-                              backendId: b.backendId,
-                              agentDid: deployment.agentDid,
-                            }),
-                          )
+                          changeConfig("deleteBackendConfig", {
+                            backendId: b.backendId,
+                            agentDid: deployment.agentDid,
+                          })
                   }
                   warning={dependentsWarning(deployment, "backend", b.backendId)}
                 >
@@ -1340,11 +1301,13 @@ export function InferencePanel({
           </DropdownMenu>
         }
         detail={(id) => {
-          const backend = deployment.inferenceBackends.find((b) => b.backendId === id)!;
+          /* the list also holds profiles and providers not set up yet;
+             only a backend opens here */
+          const backend = deployment.inferenceBackends.find((b) => b.backendId === id);
+          if (!backend) return null;
           return (
             <BackendEditor
               key={backend.backendId}
-              shell={shell}
               deployment={deployment}
               backend={backend}
               accounts={accounts}
@@ -1358,7 +1321,6 @@ export function InferencePanel({
         }}
       />
       <AccountDialogs
-        shell={shell}
         deployment={deployment}
         accounts={accounts}
         reload={reload}

@@ -5,6 +5,7 @@ import type {
 } from "@source-inc/gents-desktop-client";
 import { buildInferenceSetupPlan } from "../src/ui/lib/inferenceSetupPersistence";
 import { deployment as fixtureDeployment } from "./config-panel-wiring/fixtures";
+import type { BackendProviderKind } from "@source-inc/gents-desktop-client/generated/BackendProviderKind";
 
 const recommendation: InferenceModelRecommendation = {
   defaultsVersion: "2026-09-14.1",
@@ -45,7 +46,7 @@ describe("inference setup persistence", () => {
       oauth: false,
       discovery: {
         ...discovery,
-        providerKind: existing.providerKind!,
+        providerKind: existing.providerKind as BackendProviderKind,
         effectiveEndpoint: existing.endpoint!,
       },
       model: "new-model",

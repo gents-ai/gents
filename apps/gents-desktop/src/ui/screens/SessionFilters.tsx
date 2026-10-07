@@ -6,9 +6,18 @@
    axes, so narrowing never hides the way back. */
 import { useExclusivePopover } from "@/hooks/useExclusivePopover";
 import { Activity, CircleX, CornerDownRight, Play, User, X } from "lucide-react";
-import { useEffect, useState } from "react";
 import type { ComponentType, ReactNode } from "react";
-import type { DeploymentView, SessionSummary } from "@source-inc/gents-desktop-client";
+import type { SessionSummary } from "@source-inc/gents-desktop-client";
+import {
+  emptyFilter,
+  hasFilter,
+  type SessionFilter,
+  type SessionSource,
+  type SessionState,
+} from "@/lib/session-filter";
+import { nodeKeyOf } from "../../hooks/fleetStore";
+import { useFleet } from "@/hooks/useFleet";
+import { behaviorName } from "./behavior";
 import { Button } from "@gents/ui/components/button";
 import {
   DropdownMenu,
@@ -30,62 +39,8 @@ import { cn } from "@gents/ui/lib/utils";
 import { isLive } from "@/lib/live";
 import { BehaviorAvatar } from "./parts";
 
-export type SessionState = "live" | "held" | "failed";
-export type SessionSource = "person" | "task" | "session";
-
-export type SessionFilter = {
-  states: SessionState[];
-  sources: SessionSource[];
-  behaviors: string[];
-};
-
-export const emptyFilter: SessionFilter = {
-  states: [],
-  sources: [],
-  behaviors: [],
-};
-export const hasFilter = (f: SessionFilter) =>
-  f.states.length > 0 || f.sources.length > 0 || f.behaviors.length > 0;
-
-const KEY = "gents-session-filter";
-const strings = (v: unknown) =>
-  Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
-
-/* the narrowing outlives the visit: a person who works from "needs you"
-   comes back to it. The trigger takes full ink and the row carries a
-   clear while anything is set, so a filter is never quietly on. */
-export function useSessionFilter() {
-  const [filter, setFilter] = useState<SessionFilter>(() => {
-    try {
-      const raw = localStorage.getItem(KEY);
-      if (!raw) return emptyFilter;
-      const parsed = JSON.parse(raw) as Record<string, unknown>;
-      return {
-        states: strings(parsed.states) as SessionState[],
-        sources: strings(parsed.sources) as SessionSource[],
-        behaviors: strings(parsed.behaviors),
-      };
-    } catch {
-      return emptyFilter;
-    }
-  });
-  useEffect(() => {
-    try {
-      if (hasFilter(filter)) localStorage.setItem(KEY, JSON.stringify(filter));
-      else localStorage.removeItem(KEY);
-    } catch {
-      /* storage unavailable */
-    }
-  }, [filter]);
-  return [filter, setFilter] as const;
-}
-
-const matchesState = (c: SessionSummary, state: SessionState, held: Set<string>) =>
-  state === "live"
-    ? isLive(c.turnState)
-    : state === "held"
-      ? held.has(c.sessionId)
-      : c.turnState === "failed";
+const matchesState = (c: SessionSummary, state: SessionState) =>
+  state === "live" ? isLive(c.turnState) : c.turnState === "failed";
 
 /* One option for automation, not two. Every run a trigger fires also names
    the task it fired, so a task and a trigger were the same sessions under
@@ -103,27 +58,21 @@ const matchesSource = (c: SessionSummary, source: SessionSource) =>
 
 /* an axis passes when nothing on it is picked, or when one picked value
    matches: within an axis the options are a union, across axes they meet */
-const passes = (c: SessionSummary, f: SessionFilter, held: Set<string>) =>
-  (f.states.length === 0 || f.states.some((s) => matchesState(c, s, held))) &&
+const passes = (c: SessionSummary, f: SessionFilter) =>
+  (f.states.length === 0 || f.states.some((s) => matchesState(c, s))) &&
   (f.sources.length === 0 || f.sources.some((s) => matchesSource(c, s))) &&
   (f.behaviors.length === 0 || f.behaviors.includes(c.behaviorId ?? ""));
 
 export const filterSessions = (
   sessions: SessionSummary[],
   f: SessionFilter,
-  held: Set<string>,
   query: string | null,
 ) =>
   sessions.filter(
     (c) =>
-      passes(c, f, held) &&
+      passes(c, f) &&
       (!query || (c.title ?? "").toLowerCase().includes(query.toLowerCase())),
   );
-
-/* the held mark the rows use: a filled brand dot, not a Lucide glyph */
-function HeldDot({ className }: { className?: string }) {
-  return <span className={cn("size-2 rounded-full bg-brand", className)} />;
-}
 
 export type Option<V extends string> = {
   value: V;
@@ -134,7 +83,6 @@ export type Option<V extends string> = {
 
 const STATES: Option<SessionState>[] = [
   { value: "live", label: "Live", icon: Activity },
-  { value: "held", label: "Needs you", icon: HeldDot },
   { value: "failed", label: "Failed", icon: CircleX, tint: "text-destructive" },
 ];
 
@@ -281,7 +229,6 @@ function BehaviorAxis({
               <BehaviorAvatar
                 key={b.id}
                 name={b.name}
-                behaviorId={b.id}
                 className="size-5 text-[9px] ring-1 ring-background"
               />
             ))}
@@ -322,11 +269,7 @@ function BehaviorAxis({
                 value={id}
                 disabled={b.count === 0 && !value.includes(id)}
               >
-                <BehaviorAvatar
-                  name={b.name}
-                  behaviorId={b.id}
-                  className="size-5 text-[9px]"
-                />
+                <BehaviorAvatar name={b.name} className="size-5 text-[9px]" />
                 <span className="min-w-0 flex-1 truncate">{b.name}</span>
                 <span className="text-xs tabular-nums text-muted-foreground">
                   {b.count}
@@ -342,15 +285,14 @@ function BehaviorAxis({
 
 export function SessionFilters({
   sessions,
-  deployment,
-  held,
+  nodeDids,
   value,
   onChange,
   nodes,
 }: {
   sessions: SessionSummary[];
-  deployment: DeploymentView | null;
-  held: Set<string>;
+  /** the nodes the list spans: their behaviors are the axis's options */
+  nodeDids: readonly string[];
   value: SessionFilter;
   onChange: (next: SessionFilter) => void;
   /** the node pick beside this row, so one clear empties the whole bar */
@@ -359,13 +301,10 @@ export function SessionFilters({
   /* a count says what its option would leave: its own axis is dropped from
      the filter, so the numbers answer "and how many of those" as you narrow */
   const countFor = (axis: keyof SessionFilter, test: (c: SessionSummary) => boolean) =>
-    sessions.filter((c) => passes(c, { ...value, [axis]: [] }, held) && test(c)).length;
+    sessions.filter((c) => passes(c, { ...value, [axis]: [] }) && test(c)).length;
 
   const stateCounts = Object.fromEntries(
-    STATES.map((s) => [
-      s.value,
-      countFor("states", (c) => matchesState(c, s.value, held)),
-    ]),
+    STATES.map((s) => [s.value, countFor("states", (c) => matchesState(c, s.value))]),
   );
   const sourceCounts = Object.fromEntries(
     SOURCES.map((s) => [
@@ -373,10 +312,26 @@ export function SessionFilters({
       countFor("sources", (c) => matchesSource(c, s.value)),
     ]),
   );
-  const behaviors = (deployment?.behaviors ?? []).map((b) => ({
-    id: b.behaviorId,
-    name: b.displayName,
-    count: countFor("behaviors", (c) => c.behaviorId === b.behaviorId),
+  /* every behavior of the nodes the list spans, named by its node, offered
+     with its count even at zero; then any a listed session runs that its
+     node no longer lists, and any stored pick none of them is, so a pick
+     can always be seen and cleared */
+  const fleetNodes = useFleet((state) => state.nodes);
+  const names = new Map<string, string>();
+  for (const did of nodeDids)
+    for (const b of fleetNodes[nodeKeyOf({ agentDid: did })]?.behaviors ?? [])
+      if (!names.has(b.behaviorId)) names.set(b.behaviorId, b.displayName);
+  for (const c of sessions)
+    if (c.behaviorId && !names.has(c.behaviorId))
+      names.set(
+        c.behaviorId,
+        behaviorName(c.behaviorId, fleetNodes[nodeKeyOf(c)] ?? null),
+      );
+  for (const id of value.behaviors) if (!names.has(id)) names.set(id, id);
+  const behaviors = [...names].map(([id, name]) => ({
+    id,
+    name,
+    count: countFor("behaviors", (c) => c.behaviorId === id),
   }));
 
   /* a node pick that empties the list still needs its clear */

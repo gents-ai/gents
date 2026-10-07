@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 
 type SwipePoint = {
   x: number;
@@ -20,6 +20,12 @@ export function isMobileBackSwipe(start: SwipePoint, end: SwipePoint) {
 }
 
 export function useMobileBackSwipe(enabled: boolean, onBack: () => void) {
+  /* the newest handler, so a new one each render does not re-add the
+     listeners, which would drop a swipe begun before a navigation */
+  const back = useRef(onBack);
+  useEffect(() => {
+    back.current = onBack;
+  });
   useEffect(() => {
     if (!enabled) {
       return;
@@ -45,7 +51,7 @@ export function useMobileBackSwipe(enabled: boolean, onBack: () => void) {
         touch &&
         isMobileBackSwipe(origin, { x: touch.clientX, y: touch.clientY })
       ) {
-        onBack();
+        back.current();
       }
     }
 
@@ -61,5 +67,5 @@ export function useMobileBackSwipe(enabled: boolean, onBack: () => void) {
       document.removeEventListener("touchend", onTouchEnd);
       document.removeEventListener("touchcancel", onTouchCancel);
     };
-  }, [enabled, onBack]);
+  }, [enabled]);
 }

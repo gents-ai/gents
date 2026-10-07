@@ -7,14 +7,21 @@ import type {
   ToolDiffLineView,
   ToolPresentationView,
 } from "@source-inc/gents-desktop-client";
-import { shortPath } from "./tool-runs";
 import type { ToolStepStatus } from "@gents/ui/conversation";
 
-/* `cd <somewhere> && real-command …` is how a shell tool is usually
-   called, and the cd is scaffolding: a real export had it leading 1,037 of
-   1,525 commands. The row says what ran; the body still has the whole of
-   it, exactly as it was issued. */
-export { shortPath };
+/* An absolute path inside a checkout is mostly the checkout: every row in a
+   real session began with the same forty characters of home directory and
+   repo. Keep the tail, which is what tells two rows apart, and let the
+   title carry the rest. */
+export const shortPath = (path: string, keep = 3): string => {
+  /* a machine that separates with a backslash has the same long prefix to
+     lose, and a drive letter is as absolute as a leading slash */
+  const sep = path.includes("\\") && !path.includes("/") ? "\\" : "/";
+  const absolute = path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path);
+  const segments = path.split(/[\\/]/).filter(Boolean);
+  if (!absolute || segments.length <= keep) return path;
+  return `…${sep}${segments.slice(-keep).join(sep)}`;
+};
 
 /* leading VAR=value assignments before a command; the command is what reads */
 const ASSIGNMENTS = /^(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S*)(?:\s+|$))+/;
@@ -142,27 +149,13 @@ export function toolSummary(t: RenderedToolCallView): {
   }
 }
 
-/* What a diff line is, in the words the runtime uses. The bridge writes
-   "add" and "del" (crates/gents-desktop-bridge/src/snapshot/
-   tool_presentation.rs, `diff_lines`), while the scenarios here were
-   written as "added" and "removed" — so a test for 'added' alone sent
-   every real line down the removed branch and a whole diff read as a
-   deletion. Anything else is context, which is neither. */
-export const diffKind = (kind: string): "added" | "removed" | "context" => {
-  const k = kind.toLowerCase();
-  if (k.startsWith("add") || k === "+") return "added";
-  if (k.startsWith("del") || k.startsWith("rem") || k === "-") return "removed";
-  return "context";
-};
-
 /* how big the change is, the way an editor says it: +18 −2 */
-export function diffTally(diff: { kind: string; text?: string }[]) {
+export function diffTally(diff: readonly ToolDiffLineView[]) {
   let added = 0;
   let removed = 0;
   for (const line of diff) {
-    const kind = diffKind(line.kind);
-    if (kind === "added") added += 1;
-    else if (kind === "removed") removed += 1;
+    if (line.kind === "added") added += 1;
+    else if (line.kind === "removed") removed += 1;
   }
   if (!added && !removed) return null;
   return [added ? `+${added}` : null, removed ? `\u2212${removed}` : null]
@@ -181,8 +174,7 @@ export function diffTally(diff: { kind: string; text?: string }[]) {
 
    Matching the wording is sniffing a presentation detail: it is a constant
    in that crate today, and if it changes we silently start showing it
-   again. The honest fix is a typed signal on the timeline item, which is
-   filed with the other contract gaps in BACKGROUND-WORK.md. */
+   again. The honest fix is a typed signal on the timeline item. */
 const WITHHELD = /^\s*\[(encrypted|redacted) reasoning\]\s*$/;
 
 /* what of a turn's reasoning is actually readable */
@@ -203,11 +195,9 @@ export function reasoningWithheld(reasoning: string | null | undefined): boolean
   return reasoning.split("\n").some((line) => WITHHELD.test(line));
 }
 
-/* Every ending used to arrive as 'done', so a command that exited 1 was
-   drawn exactly like one that exited 0 — same glyph, same muted ink, the
-   exit code only inside the opened body. The outcome belongs on the row:
-   a failure is the row a person is looking for, and a refusal is not a
-   failure but the policy declining, which is why it reads as stopped.
+/* The outcome belongs on the row: a failure is the row a person is looking
+   for, and a refusal is not a failure but the policy declining, which is
+   why it reads as stopped.
 
    statusKind alone does not carry it. It is the call's lifecycle, and a
    command that exits non-zero still completes its lifecycle — the

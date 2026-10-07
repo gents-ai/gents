@@ -1,8 +1,11 @@
 import Proofs.ClientShell.Types
 
+/-- What a submit is decided on beyond the shell's state. The composer's text is
+not part of it: the shell decides for content a person would send, and the
+composer adds only its own emptiness (`PresentationAgreement.adaptLocalDraft`),
+so the shell's decision does not change with each keystroke. -/
 structure SubmitContext where
   clientAvailable   : Bool
-  composerNonEmpty  : Bool
   requestedBehavior : Option BehaviorId
   deriving Repr
 
@@ -35,7 +38,6 @@ def projectSendDecision
     (s : ShellState) (store : LocalStore) (ctx : SubmitContext) : SendDecision :=
   if ¬ ctx.clientAvailable then .blocked .clientOffline
   else if s.selection.agent.isNone then .blocked .agentNotSelected
-  else if ¬ ctx.composerNonEmpty then .blocked .composerEmpty
   else match s.workflow with
     | .submitting _ _ => .blocked .mutationInFlight
     | .awaiting _ _                 => .blocked .awaitingObservation

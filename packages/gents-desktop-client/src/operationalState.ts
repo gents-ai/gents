@@ -59,6 +59,10 @@ export type DeploymentOperationalState = {
   behaviorReadiness: BehaviorReadinessDecision;
 };
 
+/* Readiness reads a deployment's own settings, not the sessions and mailbox
+   items it lists, so a screen holding a node without those can ask. */
+type DeploymentSettings = Omit<DeploymentView, "sessions" | "mailboxItems">;
+
 function status(
   value: Omit<OperationalStatus, "action" | "animated"> &
     Partial<Pick<OperationalStatus, "action" | "animated">>,
@@ -74,7 +78,7 @@ export function isLocalRuntimeSource(source?: string | null): boolean {
   return source === "local-standard";
 }
 
-function behaviorLabel(deployment: DeploymentView, behaviorId: string): string {
+function behaviorLabel(deployment: DeploymentSettings, behaviorId: string): string {
   return (
     deployment.behaviors
       .find((behavior) => behavior.behaviorId === behaviorId)
@@ -82,7 +86,7 @@ function behaviorLabel(deployment: DeploymentView, behaviorId: string): string {
   );
 }
 
-function fallbackBehaviorId(deployment: DeploymentView): string | null {
+function fallbackBehaviorId(deployment: DeploymentSettings): string | null {
   const principalDefault = deployment.agentPrincipal.defaultBehaviorId?.trim();
   if (
     principalDefault &&
@@ -114,7 +118,7 @@ function fallbackBehaviorId(deployment: DeploymentView): string | null {
 
 /** Keep an explicit selection only while its database behavior row exists. */
 export function selectedBehaviorIdForDeployment(
-  deployment: DeploymentView | null,
+  deployment: DeploymentSettings | null,
   selectedBehaviorId: string | null,
 ): string | null {
   if (!deployment) return null;
@@ -131,7 +135,7 @@ export function selectedBehaviorIdForDeployment(
 
 /** Select one runtime-authored readiness verdict for admission and display. */
 export function selectedBehaviorReadinessDecision(
-  deployment: DeploymentView | null,
+  deployment: DeploymentSettings | null,
   selectedBehaviorId: string | null,
 ): BehaviorReadinessDecision {
   if (!deployment) {
@@ -352,7 +356,7 @@ export function projectRouteOperationalStatus(
 }
 
 export function projectDeploymentOperationalState(
-  deployment: DeploymentView,
+  deployment: DeploymentSettings,
   selectedBehaviorId: string | null = null,
   syncHealth: SyncHealthView | null = null,
 ): DeploymentOperationalState {

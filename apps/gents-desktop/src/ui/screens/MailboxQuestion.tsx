@@ -12,8 +12,8 @@ import type {
 } from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
 import { Input } from "@gents/ui/components/input";
-import { toast } from "sonner";
 import { useState } from "react";
+import { toastFailure } from "@/lib/failure";
 
 /* the question's shape, checked in full: any ask may carry an arbitrary
    payload, and only a well-formed question gets the answer surface */
@@ -95,7 +95,7 @@ export function QuestionAnswer({
       await onAnswer(answer);
       setSent(true);
     } catch (error) {
-      toast(`Couldn't send the answer: ${String(error)}`);
+      toastFailure("send the answer", error);
     } finally {
       setSending(false);
     }

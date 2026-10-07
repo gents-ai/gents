@@ -1,10 +1,6 @@
-import type {
-  DeploymentView,
-  Tools,
-  SubagentTargetDocument,
-} from "@source-inc/gents-desktop-client";
+import type { NodeView } from "../../../hooks/fleetStore";
+import type { Tools, SubagentTargetDocument } from "@source-inc/gents-desktop-client";
 import { dependentsWarning } from "./dependents";
-import type { Shell } from "@/hooks/useShell";
 import { navigate } from "@/lib/router";
 import {
   AreaRow,
@@ -25,9 +21,10 @@ import {
 } from "./ToolGroupControls";
 import { RowMenu } from "./RowMenu";
 import { useCallback, useState } from "react";
+import { useApp } from "@/app/AppContext";
 
 /* the document a draft starts from: read-only files, no commands */
-export function newToolsDocument(deployment: DeploymentView): Tools {
+export function newToolsDocument(deployment: NodeView): Tools {
   return {
     tools_id: newId("tools"),
     agent_did: deployment.agentDid,
@@ -37,20 +34,19 @@ export function newToolsDocument(deployment: DeploymentView): Tools {
 }
 
 export function ToolsEditor({
-  shell,
   deployment,
   tools,
   embedded = false,
   draft: draftMode,
 }: {
-  shell: Shell;
-  deployment: DeploymentView;
+  deployment: NodeView;
   /* in a sheet beside another page: no Danger zone */
   embedded?: boolean;
   tools: Tools;
   /* a new document that exists only here until Save */
   draft?: { onSaved: (toolsId: string) => void; onCancel: () => void };
 }) {
+  const { changeConfig } = useApp().actions;
   const [invalidLimits, setInvalidLimits] = useState<Record<string, string>>({});
   const [controlsGeneration, setControlsGeneration] = useState(0);
   const reportInvalidLimit = useCallback((id: string, label: string | null) => {
@@ -271,17 +267,15 @@ export function ToolsEditor({
         },
       };
       if (next.pendingTargets.length) {
-        await shell.applyConfig((api) =>
-          api.applyConfigComponents({
-            document: {
-              agent_principal: { agent_did: deployment.agentDid },
-              tools: [document],
-              subagent_targets: next.pendingTargets,
-            },
-          }),
-        );
+        await changeConfig("applyConfigComponents", {
+          document: {
+            agent_principal: { agent_did: deployment.agentDid },
+            tools: [document],
+            subagent_targets: next.pendingTargets,
+          },
+        });
       } else {
-        await shell.applyConfig((api) => api.saveToolsConfig({ document }));
+        await changeConfig("saveToolsConfig", { document });
       }
     },
     { isNew: draftMode !== undefined },
@@ -304,8 +298,6 @@ export function ToolsEditor({
           label="Display name"
           value={d.draft.displayName}
           onChange={(v) => d.set("displayName", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <PathRow
           id={id("root")}
@@ -313,14 +305,12 @@ export function ToolsEditor({
           description="The directory file and command tools are confined to."
           value={d.draft.root}
           onChange={(v) => d.set("root", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <ChoiceRow
           id={id("files")}
           label="Files"
           value={d.draft.files}
-          onChange={(v) => d.choose("files", v as "Off" | "ReadOnly" | "ReadWrite")}
+          onChange={(v) => d.set("files", v as "Off" | "ReadOnly" | "ReadWrite")}
           items={[
             { value: "Off", label: "Off" },
             { value: "ReadOnly", label: "Read only" },
@@ -331,7 +321,7 @@ export function ToolsEditor({
           id={id("bash")}
           label="Bash"
           value={d.draft.bash}
-          onChange={(v) => d.choose("bash", v as "Off" | "ReadOnly" | "Unrestricted")}
+          onChange={(v) => d.set("bash", v as "Off" | "ReadOnly" | "Unrestricted")}
           items={[
             { value: "Off", label: "Off" },
             { value: "ReadOnly", label: "Read only" },
@@ -343,13 +333,13 @@ export function ToolsEditor({
           label="Background processes"
           description="Permit background execution for the selected bash capability."
           checked={d.draft.background}
-          onChange={(v) => d.choose("background", v)}
+          onChange={(v) => d.set("background", v)}
         />
       </Group>
       <ToolGroupControls
         key={controlsGeneration}
         onInvalid={reportInvalidLimit}
-        shell={shell}
+
         value={d.draft.advanced}
         onChange={(value) => d.set("advanced", value)}
         deployment={{
@@ -395,15 +385,14 @@ export function ToolsEditor({
             description="Host limits, MCP grants, subagents, built-ins, datastore, integrations, self-config, and tags. Invalid or unknown fields are rejected before persistence."
             value={d.draft.advanced}
             onChange={(v) => d.set("advanced", v)}
-            onCommit={d.commit}
             rows={12}
             mono
           />
         </details>
       </Group>
       <DraftActions
+        draft={d}
         dirty={d.dirty || limitError !== null}
-        saving={d.saving}
         error={limitError ?? d.error}
         saveLabel={draftMode ? "Create" : undefined}
         onSave={() => {
@@ -430,12 +419,10 @@ export function ToolsEditor({
           warning={dependentsWarning(deployment, "tools", tools.tools_id)}
           base={base}
           onDelete={() =>
-            shell.applyConfig((api) =>
-              api.deleteToolsConfig({
-                toolsId: tools.tools_id,
-                agentDid: deployment.agentDid,
-              }),
-            )
+            changeConfig("deleteToolsConfig", {
+              toolsId: tools.tools_id,
+              agentDid: deployment.agentDid,
+            })
           }
         />
       )}
@@ -444,14 +431,13 @@ export function ToolsEditor({
 }
 
 export function ToolsPanel({
-  shell,
   deployment,
   item,
 }: {
-  shell: Shell;
-  deployment: DeploymentView;
+  deployment: NodeView;
   item?: string;
 }) {
+  const { changeConfig } = useApp().actions;
   const base = {
     name: "agent" as const,
     agentDid: deployment.agentDid,
@@ -473,24 +459,20 @@ export function ToolsPanel({
             id={t.tools_id}
             onDuplicate={async () => {
               const tools_id = newId("tools");
-              await shell.applyConfig((api) =>
-                api.saveToolsConfig({
-                  document: {
-                    ...t,
-                    tools_id,
-                    display_name: `${t.display_name ?? t.tools_id} copy`,
-                  },
-                }),
-              );
+              await changeConfig("saveToolsConfig", {
+                document: {
+                  ...t,
+                  tools_id,
+                  display_name: `${t.display_name ?? t.tools_id} copy`,
+                },
+              });
               return tools_id;
             }}
             onDelete={() =>
-              shell.applyConfig((api) =>
-                api.deleteToolsConfig({
-                  toolsId: t.tools_id,
-                  agentDid: deployment.agentDid,
-                }),
-              )
+              changeConfig("deleteToolsConfig", {
+                toolsId: t.tools_id,
+                agentDid: deployment.agentDid,
+              })
             }
             warning={dependentsWarning(deployment, "tools", t.tools_id)}
           />
@@ -500,17 +482,15 @@ export function ToolsPanel({
       empty="No Tools documents. A behavior reaches tools only through its context."
       onCreate={async () => {
         const tools_id = newId("tools");
-        await shell.applyConfig((api) =>
-          api.saveToolsConfig({
-            document: {
-              tools_id,
-              agent_did: deployment.agentDid,
-              display_name: "New tools",
-              host: { files: { mode: "ReadOnly" }, bash: { mode: "Off" } },
-              tags: null,
-            },
-          }),
-        );
+        await changeConfig("saveToolsConfig", {
+          document: {
+            tools_id,
+            agent_did: deployment.agentDid,
+            display_name: "New tools",
+            host: { files: { mode: "ReadOnly" }, bash: { mode: "Off" } },
+            tags: null,
+          },
+        });
         navigate({
           name: "agent",
           agentDid: deployment.agentDid,
@@ -523,7 +503,7 @@ export function ToolsPanel({
         return (
           <ToolsEditor
             key={tools.tools_id}
-            shell={shell}
+
             deployment={deployment}
             tools={tools}
           />

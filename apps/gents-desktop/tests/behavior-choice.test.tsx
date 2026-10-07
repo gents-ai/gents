@@ -1,49 +1,37 @@
-import { act, renderHook, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { act, renderHook } from "@testing-library/react";
+import { describe, expect, it } from "vitest";
 
-import type { Shell } from "../src/ui/hooks/useShell";
 import { useBehaviorChoice } from "../src/ui/screens/SessionScreen";
+import { node, testApp, withApp } from "./app-fixture";
+import { deployment } from "./config-panel-wiring/fixtures";
 
-function shell(selectedSessionId: string | null, defaultBehaviorId: string): Shell {
-  return {
-    selectedSessionId,
-    selectedBehaviorId: defaultBehaviorId,
-    selectBehavior: vi.fn(),
-    mailboxCause: null,
-    selectedDeployment: {
-      behaviors: [
-        { behaviorId: "setup", isDefault: defaultBehaviorId === "setup" },
-        { behaviorId: "coding", isDefault: defaultBehaviorId === "coding" },
-      ],
-    },
-  } as Shell;
+/* the choice on the new-session screen of the fixture node, whose default
+   behavior is "default" and which also offers "ops" */
+function choice() {
+  const app = testApp({
+    deployments: [node()],
+    selection: { agentDid: deployment.agentDid },
+  });
+  const rendered = renderHook(() => useBehaviorChoice(), { wrapper: withApp(app) });
+  return { app, result: rendered.result };
 }
 
 describe("new-session behavior choice", () => {
-  it("renders only the shell decision and never retains a shadow selection", () => {
-    const value = shell(null, "setup");
-    const { result, rerender } = renderHook(({ value }) => useBehaviorChoice(value), {
-      initialProps: { value },
-    });
-    act(() => result.current.setPicked("coding"));
-    expect(value.selectBehavior).toHaveBeenCalledWith("coding");
-    expect(result.current.behaviorId).toBe("setup");
-    rerender({ value: { ...value, selectedBehaviorId: "coding" } });
-    expect(result.current.behaviorId).toBe("coding");
-    rerender({
-      value: { ...value, selectedAgentDid: "other", selectedBehaviorId: null },
-    });
+  it("shows only the selection's decision and never retains a shadow selection", () => {
+    const { app, result } = choice();
+    expect(result.current.behaviorId).toBe("default");
+    act(() => result.current.setPicked("ops"));
+    expect(app.stores.selection.getState().behaviorId).toBe("ops");
+    expect(result.current.behaviorId).toBe("ops");
+    act(() => app.actions.selectAgent("did:key:other"));
     expect(result.current.behaviorId).toBeNull();
   });
-  it("forgets the behavior explicitly picked for the previous session", async () => {
-    const { result, rerender } = renderHook(({ value }) => useBehaviorChoice(value), {
-      initialProps: { value: shell(null, "setup") },
-    });
 
-    act(() => result.current.setPicked("setup"));
-    rerender({ value: shell("session-1", "setup") });
-    rerender({ value: shell(null, "coding") });
-
-    await waitFor(() => expect(result.current.behaviorId).toBe("coding"));
+  it("forgets the behavior explicitly picked for the previous session", () => {
+    const { app, result } = choice();
+    act(() => result.current.setPicked("ops"));
+    act(() => app.actions.selectSession("session-1"));
+    act(() => app.actions.startNewSession());
+    expect(result.current.behaviorId).toBe("default");
   });
 });

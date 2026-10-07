@@ -2,18 +2,19 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { MessageList } from "@source-inc/gents-desktop-chat";
+import { assistantMessage } from "./timeline-fixture";
 
 describe("fenced code highlighting", () => {
   it("highlights fenced code and labels the language", () => {
     const { container } = render(
       <MessageList
         timelineItems={[
-          {
+          assistantMessage({
             kind: "assistantMessage",
             reconstruction: { state: "ready" },
             itemKey: "a1",
             content: '```rust\nfn main() { let x = "hi"; }\n```',
-          },
+          }),
         ]}
       />,
     );
@@ -27,12 +28,12 @@ describe("fenced code highlighting", () => {
     const { container } = render(
       <MessageList
         timelineItems={[
-          {
+          assistantMessage({
             kind: "assistantMessage",
             reconstruction: { state: "ready" },
             itemKey: "a2",
             content: "```\nplain text block\n```",
-          },
+          }),
         ]}
       />,
     );

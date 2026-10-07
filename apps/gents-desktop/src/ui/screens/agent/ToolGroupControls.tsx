@@ -1,10 +1,11 @@
-import type { DeploymentView, Tools } from "@source-inc/gents-desktop-client";
+import type { NodeView } from "../../../hooks/fleetStore";
+import type { Tools } from "@source-inc/gents-desktop-client";
 import { AreaRow, ChoiceRow, NumberRow, SwitchRow } from "./editors";
 import { DocumentSelection } from "./DocumentSelection";
 import { Group } from "./rows";
-import type { Shell } from "@/hooks/useShell";
 import { RemoteToolDiscovery } from "./RemoteToolDiscovery";
 import { useEffect, useState, type ReactNode } from "react";
+import { useApp } from "@/app/AppContext";
 
 // Mirrors the canonical effective defaults used by Tools::validation_violations.
 // The desktop bridge does not currently publish these values in its catalog.
@@ -60,8 +61,6 @@ function WholeNumberRow({
       label={label}
       value={raw}
       placeholder={placeholder}
-      onCommit={() => {}}
-      onEnter={() => {}}
       onChange={(text) => {
         setRaw(text);
         const valid =
@@ -137,16 +136,15 @@ export function ToolGroupControls({
   onChange,
   deployment,
   onCreateTarget,
-  shell,
   onInvalid,
 }: {
   value: string;
   onChange: (value: string) => void;
-  deployment: DeploymentView;
+  deployment: NodeView;
   onCreateTarget: (behaviorId: string) => void;
-  shell: Shell;
   onInvalid: (id: string, label: string | null) => void;
 }) {
+  const { api } = useApp();
   const groups = parseToolGroups(value);
   if (!groups)
     return (
@@ -414,7 +412,7 @@ export function ToolGroupControls({
                   (row) => row.service_id === service.mcp_service_id,
                 );
                 if (!config) throw new Error("Remote service is unavailable");
-                const result = await shell.api.testToolService({
+                const result = await api.testToolService({
                   serviceId: config.service_id,
                   hostname: config.hostname ?? null,
                   tailscaleIp: config.tailscale_ip ?? null,
@@ -431,7 +429,6 @@ export function ToolGroupControls({
               label={`${deployment.toolServiceRegistries.find((row) => row.service_id === service.mcp_service_id)?.display_name ?? service.mcp_service_id} tool names`}
               description="Exact tool names, one per line. Empty grants no tools; discovery never grants new tools automatically."
               value={(service.tool_names ?? []).join("\n")}
-              onCommit={() => {}}
               onChange={(value) => {
                 const names = value
                   .split("\n")
@@ -628,7 +625,6 @@ export function ToolGroupControls({
               label="Language server configuration"
               description="Runtime-owned language-server flags and catalog overrides."
               value={groups.integrations.lsp.config ?? ""}
-              onCommit={() => {}}
               onChange={(config) =>
                 update("integrations", {
                   lsp: { ...groups.integrations?.lsp, config: config || null },

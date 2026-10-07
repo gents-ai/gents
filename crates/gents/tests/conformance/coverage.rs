@@ -179,7 +179,7 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
     );
     assert_eq!(
         lean_contract_snapshot().frontend_client_shell_cases.len(),
-        26
+        25
     );
     assert_eq!(
         lean_contract_snapshot().desktop_client_shell_case_count,

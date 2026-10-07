@@ -13,12 +13,34 @@ import { projectChatShell } from "@source-inc/gents-desktop-chat";
 import { copyText } from "@source-inc/gents-desktop-ui";
 import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
 import { deployment } from "./config-panel-wiring/fixtures";
+import type { ShellProjection } from "../src/hooks/shellProjection";
+import { shellStores } from "./shell-fixture";
+import { assistantMessage, sessionSnapshot, userMessage } from "./timeline-fixture";
 
-const currentIntent = {
-  acceptsComposeIntent: (captured: number) => captured === 0,
-  advanceComposeIntent: vi.fn(),
-  captureComposeIntent: () => 0,
-};
+/** chat actions on session s1 of `deployment`, admitted by the projections given */
+function chatActions(
+  api: DesktopApiAdapter,
+  projection: {
+    behaviorReadiness: BehaviorReadinessDecision;
+    shellProjection: ReturnType<typeof projectChatShell>;
+    retryShellProjection: ReturnType<typeof projectChatShell>;
+  },
+  reportFailure = vi.fn(),
+) {
+  const stores = shellStores({
+    deployments: [deployment],
+    selection: { agentDid: deployment.agentDid, sessionId: "s1" },
+  });
+  const actions = createDesktopShellChatActions({
+    api,
+    stores,
+    project: () => projection as unknown as ShellProjection,
+    refreshSession: vi.fn(),
+    refreshSnapshot: vi.fn(),
+    reportFailure,
+  });
+  return { actions, stores };
+}
 
 const readyBehaviorReadiness = {
   kind: "ready",
@@ -42,6 +64,7 @@ function operationalStateFor(
     chatSafe: routeReady,
     behaviors: [
       {
+        ...deployment.behaviors[0]!,
         behaviorId,
         displayName: decision.kind === "unknown" ? behaviorId : decision.behaviorLabel,
         enabled: true,
@@ -117,12 +140,12 @@ describe("transcript copy actions", () => {
     render(
       <MessageList
         timelineItems={[
-          {
+          userMessage({
             kind: "userMessage",
             reconstruction: { state: "ready" },
             itemKey: "u1",
             content: "copy me please",
-          },
+          }),
         ]}
       />,
     );
@@ -138,12 +161,12 @@ describe("transcript copy actions", () => {
     render(
       <MessageList
         timelineItems={[
-          {
+          assistantMessage({
             kind: "assistantMessage",
             reconstruction: { state: "ready" },
             itemKey: "a1",
             content: "```rust\nfn main() {}\n```",
-          },
+          }),
         ]}
       />,
     );
@@ -158,21 +181,24 @@ describe("transcript copy actions", () => {
 });
 
 describe("error card retry", () => {
-  const session: DesktopSessionSnapshot = {
+  const session: DesktopSessionSnapshot = sessionSnapshot({
     sessionId: "s1",
     latestRequestId: "req-failed",
     turnState: "failed",
     retryEligibility: { eligible: true, denialReason: null },
-    latestRequestOutcome: { failureReason: "provider exploded" },
+    /* only the failure is read here */
+    latestRequestOutcome: {
+      failureReason: "provider exploded",
+    } as DesktopSessionSnapshot["latestRequestOutcome"],
     timelineItems: [
-      {
+      userMessage({
         kind: "userMessage",
         reconstruction: { state: "ready" },
         itemKey: "u1",
         content: "the failed ask",
-      },
+      }),
     ],
-  };
+  });
 
   it("summarizes the error, keeps raw text in a disclosure, and retries the failed content", () => {
     const onRetryMessage = vi.fn();
@@ -322,52 +348,26 @@ describe("error card retry", () => {
     const api = {
       sendChatMessage,
       retryRequest,
-    } as DesktopApiAdapter;
+    } as unknown as DesktopApiAdapter;
     const shellProjection = projectChatShell({
       clientAvailable: true,
       selectedAgentDid: deployment.agentDid,
       selectedSessionId: "s1",
-      draft: "",
       sending: false,
       session,
       selectedSessionSummary: null,
       localWorkflow: { kind: "ready" },
       operationalState: operationalStateFor(),
     });
-    expect(shellProjection.sendStatus).toMatchObject({
-      kind: "disabled",
-      reason: "composerEmpty",
-    });
     expect(shellProjection.nonEmptyContentSendStatus).toEqual({ kind: "ready" });
 
-    const actions = createDesktopShellChatActions({
-      submissionInFlight: { current: false },
-      ...currentIntent,
-      api,
-      draft: "",
+    const { actions } = chatActions(api, {
       behaviorReadiness: readyBehaviorReadiness,
-      newSessionAgentRef: { current: null },
-      refreshSession: vi.fn(),
-      refreshSnapshot: vi.fn(),
-      selectedDeployment: deployment,
-      deployments: [deployment],
-      selectedSessionId: "s1",
-      pendingMailboxCauseId: null,
-      session,
-      setDraft: vi.fn(),
-      setError: vi.fn(),
-      setLocalWorkflow: vi.fn(),
-      setOptimisticPendingTurn: vi.fn(),
-      setSelectedBehaviorId: vi.fn(),
-      setSelectedSessionId: vi.fn(),
-      setSending: vi.fn(),
-      setPendingMailboxCauseId: vi.fn(),
-      setSession: vi.fn(),
       shellProjection,
       retryShellProjection: shellProjection,
     });
 
-    actions.onRetryMessage("req-failed");
+    actions.retryMessage("req-failed");
 
     await waitFor(() =>
       expect(retryRequest).toHaveBeenCalledWith("req-failed", deployment.agentDid),
@@ -381,12 +381,11 @@ describe("error card retry", () => {
       sessionId: "s1",
       requestId: "req_retry",
     });
-    const setError = vi.fn();
+    const reportFailure = vi.fn();
     const composerProjection = projectChatShell({
       clientAvailable: true,
       selectedAgentDid: deployment.agentDid,
       selectedSessionId: "s1",
-      draft: "retry",
       sending: false,
       session,
       selectedSessionSummary: null,
@@ -397,61 +396,44 @@ describe("error card retry", () => {
       clientAvailable: true,
       selectedAgentDid: deployment.agentDid,
       selectedSessionId: "s1",
-      draft: "retry",
       sending: false,
       session,
       selectedSessionSummary: null,
       localWorkflow: { kind: "ready" },
       operationalState: operationalStateFor(unavailableBehaviorReadiness),
     });
-    const common = {
-      submissionInFlight: { current: false },
-      ...currentIntent,
-      api: { retryRequest } as unknown as DesktopApiAdapter,
-      draft: "",
-      newSessionAgentRef: { current: null },
-      refreshSession: vi.fn(),
-      refreshSnapshot: vi.fn(),
-      selectedDeployment: deployment,
-      deployments: [deployment],
-      selectedSessionId: "s1",
-      pendingMailboxCauseId: null,
-      session,
-      setDraft: vi.fn(),
-      setError,
-      setLocalWorkflow: vi.fn(),
-      setOptimisticPendingTurn: vi.fn(),
-      setSelectedBehaviorId: vi.fn(),
-      setSelectedSessionId: vi.fn(),
-      setSending: vi.fn(),
-      setPendingMailboxCauseId: vi.fn(),
-      setSession: vi.fn(),
-    };
 
-    const blocked = createDesktopShellChatActions({
-      ...common,
-      behaviorReadiness: readyBehaviorReadiness,
-      shellProjection: composerProjection,
-      retryShellProjection: blockedRetryProjection,
-    });
-    await blocked.onRetryMessage("req-failed");
+    const api = { retryRequest } as unknown as DesktopApiAdapter;
+    const { actions: blocked } = chatActions(
+      api,
+      {
+        behaviorReadiness: readyBehaviorReadiness,
+        shellProjection: composerProjection,
+        retryShellProjection: blockedRetryProjection,
+      },
+      reportFailure,
+    );
+    await blocked.retryMessage("req-failed");
     expect(retryRequest).not.toHaveBeenCalled();
-    expect(setError).toHaveBeenCalledWith(
+    expect(reportFailure).toHaveBeenCalledWith(
       blockedRetryProjection.nonEmptyContentSendStatus.kind === "disabled"
         ? blockedRetryProjection.nonEmptyContentSendStatus.hint
         : null,
     );
 
-    setError.mockClear();
-    const readyRetry = createDesktopShellChatActions({
-      ...common,
-      behaviorReadiness: unavailableBehaviorReadiness,
-      shellProjection: blockedRetryProjection,
-      retryShellProjection: composerProjection,
-    });
-    await readyRetry.onRetryMessage("req-failed");
+    reportFailure.mockClear();
+    const { actions: readyRetry } = chatActions(
+      api,
+      {
+        behaviorReadiness: unavailableBehaviorReadiness,
+        shellProjection: blockedRetryProjection,
+        retryShellProjection: composerProjection,
+      },
+      reportFailure,
+    );
+    await readyRetry.retryMessage("req-failed");
     expect(retryRequest).toHaveBeenCalledWith("req-failed", deployment.agentDid);
-    expect(setError).not.toHaveBeenCalledWith(
+    expect(reportFailure).not.toHaveBeenCalledWith(
       blockedRetryProjection.nonEmptyContentSendStatus.kind === "disabled"
         ? blockedRetryProjection.nonEmptyContentSendStatus.hint
         : null,
@@ -464,13 +446,10 @@ describe("error card retry", () => {
       sessionId: "s1",
       requestId: "req_new",
     });
-    const setOptimisticPendingTurn = vi.fn();
-    const setDraft = vi.fn();
     const shellProjection = projectChatShell({
       clientAvailable: true,
       selectedAgentDid: deployment.agentDid,
       selectedSessionId: "s1",
-      draft: "check the upgrade",
       sending: false,
       session,
       selectedSessionSummary: null,
@@ -478,35 +457,18 @@ describe("error card retry", () => {
       operationalState: operationalStateFor(),
     });
 
-    const actions = createDesktopShellChatActions({
-      ...currentIntent,
-      api: { sendChatMessage } as unknown as DesktopApiAdapter,
-      submissionInFlight: { current: false },
-      behaviorReadiness: readyBehaviorReadiness,
-      draft: "check the upgrade",
-      newSessionAgentRef: { current: null },
-      refreshSession: vi.fn(),
-      refreshSnapshot: vi.fn(),
-      selectedDeployment: deployment,
-      deployments: [deployment],
-      selectedSessionId: "s1",
-      pendingMailboxCauseId: null,
-      setDraft,
-      setError: vi.fn(),
-      setLocalWorkflow: vi.fn(),
-      setOptimisticPendingTurn,
-      setSelectedBehaviorId: vi.fn(),
-      setSelectedSessionId: vi.fn(),
-      setSending: vi.fn(),
-      setPendingMailboxCauseId: vi.fn(),
-      setSession: vi.fn(),
-      shellProjection,
-      retryShellProjection: shellProjection,
-    });
+    const { actions, stores } = chatActions(
+      { sendChatMessage } as unknown as DesktopApiAdapter,
+      {
+        behaviorReadiness: readyBehaviorReadiness,
+        shellProjection,
+        retryShellProjection: shellProjection,
+      },
+    );
 
-    await actions.onSendMessage({ preventDefault: vi.fn() } as never);
+    await actions.sendMessage("check the upgrade");
 
-    expect(setOptimisticPendingTurn).toHaveBeenCalledWith(
+    expect(stores.chat.getState().optimisticPendingTurn).toEqual(
       expect.objectContaining({
         sessionId: "s1",
         requestId: "req_new",
@@ -514,8 +476,5 @@ describe("error card retry", () => {
         lifecycleState: "pending",
       }),
     );
-    const clearAccepted = setDraft.mock.calls[0][0] as (current: string) => string;
-    expect(clearAccepted("check the upgrade")).toBe("");
-    expect(clearAccepted("newer draft")).toBe("newer draft");
   });
 });

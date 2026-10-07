@@ -16,7 +16,7 @@ export function SyncHealth({
   compact = false,
   row = false,
 }: {
-  syncHealth: SyncHealthView | null | undefined;
+  syncHealth: SyncHealthView | null;
   /** the dot alone, for the rail; the label is still its name and in the details */
   compact?: boolean;
   /* as a full-width row of the nav panel */

@@ -34,7 +34,6 @@ def ClientShellContractCase.toJson (witness : ClientShellContractCase) : String 
     ++ "\"frontend_client_available\":" ++ boolJson witness.frontendClientAvailable ++ ","
     ++ "\"frontend_selected_agent_did\":" ++ jsonNatOption witness.frontendSelectedAgentDid ++ ","
     ++ "\"frontend_selected_session_id\":" ++ jsonNatOption witness.frontendSelectedSessionId ++ ","
-    ++ "\"frontend_composer_non_empty\":" ++ boolJson witness.frontendComposerNonEmpty ++ ","
     ++ "\"frontend_sending\":" ++ boolJson witness.frontendSending ++ ","
     ++ "\"frontend_session_present\":" ++ boolJson witness.frontendSessionPresent ++ ","
     ++ "\"frontend_session_id\":" ++ jsonNatOption witness.frontendSessionId ++ ","

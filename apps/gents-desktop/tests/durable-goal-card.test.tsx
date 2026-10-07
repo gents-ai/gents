@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { ChatTranscriptPanel } from "@source-inc/gents-desktop-chat";
 import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
+import { sessionContext } from "./timeline-fixture";
 
 describe("durable goal transcript card", () => {
   it("renders persisted goal status, objective, token usage, and active time", () => {
@@ -15,8 +16,10 @@ describe("durable goal transcript card", () => {
       status: "active",
       turnState: "completed",
       latestRequestId: "request-1",
+      retryEligibility: { eligible: false, denialReason: null },
       latestRequestOutcome: null,
       pendingTurn: null,
+      context: sessionContext(),
       timelineItems: [],
       goal: {
         goalId: "goal-1",
