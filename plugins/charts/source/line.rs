@@ -118,6 +118,15 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
             .map(|g| {
                 let mut p = r.points(g, t.rows);
                 p.sort_by(|a, b| a.0.total_cmp(&b.0));
+                let rows = p.len();
+                let p = collapse(&p, spec.agg);
+                if rows > p.len() && !spec.agg_given {
+                    ctx.notes.add(format!(
+                        "series {}: {} rows share an x with an earlier row and are combined by sum; set agg to combine them another way",
+                        crate::text::quote(&g.name),
+                        rows - p.len()
+                    ));
+                }
                 p
             })
             .collect()
@@ -133,11 +142,6 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
     let mut aligned_x: Vec<f64> = Vec::new();
     let mut reduced = false;
     if kind == Kind::StackedArea {
-        if r.x.kind != XKind::Cat {
-            for d in &mut data {
-                *d = collapse(d, spec.agg);
-            }
-        }
         aligned_x = if r.x.kind == XKind::Cat {
             (0..r.x.cats.len()).map(|i| i as f64).collect()
         } else {

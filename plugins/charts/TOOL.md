@@ -32,7 +32,7 @@ Say which columns to draw:
 | `size` | bubble size column | none |
 | `value` | heatmap cell value column | the first other numeric column |
 | `line` | combo charts: columns drawn as lines | none |
-| `agg` | how rows with the same category combine: `sum`, `mean`, `count`, `min`, `max`, `median` | `sum` (`mean` for heatmaps) |
+| `agg` | how rows with the same x or category combine: `sum`, `mean`, `count`, `min`, `max`, `median` | `sum` (`mean` for heatmaps) |
 | `sort` | category order: `none`, `x`, `x_desc`, `value`, `value_desc` | `none` |
 
 ### Chart types

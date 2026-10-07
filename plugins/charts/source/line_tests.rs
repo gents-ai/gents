@@ -579,6 +579,34 @@ fn values_cut_off_a_long_stack_are_counted_on_the_full_data() {
 }
 
 #[test]
+fn rows_sharing_a_numeric_x_are_combined_by_agg() {
+    let rows = [json!([1, 10]), json!([1, 5]), json!([2, 12]), json!([2, 6])];
+    let r = ok(&with_rows(
+        "line",
+        r#""x":"t","y":["v"],"agg":"mean""#,
+        &["t", "v"],
+        &rows,
+    ));
+    assert_eq!(r.series[0].points, 2);
+    assert_eq!((r.series[0].min, r.series[0].max), (Some(7.5), Some(9.0)));
+    assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+    let r = ok(&with_rows(
+        "line",
+        r#""x":"t","y":["v"]"#,
+        &["t", "v"],
+        &rows,
+    ));
+    assert_eq!((r.series[0].min, r.series[0].max), (Some(15.0), Some(18.0)));
+    assert!(
+        r.warnings
+            .iter()
+            .any(|w| w.contains("2 rows share an x") && w.contains("set agg")),
+        "{:?}",
+        r.warnings
+    );
+}
+
+#[test]
 fn long_data_pivots_into_one_line_per_series_value() {
     let json = r#"{"chart":"line","x":"t","y":"v","series":"s","data":{"columns":["t","s","v"],"rows":[[1,"a",1],[2,"a",2],[1,"b",5],[2,"b",3]]}}"#;
     let r = ok(json);

@@ -51,7 +51,7 @@
         "additionalProperties": false,
         "properties": {
           "agg": {
-            "description": "How rows with the same category combine: sum (default), mean, count, min, max or median. Heatmaps default to mean.",
+            "description": "How rows with the same x or category combine: sum (default), mean, count, min, max or median. Heatmaps default to mean.",
             "enum": [
               "sum",
               "mean",
