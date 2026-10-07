@@ -1218,126 +1218,118 @@ async fn single_header_transaction_matches_bulk_coordinate_validation() {
 }
 
 #[tokio::test]
-async fn retry_frontier_requires_scoped_terminal_parent_and_settled_tools() {
-    let expected = |name: &str| {
-        crate::lean_vocab_test::lean_contract_snapshot()
-            .retry_frontier_cases
-            .iter()
-            .find(|case| case["name"] == name)
-            .unwrap()["expected"]
-            .as_bool()
-    };
-    assert_eq!(expected("before-input"), Some(false));
-    assert_eq!(expected("ready"), Some(true));
-    assert_eq!(expected("foreign-or-live-parent"), None);
-    assert_eq!(expected("unsettled"), None);
+async fn retry_frontier_matches_lean_admission() {
     let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
-    let response = crate::config_client::ConfigAccess::Local(node.clone()).write("test.retry_frontier",
-        r#"mutation { create_AgentRequest(input: {
-            request_id: "retry-frontier-parent", purpose: "normal", agent_did: "did:test:test",
-            behavior_id: "general", session_id: "retry-frontier", content: "Do the work",
-            lifecycle_state: "failed", execution_origin: "interactive", created_at: "2026-10-07T00:00:00Z"
-        }) { _docID } }"#,
-    ).await.unwrap();
-    let response: defra_node::QueryResponse = serde_json::from_value(response).unwrap();
-    let parent = crate::graphql::single_mutation_document(&response, "create_AgentRequest")
-        .unwrap()
-        .unwrap()["_docID"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    let mut request = crate::watcher::AgentRequest::try_from(
-        serde_json::from_value::<gents_protocol::row::AgentRequestRow>(serde_json::json!({
-            "_docID":"successor", "request_id":"successor", "purpose":"normal",
-            "agent_did":"did:test:test", "session_id":"retry-frontier", "behavior_id":"general",
-            "content":"Do the work", "created_at":"2026-10-07T00:00:01Z",
-            "retry_parent_request_doc_id":parent
-        }))
-        .unwrap(),
-    )
-    .unwrap();
-    assert!(!history::retry_has_published_input(&node, &request)
-        .await
-        .unwrap());
-    import_history_observation(
-        &node,
-        &parent,
-        "retry-frontier",
-        "did:test:test",
-        None,
-        "Do the work",
-        &canonical_rows::authored_message_key(&parent, "prompt"),
-        1,
-        None,
-    )
-    .await;
-    assert!(history::retry_has_published_input(&node, &request)
-        .await
-        .unwrap());
-    request.requester_did = Some("did:test:other".into());
-    assert!(history::retry_has_published_input(&node, &request)
-        .await
-        .is_err());
-    request.requester_did = None;
-    let parent_gql = escape_graphql_string(&parent);
-    let response = crate::config_client::ConfigAccess::Local(node.clone())
-        .write(
-            "test.retry_frontier",
-            &format!(
-                r#"mutation {{ create_AgentToolCall(input: {{ tool_call_key:"retry-frontier-tool",
-            request_doc_id:"{parent_gql}", lifecycle_state:"running", await_mode:"foreground"
-        }}) {{ _docID }} }}"#,
-            ),
-        )
-        .await
-        .unwrap();
-    let response: defra_node::QueryResponse = serde_json::from_value(response).unwrap();
-    let tool = crate::graphql::single_mutation_document(&response, "create_AgentToolCall")
-        .unwrap()
-        .unwrap()["_docID"]
-        .as_str()
-        .unwrap();
-    assert!(history::retry_has_published_input(&node, &request)
-        .await
-        .unwrap_err()
-        .to_string()
-        .contains("unsettled"));
-    let tool = escape_graphql_string(tool);
-    crate::config_client::ConfigAccess::Local(node.clone()).write("test.retry_frontier", &format!(
-        r#"mutation {{ update_AgentToolCall(filter: {{_docID: {{_eq:"{tool}"}}}}, input: {{await_mode:"background"}}) {{_docID}} }}"#,
-    )).await.unwrap();
-    assert!(history::retry_has_published_input(&node, &request)
-        .await
-        .is_err());
-    crate::config_client::ConfigAccess::Local(node.clone()).write("test.retry_frontier", &format!(
-        r#"mutation {{ update_AgentToolCall(filter: {{_docID: {{_eq:"{tool}"}}}}, input: {{lifecycle_state:"completed", status:"completed"}}) {{_docID}} }}"#,
-    )).await.unwrap();
-    assert!(history::retry_has_published_input(&node, &request)
-        .await
-        .unwrap());
-    let response = crate::config_client::ConfigAccess::Local(node.clone()).write("test.retry_frontier", &format!(
-        r#"mutation {{ create_AgentRequest(input: {{
-            request_id:"retry-frontier-second", purpose:"normal", agent_did:"did:test:test",
-            behavior_id:"general", session_id:"retry-frontier", content:"Do the work",
-            lifecycle_state:"failed", execution_origin:"interactive", created_at:"2026-10-07T00:00:02Z",
-            retry_parent_request_doc_id:"{parent_gql}"
-        }}) {{_docID}} }}"#,
-    )).await.unwrap();
-    let response: defra_node::QueryResponse = serde_json::from_value(response).unwrap();
-    request.retry_parent_request_doc_id = Some(
-        crate::graphql::single_mutation_document(&response, "create_AgentRequest")
+    async fn write_doc(
+        node: &std::sync::Arc<defra_node::EmbeddedNode>,
+        mutation: &str,
+        field: &str,
+    ) -> String {
+        let response = crate::config_client::ConfigAccess::Local(node.clone())
+            .write("test.retry_frontier", mutation)
+            .await
+            .unwrap();
+        let response: defra_node::QueryResponse = serde_json::from_value(response).unwrap();
+        crate::graphql::single_mutation_document(&response, field)
             .unwrap()
             .unwrap()["_docID"]
             .as_str()
             .unwrap()
-            .to_owned(),
-    );
-    assert!(
-        history::retry_has_published_input(&node, &request)
-            .await
+            .to_owned()
+    }
+    for (index, case) in crate::lean_vocab_test::lean_contract_snapshot()
+        .retry_frontier_cases
+        .iter()
+        .enumerate()
+    {
+        let session_id = format!("retry-frontier-{index}");
+        let session = escape_graphql_string(&session_id);
+        let state = if case["scoped_terminal"].as_bool().unwrap() {
+            "dead"
+        } else {
+            "processing"
+        };
+        let parent = write_doc(&node, &format!(r#"mutation {{ create_AgentRequest(input: {{
+            request_id: "retry-frontier-parent-{index}", purpose: "normal", agent_did: "did:test:test",
+            behavior_id: "general", session_id: "{session}", content: "Do the work",
+            lifecycle_state: "{state}", failure_reason:"Stale", execution_origin: "interactive", created_at: "2026-10-07T00:00:00Z"
+        }}) {{ _docID }} }}"#), "create_AgentRequest").await;
+        let mut request = crate::watcher::AgentRequest::try_from(
+            serde_json::from_value::<gents_protocol::row::AgentRequestRow>(serde_json::json!({
+                "_docID":"successor", "request_id":"successor", "purpose":"normal",
+                "agent_did":"did:test:test", "session_id":session_id, "behavior_id":"general",
+                "content":"Do the work", "created_at":"2026-10-07T00:00:01Z",
+                "retry_parent_request_doc_id":parent
+            }))
             .unwrap(),
-        "a repeated retry resolves the original authored input without publishing another copy"
-    );
+        )
+        .unwrap();
+        if !case["same_requester"].as_bool().unwrap() {
+            request.requester_did = Some("did:test:other".into());
+        }
+        if !case["same_session"].as_bool().unwrap() {
+            request.session_id = format!("fresh-session-{index}");
+        }
+        if case["published"].as_bool().unwrap() {
+            import_history_observation(
+                &node,
+                &parent,
+                &session_id,
+                "did:test:test",
+                None,
+                "Do the work",
+                &canonical_rows::authored_message_key(&parent, "prompt"),
+                1,
+                None,
+            )
+            .await;
+        }
+        let parent_gql = escape_graphql_string(&parent);
+        if case["running"].as_bool().unwrap() {
+            let mode = if case["background"].as_bool().unwrap() {
+                "background"
+            } else {
+                "foreground"
+            };
+            write_doc(
+                &node,
+                &format!(
+                    r#"mutation {{ create_AgentToolCall(input: {{
+                tool_call_key:"retry-frontier-tool-{index}", request_doc_id:"{parent_gql}",
+                lifecycle_state:"running", await_mode:"{mode}"
+            }}) {{_docID}} }}"#
+                ),
+                "create_AgentToolCall",
+            )
+            .await;
+        }
+        let actual = history::retry_has_published_input(&node, &request).await;
+        assert_eq!(actual.ok(), case["expected"].as_bool(), "{case}");
+        if case["name"] == "ready" {
+            request.retry_parent_request_doc_id = Some(
+                write_doc(
+                    &node,
+                    &format!(
+                        r#"mutation {{
+                create_AgentRequest(input: {{ request_id:"retry-frontier-second", purpose:"normal",
+                    agent_did:"did:test:test", behavior_id:"general", session_id:"{session}",
+                    content:"Do the work", lifecycle_state:"failed", execution_origin:"interactive",
+                    created_at:"2026-10-07T00:00:02Z", retry_parent_request_doc_id:"{parent_gql}"
+                }}) {{_docID}} }}"#
+                    ),
+                    "create_AgentRequest",
+                )
+                .await,
+            );
+            assert_eq!(
+                history::retry_has_published_input(&node, &request)
+                    .await
+                    .ok(),
+                case["expected"].as_bool(),
+                "retry chain must find the same authored input"
+            );
+        }
+    }
     node.shutdown().await;
 }

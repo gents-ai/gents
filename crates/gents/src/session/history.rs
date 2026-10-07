@@ -91,12 +91,13 @@ pub(crate) async fn retry_has_published_input(
         );
         let query = format!(
             r#"{{
-            AgentRequest(filter: {{ {scope}, _docID: {{ _eq: "{parent}" }} }}, limit: 2) {{
-                _docID lifecycle_state retry_parent_request_doc_id
+            AgentRequest(filter: {{ _docID: {{ _eq: "{parent}" }} }}, limit: 2) {{
+                _docID agent_did requester_did session_id lifecycle_state retry_parent_request_doc_id
             }}
             AgentMessage(filter: {{ {scope}, message_key: {{ _eq: "{key}" }} }}, limit: 2) {{ _docID }}
             AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{parent}" }},
-                lifecycle_state: {{ _in: ["pending", "running"] }} }}, limit: 1) {{ _docID }}
+                lifecycle_state: {{ _in: ["pending", "running"] }},
+                _or: [{{ await_mode: {{ _eq: "foreground" }} }}, {{ await_mode: {{ _eq: null }} }}] }}, limit: 1) {{ _docID }}
         }}"#
         );
         let response =
@@ -111,15 +112,23 @@ pub(crate) async fn retry_has_published_input(
             .context("retry parent query omitted rows")?;
         anyhow::ensure!(
             parents.len() == 1
+                && parents[0]["agent_did"].as_str() == Some(request.agent_did.as_str())
                 && matches!(
                     parents[0]["lifecycle_state"].as_str(),
                     Some("failed" | "dead")
                 ),
-            "retry parent must be an exact terminal request in the same session and requester scope"
+            "retry parent must be an exact terminal request in the same agent scope"
+        );
+        if parents[0]["session_id"].as_str() != Some(request.session_id.as_str()) {
+            return Ok(false);
+        }
+        anyhow::ensure!(
+            parents[0]["requester_did"].as_str() == request.requester_did.as_deref(),
+            "retry continuation cannot cross requester scope"
         );
         anyhow::ensure!(
             rows["AgentToolCall"].as_array().is_some_and(Vec::is_empty),
-            "retry parent still has unsettled tool execution; wait for tool recovery before retrying"
+            "retry parent still has unsettled foreground tool execution; wait for tool recovery before retrying"
         );
         let prompts = rows["AgentMessage"]
             .as_array()

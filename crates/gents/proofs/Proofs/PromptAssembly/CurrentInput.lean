@@ -6,12 +6,26 @@ variable {α : Type}
 parent's authored input is proven present. A failure before input publication
 still needs its original prompt. Tool effects remain owned by their durable
 call records; selecting input never executes a tool. -/
-def admitResume (scopedTerminal settledTools published : Bool) : Option Bool :=
-  if scopedTerminal && settledTools then some published else none
+def admitResume (scopedTerminal sameSession sameRequester settledTools published : Bool) : Option Bool :=
+  if !scopedTerminal then none
+  else if !sameSession then some false
+  else if sameRequester && settledTools then some published else none
 
-theorem unsettled_tools_cannot_resume (scopedTerminal published : Bool) :
-    admitResume scopedTerminal false published = none := by
-  simp [admitResume]
+theorem unsettled_tools_cannot_resume (scopedTerminal sameRequester published : Bool) :
+    admitResume scopedTerminal true sameRequester false published = none := by
+  cases scopedTerminal <;> simp [admitResume]
+
+/-- Stale-request resend creates a new session. Retry lineage is provenance,
+not authority to import the old session's history. -/
+theorem new_session_starts_fresh (sameRequester settledTools published : Bool) :
+    admitResume true false sameRequester settledTools published = some false := rfl
+
+/-- Background execution has its own receipt and delivery owners and may
+outlive the request. Only unsettled foreground execution blocks continuation. -/
+def settledForResume (running background : Bool) : Bool := !running || background
+
+theorem background_does_not_block_resume (running : Bool) :
+    settledForResume running true = true := by simp [settledForResume]
 
 def entryMessages (resume : Bool) (history : List α) (authored : α) : List α :=
   if resume then history else history ++ [authored]

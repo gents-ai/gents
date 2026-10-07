@@ -17,14 +17,24 @@ def routingAffinityCasesJson : String := jsonArray (routingAffinityCases.map fun
   ",\"expected_token\":" ++ jsonOptionalString row.expected.token ++ "}")
 
 def retryFrontierCasesJson : String := jsonArray (
-  [("before-input", true, true, false), ("ready", true, true, true),
-   ("foreign-or-live-parent", false, true, true), ("unsettled", true, false, true)].map
-    fun (name, scopedTerminal, settledTools, published) =>
+  [("before-input", true, true, true, false, false, false),
+   ("ready", true, true, true, false, false, true),
+   ("live-parent", false, true, true, false, false, true),
+   ("foreign-requester", true, true, false, false, false, true),
+   ("unsettled", true, true, true, true, false, true),
+   ("background", true, true, true, true, true, true),
+   ("resend", true, false, true, false, false, true),
+   ("resend-other-requester", true, false, false, false, false, true)].map
+    fun (name, scopedTerminal, sameSession, sameRequester, running, background, published) =>
       "{\"name\":" ++ jsonString name ++
       ",\"scoped_terminal\":" ++ toString scopedTerminal ++
-      ",\"settled_tools\":" ++ toString settledTools ++
+      ",\"same_session\":" ++ toString sameSession ++
+      ",\"same_requester\":" ++ toString sameRequester ++
+      ",\"running\":" ++ toString running ++
+      ",\"background\":" ++ toString background ++
       ",\"published\":" ++ toString published ++ ",\"expected\":" ++
-      (match PromptAssembly.CurrentInput.admitResume scopedTerminal settledTools published with
+      (match PromptAssembly.CurrentInput.admitResume scopedTerminal sameSession sameRequester
+        (PromptAssembly.CurrentInput.settledForResume running background) published with
        | some result => toString result
        | none => "null") ++ "}")
 

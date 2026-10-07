@@ -402,6 +402,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
                 loop_config.turn_compactor =
                     Some(std::sync::Arc::new(turn_compactor_callback));
                 loop_config.context_message = request_context_message.clone();
+                loop_config.resume_from_history = resume_from_history;
                 let restored = crate::provider_context_reduction::load_unconsumed_for_request(
                     self.node.as_ref(),
                     &request.doc_id,
@@ -456,7 +457,6 @@ impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
                         .into_iter()
                         .map(|row| row.reduction_key)
                         .collect();
-                    loop_config.resume_from_history = resume_from_history;
                     let entry = request_entry(
                         history.to_vec(),
                         &request.content,

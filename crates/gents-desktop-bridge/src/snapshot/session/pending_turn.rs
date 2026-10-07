@@ -58,9 +58,7 @@ pub(super) fn build_pending_turn(
             && agent_did.is_none_or(|agent_did| request_matches_agent(row, agent_did))
     })?;
     let request_input = request.input.clone().unwrap_or_default();
-    if normalize_optional(request.retry_parent_request_doc_id.as_deref()).is_some()
-        || !gents::lifecycle::request_content_owns_user_projection(&request_input)
-    {
+    if !gents::lifecycle::request_content_owns_user_projection(&request_input) {
         return None;
     }
 
@@ -76,6 +74,28 @@ pub(super) fn build_pending_turn(
         || transcript_store.transcript(session_id),
         |agent_did| transcript_store.transcript_for_agent(session_id, agent_did),
     );
+    if let Some(parent) = normalize_optional(request.retry_parent_request_doc_id.as_deref()) {
+        let observed_parent = store.requests.iter().any(|row| {
+            row.doc_id.as_deref() == Some(parent.as_str())
+                && row.agent_did == request.agent_did
+                && row.requester_did == request.requester_did
+                && row.session_id == request.session_id
+                && normalize_optional(row.content.as_deref()).is_some()
+                && gents::lifecycle::request_content_owns_user_projection(
+                    &row.input.clone().unwrap_or_default(),
+                )
+        });
+        let parent_key = format!("authored:{parent}:prompt");
+        let published_parent = transcript.messages.iter().any(|row| {
+            row.message.request_doc_id.as_deref() == Some(parent.as_str())
+                && row.message.requester_did == request.requester_did
+                && row.message.role == gents_protocol::output::MessageRole::User
+                && row.message.message_key == parent_key
+        });
+        if observed_parent || published_parent {
+            return None;
+        }
+    }
     let prompt_message_key = request_doc_id.map(|doc_id| format!("authored:{doc_id}:prompt"));
     let exact_owner = transcript.messages.iter().any(|row| {
         request_doc_id.is_some()
@@ -112,8 +132,18 @@ mod retry_tests {
             retry_parent_request_doc_id: Some("failed-parent".into()),
             ..Default::default()
         });
+        assert!(build_pending_turn(&store, &store, Some("agent"), "session", "retry").is_some());
+        store.requests.push(AgentRequestRow {
+            doc_id: Some("failed-parent".into()),
+            request_id: "parent".into(),
+            agent_did: Some("agent".into()),
+            session_id: Some("session".into()),
+            content: Some("original instruction".into()),
+            ..Default::default()
+        });
         assert!(build_pending_turn(&store, &store, Some("agent"), "session", "retry").is_none());
-        store.requests[0].retry_parent_request_doc_id = None;
+        assert!(build_pending_turn(&store, &store, Some("agent"), "session", "parent").is_some());
+        store.requests[1].session_id = Some("old-session".into());
         assert!(build_pending_turn(&store, &store, Some("agent"), "session", "retry").is_some());
     }
 }
