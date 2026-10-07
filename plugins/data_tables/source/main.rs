@@ -92,7 +92,8 @@ pub fn call(input: &Input) -> Res<serde_json::Value> {
 
 async fn call_async(input: &Input) -> Res<serde_json::Value> {
     // A query may read no table at all (`SELECT 1 + 1`); every other mode needs data to look at.
-    if input.path.is_none() && input.tables.is_none() && input.mode() != Mode::Query {
+    let mode = input.mode()?;
+    if input.path.is_none() && input.tables.is_none() && mode != Mode::Query {
         return Err("give path (a data file or a folder of them) or tables (rows as JSON)".into());
     }
     let catalog = Arc::new(Catalog::discover(
@@ -101,7 +102,7 @@ async fn call_async(input: &Input) -> Res<serde_json::Value> {
         input.tables.as_ref(),
         input.csv_options()?,
     )?);
-    match input.mode() {
+    match mode {
         Mode::Tables => tables::list(input, &catalog),
         Mode::Describe => tables::describe(input, &catalog).await,
         Mode::Query => query::query(input, &catalog).await,

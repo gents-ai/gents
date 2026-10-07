@@ -174,12 +174,13 @@ fn temp_file(dir: &Path) -> Res<(std::path::PathBuf, File)> {
 }
 
 /// Makes the finished `tmp` the file `target`. Without `overwrite` a hard link publishes it only
-/// while the name is free, so a file that appeared since it was checked is never replaced.
+/// while the name is free, so a file that appeared since it was checked is never replaced; `tmp`
+/// then still exists and is the caller's to remove.
 fn publish(tmp: &Path, target: &Path, overwrite: bool) -> std::io::Result<()> {
     if overwrite {
         std::fs::rename(tmp, target)
     } else {
-        std::fs::hard_link(tmp, target).and_then(|()| std::fs::remove_file(tmp))
+        std::fs::hard_link(tmp, target)
     }
 }
 
@@ -261,10 +262,8 @@ async fn write_all(
 /// The `export` mode.
 pub async fn export(input: &Input, catalog: &Arc<Catalog>) -> Res<Value> {
     let sql = input.sql()?;
-    let name = input
-        .output
-        .as_deref()
-        .ok_or("output is required: the file name to write, such as result.csv")?;
+    // Export is chosen by `output`, so it is set; an empty name is refused below.
+    let name = input.output.as_deref().unwrap_or_default();
     valid_name(name)?;
     let format = match (
         input.format,
@@ -279,12 +278,10 @@ pub async fn export(input: &Input, catalog: &Arc<Catalog>) -> Res<Value> {
         input
             .path
             .as_deref()
-            .ok_or("export writes into the bound folder: give path as a folder")?,
+            .ok_or("output writes into the folder path: give path as a folder")?,
     );
     if !dir.is_dir() {
-        return Err(
-            "export writes into the bound folder: path must be a folder, not a file".into(),
-        );
+        return Err("output writes into the folder path: path must be a folder, not a file".into());
     }
     let target = dir.join(name);
     let overwrite = input.overwrite == Some(true);
@@ -318,6 +315,16 @@ pub async fn export(input: &Input, catalog: &Arc<Catalog>) -> Res<Value> {
             io_error("cannot finish the output file", &e)
         }
     })?;
+    // The file is published; a temporary name that cannot be removed is only said.
+    if !overwrite && std::fs::remove_file(&tmp).is_err() {
+        catalog.warn.once(
+            "leftover-part",
+            format!(
+                "the temporary file {} could not be removed; delete it",
+                tmp.file_name().unwrap_or_default().to_string_lossy()
+            ),
+        );
+    }
     let bytes = std::fs::metadata(&target).map(|m| m.len()).unwrap_or(0);
     Ok(json!({
         "written": name,
@@ -389,8 +396,15 @@ mod tests {
         let e = publish(&tmp, &target, false).unwrap_err();
         assert_eq!(e.kind(), std::io::ErrorKind::AlreadyExists);
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "theirs");
-        publish(&tmp, &target, true).unwrap();
+        std::fs::remove_file(&target).unwrap();
+        publish(&tmp, &target, false).unwrap();
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "new");
+        // A hard link leaves the temporary name for the caller to remove.
+        assert!(tmp.exists());
+        std::fs::remove_file(&tmp).unwrap();
+        std::fs::write(&tmp, "newer").unwrap();
+        publish(&tmp, &target, true).unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "newer");
         assert!(!tmp.exists());
     }
 

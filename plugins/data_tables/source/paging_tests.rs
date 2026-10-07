@@ -426,7 +426,7 @@ proptest! {
         let d = Dir::new();
         d.put("t.csv", render_csv(&table));
         let first = run(json!({"path": d.s(), "sql": "SELECT * FROM t", "max_rows": 100_000})).unwrap();
-        let exported = run(json!({"path": d.s(), "mode": "export", "sql": "SELECT * FROM t", "output": "out.csv"})).unwrap();
+        let exported = run(json!({"path": d.s(), "sql": "SELECT * FROM t", "output": "out.csv"})).unwrap();
         // Nothing is lost on the way in or out.
         prop_assert!(nothing_lost(&first), "{:?}", first["warnings"]);
         prop_assert_eq!(exported["rows"].clone(), first["row_count"].clone());
@@ -435,7 +435,7 @@ proptest! {
         prop_assert_eq!(&second["rows"], &first["rows"]);
         prop_assert!(nothing_lost(&second), "{:?}", second["warnings"]);
         // And through Parquet.
-        run(json!({"path": d.s(), "mode": "export", "sql": "SELECT * FROM t", "output": "out.parquet"})).unwrap();
+        run(json!({"path": d.s(), "sql": "SELECT * FROM t", "output": "out.parquet"})).unwrap();
         let third = run(json!({"path": d.s(), "sql": "SELECT * FROM out_2", "max_rows": 100_000})).unwrap();
         prop_assert_eq!(&third["columns"], &first["columns"]);
         prop_assert_eq!(&third["rows"], &first["rows"]);
@@ -474,7 +474,7 @@ proptest! {
         prop_assert_eq!(rows(&first), want.clone());
         prop_assert_eq!(columns(&first), header.clone());
         prop_assert_eq!(&first["warnings"], &json!([]));
-        run(json!({"path": d.s(), "mode": "export", "sql": "SELECT * FROM t", "output": "out.csv"})).unwrap();
+        run(json!({"path": d.s(), "sql": "SELECT * FROM t", "output": "out.csv"})).unwrap();
         let second = run(json!({"path": d.s(), "sql": "SELECT * FROM out", "max_rows": 100_000})).unwrap();
         prop_assert_eq!(rows(&second), want);
         prop_assert_eq!(columns(&second), header);

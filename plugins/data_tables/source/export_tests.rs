@@ -9,8 +9,7 @@ use parquet::basic::Compression;
 const SALES: &str = "region,units,price,day\nnorth,10,2.5,2024-01-01\nsouth,7,3,2024-01-02\nnorth,5,4,2024-01-03\neast,,1.5,2024-01-04\nsouth,3,2,2024-01-05\n";
 
 fn export(d: &Dir, extra: serde_json::Value) -> Result<serde_json::Value, String> {
-    let mut input =
-        json!({"path": d.s(), "mode": "export", "sql": "SELECT * FROM sales ORDER BY day"});
+    let mut input = json!({"path": d.s(), "sql": "SELECT * FROM sales ORDER BY day"});
     for (k, v) in extra.as_object().unwrap() {
         input[k] = v.clone();
     }
@@ -42,7 +41,7 @@ fn csv_is_written_exactly_with_null_and_floats_kept_apart() {
 fn csv_quotes_what_needs_it_and_keeps_the_empty_string() {
     let d = Dir::new();
     let r = run(
-        json!({"path": d.s(), "mode": "export", "output": "o.csv", "tables": {"t": {"rows": [{"a": "x,y", "b": "say \"hi\"", "c": "", "d": null, "e": "l1\nl2"}]}}, "sql": "SELECT * FROM t"}),
+        json!({"path": d.s(), "output": "o.csv", "tables": {"t": {"rows": [{"a": "x,y", "b": "say \"hi\"", "c": "", "d": null, "e": "l1\nl2"}]}}, "sql": "SELECT * FROM t"}),
     );
     assert!(r.is_ok(), "{r:?}");
     assert_eq!(
@@ -54,7 +53,7 @@ fn csv_quotes_what_needs_it_and_keeps_the_empty_string() {
 #[test]
 fn a_one_column_null_is_written_as_an_empty_string_and_said() {
     let d = Dir::new();
-    let r = run(json!({"path": d.s(), "mode": "export", "output": "o.csv", "tables": {"t": {"rows": [["a"], [null], ["b"]]}}, "sql": "SELECT * FROM t"})).unwrap();
+    let r = run(json!({"path": d.s(), "output": "o.csv", "tables": {"t": {"rows": [["a"], [null], ["b"]]}}, "sql": "SELECT * FROM t"})).unwrap();
     assert_eq!(
         std::fs::read_to_string(d.path().join("o.csv")).unwrap(),
         "column_1\na\n\"\"\nb\n"
@@ -76,7 +75,8 @@ fn parquet_keeps_exact_types_and_reads_back_identically() {
         fixtures::parquet(&fixtures::sample_batch(), Compression::SNAPPY),
     );
     let before = query(&d, "SELECT * FROM p").unwrap();
-    let r = run(json!({"path": d.s(), "mode": "export", "sql": "SELECT * FROM p", "output": "copy.parquet"})).unwrap();
+    let r =
+        run(json!({"path": d.s(), "sql": "SELECT * FROM p", "output": "copy.parquet"})).unwrap();
     assert_eq!(
         (r["rows"].clone(), r["format"].clone()),
         (json!(3), json!("parquet"))
@@ -110,7 +110,10 @@ fn the_format_comes_from_the_name_or_is_given_and_must_be_known() {
         export(&d, json!({"output": "x.dat"})).unwrap_err(),
         "format is required unless output ends in .csv or .parquet"
     );
-    assert!(run(json!({"path": d.s(), "mode": "export", "sql": "SELECT 1", "output": "x.csv", "format": "xlsx"})).is_err());
+    assert!(
+        run(json!({"path": d.s(), "sql": "SELECT 1", "output": "x.csv", "format": "xlsx"}))
+            .is_err()
+    );
 }
 
 #[test]
@@ -157,12 +160,7 @@ fn names_that_could_leave_the_folder_or_hide_are_refused() {
         );
     }
     assert_eq!(std::fs::read_dir(d.path()).unwrap().count(), 1);
-    let e = run(json!({"path": d.s(), "mode": "export", "sql": "SELECT 1"})).unwrap_err();
-    assert_eq!(
-        e,
-        "output is required: the file name to write, such as result.csv"
-    );
-    let e = run(json!({"path": d.s(), "mode": "export", "output": "x.csv"})).unwrap_err();
+    let e = run(json!({"path": d.s(), "output": "x.csv"})).unwrap_err();
     assert_eq!(e, "sql is required: give the SELECT to run");
 }
 
@@ -170,18 +168,17 @@ fn names_that_could_leave_the_folder_or_hide_are_refused() {
 fn a_file_or_missing_path_cannot_be_exported_into() {
     let d = sales();
     let p = d.path().join("sales.csv");
-    let e = run(json!({"path": p.to_string_lossy(), "mode": "export", "sql": "SELECT * FROM sales", "output": "o.csv"})).unwrap_err();
+    let e =
+        run(json!({"path": p.to_string_lossy(), "sql": "SELECT * FROM sales", "output": "o.csv"}))
+            .unwrap_err();
     assert_eq!(
         e,
-        "export writes into the bound folder: path must be a folder, not a file"
+        "output writes into the folder path: path must be a folder, not a file"
     );
-    let e = run(
-        json!({"mode": "export", "sql": "SELECT 1", "output": "o.csv", "tables": {"t": [[1]]}}),
-    )
-    .unwrap_err();
+    let e = run(json!({"sql": "SELECT 1", "output": "o.csv", "tables": {"t": [[1]]}})).unwrap_err();
     assert_eq!(
         e,
-        "export writes into the bound folder: give path as a folder"
+        "output writes into the folder path: give path as a folder"
     );
 }
 
@@ -230,7 +227,7 @@ fn a_large_export_streams_and_reads_back_whole() {
         text.push_str(&format!("{i},{}\n", i * 3));
     }
     d.put("big.csv", text);
-    let r = run(json!({"path": d.s(), "mode": "export", "sql": "SELECT id, v + 1 AS w FROM big WHERE id % 2 = 0", "output": "half.parquet"})).unwrap();
+    let r = run(json!({"path": d.s(), "sql": "SELECT id, v + 1 AS w FROM big WHERE id % 2 = 0", "output": "half.parquet"})).unwrap();
     assert_eq!(r["rows"], 25_000);
     let back = query(
         &d,
@@ -250,9 +247,7 @@ fn an_export_that_widens_types_midway_restarts_cleanly() {
     }
     text.push_str("late\n");
     d.put("t.csv", text);
-    let r =
-        run(json!({"path": d.s(), "mode": "export", "sql": "SELECT v FROM t", "output": "o.csv"}))
-            .unwrap();
+    let r = run(json!({"path": d.s(), "sql": "SELECT v FROM t", "output": "o.csv"})).unwrap();
     assert_eq!(r["rows"], 100_006);
     let written = std::fs::read_to_string(d.path().join("o.csv")).unwrap();
     assert_eq!(written.lines().count(), 100_007);
@@ -264,13 +259,20 @@ fn an_export_that_widens_types_midway_restarts_cleanly() {
 }
 
 #[test]
-fn output_writes_whatever_mode_is_given() {
-    for mode in ["tables", "describe", "query"] {
-        let d = sales();
-        let r = export(&d, json!({"mode": mode, "output": "o.csv"})).unwrap();
-        assert_eq!(r["written"], "o.csv", "{mode}");
-        assert!(d.path().join("o.csv").is_file(), "{mode}");
+fn output_writes_with_query_and_is_refused_with_a_mode_that_has_no_result() {
+    let d = sales();
+    let r = export(&d, json!({"mode": "query", "output": "o.csv"})).unwrap();
+    assert_eq!(r["written"], "o.csv");
+    for mode in ["tables", "describe"] {
+        let e = export(&d, json!({"mode": mode, "output": "p.csv"})).unwrap_err();
+        assert!(
+            e.starts_with(&format!(
+                "output saves the result of sql, which mode {mode} does not have"
+            )),
+            "{e}"
+        );
     }
+    assert!(!d.path().join("p.csv").exists());
 }
 
 #[test]
@@ -316,14 +318,14 @@ fn values_and_names_with_a_sniffable_delimiter_survive_an_export_and_a_read() {
     ] {
         let d = Dir::new();
         let rows: Vec<serde_json::Value> = values.iter().map(|v| json!([v])).collect();
-        run(json!({"path": d.s(), "mode": "export", "output": "o.csv", "tables": {"t": {"columns": ["v"], "rows": rows}}, "sql": "SELECT * FROM t"})).unwrap();
+        run(json!({"path": d.s(), "output": "o.csv", "tables": {"t": {"columns": ["v"], "rows": rows}}, "sql": "SELECT * FROM t"})).unwrap();
         let back = query(&d, "SELECT * FROM o").unwrap();
         assert_eq!(back["rows"], json!(rows), "{values:?}");
         assert_eq!(back["warnings"], json!([]), "{values:?}");
     }
     // Column names with the delimiters too, over rows made only of the same character.
     let d = Dir::new();
-    run(json!({"path": d.s(), "mode": "export", "output": "o.csv", "tables": {"t": {"columns": ["a;b", "c;d"], "rows": [["x;y", "z;w"], ["p;q", "r;s"]]}}, "sql": "SELECT * FROM t"})).unwrap();
+    run(json!({"path": d.s(), "output": "o.csv", "tables": {"t": {"columns": ["a;b", "c;d"], "rows": [["x;y", "z;w"], ["p;q", "r;s"]]}}, "sql": "SELECT * FROM t"})).unwrap();
     let back = query(&d, "SELECT * FROM o").unwrap();
     assert_eq!(
         back["columns"],

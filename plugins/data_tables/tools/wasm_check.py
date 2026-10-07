@@ -8,6 +8,8 @@ run through `gents plugin run` against the installed pack (scripts/test-pack.sh 
 2. The output limit: 3 MB of rows beside a 1000-row Markdown table come back inside 4 MiB.
 3. A table at the column cap answers `SELECT *` in well under the wall clock.
 4. A folder of large workbooks beside a CSV answers a query on the CSV without reading them.
+5. Saving with output never replaces an existing file without overwrite, and concurrent saves to
+   one name publish exactly one file and leave no temporary file behind.
 """
 import glob
 import json
@@ -19,6 +21,7 @@ import sys
 import tempfile
 import time
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 
 GENTS = os.environ.get("GENTS", "gents")
 HOME = os.environ["PACK_HOME"]
@@ -160,9 +163,27 @@ def workbooks():
     shutil.rmtree(d)
 
 
+def saves():
+    d = tempfile.mkdtemp()
+    open(os.path.join(d, "t.csv"), "w").write("x\n1\n2\n")
+    open(os.path.join(d, "kept.csv"), "w").write("theirs\n")
+    code, _, err, _ = run(d, {"sql": "SELECT * FROM t", "output": "kept.csv"})
+    if code == 0 or "already exists" not in err or open(os.path.join(d, "kept.csv")).read() != "theirs\n":
+        fail(f"saves: an existing file was not kept: exit {code}: {err.strip()[-200:]}")
+    with ThreadPoolExecutor(4) as pool:
+        codes = [c for c, _, _, _ in pool.map(
+            lambda _: run(d, {"sql": "SELECT * FROM t", "output": "same.parquet"}), range(4))]
+    left = sorted(n for n in os.listdir(d) if n.startswith("."))
+    if codes.count(0) != 1 or left:
+        fail(f"saves: concurrent saves exited {codes} and left {left}")
+    print(f"saves: kept an existing file; 4 concurrent saves exited {sorted(codes)}", flush=True)
+    shutil.rmtree(d)
+
+
 fuzz(int(sys.argv[1]) if len(sys.argv) > 1 else 2)
 output_limit()
 wide_table()
 workbooks()
+saves()
 print(f"{len(failures)} failures")
 sys.exit(1 if failures else 0)

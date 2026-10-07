@@ -32,7 +32,8 @@ pub enum Mode {
     Describe,
     /// Run a SELECT.
     Query,
-    /// Run a SELECT and write the result to a file.
+    /// Run a SELECT and write the result to a file: chosen by `output`, never named.
+    #[serde(skip)]
     Export,
 }
 
@@ -81,16 +82,27 @@ fn within(name: &str, v: Option<u64>, lo: u64, hi: u64, default: u64) -> Res<u64
 }
 
 impl Input {
-    /// The mode: `export` whenever there is an output name (the field that makes the host grant
-    /// writing, so a call granted it always writes), else the one given, `query` when there is
-    /// SQL, and `tables` otherwise.
-    pub fn mode(&self) -> Mode {
-        match self.mode {
-            _ if self.output.is_some() => Mode::Export,
+    /// The mode: `export` when there is an output name (the field that makes the host grant
+    /// writing) and no other mode, else the one given, `query` when there is SQL, and `tables`
+    /// otherwise. `output` with `tables` or `describe` is refused, so a call granted writing
+    /// never silently only reads.
+    pub fn mode(&self) -> Res<Mode> {
+        Ok(match self.mode {
+            None | Some(Mode::Query) if self.output.is_some() => Mode::Export,
+            Some(mode) if self.output.is_some() => {
+                return Err(format!(
+                    "output saves the result of sql, which mode {} does not have; leave out mode and give sql to save a result, or leave out output",
+                    if mode == Mode::Tables {
+                        "tables"
+                    } else {
+                        "describe"
+                    }
+                ));
+            }
             Some(mode) => mode,
             None if self.sql.is_some() => Mode::Query,
             None => Mode::Tables,
-        }
+        })
     }
 
     /// Rows per page.
@@ -178,31 +190,27 @@ mod tests {
 
     #[test]
     fn the_mode_follows_the_sql_unless_given() {
-        assert_eq!(parse(serde_json::json!({})).unwrap().mode(), Mode::Tables);
+        let mode = |v| parse(v).unwrap().mode();
+        use serde_json::json;
+        assert_eq!(mode(json!({})), Ok(Mode::Tables));
+        assert_eq!(mode(json!({"sql": "select 1"})), Ok(Mode::Query));
         assert_eq!(
-            parse(serde_json::json!({"sql": "select 1", "output": "o.csv"}))
-                .unwrap()
-                .mode(),
-            Mode::Export
+            mode(json!({"sql": "select 1", "mode": "describe"})),
+            Ok(Mode::Describe)
         );
-        assert_eq!(
-            parse(serde_json::json!({"sql": "select 1", "output": "o.csv", "mode": "describe"}))
-                .unwrap()
-                .mode(),
-            Mode::Export
+        for v in [
+            json!({"sql": "select 1", "output": "o.csv"}),
+            json!({"sql": "select 1", "output": "o.csv", "mode": "query"}),
+        ] {
+            assert_eq!(mode(v), Ok(Mode::Export));
+        }
+        let e =
+            mode(json!({"sql": "select 1", "output": "o.csv", "mode": "describe"})).unwrap_err();
+        assert!(
+            e.starts_with("output saves the result of sql, which mode describe"),
+            "{e}"
         );
-        assert_eq!(
-            parse(serde_json::json!({"sql": "select 1"}))
-                .unwrap()
-                .mode(),
-            Mode::Query
-        );
-        assert_eq!(
-            parse(serde_json::json!({"sql": "select 1", "mode": "describe"}))
-                .unwrap()
-                .mode(),
-            Mode::Describe
-        );
+        assert!(parse(json!({"mode": "export"})).is_err());
     }
 
     #[test]

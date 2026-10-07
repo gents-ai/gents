@@ -352,7 +352,7 @@ fn a_query_that_reads_no_table_needs_no_path() {
         json!({}),
         json!({"mode": "tables"}),
         json!({"mode": "describe"}),
-        json!({"mode": "export", "sql": "SELECT 1", "output": "o.csv"}),
+        json!({"sql": "SELECT 1", "output": "o.csv"}),
     ] {
         assert_eq!(
             run(input.clone()).unwrap_err(),
