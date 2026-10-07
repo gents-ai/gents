@@ -3,7 +3,7 @@
   "expect": {
     "result": {
       "complete": false,
-      "error": "only SELECT queries are accepted; to save a result as a file, give output a file name",
+      "error": "only SELECT queries are accepted; write the statement as a SELECT, and to save its result as a file add output",
       "mode": "query",
       "warnings": []
     }

@@ -264,6 +264,16 @@ fn an_export_that_widens_types_midway_restarts_cleanly() {
 }
 
 #[test]
+fn output_writes_whatever_mode_is_given() {
+    for mode in ["tables", "describe", "query"] {
+        let d = sales();
+        let r = export(&d, json!({"mode": mode, "output": "o.csv"})).unwrap();
+        assert_eq!(r["written"], "o.csv", "{mode}");
+        assert!(d.path().join("o.csv").is_file(), "{mode}");
+    }
+}
+
+#[test]
 fn a_name_of_255_bytes_is_written_and_a_longer_one_is_refused() {
     let d = sales();
     let name = format!("{}.csv", "n".repeat(251));

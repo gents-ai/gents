@@ -81,12 +81,12 @@ fn within(name: &str, v: Option<u64>, lo: u64, hi: u64, default: u64) -> Res<u64
 }
 
 impl Input {
-    /// The mode: `export` when there is an output name (the field that makes the host grant
-    /// writing) unless another mode is given, else the one given, `query` when there is SQL,
-    /// and `tables` otherwise.
+    /// The mode: `export` whenever there is an output name (the field that makes the host grant
+    /// writing, so a call granted it always writes), else the one given, `query` when there is
+    /// SQL, and `tables` otherwise.
     pub fn mode(&self) -> Mode {
         match self.mode {
-            None | Some(Mode::Query) if self.output.is_some() => Mode::Export,
+            _ if self.output.is_some() => Mode::Export,
             Some(mode) => mode,
             None if self.sql.is_some() => Mode::Query,
             None => Mode::Tables,
@@ -186,7 +186,7 @@ mod tests {
             Mode::Export
         );
         assert_eq!(
-            parse(serde_json::json!({"sql": "select 1", "output": "o.csv", "mode": "query"}))
+            parse(serde_json::json!({"sql": "select 1", "output": "o.csv", "mode": "describe"}))
                 .unwrap()
                 .mode(),
             Mode::Export
