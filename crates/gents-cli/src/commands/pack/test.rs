@@ -2,15 +2,17 @@
 //!
 //! A plugin case is a JSON file in the plugin source's `tests/` directory:
 //! `{"input": <arguments>, "expect": <result>}`. Each case runs through the
-//! same runner and bounds a real call uses, against the artifact the build
-//! just produced. `expect` absent means the call only has to succeed. The
-//! pack's `experiment.json` scenario needs a model endpoint, so it runs only
-//! when asked for with `--scenario`.
+//! same runner, bounds and host-served network a real call uses, against the
+//! artifact the build just produced. `expect` absent means the call only has
+//! to succeed. The pack's `experiment.json` scenario needs a model endpoint,
+//! so it runs only when asked for with `--scenario`.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use gents::pack::PackManifest;
+use gents::plugin::executor::call_runner;
 use gents::plugin::{BoundDir, PluginBudget, PluginRunner, PluginVerdict};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -49,7 +51,7 @@ pub(crate) async fn test(args: PackTestArgs) -> Result<()> {
     );
     let out = tempfile::tempdir().context("creating a build directory")?;
     let built = super::build::build_pack(&dir, Some(&out.path().join("test.pack")))?;
-    let plugins = run_plugin_cases_off_runtime(dir.clone()).await?;
+    let plugins = run_plugin_cases(&dir).await?;
     let scenario = if args.scenario {
         anyhow::ensure!(
             dir.join("experiment.json").is_file(),
@@ -81,17 +83,9 @@ struct ScenarioRun {
     args: crate::cli::PackRunArgs,
 }
 
-/// [`run_plugin_cases`] on a blocking thread: running a guest blocks on the
-/// WASI runtime's own executor, which panics when called from an async task.
-pub(crate) async fn run_plugin_cases_off_runtime(dir: PathBuf) -> Result<Vec<PluginCases>> {
-    tokio::task::spawn_blocking(move || run_plugin_cases(&dir))
-        .await
-        .context("running the plugin cases")?
-}
-
 /// Runs every case of every plugin that has a source, against its built
 /// artifact.
-pub(crate) fn run_plugin_cases(dir: &Path) -> Result<Vec<PluginCases>> {
+pub(crate) async fn run_plugin_cases(dir: &Path) -> Result<Vec<PluginCases>> {
     let manifest: PackManifest = serde_json::from_slice(
         &std::fs::read(dir.join("manifest.json")).context("reading manifest.json")?,
     )
@@ -114,11 +108,12 @@ pub(crate) fn run_plugin_cases(dir: &Path) -> Result<Vec<PluginCases>> {
         let artifact = std::fs::read(dir.join(&plugin.artifact))
             .with_context(|| format!("reading the built {}", plugin.artifact))?;
         // The author's own plugin runs with the authority it declares.
-        let runner = PluginRunner::compile_within(
+        let runner = Arc::new(PluginRunner::compile_within(
             &artifact,
             plugin,
             &gents::plugin::authority::declared_manifold(plugin)?,
-        )?;
+        )?);
+        let coordinate = format!("{}/{}", manifest.metadata.namespace, plugin.name);
         // The budget a real call of this artifact gets, raised to what the
         // plugin itself declares in `limits`: an interpreted plugin needs
         // room to boot its runtime, and a plugin like `review_evidence`
@@ -138,7 +133,7 @@ pub(crate) fn run_plugin_cases(dir: &Path) -> Result<Vec<PluginCases>> {
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            match run_case(&runner, &budget, &path) {
+            match run_case(&coordinate, &runner, budget, &path).await {
                 Ok(()) => report.passed += 1,
                 Err(error) => report.failures.push(format!("{name}: {error:#}")),
             }
@@ -148,22 +143,28 @@ pub(crate) fn run_plugin_cases(dir: &Path) -> Result<Vec<PluginCases>> {
     Ok(results)
 }
 
-fn run_case(runner: &PluginRunner, budget: &PluginBudget, path: &Path) -> Result<()> {
+async fn run_case(
+    coordinate: &str,
+    runner: &Arc<PluginRunner>,
+    budget: PluginBudget,
+    path: &Path,
+) -> Result<()> {
     let case: PluginCase = serde_json::from_slice(&std::fs::read(path)?)
         .context("a case is {\"input\": ..., \"expect\": ..., \"bind\": ...}")?;
-    let outcome = match &case.bind {
+    let bound = match &case.bind {
         Some(relative) => {
             let case_dir = path
                 .parent()
                 .context("the case file has no parent directory")?;
-            let bound =
+            Some(
                 BoundDir::new(&case_dir.join(relative), Some(case_dir)).with_context(|| {
                     format!("binding {relative:?} for the case at {}", path.display())
-                })?;
-            runner.call_bound(&case.input, budget, &bound)?
+                })?,
+            )
         }
-        None => runner.call(&case.input, budget)?,
+        None => None,
     };
+    let outcome = call_runner(coordinate, runner.clone(), case.input, budget, bound).await?;
     anyhow::ensure!(
         outcome.verdict == PluginVerdict::Success,
         "{:?}: {}",
@@ -207,7 +208,7 @@ mod tests {
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             super::super::build::build_pack(&dir, Some(&root.path().join("out.pack"))).unwrap();
         }
-        let results = run_plugin_cases_off_runtime(dir.clone()).await.unwrap();
+        let results = run_plugin_cases(&dir).await.unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].passed, 1, "{:?}", results[0].failures);
         assert!(results[0].failures.is_empty());
@@ -217,7 +218,7 @@ mod tests {
             r#"{"input": {"a": 1}, "expect": {"a": 2}}"#,
         )
         .unwrap();
-        let results = run_plugin_cases_off_runtime(dir.clone()).await.unwrap();
+        let results = run_plugin_cases(&dir).await.unwrap();
         assert_eq!(results[0].passed, 1);
         assert_eq!(results[0].failures.len(), 1);
         assert!(
@@ -227,15 +228,23 @@ mod tests {
         );
     }
 
+    /// A plugin granted a network allow-list reaches it through the host
+    /// while its case runs.
+    #[tokio::test]
+    async fn a_case_fetches_through_the_host_from_a_granted_host() {
+        let port = crate::commands::plugin::testing::hello_server().await;
+        let dir = crate::commands::plugin::testing::http_plugin_pack(port);
+        let results = run_plugin_cases(dir.path()).await.unwrap();
+        assert_eq!(results[0].passed, 1, "{:?}", results[0].failures);
+    }
+
     /// A case's `bind` field binds the directory named relative to the case
     /// file itself, so the fixture's `list_files` plugin sees exactly the
     /// fixture tree checked in beside its own case file.
     #[tokio::test]
     async fn a_bind_case_binds_its_fixture_directory() {
         let dir = crate::commands::plugin::testing::build_bind_plugin_fixture();
-        let results = run_plugin_cases_off_runtime(dir.path().to_owned())
-            .await
-            .unwrap();
+        let results = run_plugin_cases(dir.path()).await.unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].passed, 1, "{:?}", results[0].failures);
         assert!(results[0].failures.is_empty());

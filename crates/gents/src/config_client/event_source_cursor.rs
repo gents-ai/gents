@@ -131,12 +131,12 @@ pub(crate) async fn exclude_arrival(
     Ok(())
 }
 
-pub(crate) async fn load_or_seed_for_source(
+pub(crate) async fn load_for_source(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
     trigger_id: &str,
     collection: &str,
-) -> Result<CursorRecord> {
+) -> Result<Option<CursorRecord>> {
     let key =
         crate::trigger_engine::durable_fire_key("arrival-cursor", &[owner, trigger_id, collection]);
     let response = txn.execute(&format!("{{ EventSourceCursor(filter: {{cursor_key: {{_eq: \"{}\"}}}}, limit: 2) {{ _docID cursor_key owner_did trigger_id source_collection after }} }}", escape_graphql_string(&key))).await?;
@@ -162,8 +162,22 @@ pub(crate) async fn load_or_seed_for_source(
                 && cursor.source_collection == collection,
             "arrival cursor scope disagrees with its key"
         );
-        return Ok(CursorRecord { doc_id, cursor });
+        return Ok(Some(CursorRecord { doc_id, cursor }));
     }
+    Ok(None)
+}
+
+pub(crate) async fn load_or_seed_for_source(
+    txn: &ConfigApplyTxn<'_>,
+    owner: &str,
+    trigger_id: &str,
+    collection: &str,
+) -> Result<CursorRecord> {
+    if let Some(record) = load_for_source(txn, owner, trigger_id, collection).await? {
+        return Ok(record);
+    }
+    let key =
+        crate::trigger_engine::durable_fire_key("arrival-cursor", &[owner, trigger_id, collection]);
     let schema = txn
         .execute(&crate::defra_query::schema::introspection_query(
             collection,

@@ -777,7 +777,14 @@ async fn native_arrival_head_is_delivered_despite_reverse_lexical_timestamp_tie(
     )
     .await;
     let watcher = DefraWatcher::new(node.clone(), owner);
-    let pending = watcher.pending_requests().await.unwrap();
+    let held = crate::config_client::ConfigApplyTxn::begin_local(&node, None)
+        .await
+        .unwrap();
+    let pending = tokio::time::timeout(Duration::from_secs(5), watcher.pending_requests())
+        .await
+        .expect("arrival observation must not wait for the mutation gate")
+        .unwrap();
+    held.discard().await.unwrap();
     assert_eq!(
         pending
             .iter()

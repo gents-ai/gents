@@ -253,7 +253,12 @@ fn openrouter_additional_params_require_parameters() {
     )
     .expect("OpenRouter should contribute additional params");
 
-    assert_eq!(value["provider"]["require_parameters"], true);
+    assert_eq!(
+        value,
+        rig::providers::openrouter::ProviderPreferences::new()
+            .require_parameters(true)
+            .to_json()
+    );
 }
 
 #[test]

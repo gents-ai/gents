@@ -2,11 +2,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use defra_node::EmbeddedNode;
-use rig::completion::CompletionError;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, TryAcquireError};
 use tokio_util::sync::CancellationToken;
 
-use super::client::CallKind;
+use super::client::{AdmissionError, CallKind};
 use super::config::BackendAdmissionConfig;
 use super::permit::AdmissionPermit;
 use super::persistence::{
@@ -267,7 +266,7 @@ impl BackendAdmissionController {
         slot_connection: &str,
         cancel_observer: Option<CancellationToken>,
         terminal_failure_observer: Option<Arc<Mutex<Option<String>>>>,
-    ) -> Result<AdmissionPermit, CompletionError> {
+    ) -> Result<AdmissionPermit, AdmissionError> {
         let mut queue_depth = 0;
         let immediate = match self.pool.try_admit() {
             Err(AdmitError::NoPermits) => {
@@ -303,7 +302,7 @@ impl BackendAdmissionController {
                     {
                         tracing::warn!(backend_id = %self.backend_id, error = %error, "failed to persist queue-full inference call");
                     }
-                    Err(CompletionError::ProviderError(format!(
+                    Err(AdmissionError(format!(
                         "QueueFull: backend {} admission queue is full",
                         self.backend_id
                     )))
@@ -386,7 +385,7 @@ impl BackendAdmissionController {
         call: InferenceCallRecord,
         cancel_observer: Option<CancellationToken>,
         terminal_failure_observer: Option<Arc<Mutex<Option<String>>>>,
-    ) -> Result<AdmissionPermit, CompletionError> {
+    ) -> Result<AdmissionPermit, AdmissionError> {
         let doc_id = persist_call_started(node.clone(), &call).await?;
         Ok(AdmissionPermit::new(
             node,
@@ -402,8 +401,8 @@ impl BackendAdmissionController {
         self.pool.waiters.fetch_sub(1, Ordering::SeqCst);
     }
 
-    fn backend_gone(&self) -> CompletionError {
-        CompletionError::ProviderError(format!(
+    fn backend_gone(&self) -> AdmissionError {
+        AdmissionError(format!(
             "BackendGone: backend {} was removed or became unavailable",
             self.backend_id
         ))

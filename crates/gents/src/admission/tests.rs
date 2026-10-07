@@ -1350,7 +1350,7 @@ async fn acquire_on(
     registry: &AdmissionRegistry,
     request_id: &str,
     backend_id: &str,
-) -> Result<super::permit::AdmissionPermit, rig::completion::CompletionError> {
+) -> Result<super::permit::AdmissionPermit, super::AdmissionError> {
     registry
         .acquire_for_test(
             request_id,
@@ -1900,12 +1900,12 @@ async fn rotation_keeps_in_progress_calls_on_their_own_connection() {
         .unwrap();
 
     let old_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let old_model = super::client::AdmittedCompletionModel::for_test(
+    let old_model = super::client::AdmittedCompletionModel::new(
         CountingProvider {
             calls: old_calls.clone(),
         },
         registry.clone(),
-        &old_connection,
+        old_connection.as_str(),
     );
     let old_call = tokio::spawn(scope_request(
         AdmissionCallContext::for_request(&request("req-connection-old"), "default", backend),
@@ -1918,12 +1918,12 @@ async fn rotation_keeps_in_progress_calls_on_their_own_connection() {
         &HashMap::from([(backend.to_string(), rewritten_connection(backend, 1, 2))]),
     );
     let new_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let new_model = super::client::AdmittedCompletionModel::for_test(
+    let new_model = super::client::AdmittedCompletionModel::new(
         CountingProvider {
             calls: new_calls.clone(),
         },
         registry.clone(),
-        &new_connection,
+        new_connection.as_str(),
     );
     let new_call = tokio::spawn(scope_request(
         AdmissionCallContext::for_request(&request("req-connection-new"), "default", backend),
@@ -1956,7 +1956,7 @@ async fn rotation_keeps_in_progress_calls_on_their_own_connection() {
 type ParkedCall = std::pin::Pin<
     Box<
         dyn std::future::Future<
-                Output = Result<super::permit::AdmissionPermit, rig::completion::CompletionError>,
+                Output = Result<super::permit::AdmissionPermit, super::AdmissionError>,
             > + Send,
     >,
 >;

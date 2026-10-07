@@ -3,11 +3,11 @@ use std::sync::{Arc, Mutex};
 use defra_node::EmbeddedNode;
 use futures::future::BoxFuture;
 use gents_loop::rig_compat::CachedInputTokensObservation;
-use rig::completion::{CompletionError, Usage};
 use tokio_util::sync::CancellationToken;
 
+use super::client::AdmissionError;
 use super::controller::{InferenceCallRecord, PoolPermit};
-use super::persistence::{persist_existing_call_terminal, spawn_persistence};
+use super::persistence::{persist_existing_call_terminal, spawn_persistence, ProviderCallUsage};
 use super::stream_guard::StreamGuardLifecycle;
 
 pub(crate) struct AdmissionPermit {
@@ -26,7 +26,7 @@ pub(crate) struct AdmissionPermit {
 struct PermitTerminal {
     call_state: &'static str,
     failure_reason: Option<String>,
-    usage: Option<Usage>,
+    usage: Option<ProviderCallUsage>,
     cached_input_tokens: CachedInputTokensObservation,
 }
 
@@ -74,17 +74,17 @@ impl AdmissionPermit {
     #[cfg(test)]
     pub(crate) async fn finish_success(
         &mut self,
-        usage: Option<Usage>,
-    ) -> Result<(), CompletionError> {
+        usage: Option<ProviderCallUsage>,
+    ) -> Result<(), AdmissionError> {
         self.finish_success_with_cache(usage, CachedInputTokensObservation::NotAvailable)
             .await
     }
 
     pub(crate) async fn finish_success_with_cache(
         &mut self,
-        usage: Option<Usage>,
+        usage: Option<ProviderCallUsage>,
         cached_input_tokens: CachedInputTokensObservation,
-    ) -> Result<(), CompletionError> {
+    ) -> Result<(), AdmissionError> {
         self.terminal = Some(PermitTerminal {
             call_state: "completed",
             failure_reason: None,
@@ -94,7 +94,7 @@ impl AdmissionPermit {
         self.finish().await
     }
 
-    pub(crate) async fn finish_failure(&mut self, reason: &str) -> Result<(), CompletionError> {
+    pub(crate) async fn finish_failure(&mut self, reason: &str) -> Result<(), AdmissionError> {
         self.terminal = Some(PermitTerminal {
             call_state: "failed",
             failure_reason: Some(recorded_failure_reason(reason)),
@@ -122,7 +122,7 @@ impl AdmissionPermit {
         });
     }
 
-    async fn finish(&mut self) -> Result<(), CompletionError> {
+    async fn finish(&mut self) -> Result<(), AdmissionError> {
         if self.finished {
             return Ok(());
         }
@@ -147,7 +147,7 @@ impl AdmissionPermit {
             // InferenceCall rows. Silent warn would mint a fresh allowance on
             // crash redrive.
             if terminal.usage.is_some() {
-                return Err(CompletionError::ProviderError(format!(
+                return Err(AdmissionError(format!(
                     "persisting terminal InferenceCall usage failed for call {}: {error:#}",
                     self.call.call_id
                 )));
@@ -162,7 +162,7 @@ impl AdmissionPermit {
 impl StreamGuardLifecycle for AdmissionPermit {
     fn mark_stream_success(
         &mut self,
-        usage: Option<Usage>,
+        usage: Option<ProviderCallUsage>,
         cached_input_tokens: CachedInputTokensObservation,
     ) {
         if self.terminal.is_none() {
@@ -175,18 +175,18 @@ impl StreamGuardLifecycle for AdmissionPermit {
         }
     }
 
-    fn mark_stream_error(&mut self, error: &CompletionError) {
+    fn mark_stream_error(&mut self, error: &str) {
         if self.terminal.is_none() {
             self.terminal = Some(PermitTerminal {
                 call_state: "failed",
-                failure_reason: Some(recorded_failure_reason(&error.to_string())),
+                failure_reason: Some(recorded_failure_reason(error)),
                 usage: None,
                 cached_input_tokens: CachedInputTokensObservation::NotAvailable,
             });
         }
     }
 
-    fn finish_stream(self) -> BoxFuture<'static, Result<(), CompletionError>> {
+    fn finish_stream(self) -> BoxFuture<'static, Result<(), AdmissionError>> {
         Box::pin(async move {
             let mut permit = self;
             permit.finish().await

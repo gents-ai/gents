@@ -1961,7 +1961,7 @@ fn provider_invocations_are_confined_to_the_owned_loop_seam() {
         "crates/gents-loop/src/loop_stream.rs".to_string(),
         // Wraps a model to apply admission control; receives an
         // already-assembled request from the owned loop.
-        "crates/gents/src/admission/client.rs".to_string(),
+        "crates/gents/src/llm/rig_compat.rs".to_string(),
     ]);
     let found = files_containing(&[".completion_request(", ".completion(", ".stream("]);
     assert_eq!(

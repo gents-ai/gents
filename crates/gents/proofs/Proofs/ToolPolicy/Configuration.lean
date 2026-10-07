@@ -357,4 +357,77 @@ theorem plugin_model_slot_optional (declared optional behaviorFree : Bool)
     (h : pluginModelSlotAllowed declared optional behaviorFree = true) : optional = true := by
   cases declared <;> cases optional <;> cases behaviorFree <;> simp_all [pluginModelSlotAllowed]
 
+/-- How much of a bound folder a plugin call uses. `read` is below `readWrite`,
+so a grant of `readWrite` also serves a reading call. -/
+inductive PluginAccess where
+  | read
+  | readWrite
+  deriving DecidableEq, Repr
+
+namespace PluginAccess
+
+def rank : PluginAccess → Nat
+  | .read => 0
+  | .readWrite => 1
+
+/-- The manifest and operator spelling. -/
+def spelling : PluginAccess → String
+  | .read => "read"
+  | .readWrite => "read_write"
+
+end PluginAccess
+
+/-- A plugin declares its most access once; `writeFields` names the inputs
+that make a call write. Write fields only mean something on a plugin that may
+write, so a reading plugin that declares them is refused at the manifest. -/
+def pluginBindingValid (declared : PluginAccess) (hasWriteFields : Bool) : Bool :=
+  declared == .readWrite || !hasWriteFields
+
+/-- The access one call asks for. A call asks for `read` unless it writes:
+it writes when it sets a declared write field, or always when a writing plugin
+declares no write fields (a plugin that only writes). This replaced shipping a
+second plugin per artifact just to write (#2301). -/
+def pluginCallAccess (declared : PluginAccess) (hasWriteFields setsWriteField : Bool) :
+    PluginAccess :=
+  match declared with
+  | .read => .read
+  | .readWrite => if hasWriteFields && !setsWriteField then .read else .readWrite
+
+/-- A bound call runs only when the operator's grant for the path (`none`
+outside every allowed folder) covers the call's own access, not the plugin's
+declared maximum. -/
+def pluginCallAdmitted (declared : PluginAccess) (granted : Option PluginAccess)
+    (hasWriteFields setsWriteField : Bool) : Bool :=
+  match granted with
+  | none => false
+  | some granted =>
+    decide ((pluginCallAccess declared hasWriteFields setsWriteField).rank ≤ granted.rank)
+
+theorem plugin_call_access_within_declared (declared : PluginAccess)
+    (hasWriteFields setsWriteField : Bool) :
+    (pluginCallAccess declared hasWriteFields setsWriteField).rank ≤ declared.rank := by
+  cases declared <;> cases hasWriteFields <;> cases setsWriteField <;> decide
+
+theorem plugin_call_admitted_within_grant (declared granted : PluginAccess)
+    (hasWriteFields setsWriteField : Bool)
+    (h : pluginCallAdmitted declared (some granted) hasWriteFields setsWriteField = true) :
+    (pluginCallAccess declared hasWriteFields setsWriteField).rank ≤ granted.rank := by
+  simpa [pluginCallAdmitted] using h
+
+theorem plugin_call_outside_grant_refused (declared : PluginAccess)
+    (hasWriteFields setsWriteField : Bool) :
+    pluginCallAdmitted declared none hasWriteFields setsWriteField = false := rfl
+
+/-- One plugin serves readers and writers: a call that sets no write field runs
+under a read grant even though the plugin may write. -/
+theorem plugin_reading_call_needs_only_read (setsWriteField : Bool)
+    (h : setsWriteField = false) :
+    pluginCallAdmitted .readWrite (some .read) true setsWriteField = true := by
+  subst h; decide
+
+/-- A writing call is never admitted under a read grant. -/
+theorem plugin_writing_call_needs_read_write (hasWriteFields : Bool) :
+    pluginCallAdmitted .readWrite (some .read) hasWriteFields true = false := by
+  cases hasWriteFields <;> decide
+
 end ToolPolicy

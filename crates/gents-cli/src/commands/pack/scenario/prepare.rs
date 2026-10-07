@@ -8,6 +8,7 @@
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::{bail, Context, Result};
@@ -15,6 +16,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use gents::plugin::authority::{declared_manifold, describe_manifold};
+use gents::plugin::executor::call_runner;
 use gents::plugin::{BoundDir, PluginBudget, PluginRunner, PluginVerdict};
 
 #[cfg(test)]
@@ -139,9 +141,9 @@ pub(super) fn prepare_seed_fields(
 
 /// Runs every `prepare` step in manifest order, returning the seed fields
 /// their outputs mapped ([`validate_prepare_steps`] refuses two steps from
-/// declaring the same seed field, so insertion order never matters here). A
-/// no-op with no steps: neither the admission nor the blocking hand-off
-/// below has anything to do.
+/// declaring the same seed field, so insertion order never matters here).
+/// Each call goes through [`gents::plugin::executor::call_runner`], which
+/// serves the network the plugin's declared manifold grants.
 pub(super) async fn run_prepare_steps(
     pack: PathBuf,
     distribution: gents::pack::PackManifest,
@@ -153,97 +155,28 @@ pub(super) async fn run_prepare_steps(
         return Ok(BTreeMap::new());
     }
     let started = Instant::now();
-    let fields = tokio::task::spawn_blocking(move || {
-        run_prepare_steps_blocking(
-            &pack,
-            &distribution,
-            &steps,
-            tool_root.as_deref(),
-            grant_authority,
-        )
-    })
-    .await
-    .context("running scenario prepare steps")??;
-    tracing::info!(
-        fields = fields.len(),
-        elapsed_ms = started.elapsed().as_millis() as u64,
-        "scenario prepare steps completed"
-    );
-    Ok(fields)
-}
-
-/// The blocking half of [`run_prepare_steps`]: everything from finding the
-/// plugin through calling it and mapping its output has to run off the async
-/// executor, exactly like `commands::plugin::run::run_plugin` and
-/// `commands::pack::test::run_plugin_cases` (running a guest panics when
-/// called directly from an async task).
-fn run_prepare_steps_blocking(
-    pack: &Path,
-    distribution: &gents::pack::PackManifest,
-    steps: &[ScenarioPrepareStep],
-    tool_root: Option<&Path>,
-    grant_authority: bool,
-) -> Result<BTreeMap<String, String>> {
+    let distribution = Arc::new(distribution);
     let mut fields = BTreeMap::new();
     for step in steps {
-        let plugin = distribution
-            .metadata
-            .plugins
-            .iter()
-            .find(|declared| declared.name == step.plugin)
-            .with_context(|| format!("prepare step names undeclared plugin {}", step.plugin))?;
-        let artifact_path = pack.join(&plugin.artifact);
-        // A pack directory holding only its declared assets (a built
-        // `.pack`, the home's store, or a registry fetch) keeps
-        // `plugin.source` in the manifest but never ships the source tree
-        // itself, so a source is only actually available here when its
-        // entry file is really on disk. Rebuild from it when it is; fall
-        // back to the shipped artifact otherwise, exactly like a plugin
-        // with no declared source at all.
-        let source_entry = plugin.source.as_deref().and_then(|source| {
-            crate::commands::pack::build::plugin_entry(&plugin.language)
-                .map(|entry| pack.join(source).join(entry))
-        });
-        if source_entry.is_some_and(|entry| entry.is_file()) {
-            // Always rebuilt, not just when missing: `build_plugin` stamps
-            // the source digest, so an unchanged source costs one digest
-            // check, while a source an author edited since the last build
-            // never runs stale here.
-            crate::commands::pack::build::build_plugin(pack, distribution, plugin)
-                .with_context(|| format!("building prepare plugin {}", step.plugin))?;
-        } else if !artifact_path.is_file() {
-            bail!(
-                "prepare plugin {} has no source and its artifact is missing: {}",
-                step.plugin,
-                artifact_path.display()
-            );
-        }
-        let artifact = std::fs::read(&artifact_path)
-            .with_context(|| format!("reading {}", artifact_path.display()))?;
-        // The author's own plugin runs with exactly the authority it
-        // declares (mirrors `commands::pack::test::run_plugin_cases`);
-        // consent is the gate below, not a narrower ceiling.
-        let declared = declared_manifold(plugin)?;
-        if let Some(asks) = describe_manifold(&declared) {
-            anyhow::ensure!(
+        let coordinate = format!("{}/{}", distribution.metadata.namespace, step.plugin);
+        let (pack, distribution, tool_root, admitted) = (
+            pack.clone(),
+            distribution.clone(),
+            tool_root.clone(),
+            step.clone(),
+        );
+        // Building a plugin from source shells out to its toolchain.
+        let (runner, budget, bound) = tokio::task::spawn_blocking(move || {
+            admit_prepare_step(
+                &pack,
+                &distribution,
+                &admitted,
+                tool_root.as_deref(),
                 grant_authority,
-                "prepare plugin {} asks for {asks}; run with --grant-authority to allow that",
-                step.plugin
-            );
-        }
-        let runner = PluginRunner::compile_within(&artifact, plugin, &declared)
-            .with_context(|| format!("admitting prepare plugin {}", step.plugin))?;
-        let afb = afterburner_cloud::Afb::from_bytes(&artifact)
-            .with_context(|| format!("{} is not a readable plugin", plugin.artifact))?;
-        let budget = PluginBudget::for_plugin(&afb, plugin);
-        let bound = step
-            .bind_dir
-            .as_ref()
-            .map(|dir| {
-                BoundDir::new(Path::new(dir), tool_root)
-                    .with_context(|| format!("binding {dir:?} for prepare plugin {}", step.plugin))
-            })
-            .transpose()?;
+            )
+        })
+        .await
+        .context("admitting a scenario prepare step")??;
         match &bound {
             Some(bound) => {
                 tracing::info!(
@@ -254,11 +187,9 @@ fn run_prepare_steps_blocking(
             }
             None => tracing::info!(plugin = %step.plugin, "running scenario prepare step"),
         }
-        let outcome = match &bound {
-            Some(bound) => runner.call_bound(&step.input, &budget, bound),
-            None => runner.call(&step.input, &budget),
-        };
-        let outcome = outcome.with_context(|| format!("calling prepare plugin {}", step.plugin))?;
+        let outcome = call_runner(&coordinate, runner, step.input, budget, bound)
+            .await
+            .with_context(|| format!("calling prepare plugin {}", step.plugin))?;
         anyhow::ensure!(
             outcome.verdict == PluginVerdict::Success,
             "prepare plugin {} did not succeed: {:?}: {}",
@@ -272,7 +203,83 @@ fn run_prepare_steps_blocking(
             &step.seed_fields,
         )?);
     }
+    tracing::info!(
+        fields = fields.len(),
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "scenario prepare steps completed"
+    );
     Ok(fields)
+}
+
+/// Finds `step`'s plugin, builds it from source when its source is on disk,
+/// and admits it under its own declared authority with its budget and bound
+/// directory.
+fn admit_prepare_step(
+    pack: &Path,
+    distribution: &gents::pack::PackManifest,
+    step: &ScenarioPrepareStep,
+    tool_root: Option<&Path>,
+    grant_authority: bool,
+) -> Result<(Arc<PluginRunner>, PluginBudget, Option<BoundDir>)> {
+    let plugin = distribution
+        .metadata
+        .plugins
+        .iter()
+        .find(|declared| declared.name == step.plugin)
+        .with_context(|| format!("prepare step names undeclared plugin {}", step.plugin))?;
+    let artifact_path = pack.join(&plugin.artifact);
+    // A pack directory holding only its declared assets (a built
+    // `.pack`, the home's store, or a registry fetch) keeps
+    // `plugin.source` in the manifest but never ships the source tree
+    // itself, so a source is only actually available here when its
+    // entry file is really on disk. Rebuild from it when it is; fall
+    // back to the shipped artifact otherwise, exactly like a plugin
+    // with no declared source at all.
+    let source_entry = plugin.source.as_deref().and_then(|source| {
+        crate::commands::pack::build::plugin_entry(&plugin.language)
+            .map(|entry| pack.join(source).join(entry))
+    });
+    if source_entry.is_some_and(|entry| entry.is_file()) {
+        // Always rebuilt, not just when missing: `build_plugin` stamps
+        // the source digest, so an unchanged source costs one digest
+        // check, while a source an author edited since the last build
+        // never runs stale here.
+        crate::commands::pack::build::build_plugin(pack, distribution, plugin)
+            .with_context(|| format!("building prepare plugin {}", step.plugin))?;
+    } else if !artifact_path.is_file() {
+        bail!(
+            "prepare plugin {} has no source and its artifact is missing: {}",
+            step.plugin,
+            artifact_path.display()
+        );
+    }
+    let artifact = std::fs::read(&artifact_path)
+        .with_context(|| format!("reading {}", artifact_path.display()))?;
+    // The author's own plugin runs with exactly the authority it
+    // declares (mirrors `commands::pack::test::run_plugin_cases`);
+    // consent is the gate below, not a narrower ceiling.
+    let declared = declared_manifold(plugin)?;
+    if let Some(asks) = describe_manifold(&declared) {
+        anyhow::ensure!(
+            grant_authority,
+            "prepare plugin {} asks for {asks}; run with --grant-authority to allow that",
+            step.plugin
+        );
+    }
+    let runner = PluginRunner::compile_within(&artifact, plugin, &declared)
+        .with_context(|| format!("admitting prepare plugin {}", step.plugin))?;
+    let afb = afterburner_cloud::Afb::from_bytes(&artifact)
+        .with_context(|| format!("{} is not a readable plugin", plugin.artifact))?;
+    let budget = PluginBudget::for_plugin(&afb, plugin);
+    let bound = step
+        .bind_dir
+        .as_ref()
+        .map(|dir| {
+            BoundDir::new(Path::new(dir), tool_root)
+                .with_context(|| format!("binding {dir:?} for prepare plugin {}", step.plugin))
+        })
+        .transpose()?;
+    Ok((Arc::new(runner), budget, bound))
 }
 
 #[cfg(test)]
@@ -297,6 +304,7 @@ mod tests {
                 original_field: None,
                 description: "scan target".to_string(),
                 access: Default::default(),
+                write_fields: Vec::new(),
             }),
             limits: None,
             model_slot: None,
@@ -525,10 +533,9 @@ mod tests {
     /// Regression for the missing-coverage finding on the production path a
     /// fresh packs checkout always takes: `plugins/*.afb` is gitignored, so
     /// the artifact is missing on every clean clone and must be built from
-    /// `source` on demand. `run_prepare_steps_blocking` is synchronous and
-    /// has no `.await`, so it is called directly here while holding
-    /// `afterburner_build::compile_lock()`, exactly like
-    /// `build_bind_plugin_fixture` does for its own build.
+    /// `source` on demand. `admit_prepare_step` is synchronous, so it is
+    /// called directly here while holding `afterburner_build::compile_lock()`,
+    /// exactly like `build_bind_plugin_fixture` does for its own build.
     #[test]
     fn a_missing_prepare_plugin_artifact_is_built_from_source_on_demand() {
         let fixture = crate::commands::plugin::testing::build_bind_plugin_fixture();
@@ -557,10 +564,10 @@ mod tests {
         let _guard = crate::commands::afterburner_build::compile_lock()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let fields = run_prepare_steps_blocking(
+        let (_, _, bound) = admit_prepare_step(
             fixture.path(),
             &distribution,
-            &[step],
+            &step,
             Some(within.path()),
             false,
         )
@@ -571,7 +578,7 @@ mod tests {
             artifact_path.is_file(),
             "the missing artifact must have been rebuilt"
         );
-        assert_eq!(fields.get("files").map(String::as_str), Some("a.txt"));
+        assert!(bound.is_some());
     }
 
     /// A pack directory holding only its declared assets, the shape a built
@@ -580,8 +587,8 @@ mod tests {
     /// itself (`bind_plugin_fixture`'s `plugins/list_files/source` is not
     /// in `assets`). The prepare step must run the shipped artifact rather
     /// than attempt a build that has nothing to build from.
-    #[test]
-    fn a_prepare_step_runs_from_an_asset_only_pack_copy() {
+    #[tokio::test]
+    async fn a_prepare_step_runs_from_an_asset_only_pack_copy() {
         let fixture = crate::commands::plugin::testing::build_bind_plugin_fixture();
         let distribution: gents::pack::PackManifest =
             serde_json::from_slice(&std::fs::read(fixture.path().join("manifest.json")).unwrap())
@@ -616,13 +623,14 @@ mod tests {
             seed_fields: BTreeMap::from([("files".to_string(), "/files/0".to_string())]),
         };
 
-        let fields = run_prepare_steps_blocking(
-            asset_only.path(),
-            &distribution,
-            &[step],
-            Some(within.path()),
+        let fields = run_prepare_steps(
+            asset_only.path().to_owned(),
+            distribution,
+            vec![step],
+            Some(within.path().to_owned()),
             false,
         )
+        .await
         .expect("an asset-only copy must run its shipped artifact, not attempt a build");
         assert_eq!(fields.get("files").map(String::as_str), Some("a.txt"));
     }
@@ -646,12 +654,33 @@ mod tests {
             seed_fields: BTreeMap::new(),
         };
 
-        let error = run_prepare_steps_blocking(fixture.path(), &distribution, &[step], None, false)
+        let error = admit_prepare_step(fixture.path(), &distribution, &step, None, false)
             .expect_err("no source and a missing artifact must be refused");
         assert!(
             format!("{error:#}").contains("has no source and its artifact is missing"),
             "{error:#}"
         );
+    }
+
+    /// A prepare plugin granted a network allow-list reaches it through the
+    /// host.
+    #[tokio::test]
+    async fn a_prepare_step_fetches_through_the_host_from_a_granted_host() {
+        let port = crate::commands::plugin::testing::hello_server().await;
+        let dir = crate::commands::plugin::testing::http_plugin_pack(port);
+        let distribution: gents::pack::PackManifest =
+            serde_json::from_slice(&std::fs::read(dir.path().join("manifest.json")).unwrap())
+                .unwrap();
+        let step = ScenarioPrepareStep {
+            plugin: "fetch".to_string(),
+            input: json!({"url": format!("http://127.0.0.1:{port}/hello")}),
+            bind_dir: None,
+            seed_fields: BTreeMap::from([("hello".to_string(), "/hello".to_string())]),
+        };
+        let fields = run_prepare_steps(dir.path().to_owned(), distribution, vec![step], None, true)
+            .await
+            .unwrap();
+        assert_eq!(fields.get("hello").map(String::as_str), Some("true"));
     }
 
     /// The consent gate: a prepare plugin whose manifest declares authority
