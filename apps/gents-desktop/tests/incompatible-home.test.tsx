@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import { renderIn, testApp } from "./app-fixture";
 
 import {
   BridgeInvokeError,
@@ -12,7 +13,6 @@ import {
 } from "@source-inc/gents-desktop-client";
 
 import App from "../src/App";
-import type { Shell } from "../src/ui/hooks/useShell";
 import { SetupScreen } from "../src/ui/screens/setup/SetupScreen";
 import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
 
@@ -32,6 +32,7 @@ function managedStatus(
     effectiveToolRoot: null,
     suggestedToolRoot: "/Users/test",
     pairingReady: false,
+    runtimeBooting: false,
     approvalRequired: false,
     error: null,
     ...overrides,
@@ -293,7 +294,6 @@ describe("a home this version cannot open", () => {
             detail: "created by an older Gents version",
             older: true,
             unsafeKey: false,
-            unsafeKey: false,
           },
         ],
         retainedPaths: [],
@@ -380,8 +380,10 @@ describe("a home this version cannot open", () => {
 
 describe("setup start on a home this version cannot open", () => {
   it("hands the typed start failure to the incompatible-home flow", async () => {
-    const adopt = vi.fn(async () => true);
+    const resetManagedServer = vi.fn(async () => preview());
     const api = {
+      resetManagedServer,
+      initLocalStandardRuntime: vi.fn(),
       managedServerStatus: vi.fn(async () => managedStatus()),
       startManagedServer: vi.fn(async () => {
         throw incompatible();
@@ -393,23 +395,20 @@ describe("setup start on a home this version cannot open", () => {
         providers: [],
       })),
     };
-    const shell = {
+    const app = testApp({
       api,
       snapshot: { bootstrap: { ...bootstrap, initAgentName: "Forge" } },
-      deployments: [],
-      refreshSnapshot: vi.fn(async () => undefined),
-      onInitLocalRuntime: vi.fn(async () => undefined),
-      incompatibleHome: { adopt },
-    } as unknown as Shell;
-    render(<SetupScreen shell={shell} onDone={vi.fn()} />);
+    });
+    renderIn(app, <SetupScreen onDone={vi.fn()} />);
     const next = screen.getByTestId("setup-next");
     await waitFor(() => expect(next).toBeEnabled());
 
     await userEvent.click(next);
 
-    await waitFor(() => expect(adopt).toHaveBeenCalledOnce());
-    const [error] = adopt.mock.calls[0] as unknown as [BridgeInvokeError];
-    expect(error.code).toBe("incompatibleLocalStore");
-    expect(shell.onInitLocalRuntime).not.toHaveBeenCalled();
+    /* the typed refusal is the incompatible-home flow's: the home is
+       previewed for a reset, and no local agent is created over it */
+    await waitFor(() => expect(resetManagedServer).toHaveBeenCalledOnce());
+    expect(app.stores.client.getState().home.report).not.toBeNull();
+    expect(api.initLocalStandardRuntime).not.toHaveBeenCalled();
   });
 });

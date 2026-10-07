@@ -1,9 +1,8 @@
-/* The armed reply, made visible. Opening a mailbox item with Reply arms a
-   cause on the shell: the next message sent carries the item's id, and the
-   item closes when that request is claimed. Without this strip the composer
-   looked the same armed or not, so a person could not tell a reply from an
-   ordinary message, nor put the reply down. The chip names the item, the
-   popover shows what it asked, and the X disarms it. */
+/* The armed reply, made visible. Opening a mailbox item with Reply holds it
+   as the selection's mailbox route: the next message sent carries the
+   item's id, and the item closes when that request is claimed. The chip
+   names the item, the popover shows what it asked, and the X puts the
+   reply down. */
 import { ChevronDown, Clock, CornerDownLeft, X } from "lucide-react";
 import type { MailboxItemView } from "@source-inc/gents-desktop-client";
 import {
@@ -18,10 +17,12 @@ import {
 } from "@gents/ui/components/hover-card";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { cn } from "@gents/ui/lib/utils";
-import type { Shell } from "@/hooks/useShell";
 import { href } from "@/lib/router";
 import { useState } from "react";
-import { span, when } from "./time";
+import { Age, span } from "./time";
+import { useApp } from "@/app/AppContext";
+import { useMailboxCause, useSelectedNodeMailboxItem } from "@/hooks/useClient";
+import { deadlineOf, dueSoon } from "./mailbox-triage";
 
 const KIND_LABEL: Record<string, string> = {
   ask: "Question",
@@ -31,13 +32,12 @@ const KIND_LABEL: Record<string, string> = {
   flag: "Flag",
 };
 
-export function ReplyingTo({ shell }: { shell: Shell }) {
+export function ReplyingTo() {
+  const cause = useMailboxCause();
+  const item = useSelectedNodeMailboxItem(cause?.itemId);
+  const { clearMailboxCause } = useApp().actions;
   const [open, setOpen] = useState(false);
-  const cause = shell.mailboxCause;
   if (!cause) return null;
-  const item = shell.selectedDeployment?.mailboxItems.find(
-    (m) => m.itemId === cause.itemId,
-  );
   return (
     <div
       className="flex items-center px-2 pt-2"
@@ -98,7 +98,7 @@ export function ReplyingTo({ shell }: { shell: Shell }) {
           title="Send an ordinary message instead"
           className="mr-1 grid size-4 shrink-0 cursor-default place-items-center rounded-full text-muted-foreground opacity-0 outline-none transition-opacity duration-100 group-focus-within/chip:opacity-100 group-hover/chip:opacity-100 hover:bg-muted hover:text-foreground focus-visible:opacity-100 motion-reduce:transition-none"
           data-testid="replying-to-clear"
-          onClick={() => shell.clearMailboxCause()}
+          onClick={() => clearMailboxCause()}
         >
           <X className="size-3" />
         </button>
@@ -110,14 +110,16 @@ export function ReplyingTo({ shell }: { shell: Shell }) {
 function Details({ item }: { item: MailboxItemView }) {
   /* fixed when the popover opens: a deadline does not tick over mid-read */
   const [now] = useState(() => Date.now());
-  const deadline = item.deadlineAt ? Date.parse(item.deadlineAt) : null;
-  const soon = deadline !== null && deadline - now < 60 * 60_000;
+  const deadline = deadlineOf(item);
+  const soon = dueSoon(deadline, now);
   return (
     <div className="flex min-w-0 flex-col gap-2">
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
         <span>{KIND_LABEL[item.kind] ?? item.kind}</span>
         <span aria-hidden="true">·</span>
-        <span>{when(item.createdAt)}</span>
+        <span>
+          <Age iso={item.createdAt} />
+        </span>
         {deadline !== null && (
           <span
             className={cn(

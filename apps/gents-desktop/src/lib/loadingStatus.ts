@@ -147,7 +147,7 @@ export type SessionLoadingStatus = {
 type SessionLoadingInput = {
   selectedSessionId: string | null;
   selectedAgentDid: string | null;
-  session: DesktopSessionSnapshot | null;
+  session: Pick<DesktopSessionSnapshot, "sessionId" | "agentDid" | "hydration"> | null;
   sessionLoad: SessionLoadState;
   operationalState: DeploymentOperationalState | null;
 };

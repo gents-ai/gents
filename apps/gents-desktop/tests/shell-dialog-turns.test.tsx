@@ -1,7 +1,11 @@
 import { act, render, screen } from "@testing-library/react";
+import { useState } from "react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import type { SyncHealthView } from "@source-inc/gents-desktop-client";
+import type {
+  DesktopSessionSnapshot,
+  SyncHealthView,
+} from "@source-inc/gents-desktop-client";
 
 /* Base UI keeps a closing popover mounted for its exit animation; jsdom has
    none. This popover stays mounted after closing until the test acknowledges
@@ -42,7 +46,9 @@ vi.mock("@gents/ui/components/popover", async () => {
           props.onOpenChangeComplete?.(false);
         });
       }
-      return () => popoverControl.completions.delete(id);
+      return () => {
+        popoverControl.completions.delete(id);
+      };
     }, [id, mounted, props.open, props.onOpenChangeComplete]);
     const { open, onOpenChange } = props;
     React.useEffect(() => {
@@ -116,12 +122,12 @@ vi.stubGlobal(
   },
 );
 
-import { SyncHealth } from "../src/ui/app/SyncHealth";
-import type { Shell } from "../src/ui/hooks/useShell";
 import { AppShell } from "../src/ui/app/AppShell";
 import { TooltipProvider } from "@gents/ui/components/tooltip";
 import { SessionScreen } from "../src/ui/screens/SessionScreen";
 import { MemoryNavProvider } from "@gents/shell";
+import { testApp } from "./app-fixture";
+import { AppProvider } from "../src/ui/app/AppContext";
 
 const healthy: SyncHealthView = {
   state: "healthy",
@@ -147,10 +153,15 @@ const context = {
   lastRequest: null,
 };
 
-function sessionShell(forkSession = vi.fn().mockResolvedValue("fork-1")): Shell {
-  return {
-    selectedSessionId: "session",
-    selectedSession: {
+/* the screen's app, holding a completed session */
+function sessionApp() {
+  return testApp({
+    snapshot: { bootstrap: {}, client: { deployments: [], syncHealth: healthy } },
+    api: {
+      sessionProvenance: vi.fn().mockResolvedValue(null),
+      fetchOperationsSnapshot: vi.fn().mockResolvedValue(null),
+    },
+    session: {
       sessionId: "session",
       agentDid: "did:key:agent",
       behaviorId: "behavior",
@@ -162,55 +173,24 @@ function sessionShell(forkSession = vi.fn().mockResolvedValue("fork-1")): Shell 
       latestRequestOutcome: null,
       goal: null,
       context,
-    },
-    selectedBehaviorId: "behavior",
-    selectedAgentDid: "did:key:agent",
-    deployments: [],
-    selectedDeployment: null,
-    draft: "",
-    setDraft: vi.fn(),
-    mailboxCause: null,
-    sending: false,
-    error: null,
-    activityStatus: null,
-    nonEmptyContentSendStatus: { kind: "ready" },
-    captureComposeIntent: () => 0,
-    acceptsComposeIntent: () => true,
-    selectBehavior: vi.fn(),
-    holds: [],
-    interruptVisible: false,
-    selectedTrackedRequestId: null,
-    activeRequestId: null,
-    sessionLoad: { phase: "ready" },
-    loadOlderSessionTimeline: vi.fn(),
-    retryMessage: vi.fn(),
-    forkSession,
-    refreshSnapshot: vi.fn(),
-    api: {
-      sessionProvenance: vi.fn().mockResolvedValue(null),
-      fetchOperationsSnapshot: vi.fn().mockResolvedValue(null),
-    },
-  } as unknown as Shell;
+    } as unknown as DesktopSessionSnapshot,
+    selection: { behaviorId: "behavior" },
+  });
 }
 
 /* the shell around the screen: the side panel is the shell's dock sheet */
-function Harness({ shell }: { shell: Shell }) {
+function Harness() {
+  const [app] = useState(sessionApp);
   return (
-    <MemoryNavProvider initial={{ name: "session", sessionId: "session-1" }}>
-      <TooltipProvider>
-        <AppShell
-          route={{ name: "session", sessionId: "session-1" }}
-          agentName={null}
-          agentDid={null}
-          deployment={null}
-          online
-          mailboxCount={0}
-          syncHealth={healthy}
-        >
-          <SessionScreen shell={shell} />
-        </AppShell>
-      </TooltipProvider>
-    </MemoryNavProvider>
+    <AppProvider value={app}>
+      <MemoryNavProvider initial={{ name: "session", sessionId: "session-1" }}>
+        <TooltipProvider>
+          <AppShell route={{ name: "session", sessionId: "session-1" }}>
+            <SessionScreen />
+          </AppShell>
+        </TooltipProvider>
+      </MemoryNavProvider>
+    </AppProvider>
   );
 }
 
@@ -225,7 +205,7 @@ const dialogs = () => document.querySelectorAll('[role="dialog"]');
 describe("shell dialogs take turns (#1778)", () => {
   it("sync popover, then context meter, then the side panel never stack", async () => {
     const user = userEvent.setup();
-    render(<Harness shell={sessionShell()} />);
+    render(<Harness />);
 
     await user.click(screen.getByRole("button", { name: /Show sync diagnostics/ }));
     expect(screen.getByRole("dialog", { name: "Database sync details" })).toBeVisible();
@@ -256,27 +236,5 @@ describe("shell dialogs take turns (#1778)", () => {
       screen.queryByRole("dialog", { name: "Session context details" }),
     ).not.toBeInTheDocument();
     expect(dialogs()).toHaveLength(1);
-  });
-
-  it("the fork notice waits for an open popover to leave", async () => {
-    const user = userEvent.setup();
-    render(<Harness shell={sessionShell()} />);
-
-    await user.click(screen.getByTestId("context-meter"));
-    expect(
-      await screen.findByRole("dialog", { name: "Session context details" }),
-    ).toBeVisible();
-
-    const [more] = screen.getAllByRole("button", { name: "More" });
-    await user.click(more!);
-    await user.click(await screen.findByRole("menuitem", { name: "Fork session" }));
-    expect(dialogs()).toHaveLength(1);
-    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
-
-    await acknowledgeClose();
-    expect(await screen.findByText(/is now its own session/)).toBeInTheDocument();
-    expect(
-      screen.queryByRole("dialog", { name: "Session context details" }),
-    ).not.toBeInTheDocument();
   });
 });

@@ -6,17 +6,23 @@
 import { useEffect, useState } from "react";
 import { ArrowUpRight } from "lucide-react";
 import type {
-  DeploymentView,
   DesktopOperationsSnapshot,
+  SessionSummary,
 } from "@source-inc/gents-desktop-client";
+import { nodeKeyOf, type NodeView } from "../../../hooks/fleetStore";
 import { Badge } from "@gents/ui/components/badge";
-import type { Shell } from "@/hooks/useShell";
 import { href } from "@/lib/router";
 import { AgentAvatar } from "../AgentAvatar";
 import { isLive } from "@/lib/live";
+import { useApp } from "@/app/AppContext";
+import { useToolAuthority } from "@/hooks/useClient";
+import { NO_SESSIONS, useFleet } from "@/hooks/useFleet";
 
-function pulse(deployment: DeploymentView, ops: DesktopOperationsSnapshot | null) {
-  const live = deployment.sessions.filter((s) => isLive(s.turnState)).length;
+function pulse(
+  sessions: readonly SessionSummary[],
+  ops: DesktopOperationsSnapshot | null,
+) {
+  const live = sessions.filter((s) => isLive(s.turnState)).length;
   const tools = ops?.backgroundedTools ?? [];
   /* a started session is a background row of a session-message call */
   const subagent = (t: (typeof tools)[number]) =>
@@ -37,33 +43,28 @@ function pulse(deployment: DeploymentView, ops: DesktopOperationsSnapshot | null
   };
 }
 
-export function AgentCard({
-  shell,
-  deployment,
-}: {
-  shell: Shell;
-  deployment: DeploymentView;
-}) {
+export function AgentCard({ deployment }: { deployment: NodeView }) {
+  const { api } = useApp();
+  const authority = useToolAuthority();
   const agent = deployment.agentPrincipal;
   const name = agent.displayName ?? deployment.label;
-  const boot = shell.snapshot?.bootstrap;
   const [ops, setOps] = useState<DesktopOperationsSnapshot | null>(null);
   /* the snapshot changes with every store ping; the session list is the cue */
-  const sessions = deployment.sessions;
+  const sessions = useFleet((s) => s.sessionsOf[nodeKeyOf(deployment)] ?? NO_SESSIONS);
   useEffect(() => {
     let alive = true;
-    void shell.api.fetchOperationsSnapshot({ agentDid: deployment.agentDid }).then(
+    void api.fetchOperationsSnapshot({ agentDid: deployment.agentDid }).then(
       (o) => alive && setOps(o),
       () => alive && setOps(null),
     );
     return () => {
       alive = false;
     };
-  }, [shell.api, deployment.agentDid, sessions]);
-  const now = pulse(deployment, ops);
+  }, [api, deployment.agentDid, sessions]);
+  const now = pulse(sessions, ops);
   const facts = [
-    boot?.initToolCeiling ?? null,
-    boot?.initToolRoot ?? null,
+    authority.ceiling ?? null,
+    authority.root ?? null,
     deployment.peerId ? `on ${deployment.peerId}` : null,
   ].filter(Boolean) as string[];
   return (

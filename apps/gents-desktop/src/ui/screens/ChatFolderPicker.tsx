@@ -3,6 +3,7 @@
    OS folder picker exists. */
 import { Folder, X } from "lucide-react";
 import { Button } from "@gents/ui/components/button";
+import { toastFailure } from "../lib/failure";
 import { canPickDirectory, pickDirectory } from "../lib/pickDirectory";
 
 export const folderLabel = (path: string) =>
@@ -29,7 +30,9 @@ export function ChatFolderPicker({
         variant="quiet"
         size="sm"
         title={folder ?? "Choose the folder to work in"}
-        onClick={() => void choose()}
+        onClick={() =>
+          choose().catch((e: unknown) => toastFailure("choose a folder", e))
+        }
       >
         <Folder />
         {folder ? folderLabel(folder) : "Folder"}

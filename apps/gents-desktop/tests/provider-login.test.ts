@@ -51,6 +51,9 @@ it("replaces stale provider sign-ins from the latest account snapshot", () => {
     planType: null,
     accessTokenExpiresAt: "2026-09-15T00:00:00Z",
     lastRefresh: null,
+    pendingSave: false,
+    accountRef: null,
+    label: "Personal",
   });
   expect(
     providerSignInState([

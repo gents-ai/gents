@@ -5,6 +5,7 @@ import {
   inferenceIsConfigured,
   isLocalAgent,
   needsFirstRunSetup,
+  nodeSetUp,
   shouldRebindSetupDefault,
 } from "../src/ui/lib/firstRun";
 
@@ -94,5 +95,24 @@ describe("first-run inference gate", () => {
     expect(shouldRebindSetupDefault(generated, true)).toBe(true);
     expect(shouldRebindSetupDefault(deployment, true)).toBe(false);
     expect(shouldRebindSetupDefault(deployment, false)).toBe(true);
+  });
+});
+
+describe("the node first-run setup configured", () => {
+  const remote = { ...deployment, agentDid: "did:key:remote", source: "enrollment" };
+  const home = { ...deployment, agentDid: "did:key:home", source: "enrollment" };
+  const read = (deployments: (typeof deployment)[]) =>
+    ({
+      bootstrap: { ...bootstrap, initAgentDid: "did:key:home" },
+      client: { deployments },
+    }) as Parameters<typeof nodeSetUp>[0];
+
+  it("is the one this machine runs, even when a remote node is listed first", () => {
+    expect(nodeSetUp(read([remote, home]))?.agentDid).toBe("did:key:home");
+  });
+
+  it("is the first listed when this machine runs none, and none without nodes", () => {
+    expect(nodeSetUp(read([remote]))?.agentDid).toBe("did:key:remote");
+    expect(nodeSetUp(read([]))).toBeNull();
   });
 });

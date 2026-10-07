@@ -886,6 +886,160 @@ fn init_accepts_tool_root_for_readonly_defaults() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn serve_startup_logs_the_tool_root_that_escapes_the_ceiling() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    let recorded_root = tempdir.path().join("recorded-root");
+    let explicit_root = tempdir.path().join("explicit-root");
+    fs::create_dir_all(&home_dir)?;
+    fs::create_dir_all(&recorded_root)?;
+    fs::create_dir_all(&explicit_root)?;
+    let recorded_root = recorded_root.to_str().context("utf-8 recorded root")?;
+    let explicit_root = explicit_root.to_str().context("utf-8 explicit root")?;
+
+    let model_name = format!("tool-root-conflict-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let agent_name = format!("cli-tool-root-conflict-{}", Uuid::new_v4().simple());
+    run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            "--tool-root",
+            recorded_root,
+            "--inference-url",
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+
+    let port = allocate_port()?;
+    let stderr = run_cli_failure_stderr(
+        &home_dir,
+        &[
+            "server",
+            "--http-port",
+            &port.to_string(),
+            "--tool-root",
+            explicit_root,
+        ],
+    )?;
+
+    assert!(
+        stderr.contains("escapes operator tool root"),
+        "expected startup to log the runtime's root-admission diagnostic, got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains(recorded_root) && stderr.contains(explicit_root),
+        "expected the diagnostic to name both the Tools root and --tool-root, got:\n{stderr}"
+    );
+    Ok(())
+}
+
+/// The live `Tools.host.root`, not the root `gents init` recorded, is what
+/// `--tool-root` must admit.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn serve_admits_a_narrower_tool_root_after_the_live_root_moved() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    let workspace_root = tempdir.path().join("workspace");
+    let project_root = workspace_root.join("project");
+    fs::create_dir_all(&home_dir)?;
+    fs::create_dir_all(&project_root)?;
+    let workspace_root = workspace_root.to_str().context("utf-8 workspace root")?;
+    let project_root = project_root.to_str().context("utf-8 project root")?;
+
+    let model_name = format!("moved-tool-root-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let agent_name = format!("cli-moved-tool-root-{}", Uuid::new_v4().simple());
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            "--tool-root",
+            workspace_root,
+            "--inference-url",
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+
+    let port = allocate_port()?;
+    let graphql = graphql_url(port);
+    let mut serve = spawn_server_with_env(&home_dir, port, &[], &[])?;
+    wait_for_port(port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    let response = graphql_query(
+        &graphql,
+        &format!(
+            r#"{{ Tools(filter: {{ agent_did: {{ _eq: "{}" }} }}) {{ tools_id agent_did display_name host remote subagents built_ins datastore integrations self_config tags }} }}"#,
+            gents::graphql::escape_graphql_string(&agent_did)
+        ),
+    )
+    .await?;
+    let mut tools = response
+        .pointer("/data/Tools")
+        .and_then(Value::as_array)
+        .context("Tools rows")?
+        .iter()
+        .map(|row| {
+            row.as_object()
+                .expect("Tools row object")
+                .iter()
+                .filter(|(_, value)| !value.is_null())
+                .map(|(field, value)| {
+                    let value = value
+                        .as_str()
+                        .and_then(|encoded| serde_json::from_str::<Value>(encoded).ok())
+                        .filter(|decoded| decoded.is_object())
+                        .unwrap_or_else(|| value.clone());
+                    (field.clone(), value)
+                })
+                .collect::<serde_json::Map<_, _>>()
+        })
+        .find(|row| {
+            row.get("host")
+                .and_then(|host| host.get("root"))
+                .and_then(Value::as_str)
+                == Some(workspace_root)
+        })
+        .context("the Tools document init rooted at the workspace")?;
+    tools["host"]["root"] = Value::from(project_root);
+    let tools_path = tempdir.path().join("tools.json");
+    write_json_file(&tools_path, &Value::Object(tools))?;
+    run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "tools",
+            "set",
+            "--graphql",
+            &graphql,
+            "--file",
+            tools_path.to_str().context("utf-8 tools path")?,
+        ],
+    )?;
+    serve.child.kill()?;
+    serve.child.wait()?;
+
+    let port = allocate_port()?;
+    let graphql = graphql_url(port);
+    let mut serve = spawn_server_with_env(
+        &home_dir,
+        port,
+        &["--tool-ceiling", "readonly", "--tool-root", project_root],
+        &[],
+    )?;
+    wait_for_port(port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn init_with_write_tools_bootstraps_write_defaults() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;

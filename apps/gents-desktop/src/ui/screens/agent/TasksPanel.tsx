@@ -1,12 +1,13 @@
-/* Tasks, as the desktop app's Tasks tab: TaskSaveRequest fields, the
-   run facts, and a manual run with JSON args. */
+/* Tasks: TaskSaveRequest fields, the run facts, and a manual run with
+   JSON args. */
+import type { NodeView } from "../../../hooks/fleetStore";
+import { setEnabled } from "./enabled";
 import { dependentsWarning } from "./dependents";
 import { useState } from "react";
 import { toast } from "sonner";
-import type { DeploymentView, TaskView } from "@source-inc/gents-desktop-client";
+import type { TaskView } from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
 import { Textarea } from "@gents/ui/components/textarea";
-import type { Shell } from "@/hooks/useShell";
 import {
   AreaRow,
   DraftActions,
@@ -30,22 +31,26 @@ import { TriggerEditor } from "./TriggersPanel";
 import { sourceInWords, triggerReadiness } from "./automation";
 import { Switch } from "@gents/ui/components/switch";
 import { ExternalLink, Plus } from "lucide-react";
+import { toastFailure } from "@/lib/failure";
+import { agentOf } from "@/lib/agents";
+import { useApp } from "@/app/AppContext";
 
 const when = (iso: string | null | undefined) =>
   iso ? new Date(iso).toLocaleString() : "—";
 
 export function TaskEditor({
-  shell,
   deployment,
   task,
   embedded = false,
 }: {
-  shell: Shell;
-  deployment: DeploymentView;
+  deployment: NodeView;
   task: TaskView;
   /* in a sheet beside another page: no Danger zone */
   embedded?: boolean;
 }) {
+  const {
+    actions: { acceptsComposeIntent, captureComposeIntent, runTask, changeConfig },
+  } = useApp();
   const base = {
     name: "agent" as const,
     agentDid: deployment.agentDid,
@@ -74,27 +79,25 @@ export function TaskEditor({
     }
     const hooks = hooksFromDraft(n.hooks);
     if (typeof hooks === "string") return Promise.reject(new Error(hooks));
-    return shell.applyConfig((api) =>
-      api.saveTaskConfig({
-        document: {
-          agent_did: deployment.agentDid,
-          task_id: task.taskId,
-          display_name: n.name.trim() || task.taskId,
-          description: n.description || null,
-          behavior_id: n.behaviorId,
-          prompt_template: n.promptTemplate,
-          emit_outcome: n.emitOutcome,
-          goal_objective_template: n.goalObjectiveTemplate || null,
-          goal_token_budget: optionalInteger("Goal token budget", n.goalTokenBudget, {
-            min: 1,
-          }),
-          enabled: n.enabled,
-          output_schema_ref: n.outputSchemaRef || null,
-          hooks: hooks.length ? hooks : null,
-          tags: n.tags.length ? n.tags : null,
-        },
-      }),
-    );
+    return changeConfig("saveTaskConfig", {
+      document: {
+        agent_did: deployment.agentDid,
+        task_id: task.taskId,
+        display_name: n.name.trim() || task.taskId,
+        description: n.description || null,
+        behavior_id: n.behaviorId,
+        prompt_template: n.promptTemplate,
+        emit_outcome: n.emitOutcome,
+        goal_objective_template: n.goalObjectiveTemplate || null,
+        goal_token_budget: optionalInteger("Goal token budget", n.goalTokenBudget, {
+          min: 1,
+        }),
+        enabled: n.enabled,
+        output_schema_ref: n.outputSchemaRef || null,
+        hooks: hooks.length ? hooks : null,
+        tags: n.tags.length ? n.tags : null,
+      },
+    });
   });
   /* the New behavior dialog's resolver while it is open */
   const [newBehavior, setNewBehavior] = useState<((id: string | null) => void) | null>(
@@ -129,22 +132,20 @@ export function TaskEditor({
       return;
     }
     setRunning(true);
-    const pending = shell.runTask({
+    const pending = runTask({
       taskId: task.taskId,
       agentDid: deployment.agentDid,
       args: parsed,
     });
-    const intentGeneration = shell.captureComposeIntent();
+    const intentGeneration = captureComposeIntent();
     try {
       const r = await pending;
-      if (!shell.acceptsComposeIntent(intentGeneration)) return;
+      if (!acceptsComposeIntent(intentGeneration)) return;
       setLastRun(r.requestId);
       toast(`Task started · ${r.requestId}`);
     } catch (error) {
-      if (!shell.acceptsComposeIntent(intentGeneration)) return;
-      toast(
-        `Task failed to start: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      if (!acceptsComposeIntent(intentGeneration)) return;
+      toastFailure("start the task", error);
     } finally {
       setRunning(false);
     }
@@ -160,15 +161,13 @@ export function TaskEditor({
           label="Name"
           value={d.draft.name}
           onChange={(v) => d.set("name", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <RefRow
           id={id("behavior")}
           label="Behavior"
           description="Runs the prompt with its instructions, tools and model."
           value={d.draft.behaviorId}
-          onChange={(v) => d.choose("behaviorId", v)}
+          onChange={(v) => d.set("behaviorId", v)}
           items={behaviors}
           none="Unset"
           createLabel="New behavior…"
@@ -184,7 +183,6 @@ export function TaskEditor({
           })}
         />
         <BehaviorSheet
-          shell={shell}
           deployment={deployment}
           open={newBehavior !== null}
           onClose={(behaviorId) => {
@@ -196,14 +194,13 @@ export function TaskEditor({
           id={id("enabled")}
           label="Enabled"
           checked={d.draft.enabled}
-          onChange={(v) => d.choose("enabled", v)}
+          onChange={(v) => d.set("enabled", v)}
         />
         <AreaRow
           id={id("desc")}
           label="Description"
           value={d.draft.description}
           onChange={(v) => d.set("description", v)}
-          onCommit={d.commit}
           rows={2}
         />
         <AreaRow
@@ -212,7 +209,6 @@ export function TaskEditor({
           description="Use {{ session.session_id }} and {{ request.request_id }} for this invocation’s identity."
           value={d.draft.promptTemplate}
           onChange={(v) => d.set("promptTemplate", v)}
-          onCommit={d.commit}
           rows={5}
           stacked
         />
@@ -222,7 +218,6 @@ export function TaskEditor({
           description="Optional. Applies this goal when the queued request starts."
           value={d.draft.goalObjectiveTemplate}
           onChange={(v) => d.set("goalObjectiveTemplate", v)}
-          onCommit={d.commit}
           rows={2}
           stacked
         />
@@ -232,8 +227,6 @@ export function TaskEditor({
           description="Optional positive whole number; blank leaves the goal unlimited. Needs an objective."
           value={d.draft.goalTokenBudget}
           onChange={(v) => d.set("goalTokenBudget", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
           placeholder="Optional"
         />
         <SwitchRow
@@ -241,22 +234,19 @@ export function TaskEditor({
           label="Emit outcome"
           description="Publish one FireOutcome when the request finishes, or when its goal completes, blocks or exhausts its budget. Leave off for tasks that consume outcomes."
           checked={d.draft.emitOutcome}
-          onChange={(v) => d.choose("emitOutcome", v)}
+          onChange={(v) => d.set("emitOutcome", v)}
         />
         <TextRow
           id={id("schema")}
           label="Output schema ref"
           value={d.draft.outputSchemaRef}
           onChange={(v) => d.set("outputSchemaRef", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
           mono
         />
         <HooksRows
           id={id("hooks")}
           value={d.draft.hooks}
           onChange={(v) => d.set("hooks", v)}
-          onCommit={d.commit}
         />
         <TagsRow
           id={id("tags")}
@@ -265,13 +255,7 @@ export function TaskEditor({
           onChange={(v) => d.set("tags", v)}
         />
       </Group>
-      <DraftActions
-        dirty={d.dirty}
-        saving={d.saving}
-        error={d.error}
-        onSave={d.save}
-        onCancel={d.reset}
-      />
+      <DraftActions draft={d} />
       <Group
         title="When it runs"
         action={
@@ -304,11 +288,13 @@ export function TaskEditor({
                   aria-label={`${tr.config.display_name ?? tr.config.trigger_id} enabled`}
                   checked={tr.config.enabled !== false}
                   onCheckedChange={(next) =>
-                    void shell.applyConfig((api) =>
-                      api.saveTriggerConfig({
-                        document: { ...tr.config, enabled: next },
-                      }),
-                    )
+                    void setEnabled(
+                      changeConfig,
+                      deployment.agentDid,
+                      "Trigger",
+                      tr.config.trigger_id,
+                      next,
+                    ).catch((e: unknown) => toastFailure("turn it on or off", e))
                   }
                 />
                 <Button
@@ -326,7 +312,6 @@ export function TaskEditor({
       </Group>
       <NewAutomationDialog
         key={adding ?? "closed"}
-        shell={shell}
         deployment={deployment}
         open={adding !== null}
         onOpenChange={(open) => {
@@ -358,7 +343,6 @@ export function TaskEditor({
         {besideTriggerView && (
           <TriggerEditor
             key={besideTriggerView.config.trigger_id}
-            shell={shell}
             deployment={deployment}
             trigger={besideTriggerView}
             embedded
@@ -413,12 +397,10 @@ export function TaskEditor({
           warning={dependentsWarning(deployment, "task", task.taskId)}
           base={base}
           onDelete={() =>
-            shell.applyConfig((api) =>
-              api.deleteTaskConfig({
-                taskId: task.taskId,
-                agentDid: deployment.agentDid,
-              }),
-            )
+            changeConfig("deleteTaskConfig", {
+              taskId: task.taskId,
+              agentDid: deployment.agentDid,
+            })
           }
         />
       )}
@@ -427,7 +409,7 @@ export function TaskEditor({
 }
 
 /* when a task runs, from its triggers, and the first reason it would not */
-function whenItRuns(deployment: DeploymentView, t: TaskView) {
+function whenItRuns(deployment: NodeView, t: TaskView) {
   const triggers = deployment.triggers.filter((x) => x.config.task_id === t.taskId);
   if (t.enabled === false) return { when: "Disabled", problem: "Task is disabled" };
   if (!triggers.length) return { when: "Runs when you run it", problem: null };
@@ -443,7 +425,7 @@ function whenItRuns(deployment: DeploymentView, t: TaskView) {
 }
 
 /* the canonical document for a task view, for row edits and copies */
-function taskDocument(deployment: DeploymentView, t: TaskView) {
+function taskDocument(deployment: NodeView, t: TaskView) {
   return {
     agent_did: deployment.agentDid,
     task_id: t.taskId,
@@ -462,14 +444,13 @@ function taskDocument(deployment: DeploymentView, t: TaskView) {
 }
 
 export function TasksPanel({
-  shell,
   deployment,
   item,
 }: {
-  shell: Shell;
-  deployment: DeploymentView;
+  deployment: NodeView;
   item?: string;
 }) {
+  const { changeConfig } = useApp().actions;
   const base = {
     name: "agent" as const,
     agentDid: deployment.agentDid,
@@ -479,7 +460,6 @@ export function TasksPanel({
   return (
     <>
       <NewAutomationDialog
-        shell={shell}
         deployment={deployment}
         open={creating}
         onOpenChange={setCreating}
@@ -494,7 +474,7 @@ export function TasksPanel({
             id: t.taskId,
             title: t.name ?? t.taskId,
             tags: t.tags,
-            meta: `${w.when} · with ${deployment.behaviors.find((b) => b.behaviorId === t.behaviorId)?.displayName ?? "no behavior"}`,
+            meta: `${w.when} · with ${agentOf(deployment, t.behaviorId)?.displayName ?? "no behavior"}`,
             badge:
               w.problem ??
               (t.recentRuns.lastStatus === "failed" ? "last run failed" : undefined),
@@ -507,32 +487,30 @@ export function TasksPanel({
                 enabled={{
                   checked: t.enabled !== false,
                   onChange: (enabled) =>
-                    shell.applyConfig((api) =>
-                      api.saveTaskConfig({
-                        document: { ...taskDocument(deployment, t), enabled },
-                      }),
+                    setEnabled(
+                      changeConfig,
+                      deployment.agentDid,
+                      "Task",
+                      t.taskId,
+                      enabled,
                     ),
                 }}
                 onDuplicate={async () => {
                   const task_id = newId("task");
-                  await shell.applyConfig((api) =>
-                    api.saveTaskConfig({
-                      document: {
-                        ...taskDocument(deployment, t),
-                        task_id,
-                        display_name: `${t.name ?? t.taskId} copy`,
-                      },
-                    }),
-                  );
+                  await changeConfig("saveTaskConfig", {
+                    document: {
+                      ...taskDocument(deployment, t),
+                      task_id,
+                      display_name: `${t.name ?? t.taskId} copy`,
+                    },
+                  });
                   return task_id;
                 }}
                 onDelete={() =>
-                  shell.applyConfig((api) =>
-                    api.deleteTaskConfig({
-                      taskId: t.taskId,
-                      agentDid: deployment.agentDid,
-                    }),
-                  )
+                  changeConfig("deleteTaskConfig", {
+                    taskId: t.taskId,
+                    agentDid: deployment.agentDid,
+                  })
                 }
                 warning={dependentsWarning(deployment, "task", t.taskId)}
               />
@@ -544,14 +522,7 @@ export function TasksPanel({
         onCreate={() => setCreating(true)}
         detail={(id) => {
           const task = deployment.tasks.find((t) => t.taskId === id)!;
-          return (
-            <TaskEditor
-              key={task.taskId}
-              shell={shell}
-              deployment={deployment}
-              task={task}
-            />
-          );
+          return <TaskEditor key={task.taskId} deployment={deployment} task={task} />;
         }}
       />
     </>

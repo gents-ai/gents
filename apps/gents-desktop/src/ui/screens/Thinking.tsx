@@ -1,18 +1,6 @@
 import { Spinner } from "@gents/ui/components/spinner";
 
-/* The live line of a run.
-
-   A filled pill is the shape of a badge or a button: it reads as an object
-   that ought to respond to a click, be selectable, or carry a dismiss. This
-   is neither — it is the turn saying it is still going. So the colour moves
-   from the ground to the type, and the line sits in the assistant's own
-   flow like any other sentence it writes.
-
-   `brand` rather than lime: the role is the standout for on-states, and it
-   resolves to green in light and lime in dark, so the word stays readable
-   on both grounds where a single lime would wash out on paper. Medium
-   weight because that is already how the kit sets a step in motion, and a
-   turn that is still going is the same fact one level up. The braille
+/* The live line of a run, set in the assistant's own flow. The braille
    frames carry their mass low in the em box, so the spinner is nudged up
    onto the word's optical center. */
 export function Thinking({ label }: { label?: string | null }) {

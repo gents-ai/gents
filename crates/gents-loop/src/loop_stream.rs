@@ -91,8 +91,10 @@ use request_assembly::{
     prepare_dispatch_attempt, repair_and_rebuild_request,
 };
 pub use tool_dispatch::value_to_json_string;
-pub use turn_threading::TOOL_RESULT_IMAGE_OMITTED;
 use turn_threading::{bounded_tool_result, close_streaming_turn};
+pub use turn_threading::{
+    replayed_tool_result_text, TOOL_RESULT_IMAGE_NOT_REPLAYED, TOOL_RESULT_IMAGE_OMITTED,
+};
 // The test suite stayed in gents (crates/gents/src/agent/loop_stream/tests/):
 // it builds real DefraSessionHook/EmbeddedNode fixtures for its end-to-end
 // cases and uses `include!` to share one big fixture module across files.

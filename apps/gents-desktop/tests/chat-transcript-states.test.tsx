@@ -11,27 +11,33 @@ import type {
   DesktopSessionSnapshot,
   RenderedTimelineItem,
 } from "@source-inc/gents-desktop-client";
+import {
+  assistantMessage,
+  liveAssistant,
+  pendingUserTurn,
+  sessionSnapshot,
+  userMessage,
+} from "./timeline-fixture";
 
 function makeSession(
   overrides: Partial<DesktopSessionSnapshot> = {},
 ): DesktopSessionSnapshot {
-  return {
+  return sessionSnapshot({
     sessionId: "s1",
     agentDid: "did:test:operator",
     turnState: "running",
-    timelineItems: [],
     ...overrides,
-  };
+  });
 }
 
-const pendingTurn: RenderedTimelineItem = {
+const pendingTurn: RenderedTimelineItem = pendingUserTurn({
   kind: "pendingUserTurn",
   itemKey: "p1",
   requestId: "req_1",
   content: "do the thing",
   selectedSkillIds: [],
   lifecycleState: "processing",
-};
+});
 
 function expectReasoningBeforeAnswer() {
   const assistant = screen.getByTestId("assistant-message");
@@ -105,8 +111,8 @@ describe("session context visibility", () => {
             },
           },
         }}
-        runtimeHealth={null}
-        selectedSessionSummaryTitle="weekend triage"
+        syncHealth={null}
+        selectedSessionTitle="weekend triage"
         selectedSessionId="session-1"
         onRenameSessionTitle={vi.fn()}
       />,
@@ -159,8 +165,8 @@ describe("legacy chat header context window", () => {
           compactions: [],
           lastRequest: null,
         }}
-        runtimeHealth={null}
-        selectedSessionSummaryTitle="weekend triage"
+        syncHealth={null}
+        selectedSessionTitle="weekend triage"
         selectedSessionId="session-1"
         onRenameSessionTitle={vi.fn()}
       />,
@@ -183,13 +189,13 @@ describe("assistant reasoning order", () => {
     render(
       <MessageList
         timelineItems={[
-          {
+          assistantMessage({
             kind: "assistantMessage",
             itemKey: "assistant-1",
             content: "Final answer",
             reasoning: "First I thought about it",
             reconstruction: { state: "ready" },
-          },
+          }),
         ]}
       />,
     );
@@ -201,12 +207,12 @@ describe("assistant reasoning order", () => {
     render(
       <MessageList
         timelineItems={[
-          {
+          liveAssistant({
             kind: "liveAssistant",
             itemKey: "live-1",
             content: "Answer in progress",
             reasoning: "Thinking in progress",
-          },
+          }),
         ]}
       />,
     );
@@ -218,12 +224,12 @@ describe("assistant reasoning order", () => {
     allowTranscriptMotion();
     vi.useFakeTimers();
     const history: RenderedTimelineItem[] = [
-      {
+      assistantMessage({
         kind: "assistantMessage",
         itemKey: "assistant-history",
         content: "This historical answer is immediately readable.",
         reconstruction: { state: "ready" },
-      },
+      }),
     ];
     const { rerender } = render(
       <StrictMode>
@@ -240,12 +246,12 @@ describe("assistant reasoning order", () => {
           timelineIdentity="session-1"
           timelineItems={[
             ...history,
-            {
+            assistantMessage({
               kind: "assistantMessage",
               itemKey: "assistant-new",
               content: "This newly synchronized answer arrived as one database update.",
               reconstruction: { state: "ready" },
-            },
+            }),
           ]}
         />
       </StrictMode>,
@@ -275,12 +281,13 @@ describe("assistant reasoning order", () => {
       "0123456789abcdef one response chunk and another chunk",
       "0123456789abcdef one response chunk and another chunk with a final tail",
     ];
-    const liveItem = (content: string): RenderedTimelineItem => ({
-      kind: "liveAssistant",
-      itemKey: "live-assistant",
-      content,
-      reasoning: null,
-    });
+    const liveItem = (content: string): RenderedTimelineItem =>
+      liveAssistant({
+        kind: "liveAssistant",
+        itemKey: "live-assistant",
+        content,
+        reasoning: null,
+      });
     const { container, rerender } = render(
       <MessageList timelineItems={[liveItem(chunks[0])]} />,
     );
@@ -301,12 +308,12 @@ describe("assistant reasoning order", () => {
     render(
       <MessageList
         timelineItems={[
-          {
+          liveAssistant({
             kind: "liveAssistant",
             itemKey: "live-1",
             content: "Answer in progress",
             reasoning: null,
-          },
+          }),
         ]}
       />,
     );
@@ -321,12 +328,12 @@ describe("assistant reasoning order", () => {
       <MessageList
         timelineIdentity="session-1"
         timelineItems={[
-          {
+          liveAssistant({
             kind: "liveAssistant",
             itemKey: "live-assistant",
             content: answer,
             reasoning: null,
-          },
+          }),
         ]}
       />,
     );
@@ -335,13 +342,13 @@ describe("assistant reasoning order", () => {
       <MessageList
         timelineIdentity="session-1"
         timelineItems={[
-          {
+          assistantMessage({
             kind: "assistantMessage",
             itemKey: "message-7",
             content: answer,
             reasoning: null,
             reconstruction: { state: "ready" },
-          },
+          }),
         ]}
       />,
     );
@@ -354,12 +361,12 @@ describe("assistant reasoning order", () => {
       <MessageList
         timelineIdentity="session-1"
         timelineItems={[
-          {
+          assistantMessage({
             kind: "assistantMessage",
             itemKey: "message-1",
             content: "First session history",
             reconstruction: { state: "ready" },
-          },
+          }),
         ]}
       />,
     );
@@ -368,12 +375,12 @@ describe("assistant reasoning order", () => {
       <MessageList
         timelineIdentity="session-2"
         timelineItems={[
-          {
+          assistantMessage({
             kind: "assistantMessage",
             itemKey: "message-2",
             content: "Second session history is immediately readable.",
             reconstruction: { state: "ready" },
-          },
+          }),
         ]}
       />,
     );
@@ -454,13 +461,13 @@ describe("ChatTranscriptPanel states", () => {
         selectedSessionId="s1"
         session={makeSession({
           timelineItems: [
-            {
+            userMessage({
               kind: "userMessage",
               itemKey: "user_2",
               requestId: "req_2",
               content: "check the upgrade",
               reconstruction: { state: "ready" },
-            },
+            }),
           ],
         })}
         optimisticPendingTurn={{
@@ -495,7 +502,11 @@ describe("ChatTranscriptPanel states", () => {
         session={makeSession({
           timelineItems: [
             pendingTurn,
-            { kind: "liveAssistant", itemKey: "l1", content: "first tokens" },
+            liveAssistant({
+              kind: "liveAssistant",
+              itemKey: "l1",
+              content: "first tokens",
+            }),
           ],
         })}
       />,
@@ -524,7 +535,11 @@ describe("ChatTranscriptPanel states", () => {
           turnState: "interrupted",
           timelineItems: [
             pendingTurn,
-            { kind: "liveAssistant", itemKey: "l1", content: "partial output" },
+            liveAssistant({
+              kind: "liveAssistant",
+              itemKey: "l1",
+              content: "partial output",
+            }),
           ],
         })}
       />,
@@ -550,12 +565,12 @@ describe("ChatTranscriptPanel states", () => {
   it("keeps following when a streaming assistant before the tail grows", () => {
     const trailingTool: RenderedTimelineItem = {
       kind: "toolGroup",
+      messageSequence: null,
       itemKey: "tools-1",
       tools: [
         {
           itemKey: "tool-1",
           toolName: "bash",
-          status: "running",
           statusKind: "running",
           presentation: {
             kind: "generic",
@@ -572,7 +587,7 @@ describe("ChatTranscriptPanel states", () => {
         selectedSessionId="s1"
         session={makeSession({
           timelineItems: [
-            { kind: "liveAssistant", itemKey: "live-1", content: "a" },
+            liveAssistant({ kind: "liveAssistant", itemKey: "live-1", content: "a" }),
             trailingTool,
           ],
         })}
@@ -585,11 +600,11 @@ describe("ChatTranscriptPanel states", () => {
         selectedSessionId="s1"
         session={makeSession({
           timelineItems: [
-            {
+            liveAssistant({
               kind: "liveAssistant",
               itemKey: "live-1",
               content: "a much longer streamed answer",
-            },
+            }),
             trailingTool,
           ],
         })}
@@ -605,12 +620,12 @@ describe("ChatTranscriptPanel states", () => {
   it("keeps following when tool presentation output changes", () => {
     const toolGroup = (output: string): RenderedTimelineItem => ({
       kind: "toolGroup",
+      messageSequence: null,
       itemKey: "tools-1",
       tools: [
         {
           itemKey: "tool-1",
           toolName: "bash",
-          status: "running",
           statusKind: "running",
           presentation: {
             kind: "generic",
@@ -648,12 +663,13 @@ describe("ChatTranscriptPanel states", () => {
   it("loads an existing session at its tip", () => {
     const timelineItems: RenderedTimelineItem[] = Array.from(
       { length: 90 },
-      (_, index) => ({
-        kind: "userMessage",
-        itemKey: `loaded-user-${index}`,
-        content: `loaded-message-${index}`,
-        reconstruction: { state: "ready" },
-      }),
+      (_, index) =>
+        userMessage({
+          kind: "userMessage",
+          itemKey: `loaded-user-${index}`,
+          content: `loaded-message-${index}`,
+          reconstruction: { state: "ready" },
+        }),
     );
     const { rerender } = render(
       <ChatTranscriptPanel selectedSessionId="s1" session={null} />,
@@ -689,12 +705,12 @@ describe("ChatTranscriptPanel states", () => {
           turnState: "failed",
           latestRequestId: "req_1",
           timelineItems: [
-            {
+            userMessage({
               kind: "userMessage",
               itemKey: "user_1",
               content: "do the thing",
               reconstruction: { state: "ready" },
-            },
+            }),
           ],
         })}
       />,
@@ -714,18 +730,18 @@ describe("ChatTranscriptPanel states", () => {
         session={makeSession({
           latestRequestId: "req_2",
           timelineItems: [
-            {
+            userMessage({
               kind: "userMessage",
               itemKey: "user_1",
               content: "do the thing",
               reconstruction: { state: "ready" },
-            },
-            {
+            }),
+            userMessage({
               kind: "userMessage",
               itemKey: "user_2",
               content: "do the thing",
               reconstruction: { state: "ready" },
-            },
+            }),
           ],
         })}
       />,
@@ -740,13 +756,13 @@ describe("ChatTranscriptPanel states", () => {
     const staleSession = makeSession({
       latestRequestId: "req_old",
       timelineItems: [
-        {
+        userMessage({
           kind: "userMessage",
           itemKey: "user_old",
           requestId: "req_old",
           content: "earlier",
           reconstruction: { state: "ready" },
-        },
+        }),
       ],
     });
     const { rerender } = render(
@@ -784,12 +800,13 @@ describe("ChatTranscriptPanel states", () => {
   it("renders a trailing page and prepends older messages without moving the reading position", async () => {
     const timelineItems: RenderedTimelineItem[] = Array.from(
       { length: 90 },
-      (_, index) => ({
-        kind: "userMessage",
-        itemKey: `user-${index}`,
-        content: `message-${index}`,
-        reconstruction: { state: "ready" },
-      }),
+      (_, index) =>
+        userMessage({
+          kind: "userMessage",
+          itemKey: `user-${index}`,
+          content: `message-${index}`,
+          reconstruction: { state: "ready" },
+        }),
     );
     const { rerender } = render(
       <ChatTranscriptPanel
@@ -823,12 +840,12 @@ describe("ChatTranscriptPanel states", () => {
 
     const streamingTimelineItems: RenderedTimelineItem[] = [
       ...timelineItems,
-      {
+      assistantMessage({
         kind: "assistantMessage",
         itemKey: "assistant-90",
         content: "message-90",
         reconstruction: { state: "ready" },
-      },
+      }),
     ];
     rerender(
       <ChatTranscriptPanel
@@ -850,12 +867,14 @@ describe("ChatTranscriptPanel states", () => {
   });
 
   it("requests exactly one remote page and retains the mounted tip rows", async () => {
-    const allItems: RenderedTimelineItem[] = Array.from({ length: 80 }, (_, index) => ({
-      kind: "userMessage",
-      itemKey: `remote-${index}`,
-      content: `remote-message-${index}`,
-      reconstruction: { state: "ready" },
-    }));
+    const allItems: RenderedTimelineItem[] = Array.from({ length: 80 }, (_, index) =>
+      userMessage({
+        kind: "userMessage",
+        itemKey: `remote-${index}`,
+        content: `remote-message-${index}`,
+        reconstruction: { state: "ready" },
+      }),
+    );
     const onLoad = vi.fn();
 
     function RemotePageFixture() {

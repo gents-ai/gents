@@ -14,7 +14,6 @@ function renderGeneric(summary: string | null) {
         {
           itemKey: "tool-1",
           toolName: "web_request",
-          status: "completed",
           statusKind: "success",
           presentation: {
             kind: "generic",

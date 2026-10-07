@@ -473,6 +473,11 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
         "bafyreicderii4drvuggodfzo24q5ergcponrix4u6zv6qfo75uvescmwh4"
     ),
     baseline_entry!(
+        gents_protocol::schemas::RENDERED_REQUEST_BLOCK_NAME,
+        gents_protocol::schemas::RENDERED_REQUEST_BLOCK,
+        "bafyreicl23h6anxhpfmdmomvgpegd42apgmvddtjtcqlteabtcog3d7h5i"
+    ),
+    baseline_entry!(
         gents_protocol::schemas::PROVIDER_CONTEXT_REDUCTION_NAME,
         gents_protocol::schemas::PROVIDER_CONTEXT_REDUCTION,
         "bafyreiaon3ziv3yuduotqbsebc5ztwn7x3xmkeru2yn3bpoh2smhvv3oge"

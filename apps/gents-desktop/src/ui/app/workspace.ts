@@ -9,12 +9,13 @@
    screen's dock. Which tabs a dock holds outlives the visit and the app;
    that it was open lasts the run. The dock's width is the resize hook's,
    in the shell. */
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { useStore } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { createStore } from "zustand/vanilla";
 
 import { useRoute } from "@/lib/router";
+import { browserStorage } from "@/lib/storage";
 import type { Route } from "@gents/shell";
 
 export type DockState = {
@@ -47,31 +48,6 @@ type WorkspaceState = {
   docks: Record<string, DockState>;
   /** scopes by last visit, most recent last; bounds what is remembered */
   visited: string[];
-};
-
-/* the dock works without storage: unavailable or refused, it lasts the run */
-const browserStorage = {
-  getItem(key: string) {
-    try {
-      return localStorage.getItem(key);
-    } catch {
-      return null;
-    }
-  },
-  setItem(key: string, value: string) {
-    try {
-      localStorage.setItem(key, value);
-    } catch {
-      /* storage unavailable */
-    }
-  },
-  removeItem(key: string) {
-    try {
-      localStorage.removeItem(key);
-    } catch {
-      /* storage unavailable */
-    }
-  },
 };
 
 const isRecord = (v: unknown): v is Record<string, unknown> =>
@@ -225,6 +201,15 @@ export type DockHandle = {
 /** The dock of the screen being rendered, found from the current route. */
 export function useDock(): DockHandle {
   return useDockFor(dockScope(useRoute()));
+}
+
+/** Records that the route's screen is shown, which keeps its dock
+    remembered longest. Whose dock a screen shows is found from its route
+    while rendering; this is only the bookkeeping that bounds how many are
+    kept. */
+export function useDockVisit(route: Route) {
+  const scope = dockScope(route);
+  useEffect(() => workspace.visit(scope), [scope]);
 }
 
 /** The dock of `scope`, with its changes bound to it. */

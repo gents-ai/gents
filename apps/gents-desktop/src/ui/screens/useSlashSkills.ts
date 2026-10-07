@@ -46,12 +46,5 @@ export function useSlashSkills(
       setDismissedFor(draft);
     }
   };
-  return {
-    suggestion,
-    items,
-    active,
-    accept,
-    onKeyDown,
-    hasSkills: available.length > 0,
-  };
+  return { items, active, accept, onKeyDown };
 }

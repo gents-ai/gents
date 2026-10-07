@@ -14,7 +14,6 @@ function toolGroup(statusKind: string, tail: string | null): RenderedTimelineIte
         itemKey: "t1",
         toolName: "gents_exec",
         statusKind,
-        status: statusKind,
         presentation: { kind: "generic", summary: null, input: null, output: null },
         reconstruction: { state: "ready" },
         partialOutputTail: tail,

@@ -77,6 +77,16 @@ pub(super) fn bounded_tool_result_with_presentation(
 ) -> (String, Option<gents_protocol::output::PayloadPresentation>) {
     use gents_protocol::output::{PayloadPresentation, PresentationPart};
 
+    if let Some(text) =
+        gents_loop::loop_stream::replayed_tool_result_text(tool_name, raw_result, limits)
+    {
+        return (
+            text.clone(),
+            Some(PayloadPresentation::Composed {
+                parts: vec![PresentationPart::Literal { text }],
+            }),
+        );
+    }
     let mode = truncation_mode_for(tool_name);
     let truncated = crate::truncation::truncate(raw_result, mode, limits);
     if !truncated.truncated {
