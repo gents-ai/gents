@@ -867,7 +867,12 @@ async fn required_mcp_service_needs_agent_scoped_measured_availability() {
     .unwrap();
     let active = std::collections::HashSet::from(["investigator".to_string()]);
     let error = config
-        .resolve_with_available_subagent_targets(&node, agent_did, &active)
+        .resolve_with_available_subagent_targets(
+            &node,
+            agent_did,
+            &active,
+            &std::sync::Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
+        )
         .await
         .expect_err("missing health measurement must quarantine the behavior");
     assert!(error.to_string().contains("not measured available"));
@@ -886,7 +891,12 @@ async fn required_mcp_service_needs_agent_scoped_measured_availability() {
     let response = node.execute(&health).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     let surface = config
-        .resolve_with_available_subagent_targets(&node, agent_did, &active)
+        .resolve_with_available_subagent_targets(
+            &node,
+            agent_did,
+            &active,
+            &std::sync::Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
+        )
         .await
         .expect("healthy required service makes the behavior resolvable");
     assert!(surface.includes_meta_tools());
@@ -901,7 +911,12 @@ async fn required_mcp_service_needs_agent_scoped_measured_availability() {
     let response = node.execute(changed_endpoint).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     let error = config
-        .resolve_with_available_subagent_targets(&node, agent_did, &active)
+        .resolve_with_available_subagent_targets(
+            &node,
+            agent_did,
+            &active,
+            &std::sync::Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
+        )
         .await
         .expect_err("health for an old endpoint must not satisfy current registry config");
     assert!(error.to_string().contains("not measured available"));
@@ -1101,7 +1116,11 @@ async fn defra_query_tool_gated_by_selection() {
         Vec::new(),
     )
     .unwrap()
-    .resolve(&node, "did:key:z-test-agent")
+    .resolve(
+        &node,
+        "did:key:z-test-agent",
+        &std::sync::Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
+    )
     .await
     .unwrap();
     assert!(enabled.tool_names().contains(&"query".to_string()));
@@ -1116,7 +1135,11 @@ async fn defra_query_tool_gated_by_selection() {
         Vec::new(),
     )
     .unwrap()
-    .resolve(&node, "did:key:z-test-agent")
+    .resolve(
+        &node,
+        "did:key:z-test-agent",
+        &std::sync::Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
+    )
     .await
     .unwrap();
     assert!(!disabled.tool_names().contains(&"query".to_string()));
@@ -1137,7 +1160,11 @@ async fn context_budget_tool_gated_by_selection() {
         Vec::new(),
     )
     .unwrap()
-    .resolve(&node, "did:key:z-test-agent")
+    .resolve(
+        &node,
+        "did:key:z-test-agent",
+        &std::sync::Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
+    )
     .await
     .unwrap();
     assert!(enabled.tool_names().contains(&"context_budget".to_string()));
@@ -1152,7 +1179,11 @@ async fn context_budget_tool_gated_by_selection() {
         Vec::new(),
     )
     .unwrap()
-    .resolve(&node, "did:key:z-test-agent")
+    .resolve(
+        &node,
+        "did:key:z-test-agent",
+        &std::sync::Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
+    )
     .await
     .unwrap();
     assert!(!disabled
@@ -1196,7 +1227,11 @@ async fn write_tools_register_under_declared_names() {
         Vec::new(),
     )
     .unwrap()
-    .resolve(&node, "did:key:z-test-agent")
+    .resolve(
+        &node,
+        "did:key:z-test-agent",
+        &std::sync::Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
+    )
     .await
     .unwrap();
 
@@ -1258,7 +1293,11 @@ async fn write_tool_whose_count_field_resolves_no_schema_is_refused_at_registrat
         Vec::new(),
     )
     .unwrap()
-    .resolve(&node, "did:key:z-test-agent")
+    .resolve(
+        &node,
+        "did:key:z-test-agent",
+        &std::sync::Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
+    )
     .await
     .unwrap();
 
@@ -1291,7 +1330,11 @@ async fn mailbox_surface_registers_stamped_tool_and_captures_owner_lineage() {
         Vec::new(),
     )
     .unwrap()
-    .resolve(&node, "did:key:z-test-agent")
+    .resolve(
+        &node,
+        "did:key:z-test-agent",
+        &std::sync::Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
+    )
     .await
     .unwrap();
     assert!(granted
@@ -1308,7 +1351,11 @@ async fn mailbox_surface_registers_stamped_tool_and_captures_owner_lineage() {
         .any(|tool| tool.name() == crate::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME));
 
     let without_grant = BehaviorToolConfig::meta_only()
-        .resolve(runtime.node.as_ref(), &runtime.agent_did)
+        .resolve(
+            runtime.node.as_ref(),
+            &runtime.agent_did,
+            &std::sync::Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
+        )
         .await
         .unwrap();
     assert!(!without_grant
@@ -1350,7 +1397,11 @@ async fn query_tool_is_advertised_and_registered() {
         Vec::new(),
     )
     .unwrap()
-    .resolve(&node, &agent_did)
+    .resolve(
+        &node,
+        &agent_did,
+        &std::sync::Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
+    )
     .await
     .unwrap();
 
@@ -1513,7 +1564,11 @@ async fn explicitly_disabling_goal_tools_removes_them_from_names_and_runtime() {
         Vec::new(),
     )
     .unwrap()
-    .resolve(&node, "did:key:z-test-agent")
+    .resolve(
+        &node,
+        "did:key:z-test-agent",
+        &std::sync::Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
+    )
     .await
     .unwrap();
 
@@ -1550,7 +1605,11 @@ async fn goal_tools_are_independent_from_generic_meta_tools() {
         Vec::new(),
     )
     .unwrap()
-    .resolve(&node, "did:key:z-test-agent")
+    .resolve(
+        &node,
+        "did:key:z-test-agent",
+        &std::sync::Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
+    )
     .await
     .unwrap();
 
@@ -1577,7 +1636,11 @@ async fn goal_creation_requires_its_separate_capability() {
         Vec::new(),
     )
     .unwrap()
-    .resolve(&node, "did:key:z-test-agent")
+    .resolve(
+        &node,
+        "did:key:z-test-agent",
+        &std::sync::Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
+    )
     .await
     .unwrap();
     assert!(!without_create
@@ -1595,7 +1658,11 @@ async fn goal_creation_requires_its_separate_capability() {
         Vec::new(),
     )
     .unwrap()
-    .resolve(&node, "did:key:z-test-agent")
+    .resolve(
+        &node,
+        "did:key:z-test-agent",
+        &std::sync::Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
+    )
     .await
     .unwrap();
     assert!(with_create
@@ -1629,7 +1696,11 @@ async fn operator_ceiling_can_deny_goal_creation_only() {
         Vec::new(),
     )
     .unwrap()
-    .resolve(&node, "did:key:z-test-agent")
+    .resolve(
+        &node,
+        "did:key:z-test-agent",
+        &std::sync::Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
+    )
     .await
     .unwrap();
 
@@ -1658,7 +1729,11 @@ async fn operator_ceiling_denies_all_goal_mutation_when_base_capability_is_off()
         Vec::new(),
     )
     .unwrap()
-    .resolve(&node, "did:key:z-test-agent")
+    .resolve(
+        &node,
+        "did:key:z-test-agent",
+        &std::sync::Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
+    )
     .await
     .unwrap();
 
@@ -1868,7 +1943,11 @@ async fn session_history_tool_follows_selection() {
         Vec::new(),
     )
     .unwrap()
-    .resolve(&node, "did:key:z-test-agent")
+    .resolve(
+        &node,
+        "did:key:z-test-agent",
+        &std::sync::Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
+    )
     .await
     .unwrap();
     assert!(!disabled
@@ -1885,7 +1964,11 @@ async fn session_history_tool_follows_selection() {
         Vec::new(),
     )
     .unwrap()
-    .resolve(&node, "did:key:z-test-agent")
+    .resolve(
+        &node,
+        "did:key:z-test-agent",
+        &std::sync::Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
+    )
     .await
     .unwrap();
     assert!(enabled
@@ -1950,7 +2033,14 @@ async fn tool_construction_rechecks_current_workspace_root_policy() {
         Vec::new(),
     )
     .unwrap();
-    let surface = config.resolve(&node, "did:test:test").await.unwrap();
+    let surface = config
+        .resolve(
+            &node,
+            "did:test:test",
+            &std::sync::Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
+        )
+        .await
+        .unwrap();
     let runtime = ToolRuntimeContext::oneshot(node.clone());
     surface
         .build_tools(&runtime)
@@ -2004,7 +2094,14 @@ async fn normal_load_rejects_active_blank_root_under_explicit_policy_without_cei
         Vec::new(),
     )
     .unwrap();
-    let surface = config.resolve(&node, "did:test:test").await.unwrap();
+    let surface = config
+        .resolve(
+            &node,
+            "did:test:test",
+            &std::sync::Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
+        )
+        .await
+        .unwrap();
     let error = match surface
         .build_tools(&ToolRuntimeContext::oneshot(node))
         .await
@@ -2428,7 +2525,11 @@ async fn memory_tool_requires_selection_opt_in() {
         Vec::new(),
     )
     .unwrap()
-    .resolve(&node, "did:key:z-test-agent")
+    .resolve(
+        &node,
+        "did:key:z-test-agent",
+        &std::sync::Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
+    )
     .await
     .unwrap();
     assert!(!disabled
@@ -2445,7 +2546,11 @@ async fn memory_tool_requires_selection_opt_in() {
         Vec::new(),
     )
     .unwrap()
-    .resolve(&node, "did:key:z-test-agent")
+    .resolve(
+        &node,
+        "did:key:z-test-agent",
+        &std::sync::Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
+    )
     .await
     .unwrap();
     assert!(enabled
@@ -2469,7 +2574,11 @@ async fn defra_query_is_off_by_default() {
         Vec::new(),
     )
     .unwrap()
-    .resolve(&node, "did:key:z-test-agent")
+    .resolve(
+        &node,
+        "did:key:z-test-agent",
+        &std::sync::Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
+    )
     .await
     .unwrap();
     assert!(
@@ -2488,7 +2597,11 @@ async fn defra_query_is_off_by_default() {
 
     // The meta-only baseline excludes it too.
     let meta_only = BehaviorToolConfig::meta_only()
-        .resolve(&node, "did:key:z-test-agent")
+        .resolve(
+            &node,
+            "did:key:z-test-agent",
+            &std::sync::Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
+        )
         .await
         .unwrap();
     assert!(
@@ -2518,7 +2631,11 @@ async fn agent_config_alias_expands_to_config_scope() {
         Vec::new(),
     )
     .unwrap()
-    .resolve(&node, "did:key:z-test-agent")
+    .resolve(
+        &node,
+        "did:key:z-test-agent",
+        &std::sync::Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
+    )
     .await
     .unwrap();
 

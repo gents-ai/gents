@@ -66,7 +66,11 @@ async fn snapshot_for_behaviors_with_principal(
     for behavior in &behaviors {
         let tool_surface = behavior
             .tools
-            .resolve(node, behavior.agent_did())
+            .resolve(
+                node,
+                behavior.agent_did(),
+                &Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
+            )
             .await
             .unwrap();
         tool_surfaces.insert(behavior.behavior_id.clone(), Arc::new(tool_surface));
@@ -90,7 +94,11 @@ async fn snapshot_for_behaviors_with_admission(
     for behavior in &behaviors {
         let tool_surface = behavior
             .tools
-            .resolve(node, behavior.agent_did())
+            .resolve(
+                node,
+                behavior.agent_did(),
+                &Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
+            )
             .await
             .unwrap();
         tool_surfaces.insert(behavior.behavior_id.clone(), Arc::new(tool_surface));
@@ -364,7 +372,11 @@ async fn slot_panic_restarts_behavior() {
     let tool_surface = Arc::new(
         behavior
             .tools
-            .resolve(node.as_ref(), behavior.agent_did())
+            .resolve(
+                node.as_ref(),
+                behavior.agent_did(),
+                &Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
+            )
             .await
             .unwrap(),
     );
@@ -450,7 +462,11 @@ async fn dropping_behavior_slot_aborts_a_held_executor() {
     let tool_surface = Arc::new(
         behavior
             .tools
-            .resolve(node.as_ref(), behavior.agent_did())
+            .resolve(
+                node.as_ref(),
+                behavior.agent_did(),
+                &Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
+            )
             .await
             .unwrap(),
     );
@@ -2202,4 +2218,144 @@ async fn retiring_a_slot_notifies_the_failure_policy() {
         .expect("supervisor should stop on shutdown")
         .unwrap()
         .unwrap();
+}
+
+/// One behavior whose Tools selection names `fixture/list_files`, resolved
+/// against two plugin homes: one without the record, one with it.
+async fn plugin_resolution_surfaces(
+    node: &defra_node::EmbeddedNode,
+) -> (Arc<ResolvedBehavior>, Arc<ToolSurface>, Arc<ToolSurface>) {
+    let mut behavior = PendingAgentBehavior::new("general")
+        .build_with_identity_for_test(test_identity("plugin-resolution-fingerprint"));
+    let tools: crate::document_config::Tools = serde_json::from_value(serde_json::json!({
+        "tools_id": format!("{}:tools", behavior.behavior_id),
+        "agent_did": behavior.agent_did(),
+        "integrations": {"plugins": [{"plugin": "fixture/list_files"}]},
+    }))
+    .unwrap();
+    behavior.tools = BehaviorToolConfig::from_tools_document(
+        &behavior.behavior_id.clone(),
+        &tools,
+        &ToolCeiling::meta_only(),
+        Vec::new(),
+    )
+    .unwrap();
+    let behavior = Arc::new(behavior);
+
+    let absent_home = tempfile::tempdir().unwrap();
+    let absent_plugins = Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
+        absent_home.path().to_path_buf(),
+    )));
+    let installed_home = tempfile::tempdir().unwrap();
+    let record: crate::plugin::store::InstalledPlugin = serde_json::from_value(serde_json::json!({
+        "namespace": "fixture",
+        "name": "list_files",
+        "version": "0.1.0",
+        "digest": format!("sha256:{}", "a".repeat(64)),
+        "language": "rust",
+        "declaration": {
+            "name": "list_files",
+            "description": "lists files",
+            "artifact": "plugins/list_files.afb",
+            "language": "rust",
+            "input_schema": {"type": "object"}
+        }
+    }))
+    .unwrap();
+    crate::plugin::store::write_record(installed_home.path(), &record).unwrap();
+    let installed_plugins = Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
+        installed_home.path().to_path_buf(),
+    )));
+
+    let absent = Arc::new(
+        behavior
+            .tools
+            .resolve(node, behavior.agent_did(), &absent_plugins)
+            .await
+            .unwrap(),
+    );
+    let installed = Arc::new(
+        behavior
+            .tools
+            .resolve(node, behavior.agent_did(), &installed_plugins)
+            .await
+            .unwrap(),
+    );
+    let plugin_ref = crate::document_config::PluginToolRef {
+        plugin: "fixture/list_files".to_string(),
+        digest: None,
+    };
+    assert_eq!(
+        absent.plugin_resolutions(),
+        &[(plugin_ref.clone(), None)],
+        "a missing plugin record resolves to no identity, never an error"
+    );
+    assert_eq!(
+        installed.plugin_resolutions(),
+        &[(
+            plugin_ref,
+            Some(crate::tool_surface::PluginRecordIdentity {
+                version: record.version.clone(),
+                digest: record.digest.clone(),
+            })
+        )],
+        "an installed plugin records its version and digest"
+    );
+    (behavior, absent, installed)
+}
+
+#[tokio::test]
+async fn plugin_install_alone_changes_the_fingerprint_and_recreates_the_slot() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let principal = stub_principal();
+    let (behavior, absent_surface, installed_surface) =
+        plugin_resolution_surfaces(node.as_ref()).await;
+
+    let snapshot_for = |surface: Arc<ToolSurface>| {
+        ResolvedRuntimeSnapshot::from_parts(
+            "general".to_string(),
+            vec![Arc::clone(&behavior)],
+            HashMap::from([("general".to_string(), surface)]),
+            HashMap::new(),
+        )
+        .with_principal(Arc::clone(&principal))
+    };
+    let absent_snapshot = snapshot_for(Arc::clone(&absent_surface));
+    let installed_snapshot = snapshot_for(Arc::clone(&installed_surface));
+
+    assert_ne!(
+        absent_snapshot.configuration_fingerprint(),
+        installed_snapshot.configuration_fingerprint(),
+        "installing the named plugin must change the configuration fingerprint"
+    );
+    let active_absent = absent_snapshot.activate(1, HashMap::new());
+    let diff = diff_counts(&active_absent, &installed_snapshot);
+    assert_eq!(diff.updated, 1);
+    assert_eq!(diff.added, 0);
+    assert_eq!(diff.removed, 0);
+
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let slot = spawn_slot(
+        Arc::clone(&behavior),
+        Arc::clone(&absent_surface),
+        crate::retry::RetryPolicy {
+            max_retries: 1,
+            base_delay_ms: 1,
+            max_delay_ms: 1,
+        },
+        |_, _, _, _, _| async { Ok(()) },
+        shutdown_rx,
+    );
+    assert!(
+        slot.matches(&behavior, &absent_surface, 1),
+        "the slot keeps its own surface"
+    );
+    assert!(
+        !slot.matches(&behavior, &installed_surface, 1),
+        "a changed plugin resolution must recreate the slot so the behavior \
+         re-admits with a fresh build budget"
+    );
+    let _ = shutdown_tx.send(true);
+    retire_slot(slot);
 }

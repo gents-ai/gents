@@ -854,3 +854,294 @@ async fn control_watcher_settles_when_an_unselected_behavior_is_permanently_inva
         view.pending_visibility_details()
     );
 }
+
+/// Writes (or refreshes) the PackInstallation record a pack install leaves,
+/// reading and writing in one transaction the way the install owner does, so
+/// a reinstall updates the record it finds instead of racing its own index.
+async fn write_pack_installation_record(
+    node: &defra_node::EmbeddedNode,
+    agent_did: &str,
+    installed_at: &str,
+) {
+    let owner = escape_graphql_string(agent_did);
+    let coordinate = escape_graphql_string("fixture/bind_plugin_fixture");
+    let version = escape_graphql_string("0.1.0");
+    let digest = escape_graphql_string("sha256:pack-digest");
+    let stamped = escape_graphql_string(installed_at);
+    crate::config_client::ConfigAccess::transact_local(
+        node,
+        None,
+        "test.pack.installation.record",
+        move |txn| {
+            let (owner, coordinate, version, digest, stamped) = (
+                owner.clone(),
+                coordinate.clone(),
+                version.clone(),
+                digest.clone(),
+                stamped.clone(),
+            );
+            Box::pin(async move {
+                let existing = txn
+                    .execute(&format!(
+                        r#"{{ PackInstallation(
+                            filter: {{ agent_did: {{ _eq: "{owner}" }}, coordinate: {{ _eq: "{coordinate}" }} }},
+                            limit: 1
+                        ) {{ _docID }} }}"#
+                    ))
+                    .await?;
+                let doc_id = existing["data"]["PackInstallation"]
+                    .as_array()
+                    .and_then(|rows| rows.first())
+                    .and_then(|row| row.get("_docID"))
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned);
+                let mutation = match doc_id {
+                    Some(doc_id) => format!(
+                        r#"mutation {{ update_PackInstallation(docID: "{}", input: {{
+                            installed_at: "{stamped}"
+                        }}) {{ _docID }} }}"#,
+                        escape_graphql_string(&doc_id)
+                    ),
+                    None => format!(
+                        r#"mutation {{ create_PackInstallation(input: {{
+                            agent_did: "{owner}", coordinate: "{coordinate}",
+                            version: "{version}", digest: "{digest}", installed_at: "{stamped}"
+                        }}) {{ _docID }} }}"#
+                    ),
+                };
+                txn.execute(&mutation).await.map(|_| ())
+            })
+        },
+    )
+    .await
+    .unwrap();
+}
+
+async fn write_tools_naming_plugin(
+    node: &Arc<defra_node::EmbeddedNode>,
+    agent_did: &str,
+    tools_id: &str,
+) {
+    let tools: Tools = serde_json::from_value(serde_json::json!({
+        "tools_id": tools_id,
+        "agent_did": agent_did,
+        "integrations": {"plugins": [{"plugin": "fixture/list_files"}]},
+    }))
+    .unwrap();
+    crate::config_client::write_tools_document(
+        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &tools,
+    )
+    .await
+    .unwrap();
+}
+
+fn installed_record() -> crate::plugin::store::InstalledPlugin {
+    serde_json::from_value(serde_json::json!({
+        "namespace": "fixture",
+        "name": "list_files",
+        "version": "0.1.0",
+        "digest": format!("sha256:{}", "b".repeat(64)),
+        "language": "rust",
+        "declaration": {
+            "name": "list_files",
+            "description": "lists files",
+            "artifact": "plugins/list_files.afb",
+            "language": "rust",
+            "input_schema": {"type": "object"}
+        }
+    }))
+    .unwrap()
+}
+
+/// #2338: installing the plugin a Tools document names changes the resolved
+/// surface, so the install record's write must wake the watcher and propose a
+/// new fingerprint; a same-digest reinstall proposes the same fingerprint, so
+/// the reconciler no-ops instead of churning generations.
+#[tokio::test]
+async fn control_watcher_proposes_a_new_fingerprint_when_the_named_plugin_installs() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("control-watcher-plugin-install"));
+    bind_default_behavior_backend(
+        node.as_ref(),
+        identity.did(),
+        "backend-plugin-install",
+        "http://127.0.0.1:8115/v1",
+    )
+    .await;
+    let plugin_home = tempfile::tempdir().unwrap();
+    let agent = crate::Gents::from_default_behavior_documents(
+        node.clone(),
+        identity,
+        crate::agent::DocumentRuntimeOptions {
+            tool_ceiling: ToolCeiling::meta_only(),
+            plugin_home: Some(plugin_home.path().to_path_buf()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let agent_did = agent.agent_did().to_string();
+    let behavior_id = agent.default_behavior_id().to_string();
+    let resolve_context = agent
+        .document_runtime_context()
+        .cloned()
+        .expect("document-backed agent");
+    let runtime_status = RuntimeStatusHandle::new(node.clone(), agent_did.clone());
+    runtime_status
+        .initialize_startup(&behavior_id)
+        .await
+        .unwrap();
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let (proposal_tx, mut proposal_rx) = mpsc::channel(8);
+    let watcher_task = tokio::spawn(run_test_control_watcher(
+        node.clone(),
+        node.subscribe_document_changes(),
+        agent_did.clone(),
+        resolve_context,
+        proposal_tx,
+        runtime_status,
+        mpsc::channel::<()>(1).1,
+        shutdown_rx,
+    ));
+    tokio::task::yield_now().await;
+
+    write_tools_naming_plugin(&node, &agent_did, &format!("{behavior_id}:tools")).await;
+    let absent = tokio::time::timeout(PROPOSAL_TIMEOUT, proposal_rx.recv())
+        .await
+        .expect("the Tools write naming a missing plugin must reach the reconcile owner")
+        .expect("proposal channel");
+    let absent_surface = absent
+        .tool_surfaces
+        .get(&behavior_id)
+        .expect("default behavior tool surface");
+    assert_eq!(
+        absent_surface.plugin_resolutions(),
+        &[(
+            crate::document_config::PluginToolRef {
+                plugin: "fixture/list_files".to_string(),
+                digest: None,
+            },
+            None
+        )],
+        "while the plugin is missing the surface records no identity"
+    );
+
+    // The install: the plugin store record, then the only document an
+    // install writes.
+    crate::plugin::store::write_record(plugin_home.path(), &installed_record()).unwrap();
+    write_pack_installation_record(node.as_ref(), &agent_did, "2026-10-08T00:00:00Z").await;
+    let installed = tokio::time::timeout(PROPOSAL_TIMEOUT, proposal_rx.recv())
+        .await
+        .expect("a pack install must wake the reconcile owner")
+        .expect("proposal channel");
+    assert_ne!(
+        installed.configuration_fingerprint(),
+        absent.configuration_fingerprint(),
+        "the installed plugin identity must change the resolved fingerprint"
+    );
+
+    // A same-digest reinstall refreshes the record's installed_at only; the
+    // resolved identity is unchanged, so the proposal repeats the fingerprint
+    // the reconciler already holds and nothing new can apply.
+    write_pack_installation_record(node.as_ref(), &agent_did, "2026-10-08T00:00:01Z").await;
+    let reinstalled = tokio::time::timeout(PROPOSAL_TIMEOUT, proposal_rx.recv())
+        .await
+        .expect("the reinstall observation must reach the reconcile owner")
+        .expect("proposal channel");
+    assert_eq!(
+        reinstalled.configuration_fingerprint(),
+        installed.configuration_fingerprint(),
+        "a same-digest reinstall must not produce a new fingerprint"
+    );
+    tokio::time::sleep(TEST_CONTROL_WATCHER_TIMING.settle_window).await;
+    assert!(
+        proposal_rx.try_recv().is_err(),
+        "a settled same-fingerprint observation must not keep proposing"
+    );
+
+    let _ = shutdown_tx.send(true);
+    watcher_task.await.unwrap().unwrap();
+}
+
+/// #2338 negative: while the named plugin stays missing, install-record
+/// writes alone never change the resolved fingerprint, so they cannot churn
+/// the active generation.
+#[tokio::test]
+async fn control_watcher_keeps_one_fingerprint_while_the_named_plugin_stays_missing() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("control-watcher-plugin-missing"));
+    bind_default_behavior_backend(
+        node.as_ref(),
+        identity.did(),
+        "backend-plugin-missing",
+        "http://127.0.0.1:8116/v1",
+    )
+    .await;
+    let plugin_home = tempfile::tempdir().unwrap();
+    let agent = crate::Gents::from_default_behavior_documents(
+        node.clone(),
+        identity,
+        crate::agent::DocumentRuntimeOptions {
+            tool_ceiling: ToolCeiling::meta_only(),
+            plugin_home: Some(plugin_home.path().to_path_buf()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let agent_did = agent.agent_did().to_string();
+    let behavior_id = agent.default_behavior_id().to_string();
+    let resolve_context = agent
+        .document_runtime_context()
+        .cloned()
+        .expect("document-backed agent");
+    let runtime_status = RuntimeStatusHandle::new(node.clone(), agent_did.clone());
+    runtime_status
+        .initialize_startup(&behavior_id)
+        .await
+        .unwrap();
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let (proposal_tx, mut proposal_rx) = mpsc::channel(8);
+    let watcher_task = tokio::spawn(run_test_control_watcher(
+        node.clone(),
+        node.subscribe_document_changes(),
+        agent_did.clone(),
+        resolve_context,
+        proposal_tx,
+        runtime_status,
+        mpsc::channel::<()>(1).1,
+        shutdown_rx,
+    ));
+    tokio::task::yield_now().await;
+
+    write_tools_naming_plugin(&node, &agent_did, &format!("{behavior_id}:tools")).await;
+    let named = tokio::time::timeout(PROPOSAL_TIMEOUT, proposal_rx.recv())
+        .await
+        .expect("the Tools write naming a missing plugin must reach the reconcile owner")
+        .expect("proposal channel");
+    let fingerprint = named.configuration_fingerprint();
+
+    for stamp in ["2026-10-08T00:00:00Z", "2026-10-08T00:00:01Z"] {
+        write_pack_installation_record(node.as_ref(), &agent_did, stamp).await;
+        let observed = tokio::time::timeout(PROPOSAL_TIMEOUT, proposal_rx.recv())
+            .await
+            .expect("each install-record observation must reach the reconcile owner")
+            .expect("proposal channel");
+        assert_eq!(
+            observed.configuration_fingerprint(),
+            fingerprint,
+            "an install record for a plugin that is still missing must not change the fingerprint"
+        );
+    }
+    tokio::time::sleep(TEST_CONTROL_WATCHER_TIMING.settle_window).await;
+    assert!(
+        proposal_rx.try_recv().is_err(),
+        "no further proposals may arrive once the writes settle"
+    );
+
+    let _ = shutdown_tx.send(true);
+    watcher_task.await.unwrap().unwrap();
+}

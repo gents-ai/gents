@@ -6,6 +6,14 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- Installing or removing a plugin a behavior's Tools document names now
+  re-admits a behavior that was demoted for failing to build on the missing
+  tool (#2338). The resolved plugin identity (version and digest) joins the
+  runtime configuration fingerprint and the slot comparison, and a pack
+  install's `PackInstallation` record wakes the reconciler, so the next
+  reconcile recreates the slot with a fresh build budget. The demotion log
+  names installing a missing plugin as the fix.
+
 - `gents pack scenario run` can run a pack whose agent calls plugins from a
   dependency: `--with-pack` packs are stored after the run's `gents init`
   (which empties the home), dependencies install into the run's home before

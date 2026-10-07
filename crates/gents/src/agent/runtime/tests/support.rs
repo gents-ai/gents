@@ -71,6 +71,53 @@ pub(super) fn request(behavior_id: Option<&str>, session_id: &str) -> AgentReque
     }
 }
 
+pub(super) async fn wait_for_request_state(
+    node: &defra_node::EmbeddedNode,
+    doc_id: &str,
+    expected_lifecycle_state: &str,
+) {
+    let escaped_doc_id = escape_graphql_string(doc_id);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let query = format!(
+            r#"{{
+                AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }}, limit: 1) {{
+                    lifecycle_state
+                }}
+            }}"#
+        );
+        let response = node.execute(&query).await;
+        assert!(
+            !response.has_errors(),
+            "AgentRequest query failed: {:?}",
+            response.errors
+        );
+        let row = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentRequest"))
+            .and_then(Value::as_array)
+            .and_then(|rows| rows.first())
+            .cloned()
+            .expect("AgentRequest row");
+        let lifecycle_state = row
+            .get("lifecycle_state")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if lifecycle_state == expected_lifecycle_state {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for AgentRequest {} to reach lifecycle_state={}, last row={:?}",
+            doc_id,
+            expected_lifecycle_state,
+            row
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 #[derive(Debug)]
 pub(super) struct RuntimeStatusRow {
     pub(super) process_state: String,

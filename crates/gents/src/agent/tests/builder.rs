@@ -63,7 +63,11 @@ async fn builder_includes_custom_tools_in_resolved_tool_surface() {
 
     let tool_surface = agent.behaviors()[0]
         .tools
-        .resolve(node.as_ref(), identity.did())
+        .resolve(
+            node.as_ref(),
+            identity.did(),
+            &std::sync::Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
+        )
         .await
         .unwrap();
     assert!(tool_surface

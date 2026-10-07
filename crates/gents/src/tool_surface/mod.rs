@@ -56,6 +56,15 @@ use crate::toolset::{build_memory_tool, MEMORY_TOOL_NAME};
 /// tool with `host.cli[].timeout_secs`, within the host foreground maximum.
 const DEFAULT_CLI_TIMEOUT_SECS: u64 = 10;
 
+/// A resolved plugin tool's installed identity: enough for the reconciler to
+/// tell an install, an update and a removal apart without reading the plugin
+/// store again.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginRecordIdentity {
+    pub version: String,
+    pub digest: String,
+}
+
 #[derive(Clone)]
 pub struct ToolSurface {
     host_tools: ToolSet,
@@ -84,6 +93,19 @@ pub struct ToolSurface {
     pub(super) eth_queries: Vec<crate::eth::ResolvedEthQuery>,
     pub(super) eth_calls: Vec<crate::eth::ResolvedEthCall>,
     pub(super) plugin_tools: Vec<crate::document_config::PluginToolRef>,
+    /// The plugin tools above resolved against the host plugin store when the
+    /// surface was resolved. It exists so that installing or removing a named
+    /// plugin is a behavior change the reconciler sees (it feeds the runtime
+    /// configuration fingerprint and the slot comparison through this struct's
+    /// Debug), re-admitting a behavior whose build failed on the missing tool.
+    /// `None` records a not-installed or pin-mismatched plugin and never makes
+    /// a behavior unavailable: building tools stays the fail-closed gate. A
+    /// grant-only reinstall whose `(version, digest)` is unchanged does not
+    /// refresh the slot, so a new grant does not churn the fingerprint.
+    pub(super) plugin_resolutions: Vec<(
+        crate::document_config::PluginToolRef,
+        Option<PluginRecordIdentity>,
+    )>,
     pub(super) enable_skills: bool,
     pub(super) self_config: SelfConfigToolConfig,
     pub(super) lsp: Option<crate::toolset::lsp::LspToolConfig>,
@@ -185,6 +207,17 @@ impl ToolSurface {
 
     pub fn allowed_mcp_service_ids(&self) -> &[String] {
         &self.allowed_mcp_service_ids
+    }
+
+    /// The recorded plugin resolutions change detection saw (see the
+    /// `plugin_resolutions` field); observation only, never tool building.
+    pub(crate) fn plugin_resolutions(
+        &self,
+    ) -> &[(
+        crate::document_config::PluginToolRef,
+        Option<PluginRecordIdentity>,
+    )] {
+        &self.plugin_resolutions
     }
 
     #[allow(dead_code)]
@@ -527,6 +560,7 @@ impl std::fmt::Debug for ToolSurface {
             .field("query_tools", &self.query_tools)
             .field("eth_queries", &self.eth_queries)
             .field("plugin_tools", &self.plugin_tools)
+            .field("plugin_resolutions", &self.plugin_resolutions)
             .field("enable_skills", &self.enable_skills)
             .field("self_config", &self.self_config)
             .field(

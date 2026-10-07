@@ -3850,11 +3850,11 @@ async fn persona_create_authors_row_and_applies_after_manual_tick() {
 
     let snapshot = crate::agent::resolve_document_runtime_snapshot(
         node.as_ref(),
-        &crate::agent::DocumentResolveContext {
+        &crate::agent::DocumentResolveContext::for_tests(
             identity,
-            tool_ceiling: crate::tool_surface::ToolCeiling::readonly(),
-            backend_health: Default::default(),
-        },
+            crate::tool_surface::ToolCeiling::readonly(),
+            Default::default(),
+        ),
     )
     .await
     .expect("restart-style runtime resolution accepts the materialized behavior");
@@ -3874,7 +3874,11 @@ async fn persona_create_authors_row_and_applies_after_manual_tick() {
     );
     let names = runtime_behavior
         .tools
-        .resolve(node.as_ref(), &agent_did)
+        .resolve(
+            node.as_ref(),
+            &agent_did,
+            &std::sync::Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
+        )
         .await
         .expect("new behavior tool surface resolves after restart")
         .tool_names();
@@ -4278,11 +4282,11 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
 
     let snapshot = crate::agent::resolve_document_runtime_snapshot(
         node.as_ref(),
-        &crate::agent::DocumentResolveContext {
-            identity: identity.clone(),
-            tool_ceiling: crate::tool_surface::ToolCeiling::readonly_at(operator_root.path()),
-            backend_health: Default::default(),
-        },
+        &crate::agent::DocumentResolveContext::for_tests(
+            identity.clone(),
+            crate::tool_surface::ToolCeiling::readonly_at(operator_root.path()),
+            Default::default(),
+        ),
     )
     .await
     .expect("fresh request runtime snapshot");
@@ -4294,7 +4298,11 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
     let surface = Arc::new(
         runtime_behavior
             .tools
-            .resolve(node.as_ref(), &owner)
+            .resolve(
+                node.as_ref(),
+                &owner,
+                &std::sync::Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
+            )
             .await
             .expect("resolve fresh-request tool surface"),
     );

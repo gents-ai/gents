@@ -376,7 +376,11 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
         .unwrap();
         let surface = behavior
             .tools
-            .resolve(&node, behavior.agent_did())
+            .resolve(
+                &node,
+                behavior.agent_did(),
+                &std::sync::Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
+            )
             .await
             .unwrap();
         let obligations = surface.output_obligations();

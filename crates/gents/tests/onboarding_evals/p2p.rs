@@ -429,7 +429,14 @@ async fn engineer_p2p_live_comparison() -> Result<()> {
             .ok_or_else(|| {
                 anyhow::anyhow!("ready runtime did not resolve the Engineer behavior")
             })?;
-        let surface = behavior.tools.resolve(&local.node, &did).await?;
+        let surface = behavior
+            .tools
+            .resolve(
+                &local.node,
+                &did,
+                &std::sync::Arc::new(gents::plugin::executor::PluginExecutor::new(None)),
+            )
+            .await?;
         let tool_context = ToolRuntimeContext::new_with_agent_did(
             local.node.clone(),
             Default::default(),

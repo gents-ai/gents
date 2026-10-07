@@ -439,11 +439,11 @@ async fn from_default_behavior_documents_filters_inactive_subagent_targets() {
 
     let snapshot = resolve_document_runtime_snapshot(
         node.as_ref(),
-        &DocumentResolveContext {
+        &DocumentResolveContext::for_tests(
             identity,
-            tool_ceiling: ToolCeiling::readonly(),
-            backend_health: crate::backend_health::BackendHealthMap::new(),
-        },
+            ToolCeiling::readonly(),
+            crate::backend_health::BackendHealthMap::new(),
+        ),
     )
     .await
     .unwrap();
