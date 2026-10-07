@@ -3412,6 +3412,22 @@ mod tests {
         commit_document(core, "desktop.enrollment.test.route_receipt", &mutation).await;
     }
 
+    /// A core whose own P2P supervisor is stopped, so the test's reconciler
+    /// is the only one acting on the peer directory.
+    async fn start_unsupervised_core(root: std::path::PathBuf) -> ClientCore {
+        let core = ClientCore::start_with_paths_and_options(
+            crate::client::paths::DesktopPaths::from_root(root),
+            super::super::ClientCoreOptions::local_only(),
+        )
+        .await
+        .unwrap();
+        if let Some(supervisor) = core.p2p_supervisor.lock().await.take() {
+            supervisor.abort();
+            let _ = supervisor.await;
+        }
+        core
+    }
+
     async fn locally_retire(
         core: &ClientCore,
         authority: &SignedEnrollmentAuthority,
@@ -3445,16 +3461,10 @@ mod tests {
 
     #[tokio::test]
     async fn locally_removed_enrollment_stays_absent_across_reconcile() {
-        use super::super::ClientCoreOptions;
         use crate::client::paths::DesktopPaths;
 
         let temp = tempfile::tempdir().unwrap();
-        let core = ClientCore::start_with_paths_and_options(
-            DesktopPaths::from_root(temp.path().join("desktop")),
-            ClientCoreOptions::local_only(),
-        )
-        .await
-        .unwrap();
+        let core = start_unsupervised_core(temp.path().join("desktop")).await;
         let admin =
             PrincipalIdentity::load_or_create(&DesktopPaths::from_root(temp.path().join("admin")))
                 .await
@@ -3557,16 +3567,10 @@ mod tests {
 
     #[tokio::test]
     async fn revoked_enrollment_ends_the_active_request_listing() {
-        use super::super::ClientCoreOptions;
         use crate::client::paths::DesktopPaths;
 
         let temp = tempfile::tempdir().unwrap();
-        let core = ClientCore::start_with_paths_and_options(
-            DesktopPaths::from_root(temp.path().to_path_buf()),
-            ClientCoreOptions::local_only(),
-        )
-        .await
-        .unwrap();
+        let core = start_unsupervised_core(temp.path().to_path_buf()).await;
         let admin =
             PrincipalIdentity::load_or_create(&DesktopPaths::from_root(temp.path().join("admin")))
                 .await
@@ -3601,16 +3605,10 @@ mod tests {
 
     #[tokio::test]
     async fn a_locally_retired_request_refuses_its_offer_instead_of_sharing_its_challenge() {
-        use super::super::ClientCoreOptions;
         use crate::client::paths::DesktopPaths;
 
         let temp = tempfile::tempdir().unwrap();
-        let core = ClientCore::start_with_paths_and_options(
-            DesktopPaths::from_root(temp.path().to_path_buf()),
-            ClientCoreOptions::local_only(),
-        )
-        .await
-        .unwrap();
+        let core = start_unsupervised_core(temp.path().to_path_buf()).await;
         let admin =
             PrincipalIdentity::load_or_create(&DesktopPaths::from_root(temp.path().join("admin")))
                 .await
@@ -3634,16 +3632,10 @@ mod tests {
 
     #[tokio::test]
     async fn malformed_authority_rows_are_skipped_by_the_active_listing() {
-        use super::super::ClientCoreOptions;
         use crate::client::paths::DesktopPaths;
 
         let temp = tempfile::tempdir().unwrap();
-        let core = ClientCore::start_with_paths_and_options(
-            DesktopPaths::from_root(temp.path().to_path_buf()),
-            ClientCoreOptions::local_only(),
-        )
-        .await
-        .unwrap();
+        let core = start_unsupervised_core(temp.path().to_path_buf()).await;
         let admin =
             PrincipalIdentity::load_or_create(&DesktopPaths::from_root(temp.path().join("admin")))
                 .await
@@ -3676,16 +3668,10 @@ mod tests {
 
     #[tokio::test]
     async fn a_saved_peer_removed_for_an_absent_receipt_reinstalls_when_it_returns() {
-        use super::super::ClientCoreOptions;
         use crate::client::paths::DesktopPaths;
 
         let temp = tempfile::tempdir().unwrap();
-        let core = ClientCore::start_with_paths_and_options(
-            DesktopPaths::from_root(temp.path().to_path_buf()),
-            ClientCoreOptions::local_only(),
-        )
-        .await
-        .unwrap();
+        let core = start_unsupervised_core(temp.path().to_path_buf()).await;
         let admin =
             PrincipalIdentity::load_or_create(&DesktopPaths::from_root(temp.path().join("admin")))
                 .await
@@ -3771,17 +3757,11 @@ mod tests {
 
     #[tokio::test]
     async fn a_retirement_survives_an_absent_route_receipt_while_authority_is_current() {
-        use super::super::ClientCoreOptions;
         use crate::client::paths::DesktopPaths;
         use std::sync::atomic::Ordering::SeqCst;
 
         let temp = tempfile::tempdir().unwrap();
-        let core = ClientCore::start_with_paths_and_options(
-            DesktopPaths::from_root(temp.path().to_path_buf()),
-            ClientCoreOptions::local_only(),
-        )
-        .await
-        .unwrap();
+        let core = start_unsupervised_core(temp.path().to_path_buf()).await;
         let admin =
             PrincipalIdentity::load_or_create(&DesktopPaths::from_root(temp.path().join("admin")))
                 .await
