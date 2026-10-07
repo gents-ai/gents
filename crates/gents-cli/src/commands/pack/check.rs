@@ -497,4 +497,34 @@ mod tests {
         let report = check_dir(dir.path()).await;
         assert!(!report.problems.is_empty(), "{:#?}", report.problems);
     }
+
+    /// An allowed folder must stay inside `init.tool_root`, so `gents pack
+    /// check` refuses a scenario that allows one without declaring it, before
+    /// any run initializes a home.
+    #[tokio::test]
+    async fn allowed_folders_without_a_tool_root_fail_the_check() {
+        let dir = copy_pack(&super::super::test_support::fixture_dir(
+            "documents_fixture",
+        ));
+        let experiment_path = dir.path().join("experiment.json");
+        let text = std::fs::read_to_string(&experiment_path).unwrap();
+        assert!(
+            !text.contains("tool_root"),
+            "the fixture declares no tool_root"
+        );
+        std::fs::write(
+            &experiment_path,
+            text.replacen('{', r#"{"allowed_folders": [{"path": "/tmp"}],"#, 1),
+        )
+        .unwrap();
+        let report = check_dir(dir.path()).await;
+        assert!(
+            report
+                .problems
+                .iter()
+                .any(|problem| problem.contains("allowed_folders needs init.tool_root")),
+            "{:#?}",
+            report.problems
+        );
+    }
 }

@@ -51,6 +51,12 @@ struct ScenarioManifest {
     await_timeout_secs: u64,
     #[serde(default)]
     prepare: Vec<ScenarioPrepareStep>,
+    /// Folders the scenario's operator allows plugins to reach, written to the
+    /// run's home before its server starts exactly as `gents plugin dirs add`
+    /// would. A graph stage binds a data-chosen path with no working folder,
+    /// so this is how a scenario lets one read or write outside the defaults.
+    #[serde(default)]
+    allowed_folders: Vec<ScenarioAllowedFolder>,
     /// Environment required by canonical dependency configs, keyed by pack.
     /// Values are expanded with the scenario's normal environment interpolation.
     #[serde(default)]
@@ -68,6 +74,17 @@ struct ScenarioManifest {
     /// tool, trigger, and event-source references used by scenario validation.
     #[serde(skip)]
     config: Option<gents::document_config::PackConfig>,
+}
+
+/// One `allowed_folders` entry: `path` is relative to `init.tool_root` unless
+/// absolute, must stay inside it (a scenario with allowed folders declares
+/// one), and is made when missing so an output folder needs no fixture.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ScenarioAllowedFolder {
+    path: String,
+    #[serde(default)]
+    access: gents::pack::BindAccess,
 }
 
 fn default_timeout() -> u64 {
@@ -735,6 +752,25 @@ fn trigger_source_collections(
 }
 
 fn validate_manifest(manifest: &ScenarioManifest) -> Result<()> {
+    let mut allowed = BTreeSet::new();
+    for folder in &manifest.allowed_folders {
+        let path = folder.path.trim();
+        if path.is_empty() {
+            bail!("allowed_folders entries need a path");
+        }
+        if !allowed.insert(path) {
+            bail!("allowed_folders names {path} twice");
+        }
+    }
+    if !allowed.is_empty()
+        && manifest
+            .init
+            .tool_root
+            .as_deref()
+            .is_none_or(|root| root.trim().is_empty())
+    {
+        bail!("allowed_folders needs init.tool_root: every allowed folder stays inside it");
+    }
     if !manifest.expect.source_edges.is_empty() && !manifest.expect.signed_provenance {
         bail!("expect.source_edges requires expect.signed_provenance=true");
     }
@@ -3137,6 +3173,66 @@ fn resolve_prepare_within(pack: &Path, manifest: &ScenarioManifest) -> Result<Op
     }
 }
 
+/// Allows `manifest.allowed_folders` in `home` through the operator's own
+/// allowed-folders owner (`gents::plugin::allowed`), which keeps refusing a
+/// folder that is too broad or holds the gents home. The ceiling is the same
+/// one a `prepare` step's `bind_dir` stays inside: `init.tool_root`.
+fn allow_scenario_folders(
+    pack: &Path,
+    manifest: &ScenarioManifest,
+    home: &Path,
+) -> Result<Vec<gents::plugin::allowed::AllowedDir>> {
+    if manifest.allowed_folders.is_empty() {
+        return Ok(Vec::new());
+    }
+    let root = resolve_prepare_within(pack, manifest)?
+        .context("allowed_folders needs init.tool_root: every allowed folder stays inside it")?;
+    manifest
+        .allowed_folders
+        .iter()
+        .map(|folder| {
+            let path = root.join(folder.path.trim());
+            anyhow::ensure!(
+                !path
+                    .components()
+                    .any(|part| part == std::path::Component::ParentDir),
+                "allowed_folders path {:?} must not contain ..",
+                folder.path
+            );
+            // Checked against the existing part before anything is made, then
+            // again once it exists, so a symlink cannot lead outside either.
+            let inside = |path: &Path| path.starts_with(&root);
+            let existing = path
+                .ancestors()
+                .find(|ancestor| ancestor.exists())
+                .context("an absolute path has an existing ancestor")?;
+            let planned = existing
+                .canonicalize()
+                .with_context(|| format!("resolving {}", existing.display()))?
+                .join(path.strip_prefix(existing).unwrap_or(Path::new("")));
+            let outside = |path: &Path| {
+                anyhow::anyhow!(
+                    "allowed_folders path {} is outside init.tool_root {}",
+                    path.display(),
+                    root.display()
+                )
+            };
+            if !inside(&planned) {
+                return Err(outside(&planned));
+            }
+            std::fs::create_dir_all(&path)
+                .with_context(|| format!("creating allowed folder {}", path.display()))?;
+            let canonical = path
+                .canonicalize()
+                .with_context(|| format!("resolving allowed folder {}", path.display()))?;
+            if !inside(&canonical) {
+                return Err(outside(&canonical));
+            }
+            gents::plugin::allowed::add(home, &canonical, folder.access)
+        })
+        .collect()
+}
+
 pub(crate) async fn init_pack(args: PackInitArgs) -> Result<()> {
     let bin = std::env::current_exe().context("resolving the gents binary path")?;
     let (pack, _cache_lease, distribution) = resolve_scenario_dir(&args.pack, None).await?;
@@ -3157,6 +3253,7 @@ pub(crate) async fn init_pack(args: PackInitArgs) -> Result<()> {
         &pack_init_cli_args(&home, &manifest, tool_root.as_deref()),
     )
     .await?;
+    allow_scenario_folders(&pack, &manifest, &home)?;
     let agent_did = init
         .get("agent_did")
         .and_then(Value::as_str)
@@ -3328,6 +3425,10 @@ pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
         &inference_profile_id,
         default_behavior_id,
     )?;
+
+    for allowed in allow_scenario_folders(&pack, &manifest, &home)? {
+        tracing::info!(path = %allowed.path.display(), access = allowed.access.as_str(), "scenario allowed folder");
+    }
 
     let port = args.http_port;
     let graphql = crate::resolve_graphql_endpoint(
@@ -3826,6 +3927,85 @@ mod tests {
         assert_eq!(resolve_prepare_within(pack.path(), &unset).unwrap(), None);
     }
 
+    /// `allowed_folders` reach the run's home through the operator's own
+    /// allowed-folders owner, inside `init.tool_root` only.
+    #[test]
+    fn scenario_allowed_folders_are_written_inside_the_tool_root() {
+        let pack = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let manifest = |folders: serde_json::Value, tool_root: bool| -> ScenarioManifest {
+            let mut init = serde_json::json!({"inference_url": "http://x", "model_name": "m"});
+            if tool_root {
+                init["tool_root"] = serde_json::json!(root.path());
+            }
+            serde_json::from_value(serde_json::json!({
+                "name": "t", "init": init,
+                "seed": {"collection": "J", "job_id_field": "run_id", "prompt_field": "focus"},
+                "expect": {"trigger_ids": []},
+                "allowed_folders": folders,
+            }))
+            .unwrap()
+        };
+
+        let allowed = allow_scenario_folders(
+            pack.path(),
+            &manifest(
+                serde_json::json!([{"path": "out", "access": "read_write"}, {"path": "data"}]),
+                true,
+            ),
+            home.path(),
+        )
+        .unwrap();
+        let root = root.path().canonicalize().unwrap();
+        assert!(root.join("out").is_dir(), "a missing folder is made");
+        assert_eq!(
+            gents::plugin::allowed::list(home.path()).unwrap(),
+            vec![
+                gents::plugin::allowed::AllowedDir {
+                    path: root.join("data"),
+                    access: gents::pack::BindAccess::Read,
+                },
+                gents::plugin::allowed::AllowedDir {
+                    path: root.join("out"),
+                    access: gents::pack::BindAccess::ReadWrite,
+                },
+            ]
+        );
+        assert_eq!(allowed.len(), 2);
+
+        for (folders, tool_root, expected) in [
+            (
+                serde_json::json!([{"path": outside.path()}]),
+                true,
+                "outside init.tool_root",
+            ),
+            (
+                serde_json::json!([{"path": "../escape"}]),
+                true,
+                "must not contain ..",
+            ),
+            (
+                serde_json::json!([{"path": "out"}]),
+                false,
+                "needs init.tool_root",
+            ),
+            (
+                serde_json::json!([{"path": outside.path()}]),
+                false,
+                "needs init.tool_root",
+            ),
+        ] {
+            let error =
+                allow_scenario_folders(pack.path(), &manifest(folders, tool_root), home.path())
+                    .unwrap_err();
+            assert!(format!("{error:#}").contains(expected), "{error:#}");
+        }
+        let twice = manifest(serde_json::json!([{"path": "a"}, {"path": "a"}]), true);
+        assert!(format!("{:#}", validate_manifest(&twice).unwrap_err()).contains("twice"));
+    }
+
     #[test]
     fn scenario_staging_explicitly_binds_the_initialized_profile() {
         let pack = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -4150,6 +4330,7 @@ mod tests {
             },
             await_timeout_secs: 1,
             prepare: Vec::new(),
+            allowed_folders: Vec::new(),
             graph_dependency_environment: BTreeMap::new(),
             graph_dependencies: Vec::new(),
             plugins: Vec::new(),
@@ -4462,6 +4643,7 @@ mod tests {
             },
             await_timeout_secs: 1,
             prepare: Vec::new(),
+            allowed_folders: Vec::new(),
             graph_dependency_environment: BTreeMap::new(),
             graph_dependencies: Vec::new(),
             plugins: Vec::new(),
