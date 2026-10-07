@@ -845,6 +845,23 @@ pub fn guard_tools_keep_grants(
     );
     Ok(())
 }
+
+/// Lean `SelfConfig.reselectionKeepsGrants`: the Tools a Context or Behavior
+/// newly selects are bounded like a Tools write from the previously selected
+/// Tools; with no previous selection (a new Context, a clone's copy) like a
+/// Tools write over a document with no grant. Selecting no Tools carries no
+/// grant.
+pub fn reselection_keeps_grants(
+    held: &OperatorGrants,
+    before: Option<&Map<String, Value>>,
+    after: Option<&Map<String, Value>>,
+) -> Result<()> {
+    match after {
+        None => Ok(()),
+        Some(after) => guard_tools_keep_grants(held, before, after),
+    }
+}
+
 /// Lean `SelfConfig.authGuard`: the model may not introduce or change a raw
 /// API key, and a principal-OAuth candidate keeps the stored account reference
 /// (none for a non-OAuth backend). A stored or candidate `auth` that does not

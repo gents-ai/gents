@@ -1,8 +1,10 @@
 //! Generated field tables and patch results checked against the existing patch owner.
 //! Every Tools row replays the Lean always-on operator-grant verdict through
-//! `guard_tools_keep_grants`; guarded rows also replay the Lean guard verdict
-//! through the production guard of their target (Tools and Behavior no-lockout,
-//! Backend auth, and the Profile account choice). Reference validation and
+//! `guard_tools_keep_grants`, and every Context and Behavior row replays it
+//! through `reselection_keeps_grants` on the Tools documents Lean resolves;
+//! guarded rows also replay the Lean guard verdict through the production guard
+//! of their target (Tools and Behavior no-lockout, Backend auth, and the Profile
+//! account choice). Reference validation and
 //! transactional rejection need an end-to-end ConfigApplyTxn consumer; this
 //! test does not simulate them.
 use crate::lean_vocab_test::{
@@ -13,7 +15,7 @@ use gents::config_client::patch::{
 };
 use gents::self_config::{
     guard_backend_auth, guard_backend_choice, guard_behavior_keeps_reach, guard_tools_keep_control,
-    guard_tools_keep_grants, OperatorGrants,
+    guard_tools_keep_grants, reselection_keeps_grants, OperatorGrants,
 };
 use serde_json::{Map, Value};
 use std::collections::BTreeSet;
@@ -108,7 +110,12 @@ pub(super) fn generated_self_config_cases_fence_patch_merge() {
                 case.name
             );
         }
-        let grant_guarded = target == SelfConfigTarget::Tools;
+        let grant_guarded = matches!(
+            target,
+            SelfConfigTarget::Tools
+                | SelfConfigTarget::AgentContext
+                | SelfConfigTarget::AgentBehavior
+        );
         if (case.guarded || grant_guarded) && case.admissible && case.validates {
             let held = OperatorGrants {
                 pack_install: case.held_grants.pack_install,
@@ -118,6 +125,18 @@ pub(super) fn generated_self_config_cases_fence_patch_merge() {
                 SelfConfigTarget::Tools => {
                     let (stored, candidate) = typed();
                     guard_tools_keep_grants(&held, Some(&stored), &candidate)
+                }
+                SelfConfigTarget::AgentContext | SelfConfigTarget::AgentBehavior => {
+                    let selected =
+                        |doc: &Option<Vec<crate::lean_vocab_test::LeanSelfConfigFieldValue>>| {
+                            doc.as_deref()
+                                .map(|doc| typed_doc(SelfConfigTarget::Tools, doc))
+                        };
+                    reselection_keeps_grants(
+                        &held,
+                        selected(&case.selected_before).as_ref(),
+                        selected(&case.selected_after).as_ref(),
+                    )
                 }
                 _ => Ok(()),
             };

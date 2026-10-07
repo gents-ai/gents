@@ -14,6 +14,10 @@ structure CaseRow where
   patch : List (FieldKey × Option FieldValue)
   /-- Operator grants the invoking agent holds. -/
   held : Grants := Grants.bot
+  /-- Tools documents by `tools_id`, for chain and clone rows. -/
+  tools : List (FieldValue × List (FieldKey × FieldValue)) := []
+  /-- `context_id` to its `tools_id` (`none` selects no Tools), for Behavior rows. -/
+  contexts : List (FieldValue × Option FieldValue) := []
   /-- Backends a profile row can select: (`backend_id` JSON text, provider
   kind, auth JSON text). -/
   backends : List (String × String × String) := []
@@ -98,12 +102,31 @@ def lockoutGuard (t : Target) (stored : Doc) : Doc → Bool :=
 def rowBackendOf (r : CaseRow) (id : String) : Option (String × Configuration.BackendAuth) :=
   (r.backends.find? (·.1 = id)).bind fun (_, kind, auth) => (decodeAuthText auth).map (kind, ·)
 
+/-- Tools fixtures for chain and clone rows, without and with the pack grant. -/
+def plainTools : List (FieldKey × FieldValue) :=
+  [("self_config", "{\"enable_self_config\":true}")]
+
+def grantedTools : List (FieldKey × FieldValue) :=
+  [("self_config", "{\"enable_self_config\":true,\"enable_pack_install\":true}")]
+
+/-- The Tools document a Context or Behavior selects, through the row's tables. -/
+def rowResolve (r : CaseRow) : Doc → Option Doc :=
+  let tools (id : FieldValue) : Option Doc :=
+    (r.tools.find? (·.1 == id)).map (fun entry => Doc.ofList entry.2)
+  match r.target with
+  | .agentContext => fun doc => (doc "tools_id").bind tools
+  | .agentBehavior => fun doc =>
+      ((doc "context_id").bind fun context =>
+        (r.contexts.find? (·.1 == context)).bind (·.2)).bind tools
+  | _ => fun _ => none
+
 /-- The always-on operator-grant slice. It is not part of the guarded
 dispatch: the native owner runs it in the shared validate slot on every Tools
 write. -/
 def grantGuard (r : CaseRow) (stored : Doc) : Doc → Bool :=
   match r.target with
   | .tools => keepsGrants decodeGrants r.held stored
+  | .agentContext | .agentBehavior => chainKeepsGrants decodeGrants r.held (rowResolve r) stored
   | _ => fun _ => true
 
 /-- Every Tools row replays the always-on grant slice. A guarded row also
@@ -133,6 +156,8 @@ structure CaseWitness where
   unchangedOnReject : Bool
   controlKeptAfterAccept : Bool
   grantsKeptAfterAccept : Bool
+  selectedBefore : Option (List (FieldKey × FieldValue))
+  selectedAfter : Option (List (FieldKey × FieldValue))
   deriving Repr
 
 def buildWitness (r : CaseRow) : CaseWitness :=
@@ -157,6 +182,8 @@ def buildWitness (r : CaseRow) : CaseWitness :=
   , controlKeptAfterAccept :=
       !(r.guarded && outcome.isSome) || caseGuard r stored result
   , grantsKeptAfterAccept := !outcome.isSome || grantGuard r stored result
+  , selectedBefore := (rowResolve r stored).map (project .tools)
+  , selectedAfter := (rowResolve r merged).map (project .tools)
   }
 
 /-- Values are decoded group values abstracted as strings; nested validation
@@ -385,6 +412,63 @@ def scenarios : List CaseRow := examplesToRows ++
     , doc := [("self_config", "{\"enable_self_config\":true,\"self_config_no_lockout\":true}")]
     , patch := [("self_config",
         some "{\"enable_self_config\":true,\"self_config_no_lockout\":true,\"enable_pack_install\":true}")] }
+  , { name := "context_grant_reselect_without_held_rejected"
+    , target := .agentContext, guarded := false, validates := true
+    , doc := [("context_id", "ctx"), ("tools_id", "plain")]
+    , patch := [("tools_id", some "granted")]
+    , tools := [("plain", plainTools), ("granted", grantedTools)] }
+  , { name := "context_grant_reselect_with_held_accepted"
+    , target := .agentContext, guarded := false, validates := true
+    , held := { Grants.bot with packInstall := true }
+    , doc := [("context_id", "ctx"), ("tools_id", "plain")]
+    , patch := [("tools_id", some "granted")]
+    , tools := [("plain", plainTools), ("granted", grantedTools)] }
+  , { name := "context_reselect_between_granted_tools_accepted"
+    , target := .agentContext, guarded := false, validates := true
+    , doc := [("context_id", "ctx"), ("tools_id", "granted")]
+    , patch := [("tools_id", some "granted-2")]
+    , tools := [("granted", grantedTools), ("granted-2", grantedTools)] }
+  , { name := "context_create_selecting_granted_tools_without_held_rejected"
+    , target := .agentContext, guarded := false, validates := true
+    , doc := [("context_id", "ctx-new")]
+    , patch := [("tools_id", some "granted")]
+    , tools := [("granted", grantedTools)] }
+  , { name := "behavior_grant_reselect_without_held_rejected"
+    , target := .agentBehavior, guarded := false, validates := true
+    , doc := [("behavior_id", "worker"), ("context_id", "ctx-plain")]
+    , patch := [("context_id", some "ctx-granted")]
+    , contexts := [("ctx-plain", some "plain"), ("ctx-granted", some "granted")]
+    , tools := [("plain", plainTools), ("granted", grantedTools)] }
+  , { name := "behavior_reselect_away_from_granted_tools_accepted"
+    , target := .agentBehavior, guarded := false, validates := true
+    , doc := [("behavior_id", "worker"), ("context_id", "ctx-granted")]
+    , patch := [("context_id", some "ctx-plain")]
+    , contexts := [("ctx-plain", some "plain"), ("ctx-granted", some "granted")]
+    , tools := [("plain", plainTools), ("granted", grantedTools)] }
+  , { name := "clone_granted_source_without_held_rejected"
+    , target := .agentBehavior, guarded := false, validates := true
+    , doc := [("behavior_id", "copy")]
+    , patch := [("context_id", some "ctx-granted")]
+    , contexts := [("ctx-granted", some "granted")]
+    , tools := [("granted", grantedTools)] }
+  , { name := "clone_granted_source_with_held_accepted"
+    , target := .agentBehavior, guarded := false, validates := true
+    , held := { Grants.bot with packInstall := true }
+    , doc := [("behavior_id", "copy")]
+    , patch := [("context_id", some "ctx-granted")]
+    , contexts := [("ctx-granted", some "granted")]
+    , tools := [("granted", grantedTools)] }
+  , { name := "clone_plain_source_without_held_accepted"
+    , target := .agentBehavior, guarded := false, validates := true
+    , doc := [("behavior_id", "copy")]
+    , patch := [("context_id", some "ctx-plain")]
+    , contexts := [("ctx-plain", some "plain")]
+    , tools := [("plain", plainTools)] }
+  , { name := "clone_source_without_tools_accepted"
+    , target := .agentBehavior, guarded := false, validates := true
+    , doc := [("behavior_id", "copy")]
+    , patch := [("context_id", some "ctx-bare")]
+    , contexts := [("ctx-bare", none)] }
   ]
 
 def selfConfigCases : List CaseWitness :=
@@ -416,6 +500,21 @@ theorem self_config_cases_cover_grant_refusals :
           && w.admissiblePatch && !w.accepted)
       && selfConfigCases.any (fun w =>
         decide (w.row.target = .tools) && w.row.held.packInstall && w.accepted)) = true := by
+  native_decide
+
+theorem self_config_cases_cover_reselection :
+    (selfConfigCases.any (fun w => decide (w.row.target = .agentContext)
+        && w.selectedBefore.isSome && w.selectedAfter.isSome && !w.accepted)
+      && selfConfigCases.any (fun w => decide (w.row.target = .agentContext)
+        && w.selectedBefore.isNone && w.selectedAfter.isSome && !w.accepted)
+      && selfConfigCases.any (fun w => decide (w.row.target = .agentBehavior)
+        && w.selectedBefore.isSome && !w.accepted)
+      && selfConfigCases.any (fun w => decide (w.row.target = .agentBehavior)
+        && w.selectedBefore.isNone && w.selectedAfter.isSome && !w.accepted)
+      && selfConfigCases.any (fun w =>
+        w.selectedBefore.isNone && w.selectedAfter.isSome && w.accepted)
+      && selfConfigCases.any (fun w => w.selectedBefore.isSome && w.selectedAfter.isSome
+        && w.accepted && !w.row.held.packInstall)) = true := by
   native_decide
 
 end SelfConfig.ContractCases
