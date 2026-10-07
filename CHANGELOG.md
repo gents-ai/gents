@@ -6,6 +6,9 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- A runtime that cannot start because a behavior is unavailable now logs each
+  blocking behavior's diagnostic; a `--tool-root` that does not admit the
+  live `Tools.host.root` names both roots (#2296).
 - Agent-scoped OAuth backends (Claude, ChatGPT, Grok) heal an expired access
   token on their own: the scheduled prober resolves its bearer through the
   credential owner, refreshing and persisting when stale, so an idle runtime no
