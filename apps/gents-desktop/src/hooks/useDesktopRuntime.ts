@@ -141,10 +141,12 @@ export function useSelectionReconcile({
 
   // Snapshot absence is not an explicit navigation intent. Preserve an
   // existing principal selection while bounded observations catch up; only
-  // initialize an empty selection through the route owner.
+  // initialize an empty selection through the route owner. The route's
+  // effect runs first in the same commit (it is a child's), so the store,
+  // not this render's value, says whether a node is already selected.
   useEffect(() => {
-    if (!agentDid && firstNode) actions.selectAgent(firstNode);
-  }, [actions, agentDid, firstNode]);
+    if (!store.getState().agentDid && firstNode) actions.selectAgent(firstNode);
+  }, [actions, agentDid, firstNode, store]);
 
   useEffect(() => {
     if (!node) {
