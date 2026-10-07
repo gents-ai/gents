@@ -1042,6 +1042,9 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "RecoverySweepCases".to_string(),
         ));
     }
+    if !snapshot.fold_queue_cases.is_empty() {
+        emitted.insert(("fold_queue_cases".to_string(), "FoldQueueCases".to_string()));
+    }
     if !snapshot.interrupt_queue_cases.is_empty() {
         for domain in ["InterruptQueueCases", "InterruptQueueHttpOverlapCases"] {
             emitted.insert(("interrupt_queue_cases".to_string(), domain.to_string()));

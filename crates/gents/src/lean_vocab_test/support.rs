@@ -217,6 +217,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) canonical_dispatch_observation_cases: Vec<LeanDispatchObservationCase>,
     pub(crate) canonical_spawned_target_rejection_cases: Vec<LeanSpawnedTargetRejectionCase>,
     pub(crate) interrupt_queue_cases: Vec<LeanInterruptQueueCase>,
+    pub(crate) fold_queue_cases: Vec<LeanFoldQueueCase>,
     pub(crate) canonical_worker_capacity_cases: Vec<LeanWorkerCapacityCase>,
     pub(crate) canonical_payload_presentation_cases: Vec<LeanPayloadPresentationCase>,
     pub(crate) terminal_diagnostic_presentation_cases: Vec<LeanTerminalDiagnosticPresentationCase>,
@@ -1750,6 +1751,56 @@ pub(crate) struct LeanInterruptQueueObservation {
     pub(crate) pending: Vec<u64>,
     pub(crate) terminal: Vec<u64>,
     pub(crate) latched: bool,
+}
+
+pub(crate) fn lean_fold_queue_cases() -> &'static [LeanFoldQueueCase] {
+    &lean_contract_snapshot().fold_queue_cases
+}
+
+/// `SessionQueue.FoldCases`: queue events and the model's observation.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanFoldQueueCase {
+    pub(crate) name: String,
+    pub(crate) agent_id: u64,
+    pub(crate) session_id: u64,
+    pub(crate) inputs: Vec<LeanFoldQueueInput>,
+    pub(crate) expected: LeanFoldQueueObservation,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum LeanFoldQueueInput {
+    Enqueue { entry: LeanFoldQueueEntry },
+    Claim { admitted: Vec<u64> },
+    Finish,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanFoldQueueEntry {
+    pub(crate) request_id: u64,
+    pub(crate) execution_origin: String,
+    pub(crate) source: String,
+    pub(crate) policy: String,
+    pub(crate) queued_after: Option<u64>,
+    pub(crate) requester_id: Option<u64>,
+    pub(crate) turn_context: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanFoldQueueObservation {
+    pub(crate) active: Option<u64>,
+    pub(crate) pending: Vec<u64>,
+    pub(crate) claims: Vec<LeanFoldQueueClaim>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanFoldQueueClaim {
+    pub(crate) head: u64,
+    pub(crate) folded: Vec<u64>,
 }
 
 #[derive(Debug, Deserialize)]

@@ -1107,6 +1107,12 @@ def caseCoverage : List CoverageEntry :=
       "Sequential cases bind Local and HTTP latch/drain, scheduled-origin eligibility, exact pending membership, notification bindings and replay. Native publisher timestamps do not bind modeled equal-time queue ordering. Background-process survival is a separate obligation.")
       "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
+      "fold_queue_cases"
+      "FoldQueueCases"
+      "lifecycle::queue::tests::folding::generated_fold_queue_cases_bind_to_native_claims"
+      "Generated scripts drive the native claim transaction with an explicit verified-admission set and bind active, pending and per-claim folded rows, including supersession pointers. The daemon's admission verification that produces that set is exercised natively, not generated.")
+      "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
       "interrupt_queue_cases"
       "InterruptQueueHttpOverlapCases"
       "interrupt::queue_tests::generated_http_overlap_cases_preserve_cutoff"
