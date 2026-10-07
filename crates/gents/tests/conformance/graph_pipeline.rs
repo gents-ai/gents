@@ -1,9 +1,11 @@
 use gents::graph_pipeline::{
-    compile_graph, CompilerPolicy, EntryBinding, GraphIntent, GraphLimits, GraphNode,
-    PortCardinality, PortRef, PortSpec, ResultCardinality, ResultContract, StageCapability,
+    compile_graph, CompilerPolicy, DeliveryConcurrency, DiagnosticCode, EntryBinding, GraphEdge,
+    GraphIntent, GraphLimits, GraphNode, PortCardinality, PortRef, PortSpec, ResultCardinality,
+    ResultContract, StageCapability,
 };
 
 use super::lean_contract_snapshot;
+use crate::lean_vocab_test::{LeanGraphBoundsFault, LeanGraphTopologyFault};
 
 const CALLER_DID: &str = "did:key:graph-composer";
 
@@ -81,15 +83,47 @@ fn valid_fixture() -> (GraphIntent, Vec<StageCapability>) {
     (intent, vec![capability])
 }
 
+/// Give the worker a second, optional input on its own output's collection and
+/// wire its output into it: the smallest graph whose only compile fault is
+/// `Cycle` (one node, one self-edge, every port and binding otherwise valid).
+/// The two-node cycle is covered by
+/// `graph_pipeline::tests::rejects_cycles_and_unreachable_nodes`.
+fn make_cyclic(intent: &mut GraphIntent, capabilities: &mut [StageCapability]) {
+    capabilities[0].input_ports.push(PortSpec {
+        name: "feedback".to_owned(),
+        collection: "ExperimentResult".to_owned(),
+        schema: "ExperimentResult/v1".to_owned(),
+        correlation_field: "graph_run_id".to_owned(),
+        cardinality: PortCardinality::One,
+        required: false,
+    });
+    intent.edges.push(GraphEdge {
+        from: PortRef {
+            node_id: "worker".to_owned(),
+            port: "result".to_owned(),
+        },
+        to: PortRef {
+            node_id: "worker".to_owned(),
+            port: "feedback".to_owned(),
+        },
+        delivery: None,
+        concurrency: DeliveryConcurrency::Parallel,
+        predicate: None,
+    });
+}
+
 #[test]
 fn generated_validation_cases_fence_whole_graph_compilation_gate() {
     let cases = &lean_contract_snapshot().graph_pipeline_validation_cases;
-    assert_eq!(cases.len(), 32, "Lean must emit the full five-bit matrix");
+    assert_eq!(
+        cases.len(),
+        48,
+        "Lean must emit the full topology and bounds fault matrix"
+    );
 
-    // Single-bit cases pin the concrete diagnostic channel so rejection must
-    // come from the declared gate, not an unrelated compiler check. Multi-bit
+    // Single-fault cases pin the concrete diagnostic channel so rejection must
+    // come from the declared gate, not an unrelated compiler check. Multi-fault
     // cases legitimately emit several codes at once.
-    use gents::graph_pipeline::DiagnosticCode;
     for test_case in cases {
         let (mut intent, mut capabilities) = valid_fixture();
         let mut expected_codes = Vec::new();
@@ -97,17 +131,27 @@ fn generated_validation_cases_fence_whole_graph_compilation_gate() {
             intent.entries[0].schema = "WrongSchema/v1".to_owned();
             expected_codes.push(DiagnosticCode::SchemaMismatch);
         }
-        if !test_case.topology_valid {
-            intent.entries.clear();
-            expected_codes.push(DiagnosticCode::MissingInputBinding);
+        match test_case.topology_fault {
+            LeanGraphTopologyFault::Valid => {}
+            LeanGraphTopologyFault::MissingInputBinding => {
+                intent.entries.clear();
+                expected_codes.push(DiagnosticCode::MissingInputBinding);
+            }
+            LeanGraphTopologyFault::Cycle => {
+                make_cyclic(&mut intent, &mut capabilities);
+                expected_codes.push(DiagnosticCode::Cycle);
+            }
         }
         if !test_case.capabilities_authorized {
             capabilities[0].allowed_callers.clear();
             expected_codes.push(DiagnosticCode::UnauthorizedCapability);
         }
-        if !test_case.within_bounds {
-            intent.limits.max_nodes = 0;
-            expected_codes.push(DiagnosticCode::NodeLimitExceeded);
+        match test_case.bounds_fault {
+            LeanGraphBoundsFault::Within => {}
+            LeanGraphBoundsFault::NodeLimit => {
+                intent.limits.max_nodes = 0;
+                expected_codes.push(DiagnosticCode::NodeLimitExceeded);
+            }
         }
         if !test_case.terminal_result_declared {
             intent.results.clear();
@@ -126,6 +170,19 @@ fn generated_validation_cases_fence_whole_graph_compilation_gate() {
             "{}",
             test_case.name
         );
+        if let Err(error) = &compiled {
+            let saw_cycle = error
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == DiagnosticCode::Cycle);
+            assert_eq!(
+                saw_cycle,
+                test_case.topology_fault == LeanGraphTopologyFault::Cycle,
+                "{}: Cycle must be reported exactly for the cycle fault; observed {:?}",
+                test_case.name,
+                error.diagnostics
+            );
+        }
         if let [expected_code] = expected_codes.as_slice() {
             let error = compiled.unwrap_err();
             assert!(

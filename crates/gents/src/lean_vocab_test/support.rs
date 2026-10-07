@@ -357,13 +357,32 @@ pub(crate) struct LeanPairingReconcileCase {
     pub(crate) after: LeanPairingReconcileSnapshot,
 }
 
+/// Which compiler diagnostic realizes Lean `topologyValid = false`
+/// (`Conformance.GraphPipelineContracts.TopologyFault`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum LeanGraphTopologyFault {
+    Valid,
+    MissingInputBinding,
+    Cycle,
+}
+
+/// Which compiler diagnostic realizes Lean `withinBounds = false`
+/// (`Conformance.GraphPipelineContracts.BoundsFault`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum LeanGraphBoundsFault {
+    Within,
+    NodeLimit,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct LeanGraphPipelineValidationCase {
     pub(crate) name: String,
     pub(crate) types_valid: bool,
-    pub(crate) topology_valid: bool,
+    pub(crate) topology_fault: LeanGraphTopologyFault,
     pub(crate) capabilities_authorized: bool,
-    pub(crate) within_bounds: bool,
+    pub(crate) bounds_fault: LeanGraphBoundsFault,
     pub(crate) terminal_result_declared: bool,
     pub(crate) expected_valid: bool,
 }

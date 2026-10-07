@@ -5,52 +5,139 @@ namespace Conformance.GraphPipelineContracts
 
 open Conformance.Contracts
 
+def boolValues : List Bool := [false, true]
+
+def boolJson (value : Bool) : String :=
+  if value then "true" else "false"
+
+/-- The one revision every family starts from: whole-graph valid, so a case
+varies only the inputs it names. -/
+def fixtureRevision
+    (status : GraphPipeline.RevisionStatus)
+    (artifactsComplete : Bool := true) : GraphPipeline.Revision :=
+  { graphId := 1
+  , revisionId := 2
+  , digest := 3
+  , status := status
+  , typesValid := true
+  , topologyValid := true
+  , capabilitiesAuthorized := true
+  , withinBounds := true
+  , terminalResultDeclared := true
+  , artifactsComplete := artifactsComplete
+  }
+
+def transitionAllowed
+    (state : GraphPipeline.State)
+    (action : GraphPipeline.Action) : Bool :=
+  (GraphPipeline.step? state action).isSome
+
+/-- Which native compiler diagnostic realizes `topologyValid = false`. The
+model keeps topology opaque (`GraphPipeline.Revision.topologyValid`);
+acyclicity is decided by the native Kahn pass in `compile_graph`. Both faults
+project to `topologyValid = false`; the selector only tells the consumer which
+intent to build, so a rejection is checked through that diagnostic. -/
+inductive TopologyFault where
+  | valid
+  | missingInputBinding
+  | cycle
+  deriving DecidableEq, Repr
+
+def TopologyFault.topologyValid : TopologyFault → Bool
+  | .valid => true
+  | .missingInputBinding | .cycle => false
+
+def TopologyFault.wireName : TopologyFault → String
+  | .valid => "valid"
+  | .missingInputBinding => "missing_input_binding"
+  | .cycle => "cycle"
+
+def topologyFaults : List TopologyFault := [.valid, .missingInputBinding, .cycle]
+
+/-- Which native compiler diagnostic realizes `withinBounds = false`: an
+intent that exceeds its own node limit (`node_limit_exceeded`). The model
+keeps `withinBounds` opaque and orders no graph limits; the native compiler
+compares them. -/
+inductive BoundsFault where
+  | within
+  | nodeLimit
+  deriving DecidableEq, Repr
+
+def BoundsFault.withinBounds : BoundsFault → Bool
+  | .within => true
+  | .nodeLimit => false
+
+def BoundsFault.wireName : BoundsFault → String
+  | .within => "within"
+  | .nodeLimit => "node_limit"
+
+def boundsFaults : List BoundsFault := [.within, .nodeLimit]
+
 structure ValidationCase where
   name : String
   typesValid : Bool
-  topologyValid : Bool
+  topology : TopologyFault
   capabilitiesAuthorized : Bool
-  withinBounds : Bool
+  bounds : BoundsFault
   terminalResultDeclared : Bool
-  expectedValid : Bool
   deriving DecidableEq, Repr
 
-def boolValues : List Bool := [false, true]
+def ValidationCase.revision (c : ValidationCase) : GraphPipeline.Revision :=
+  { fixtureRevision .draft false with
+    typesValid := c.typesValid,
+    topologyValid := c.topology.topologyValid,
+    capabilitiesAuthorized := c.capabilitiesAuthorized,
+    withinBounds := c.bounds.withinBounds,
+    terminalResultDeclared := c.terminalResultDeclared }
+
+/-- The compile gate is the `validate` transition of a fresh proposal. -/
+def ValidationCase.expectedValid (c : ValidationCase) : Bool :=
+  transitionAllowed (GraphPipeline.initial c.revision) .validate
 
 def validationCases : List ValidationCase :=
   boolValues.flatMap fun typesValid =>
-    boolValues.flatMap fun topologyValid =>
+    topologyFaults.flatMap fun topology =>
       boolValues.flatMap fun capabilitiesAuthorized =>
-        boolValues.flatMap fun withinBounds =>
+        boundsFaults.flatMap fun bounds =>
           boolValues.map fun terminalResultDeclared =>
-          { name :=
-              "types=" ++ toString typesValid ++
-              ",topology=" ++ toString topologyValid ++
-              ",authorized=" ++ toString capabilitiesAuthorized ++
-              ",bounds=" ++ toString withinBounds ++
-              ",terminal_result=" ++ toString terminalResultDeclared
-          , typesValid := typesValid
-          , topologyValid := topologyValid
-          , capabilitiesAuthorized := capabilitiesAuthorized
-          , withinBounds := withinBounds
-          , terminalResultDeclared := terminalResultDeclared
-          , expectedValid :=
-              typesValid && topologyValid && capabilitiesAuthorized && withinBounds &&
-                terminalResultDeclared
-          }
+            { name :=
+                "types=" ++ toString typesValid ++
+                ",topology=" ++ topology.wireName ++
+                ",authorized=" ++ toString capabilitiesAuthorized ++
+                ",bounds=" ++ bounds.wireName ++
+                ",terminal_result=" ++ toString terminalResultDeclared
+            , typesValid := typesValid
+            , topology := topology
+            , capabilitiesAuthorized := capabilitiesAuthorized
+            , bounds := bounds
+            , terminalResultDeclared := terminalResultDeclared
+            }
 
-theorem validationCases_count : validationCases.length = 32 := by native_decide
+theorem validationCases_count : validationCases.length = 48 := by native_decide
 
-private def boolJson (value : Bool) : String :=
-  if value then "true" else "false"
+/-- The executable gate agrees with the Prop-level whole-graph predicate. -/
+theorem validationCases_agree_with_wholeGraphValid :
+    validationCases.all
+      (fun c => c.expectedValid == decide c.revision.wholeGraphValid) = true := by
+  native_decide
+
+/-- A cyclic topology never validates, whatever the other inputs say. -/
+theorem cycle_never_validates :
+    validationCases.all (fun c => c.topology != .cycle || !c.expectedValid) = true := by
+  native_decide
+
+theorem every_topology_and_bounds_fault_is_covered :
+    (topologyFaults.all (fun f => validationCases.any (·.topology == f)) &&
+      boundsFaults.all (fun f => validationCases.any (·.bounds == f))) = true := by
+  native_decide
 
 def validationCaseJson (testCase : ValidationCase) : String :=
   "{"
     ++ "\"name\":" ++ jsonString testCase.name ++ ","
     ++ "\"types_valid\":" ++ boolJson testCase.typesValid ++ ","
-    ++ "\"topology_valid\":" ++ boolJson testCase.topologyValid ++ ","
+    ++ "\"topology_fault\":" ++ jsonString testCase.topology.wireName ++ ","
     ++ "\"capabilities_authorized\":" ++ boolJson testCase.capabilitiesAuthorized ++ ","
-    ++ "\"within_bounds\":" ++ boolJson testCase.withinBounds ++ ","
+    ++ "\"bounds_fault\":" ++ jsonString testCase.bounds.wireName ++ ","
     ++ "\"terminal_result_declared\":" ++
       boolJson testCase.terminalResultDeclared ++ ","
     ++ "\"expected_valid\":" ++ boolJson testCase.expectedValid
@@ -153,11 +240,6 @@ private def runState
       , resultsCommitted := false
       }
   }
-
-private def transitionAllowed
-    (state : GraphPipeline.State)
-    (action : GraphPipeline.Action) : Bool :=
-  (GraphPipeline.step? state action).isSome
 
 def runTerminalCases : List RunTerminalCase :=
   runStatuses.flatMap fun (status, statusName) =>
