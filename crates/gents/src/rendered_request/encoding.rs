@@ -363,8 +363,10 @@ pub(crate) fn block_content_key(bytes: &[u8]) -> String {
 /// reading of the fuel parameter `RenderedCapture.resolveBytes` threads
 /// through every resolution, not a second policy: a manifest beyond it fails
 /// closed exactly like an over-fuel Lean resolution, and the writer refuses to
-/// produce one. At the mean chunk size it bounds a single captured body to
-/// roughly 40 MiB, far above any context window.
+/// produce one. Blocks span 2048..16387 bytes (the 16 KiB forced cut may
+/// overshoot by up to three UTF-8 continuation bytes), so the ceiling decodes
+/// a body of at least ~20 MiB when every cut lands at the minimum, against
+/// ~40 MiB at the ~4 KiB mean cut — both far above any context window.
 pub(crate) const MAX_MANIFEST_BLOCKS: usize = 10_000;
 
 /// Fuel for durable manifest resolution: `MAX_MANIFEST_BLOCKS` blocks plus the
@@ -377,8 +379,23 @@ pub(crate) const MANIFEST_RESOLUTION_FUEL: usize = MAX_MANIFEST_BLOCKS + 2;
 pub(crate) fn encode_manifest(blocks: &[ManifestEntry]) -> Result<EncodedJson> {
     anyhow::ensure!(
         blocks.len() <= MAX_MANIFEST_BLOCKS,
-        "capture manifest names {} blocks, above the {} the reader resolves",
+        "capture manifest names {} blocks spanning {} body bytes ({}..{} bytes per block), \
+         above the {} the reader resolves; that ceiling decodes bodies of at least ~20 MiB at \
+         the 2 KiB minimum cut and ~40 MiB at the 4 KiB mean cut",
         blocks.len(),
+        blocks
+            .iter()
+            .fold(0u64, |total, entry| total.saturating_add(entry.byte_len)),
+        blocks
+            .iter()
+            .map(|entry| entry.byte_len)
+            .min()
+            .unwrap_or_default(),
+        blocks
+            .iter()
+            .map(|entry| entry.byte_len)
+            .max()
+            .unwrap_or_default(),
         MAX_MANIFEST_BLOCKS
     );
     let stored = encode_envelope(Payload::Manifest {

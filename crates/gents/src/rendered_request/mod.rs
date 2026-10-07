@@ -472,6 +472,138 @@ mod tests {
         }
     }
 
+    /// A block store that answers every named document with a fixed payload
+    /// and commit, so one manifest entry can name a wrong-content document
+    /// under a content key another manifest references correctly.
+    struct MisreferencingBlockStore {
+        docs: Vec<(String, String, String)>,
+    }
+
+    #[async_trait::async_trait]
+    impl CaptureBaseReader for MisreferencingBlockStore {
+        async fn execute_capture_query(&self, query: &str) -> Result<Value> {
+            if !query.contains("RenderedRequestBlock") {
+                return Ok(serde_json::json!({"data": {"RenderedRequest": []}}));
+            }
+            let rows = self
+                .docs
+                .iter()
+                .map(|(doc_id, payload, _)| {
+                    serde_json::json!({
+                        "_docID": doc_id,
+                        "payload": payload,
+                        "byte_len": payload.len(),
+                    })
+                })
+                .collect::<Vec<_>>();
+            Ok(serde_json::json!({"data": {"RenderedRequestBlock": rows}}))
+        }
+
+        async fn capture_field_commit(
+            &self,
+            doc_id: &str,
+            _field: &str,
+        ) -> Result<Option<commits::RequestJsonCommit>> {
+            Ok(self
+                .docs
+                .iter()
+                .find(|(named, _, _)| named == doc_id)
+                .map(|(_, _, cid)| commits::RequestJsonCommit {
+                    cid: cid.clone(),
+                    height: 1,
+                }))
+        }
+    }
+
+    /// The cache-poisoning regression: a manifest entry naming a wrong-content
+    /// document under a content key must fail as that capture's own
+    /// verification error without ever entering the block cache — a cached
+    /// mismatch would fail the witness check of a later, correct capture of
+    /// the same content and drop a turn nothing is wrong with.
+    #[tokio::test]
+    async fn a_misreferenced_block_entry_drops_only_its_own_turn() {
+        let mut body = serde_json::json!({"model": "m", "stream": true});
+        body["padding"] = serde_json::json!(capture_text(6000));
+        let canonical = canonical_json_string(&body).unwrap();
+        let chunks = encoding::chunk_capture_body(&canonical);
+        assert!(chunks.len() > 1, "fixture must span several blocks");
+
+        let wrong_payload = "z".repeat(chunks[0].bytes.len());
+        assert_ne!(
+            encoding::block_content_key(wrong_payload.as_bytes()),
+            chunks[0].content_key
+        );
+        let mut docs = vec![(
+            "block-wrong".to_string(),
+            wrong_payload,
+            "wrong-commit".to_string(),
+        )];
+        let entries = chunks
+            .iter()
+            .enumerate()
+            .map(|(index, chunk)| {
+                docs.push((
+                    format!("block-{index}"),
+                    String::from_utf8(chunk.bytes.clone()).unwrap(),
+                    format!("witness-{index}"),
+                ));
+                encoding::ManifestEntry {
+                    doc_id: format!("block-{index}"),
+                    content_key: chunk.content_key.clone(),
+                    field_commit_cid: format!("witness-{index}"),
+                    byte_len: u64::try_from(chunk.bytes.len()).unwrap(),
+                }
+            })
+            .collect::<Vec<_>>();
+        let store = MisreferencingBlockStore { docs };
+
+        // Turn N's first entry names the wrong-content document under the
+        // correct content key; turn M references the same key correctly.
+        let mut misreferenced = entries.clone();
+        misreferenced[0].doc_id = "block-wrong".into();
+        misreferenced[0].field_commit_cid = "wrong-commit".into();
+        let encode_turn = |entries: &[encoding::ManifestEntry]| {
+            let manifest = encoding::encode_manifest(entries).unwrap();
+            encoding::encode_container(&manifest, &manifest).unwrap()
+        };
+        let turn_n = encode_turn(&misreferenced);
+        let turn_m = encode_turn(&entries);
+
+        let version = gents_protocol::rendered_request::CAPTURE_VERSION;
+        let mut cache = CaptureReadCache::default();
+        let error = decode_capture_json_from_cached(
+            &store,
+            version,
+            &turn_n,
+            CapturePayloadKind::RequestBody,
+            &mut cache,
+        )
+        .await
+        .err()
+        .expect("the misreferencing turn must fail closed");
+        assert!(
+            error.downcast_ref::<CaptureStoreReadError>().is_none(),
+            "a misreferenced block is a verification failure, not a store failure: {error:#}"
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("does not hash to its content key"),
+            "{error:#}"
+        );
+
+        let replayed = decode_capture_json_from_cached(
+            &store,
+            version,
+            &turn_m,
+            CapturePayloadKind::RequestBody,
+            &mut cache,
+        )
+        .await
+        .expect("the neighboring turn must still replay through the shared cache");
+        assert_eq!(replayed, body);
+    }
+
     fn agent_request() -> crate::watcher::AgentRequest {
         crate::watcher::AgentRequest {
             purpose: gents_protocol::request_admission::RequestPurpose::Normal,
@@ -752,7 +884,11 @@ async fn decode_capture_json_from_cached<R: CaptureBaseReader + Sync>(
 /// A failed query is a [`CaptureStoreReadError`]: it says the store is broken,
 /// not that the capture is unverifiable. A block document that is simply
 /// absent is left uncached, so resolution reports it as a verification failure
-/// and replay drops only the affected turn.
+/// and replay drops only the affected turn. A document whose payload does not
+/// hash to the entry's content key is the same kind of verification failure
+/// for the capture that named it, and is refused before the cache: the cache
+/// is keyed by content key, so admitting it would poison every later capture
+/// that references the key correctly.
 async fn read_manifest_blocks<R: CaptureBaseReader + Sync>(
     reader: &R,
     entries: &[encoding::ManifestEntry],
@@ -834,6 +970,11 @@ async fn read_manifest_blocks<R: CaptureBaseReader + Sync>(
             "capture manifest block {} stores byte_len {byte_len}, manifest pins {}",
             entry.doc_id,
             entry.byte_len
+        );
+        anyhow::ensure!(
+            encoding::block_content_key(payload.as_bytes()) == entry.content_key,
+            "capture manifest block {} stores a payload that does not hash to its content key",
+            entry.doc_id
         );
         cache.insert(
             entry.content_key.clone(),

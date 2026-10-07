@@ -339,7 +339,10 @@ impl DefraRenderedRequestSink {
         // disagrees with the writes would turn a concurrent same-content writer
         // into a failed capture instead of an idempotent reuse, and the
         // transaction owner retries this whole closure on conflict, where a
-        // fresh snapshot re-decides what is missing.
+        // fresh snapshot re-decides what is missing. A block create that
+        // nevertheless loses the unique content key reconciles against the
+        // winning row inside the attempt, since the retry owner classifies
+        // neither that error nor the manifest's duplicate key as a conflict.
         let capture_container = crate::config_client::ConfigAccess::transact_local(
             self.node.as_ref(),
             None,
@@ -354,6 +357,7 @@ impl DefraRenderedRequestSink {
                     let mut stored = StoredCaptureBlocks::default();
                     let request_entries =
                         write_capture_blocks(txn, &blocks, &request_canonical, &mut stored).await?;
+                    verify_created_block_readback(txn, &request_entries, &stored).await?;
                     let request_encoding = super::encoding::encode_manifest(&request_entries)?;
                     let provenance_entries = write_capture_blocks(
                         txn,
@@ -646,6 +650,94 @@ async fn stored_blocks_in_txn(
 #[derive(Default)]
 struct StoredCaptureBlocks {
     doc_ids: std::collections::BTreeMap<String, String>,
+    /// Blocks this attempt created, keyed by content key. Reused rows had
+    /// their stored payload byte-compared on read; created rows did not, which
+    /// is what the post-create read-back exists to close.
+    created: std::collections::BTreeMap<String, Vec<u8>>,
+}
+
+/// A unique-index violation surfaced through a transaction statement: DefraDB's
+/// shared `UniqueConstraintViolation` message, the same error class
+/// `gents-migration` tolerates at boot. The transaction owner classifies only
+/// snapshot conflicts as replayable, so this class neither retries nor
+/// reconciles on its own; the caller must.
+fn is_unique_index_violation(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|cause| cause.to_string().contains("violates unique index"))
+}
+
+/// Create one capture block document and return its document id.
+///
+/// The content key is unique on the collection, so the create can lose to a
+/// concurrent writer that stored the same block first. The loser reconciles
+/// inside this same attempt instead of failing the capture: the winning row is
+/// re-read by content key, byte-compared, and its document id returned so the
+/// manifest names the row that is actually durable — the entry loop then pins
+/// that row's current field commit. Only a winner holding different bytes for
+/// the same content key is an integrity error.
+async fn create_block_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    block: &PendingBlock,
+) -> Result<String> {
+    let payload = String::from_utf8(block.bytes.clone()).context(
+        "capture block bytes must be valid UTF-8; chunk boundaries land on character boundaries",
+    )?;
+    let input = serde_json::json!({
+        "content_key": block.content_key,
+        "payload": payload,
+        "byte_len": block.bytes.len(),
+        "created_at": chrono::Utc::now().to_rfc3339(),
+    });
+    let variables = serde_json::json!({ "input": input });
+    let response = match txn
+        .execute_with_variables(CREATE_RENDERED_REQUEST_BLOCK_MUTATION, &variables)
+        .await
+    {
+        Ok(response) => response,
+        Err(error) if is_unique_index_violation(&error) => {
+            return reconcile_created_block(txn, block).await;
+        }
+        Err(error) => return Err(error),
+    };
+    response
+        .get("data")
+        .and_then(|data| data.get("add_RenderedRequestBlock"))
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("_docID"))
+        .and_then(Value::as_str)
+        .with_context(|| {
+            format!(
+                "creating capture block returned no document: {}",
+                block.content_key
+            )
+        })
+        .map(ToOwned::to_owned)
+}
+
+/// Resolve the winner of a lost block create: the row already holding the
+/// content key, which must carry the same bytes or the store is lying about
+/// content it addresses.
+async fn reconcile_created_block(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    block: &PendingBlock,
+) -> Result<String> {
+    let (doc_id, payload) = stored_blocks_in_txn(txn, &[block.content_key.clone()])
+        .await?
+        .get(&block.content_key)
+        .with_context(|| {
+            format!(
+                "capture block create lost the unique content key {} but its winner is unreadable",
+                block.content_key
+            )
+        })?
+        .clone();
+    anyhow::ensure!(
+        payload.as_bytes() == block.bytes.as_slice(),
+        "concurrent capture block {doc_id} holds different bytes under the same content key"
+    );
+    Ok(doc_id)
 }
 
 /// Write the blocks one capture payload needs and return its manifest entries,
@@ -654,7 +746,8 @@ struct StoredCaptureBlocks {
 /// The function gates its own commit the way `encode_full` does: it reassembles
 /// the stored bytes back over the canonical body and refuses to return entries
 /// that do not reproduce it exactly, so no manifest is ever written for a body
-/// the store cannot give back.
+/// the store cannot give back. Reused rows are byte-compared on read, created
+/// rows are read back once through [`verify_created_block_readback`].
 ///
 /// Every entry pins the *current* field commit of its block document, read in
 /// this same transaction for created and reused rows alike, so the manifest
@@ -693,33 +786,10 @@ async fn write_capture_blocks(
         if stored.doc_ids.contains_key(&block.content_key) {
             continue;
         }
-        let payload = String::from_utf8(block.bytes.clone()).context(
-            "capture block bytes must be valid UTF-8; chunk boundaries land on character boundaries",
-        )?;
-        let input = serde_json::json!({
-            "content_key": block.content_key,
-            "payload": payload,
-            "byte_len": block.bytes.len(),
-            "created_at": chrono::Utc::now().to_rfc3339(),
-        });
-        let variables = serde_json::json!({ "input": input });
-        let response = txn
-            .execute_with_variables(CREATE_RENDERED_REQUEST_BLOCK_MUTATION, &variables)
-            .await?;
-        let doc_id = response
-            .get("data")
-            .and_then(|data| data.get("add_RenderedRequestBlock"))
-            .and_then(Value::as_array)
-            .and_then(|rows| rows.first())
-            .and_then(|row| row.get("_docID"))
-            .and_then(Value::as_str)
-            .with_context(|| {
-                format!(
-                    "creating capture block returned no document: {}",
-                    block.content_key
-                )
-            })?
-            .to_owned();
+        let doc_id = create_block_in_txn(txn, block).await?;
+        stored
+            .created
+            .insert(block.content_key.clone(), block.bytes.clone());
         stored.doc_ids.insert(block.content_key.clone(), doc_id);
     }
 
@@ -746,6 +816,46 @@ async fn write_capture_blocks(
         "chunked capture blocks did not reassemble into the canonical body"
     );
     Ok(entries)
+}
+
+/// Read one block this capture created back through the same transaction and
+/// byte-compare it with the bytes the writer holds.
+///
+/// The reassemble gate inside `write_capture_blocks` compares in-memory chunk
+/// bytes, and reused rows were byte-compared against a store read; created
+/// rows were the one path store-side mangling could survive unseen until a
+/// reader failed closed. One read per capture, on the first block of the
+/// request-body manifest the capture created; a manifest built entirely from
+/// already-stored rows read everything it names.
+async fn verify_created_block_readback(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    entries: &[super::encoding::ManifestEntry],
+    stored: &StoredCaptureBlocks,
+) -> Result<()> {
+    let Some(entry) = entries
+        .iter()
+        .find(|entry| stored.created.contains_key(&entry.content_key))
+    else {
+        return Ok(());
+    };
+    let Some(bytes) = stored.created.get(&entry.content_key) else {
+        return Ok(());
+    };
+    let (doc_id, payload) = stored_blocks_in_txn(txn, &[entry.content_key.clone()])
+        .await?
+        .get(&entry.content_key)
+        .with_context(|| {
+            format!(
+                "created capture block {} was unreadable in its own transaction",
+                entry.content_key
+            )
+        })?
+        .clone();
+    anyhow::ensure!(
+        payload.as_bytes() == bytes.as_slice(),
+        "created capture block {doc_id} did not read back the bytes it was written with"
+    );
+    Ok(())
 }
 
 /// The single result field of a single-operation mutation envelope.
@@ -1149,6 +1259,153 @@ mod tests {
             block_rows(node.as_ref()).await.len(),
             blocks_after_first,
             "no block may be written twice"
+        );
+        node.shutdown().await;
+    }
+
+    /// The block-create race: a concurrent writer stored the same content key
+    /// first, so the create loses the unique index rather than seeing the row
+    /// in the existence read. The write closure reconciles against the winning
+    /// row in the same attempt — identical bytes complete the work on the
+    /// winner's row, different bytes under the same key are an integrity
+    /// error — and the capture the reconciled block belongs to still succeeds.
+    #[tokio::test]
+    async fn a_lost_block_create_reconciles_the_winning_row() {
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        let sink = DefraRenderedRequestSink::new(Arc::clone(&node));
+
+        let request_json = json!({
+            "model": "m",
+            "messages": [{"role": "user", "content": capture_text(23, 6 * 1024)}]
+        });
+        let canonical = canonical_json_string(&request_json).unwrap();
+        let blocks: Vec<PendingBlock> = super::super::encoding::chunk_capture_body(&canonical)
+            .iter()
+            .map(|chunk| PendingBlock {
+                content_key: chunk.content_key.clone(),
+                bytes: chunk.bytes.clone(),
+            })
+            .collect();
+        assert!(blocks.len() > 1, "the body must span several blocks");
+
+        // The winner: identical content under its own created_at, committed
+        // before the transaction below, so the create finds its unique index
+        // entry rather than a reusable row in the existence read's place.
+        let winner = blocks[0].clone();
+        let winner_payload = String::from_utf8(winner.bytes.clone()).unwrap();
+        let response = node
+            .execute(&format!(
+                r#"mutation {{ create_RenderedRequestBlock(input: {{ content_key: "{}", payload: "{}", byte_len: {}, created_at: "2026-01-01T00:00:00Z" }}) {{ _docID }} }}"#,
+                escape_graphql_string(&winner.content_key),
+                escape_graphql_string(&winner_payload),
+                winner.bytes.len(),
+            ))
+            .await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        let winner_doc_id = response.data.unwrap()["add_RenderedRequestBlock"][0]["_docID"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        let expected_doc = winner_doc_id.clone();
+        let reconciled = crate::config_client::ConfigAccess::transact_local(
+            node.as_ref(),
+            None,
+            "test.reconcile_lost_block_create",
+            |txn| {
+                let winner = winner.clone();
+                let expected_doc = expected_doc.clone();
+                Box::pin(async move {
+                    let doc_id = create_block_in_txn(txn, &winner).await?;
+                    anyhow::ensure!(
+                        doc_id == expected_doc,
+                        "the reconciled reference must name the winner, not a new row"
+                    );
+                    Ok(doc_id)
+                })
+            },
+        )
+        .await
+        .expect("a create lost to identical bytes reconciles");
+        assert_eq!(reconciled, winner_doc_id);
+
+        // The failed create wrote nothing: the winner is still the only row
+        // under the content key.
+        let rows = node
+            .execute(&format!(
+                r#"{{ RenderedRequestBlock(filter: {{ content_key: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+                escape_graphql_string(&winner.content_key),
+            ))
+            .await;
+        assert!(!rows.has_errors(), "{:?}", rows.errors);
+        let holding = rows.data.unwrap()["RenderedRequestBlock"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(holding.len(), 1, "one row per content key");
+        assert_eq!(
+            holding[0]["_docID"].as_str(),
+            Some(winner_doc_id.as_str()),
+            "the winner keeps the content key"
+        );
+
+        // A winner holding different bytes under the same content key is an
+        // integrity error, not a block to pin.
+        let other_canonical = canonical_json_string(&json!({
+            "model": "m",
+            "messages": [{"role": "user", "content": capture_text(29, 6 * 1024)}]
+        }))
+        .unwrap();
+        let other = super::super::encoding::chunk_capture_body(&other_canonical)
+            .into_iter()
+            .next()
+            .expect("other body chunks");
+        let tampered = format!("{}tampered", other.bytes.len());
+        let response = node
+            .execute(&format!(
+                r#"mutation {{ create_RenderedRequestBlock(input: {{ content_key: "{}", payload: "{}", byte_len: {}, created_at: "2026-01-01T00:00:00Z" }}) {{ _docID }} }}"#,
+                escape_graphql_string(&other.content_key),
+                escape_graphql_string(&tampered),
+                tampered.len(),
+            ))
+            .await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        let error = crate::config_client::ConfigAccess::transact_local(
+            node.as_ref(),
+            None,
+            "test.reconcile_lost_block_create",
+            |txn| {
+                let other = PendingBlock {
+                    content_key: other.content_key.clone(),
+                    bytes: other.bytes.clone(),
+                };
+                Box::pin(async move { create_block_in_txn(txn, &other).await })
+            },
+        )
+        .await
+        .expect_err("a create lost to different bytes is an integrity error");
+        assert!(
+            error.to_string().contains("does not match its content key"),
+            "{error:#}"
+        );
+
+        // The reconciled winner is the row the real writer uses: the capture
+        // completes over it and decodes back through the reader.
+        let rendered = rendered_turn(0, request_json);
+        sink.capture(rendered.clone()).await.expect("capture");
+        let row = stored_capture(node.as_ref(), &rendered.capture_key).await;
+        let stored = row["request_json"].as_str().unwrap();
+        assert_eq!(
+            super::super::decode_capture_json_embedded(
+                node.as_ref(),
+                3,
+                stored,
+                super::super::CapturePayloadKind::RequestBody,
+            )
+            .await
+            .unwrap(),
+            super::super::canonical_json(&rendered.request_json)
         );
         node.shutdown().await;
     }
