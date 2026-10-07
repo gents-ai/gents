@@ -122,7 +122,7 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
                 let p = collapse(&p, spec.agg);
                 if rows > p.len() && !spec.agg_given {
                     ctx.notes.add(format!(
-                        "series {}: {} rows share an x with an earlier row and are combined by sum; set agg to combine them another way",
+                        "series {}: {} rows share an x with an earlier row and are combined by sum; set agg to combine them another way, or give series to draw one line per group",
                         crate::text::quote(&g.name),
                         rows - p.len()
                     ));

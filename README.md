@@ -59,8 +59,8 @@ series' highest and lowest point), `series` (the numbers behind the marks) and
 
 ## Use it as a graph node
 
-Installing the pack also installs the plugin as a node, a plain callback, so no
-model and no graph pack is needed: create a `ChartRequest` document and a
+Installing the pack also installs the plugin as two nodes, plain callbacks, so
+no model and no graph pack is needed: create a `ChartRequest` document and a
 `ChartResult` appears.
 
 ```sh
@@ -76,7 +76,11 @@ data_tables node can be passed straight in.
 
 | Node | Reads | Writes |
 | --- | --- | --- |
-| `chart-render` (plugin `charts`) | every `ChartRequest` | one `ChartResult`; with `save` set, also the files its `svg_file` and `png_file` name |
+| `chart-render` (plugin `charts`) | a `ChartRequest` with no `save` | one `ChartResult` |
+| `chart-save` (plugin `charts`) | a `ChartRequest` with `save` set | one `ChartResult` whose `svg_file` and `png_file` name the files written |
+
+The split keeps `save` out of a request that has none: the host treats any
+non-null `save`, even an empty one, as a write.
 
 `ChartRequest` has the fields of the tool (`chart`, `data`, `path`, `file`,
 `x`, `y`, `line`, `series`, `size`, `value`, `agg`, `sort`, `stack`,
@@ -127,7 +131,7 @@ ls reports   # revenue.svg  revenue.png  sales.csv
 ## Installation
 
 `gents pack install gents/charts` installs the Chart maker behavior, its Tools
-document, the graph node and the plugin, and binds the `chart_maker` inference slot to a
+document, the two graph nodes and the plugin, and binds the `chart_maker` inference slot to a
 profile (any capable one; a profile that accepts images also checks the
 picture). Nothing else needs configuring: there is no network, key or model
 download.

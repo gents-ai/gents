@@ -34,12 +34,12 @@
       "expr": "row(\"agent_behaviors\"; \"behavior_id\"; \"chart-maker\").inference_profile_id == \"gents:inference-slot:chart_maker\" and (.manifest.inference_slots | map(.name)) == [\"chart_maker\"] and (doc_text(\"agent_behaviors/chart_maker/system_prompt.md\") | contains(\"`charts`\"))"
     },
     {
-      "name": "one graph node turns every ChartRequest into one ChartResult",
-      "expr": "(.config.event_sources | length) == 1 and row(\"event_sources\"; \"event_source_id\"; \"chart-render\").source_collection == \"ChartRequest\" and (row(\"event_sources\"; \"event_source_id\"; \"chart-render\") | has(\"filter\") | not) and [.config.callbacks[].handler.plugin] == [\"gents/charts\"] and all(.config.callbacks[]; .handler.outputs | length == 1 and .[0].collection == \"ChartResult\" and .[0].required == true)"
+      "name": "two nodes on the one charts plugin split on save, so a read-only folder serves requests without it",
+      "expr": "row(\"event_sources\"; \"event_source_id\"; \"chart-render\").source_collection == \"ChartRequest\" and row(\"event_sources\"; \"event_source_id\"; \"chart-save\").source_collection == \"ChartRequest\" and (row(\"event_sources\"; \"event_source_id\"; \"chart-render\").filter | contains(\"save\")) and (row(\"event_sources\"; \"event_source_id\"; \"chart-save\").filter | contains(\"save\")) and [.config.callbacks[].handler.plugin] == [\"gents/charts\", \"gents/charts\"] and all(.config.callbacks[]; .handler.outputs | length == 1 and .[0].collection == \"ChartResult\" and .[0].required == true)"
     },
     {
-      "name": "the node's binding passes every ChartRequest field, save included",
-      "expr": "doc_text(\"schemas/chart_request.graphql\") as $g | (row(\"callback_bindings\"; \"binding_id\"; \"chart-render\").input_fields | index(\"save\")) != null and all(.config.callback_bindings[].input_fields[]; . as $f | $g | contains(\"  \" + $f + \":\"))"
+      "name": "only the save node's binding passes save, and every passed field is a ChartRequest field",
+      "expr": "doc_text(\"schemas/chart_request.graphql\") as $g | (row(\"callback_bindings\"; \"binding_id\"; \"chart-render\").input_fields | index(\"save\")) == null and (row(\"callback_bindings\"; \"binding_id\"; \"chart-save\").input_fields | index(\"save\")) != null and all(.config.callback_bindings[].input_fields[]; . as $f | $g | contains(\"  \" + $f + \":\"))"
     },
     {
       "name": "the request fields of the schema are exactly the tool fields plus run_id",

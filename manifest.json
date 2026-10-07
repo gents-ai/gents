@@ -11,6 +11,7 @@
     "tests/content.json",
     "tests/graph_error.json",
     "tests/graph_inline.json",
+    "tests/graph_read_only.json",
     "tests/graph_render.json",
     "tests/graph_save.json",
     "tests/install.json"

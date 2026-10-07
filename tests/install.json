@@ -4,8 +4,11 @@
       "AgentBehavior/chart-maker",
       "AgentContext/chart-maker-context",
       "Callback/chart-render",
+      "Callback/chart-save",
       "CallbackBinding/chart-render",
+      "CallbackBinding/chart-save",
       "EventSource/chart-render",
+      "EventSource/chart-save",
       "Tools/chart-maker-tools"
     ],
     "plugins": [
