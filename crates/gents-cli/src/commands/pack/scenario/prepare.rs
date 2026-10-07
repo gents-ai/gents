@@ -304,6 +304,7 @@ mod tests {
                 original_field: None,
                 description: "scan target".to_string(),
                 access: Default::default(),
+                write_fields: Vec::new(),
             }),
             limits: None,
             model_slot: None,

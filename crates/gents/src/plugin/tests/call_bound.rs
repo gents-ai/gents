@@ -91,6 +91,7 @@ fn call_bound_overwrites_the_declared_input_field_with_the_canonical_bound_path(
         original_field: None,
         description: "a directory".to_owned(),
         access: Default::default(),
+        write_fields: Vec::new(),
     });
     let runner = PluginRunner::compile(&afb, &plugin).unwrap();
     let dir = tempfile::tempdir().unwrap();
@@ -125,6 +126,7 @@ fn call_bound_treats_null_arguments_as_an_empty_object() {
         original_field: None,
         description: "a directory".to_owned(),
         access: Default::default(),
+        write_fields: Vec::new(),
     });
     let runner = PluginRunner::compile(&afb, &plugin).unwrap();
     let dir = tempfile::tempdir().unwrap();
@@ -154,6 +156,7 @@ fn admission_refuses_a_bind_dir_plugin_whose_dispatch_path_cannot_enforce_read_o
         original_field: None,
         description: "a directory".to_owned(),
         access: Default::default(),
+        write_fields: Vec::new(),
     });
 
     let error = PluginRunner::compile(&afb_bytes, &plugin)
@@ -198,6 +201,7 @@ fn call_bound_read_write_lets_the_guest_create_a_file() {
         original_field: None,
         description: "a directory".to_owned(),
         access: crate::pack::BindAccess::ReadWrite,
+        write_fields: Vec::new(),
     });
     let runner = PluginRunner::compile(&afb, &plugin).unwrap();
     let outcome = call_bound_verdict(&runner, &bound);
@@ -252,6 +256,7 @@ fn call_bound_reads_inside_and_never_writes_for_a_read_plugin() {
         original_field: None,
         description: "a directory".to_owned(),
         access,
+        write_fields: Vec::new(),
     };
     let runner = |wat: &str| {
         let (mut plugin, afb) = build_plugin_pack("bound", wat, None);

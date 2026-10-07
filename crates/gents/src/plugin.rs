@@ -430,17 +430,20 @@ impl PluginRunner {
             // this artifact's dispatch path can honour that grant at all,
             // independent of whether one was declared here.
             let supported = afterburner::afb_run::bounds_for(&afb);
-            let (enforced, kind) = match binding.access {
-                BindAccess::Read => (supported.manifold_fs_ro, "read-only"),
-                BindAccess::ReadWrite => (supported.manifold_fs_rw, "read-write"),
-            };
-            anyhow::ensure!(
-                enforced,
-                "plugin {:?} declares bind_dir, but its dispatch path cannot enforce a \
-                 {kind} filesystem grant, so a caller-bound directory would not actually be \
-                 contained",
-                plugin.name
-            );
+            let reads = binding.access == BindAccess::Read || !binding.write_fields.is_empty();
+            let writes = binding.access == BindAccess::ReadWrite;
+            for (needed, enforced, kind) in [
+                (reads, supported.manifold_fs_ro, "read-only"),
+                (writes, supported.manifold_fs_rw, "read-write"),
+            ] {
+                anyhow::ensure!(
+                    !needed || enforced,
+                    "plugin {:?} declares bind_dir, but its dispatch path cannot enforce a \
+                     {kind} filesystem grant, so a caller-bound directory would not actually be \
+                     contained",
+                    plugin.name
+                );
+            }
         }
 
         Ok(Self {
@@ -461,10 +464,11 @@ impl PluginRunner {
     }
 
     /// Runs it once, binding `bound` into `plugin.bind_dir`'s declared
-    /// input field, with the access the plugin declared, and only for this
-    /// one call. Refuses outright when the plugin declares no `bind_dir`
-    /// (the field it would overwrite does not exist) or when `bound` was
-    /// allowed less access than the plugin declared.
+    /// input field, with the access this call asks for
+    /// ([`crate::pack::PluginDirBinding::call_access`]), and only for this one
+    /// call. Refuses outright when the plugin declares no `bind_dir` (the
+    /// field it would overwrite does not exist) or when `bound` was allowed
+    /// less access than the call asks for.
     ///
     /// `arguments[bind_dir.input_field]` is overwritten with `bound`'s own
     /// canonical target regardless of what the caller passed, so a plugin
@@ -474,7 +478,7 @@ impl PluginRunner {
     /// a missing operator input is treated as an empty object rather than
     /// refused; any other non-object value is still refused. The manifold
     /// this call actually runs under is the admitted one with `fs` replaced
-    /// by exactly `bound`'s directory - never wider, and never recorded as a
+    /// by exactly `bound`'s directory at the call's access - never wider, and never recorded as a
     /// standing grant (the install record's `granted` is untouched; see
     /// [`BoundDir`]'s own doc).
     pub fn call_bound(
@@ -489,11 +493,12 @@ impl PluginRunner {
                 self.plugin.name
             )
         })?;
+        let access = bind_dir.call_access(arguments);
         anyhow::ensure!(
-            bound.access() >= bind_dir.access,
-            "plugin {:?} needs {} access, but {} is only allowed {}",
+            bound.access() >= access,
+            "plugin {:?} needs {} access for this call, but {} is only allowed {}",
             self.plugin.name,
-            bind_dir.access.as_str(),
+            access.as_str(),
             bound.path().display(),
             bound.access().as_str()
         );
@@ -530,7 +535,7 @@ impl PluginRunner {
         }
         let roots = vec![bound.path().to_path_buf()];
         let manifold = Manifold {
-            fs: match bind_dir.access {
+            fs: match access {
                 BindAccess::Read => FsAccess::ReadOnly(roots),
                 BindAccess::ReadWrite => FsAccess::ReadWrite(roots),
             },

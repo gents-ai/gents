@@ -231,8 +231,8 @@ impl std::str::FromStr for BindAccess {
 }
 
 /// Where a plugin's `bind_dir` binds: which input field carries the
-/// canonical bound path, what a consenting operator is shown for it, and
-/// how much of the directory the plugin uses.
+/// canonical bound path, what a consenting operator is shown for it, the most
+/// of the directory the plugin may use, and which inputs make a call write.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PluginDirBinding {
@@ -251,10 +251,49 @@ pub struct PluginDirBinding {
     pub original_field: Option<String>,
     /// Shown to an operator deciding whether to bind this plugin.
     pub description: String,
-    /// `read` (the default) or `read_write`. A caller may bind it only
-    /// where the operator allowed at least this much.
+    /// `read` (the default) or `read_write`: the most access any call may
+    /// use. Each call asks only for what it uses ([`Self::call_access`]), and
+    /// is bound only where the operator allowed at least that much.
     #[serde(default, skip_serializing_if = "BindAccess::is_read")]
     pub access: BindAccess,
+    /// Properties of `input_schema` whose presence makes a call write. A call
+    /// that sets none of them asks for `read`, so one `read_write` plugin
+    /// serves readers under a read-only folder too. Empty on a `read_write`
+    /// plugin means every call writes. Only a `read_write` plugin may declare
+    /// them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub write_fields: Vec<String>,
+}
+
+impl PluginDirBinding {
+    /// The access one call with `arguments` asks for: Lean
+    /// `ToolPolicy.pluginCallAccess`. A call reads unless it writes, and it
+    /// writes when it sets a declared write field to anything but null, or
+    /// always when a `read_write` plugin declares none.
+    pub fn call_access(&self, arguments: &serde_json::Value) -> BindAccess {
+        match self.access {
+            BindAccess::Read => BindAccess::Read,
+            BindAccess::ReadWrite if self.write_fields.is_empty() => BindAccess::ReadWrite,
+            BindAccess::ReadWrite if self.write_fields_set(arguments).is_empty() => {
+                BindAccess::Read
+            }
+            BindAccess::ReadWrite => BindAccess::ReadWrite,
+        }
+    }
+
+    /// The declared write fields `arguments` sets, the ones an error names
+    /// when that call is refused for writing.
+    pub fn write_fields_set(&self, arguments: &serde_json::Value) -> Vec<&str> {
+        self.write_fields
+            .iter()
+            .filter(|field| {
+                arguments
+                    .get(field.as_str())
+                    .is_some_and(|value| !value.is_null())
+            })
+            .map(String::as_str)
+            .collect()
+    }
 }
 
 /// A plugin's declared resource ceiling: what
@@ -442,6 +481,22 @@ impl PackPlugin {
                     original
                 );
             }
+            anyhow::ensure!(
+                bind_dir.write_fields.is_empty() || bind_dir.access == BindAccess::ReadWrite,
+                "plugin {:?} declares bind_dir.write_fields but bind_dir.access is read; a \
+                 call that sets one would write, so declare access read_write",
+                self.name
+            );
+            for field in &bind_dir.write_fields {
+                anyhow::ensure!(
+                    field != &bind_dir.input_field
+                        && Some(field) != bind_dir.original_field.as_ref()
+                        && schema_declares_property(&self.input_schema, field, |_| true),
+                    "plugin {:?} bind_dir.write_fields names {field:?}, which must be a property \
+                     of input_schema other than the bound path fields",
+                    self.name
+                );
+            }
             // The directory a caller binds is authority granted fresh at
             // every call (see `crate::plugin::BoundDir`), never a standing
             // one; a plugin that also declared its own `fs` grant would
@@ -513,21 +568,29 @@ fn limit_range_reason(value: u32, ceiling: u32, unit: &str) -> String {
 /// never be satisfied, and a field absent from every location declares
 /// nothing to bind.
 fn schema_declares_string_property(input_schema: &serde_json::Value, field: &str) -> bool {
-    let is_string_property = |schema: &serde_json::Value| {
+    schema_declares_property(input_schema, field, |property| {
+        property.get("type").and_then(serde_json::Value::as_str) == Some("string")
+    })
+}
+
+/// Whether `input_schema`, or one of its `oneOf` branches, declares `field`
+/// as a property that `accept` accepts.
+fn schema_declares_property(
+    input_schema: &serde_json::Value,
+    field: &str,
+    accept: impl Fn(&serde_json::Value) -> bool,
+) -> bool {
+    let declares = |schema: &serde_json::Value| {
         schema
             .get("properties")
             .and_then(|properties| properties.get(field))
-            .and_then(|property| property.get("type"))
-            .and_then(serde_json::Value::as_str)
-            == Some("string")
+            .is_some_and(&accept)
     };
-    if is_string_property(input_schema) {
-        return true;
-    }
-    input_schema
-        .get("oneOf")
-        .and_then(serde_json::Value::as_array)
-        .is_some_and(|branches| branches.iter().any(is_string_property))
+    declares(input_schema)
+        || input_schema
+            .get("oneOf")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|branches| branches.iter().any(declares))
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1051,6 +1114,7 @@ mod tests {
                 original_field: None,
                 description: "the directory to scan".to_owned(),
                 access: BindAccess::Read,
+                write_fields: Vec::new(),
             }),
             ..valid_plugin()
         }
@@ -1086,6 +1150,42 @@ mod tests {
         missing.input_schema = serde_json::json!({"type": "object"});
         let error = missing.validate().expect_err("root is not declared");
         assert!(format!("{error:#}").contains("root"));
+    }
+
+    #[test]
+    fn bind_dir_write_fields_are_schema_properties_on_a_read_write_plugin() {
+        let mut plugin = bindable_plugin();
+        plugin.input_schema = serde_json::json!({"type": "object", "properties": {
+            "root": {"type": "string"}, "output": {"type": "object"}}});
+        let binding = plugin.bind_dir.as_mut().unwrap();
+        binding.write_fields = vec!["output".into()];
+        let error = plugin.validate().expect_err("a read plugin cannot write");
+        assert!(
+            format!("{error:#}").contains("access read_write"),
+            "{error:#}"
+        );
+        plugin.bind_dir.as_mut().unwrap().access = BindAccess::ReadWrite;
+        plugin
+            .validate()
+            .expect("any declared property can be a write field");
+        for field in ["missing", "root"] {
+            plugin.bind_dir.as_mut().unwrap().write_fields = vec![field.into()];
+            let error = plugin.validate().expect_err("not a write field");
+            assert!(format!("{error:#}").contains(field), "{error:#}");
+        }
+        let parsed: PluginDirBinding = serde_json::from_str(
+            r#"{"input_field":"root","description":"d","access":"read_write","write_fields":["output"]}"#,
+        )
+        .unwrap();
+        assert_eq!(parsed.write_fields, ["output"]);
+        assert_eq!(
+            parsed.call_access(&serde_json::json!({"output": null})),
+            BindAccess::Read
+        );
+        assert_eq!(
+            parsed.call_access(&serde_json::json!({"output": {}})),
+            BindAccess::ReadWrite
+        );
     }
 
     #[test]

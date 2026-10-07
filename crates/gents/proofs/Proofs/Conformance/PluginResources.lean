@@ -104,6 +104,18 @@ private def networkJson : Json := toJson <| grants.flatMap fun g =>
 
 end Network
 
-def casesJson : String := (Json.mkObj [("consent", consentJson), ("budgets", budgetsJson), ("model_slots", modelSlotsJson),
-  ("network", networkJson)]).compress
+private def callAccessJson : Json := toJson <| [PluginAccess.read, .readWrite].flatMap fun declared =>
+  [false, true].flatMap fun writeFields =>
+  [false, true].flatMap fun setsWriteField =>
+  [none, some PluginAccess.read, some .readWrite].map fun granted => Json.mkObj [
+    ("declared", toJson declared.spelling), ("write_fields", toJson writeFields),
+    ("sets_write_field", toJson setsWriteField),
+    ("granted", match granted with | none => Json.null | some access => toJson access.spelling),
+    ("valid", toJson (pluginBindingValid declared writeFields)),
+    ("call", toJson (pluginCallAccess declared writeFields setsWriteField).spelling),
+    ("admitted", toJson (pluginCallAdmitted declared granted writeFields setsWriteField))]
+
+def casesJson : String := (Json.mkObj [("consent", consentJson), ("budgets", budgetsJson),
+  ("model_slots", modelSlotsJson), ("network", networkJson),
+  ("call_access", callAccessJson)]).compress
 end Conformance.PluginResources
