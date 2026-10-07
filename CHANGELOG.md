@@ -29,6 +29,15 @@ source consistency checks, not a separate runtime compatibility version.
   its node starts and applies the scenario pack (plugins install only on the
   node's own host, and the scenario's documents may name the dependency's),
   and `--grant-authority` reaches those installs.
+- Removing an enrolled agent stays removed. Removal records the ended
+  authorization generation locally, so the enrollment reconciler stops
+  reinstalling and redialling the server every tick until the authorization
+  lease expires or the network owner revokes; re-enrolling needs a fresh
+  offer from the server's `/status`. The reconciler's own teardown of a peer
+  whose route receipt is briefly unobserved does not retire it. The
+  enrollment list also derives "approved" from the durable projection the
+  reconciler uses, so a locally removed or revoked request stops listing as
+  approved before its own expiry (#2295).
 
 - Plugins reach the network through the host (#2300). A plugin whose granted
   manifold carries an `OutboundHttp` allow-list answers a call with
