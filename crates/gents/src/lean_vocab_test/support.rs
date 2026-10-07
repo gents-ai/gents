@@ -387,11 +387,22 @@ pub(crate) struct LeanGraphPipelineValidationCase {
     pub(crate) expected_valid: bool,
 }
 
+/// Where the active pointer stands relative to the candidate revision
+/// (`Conformance.GraphPipelineContracts.ActivePointer`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum LeanGraphActivePointer {
+    Empty,
+    Current,
+    Other,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct LeanGraphPipelineRevisionGateCase {
     pub(crate) name: String,
     pub(crate) status: String,
     pub(crate) artifacts_complete: bool,
+    pub(crate) active_pointer: LeanGraphActivePointer,
     pub(crate) activation_precondition_met: bool,
     pub(crate) pointer_matches: bool,
     pub(crate) expected_activate: bool,

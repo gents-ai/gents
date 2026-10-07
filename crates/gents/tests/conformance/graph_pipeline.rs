@@ -226,8 +226,8 @@ fn generated_revision_gate_cases_fence_publication_and_start_readiness() {
     let cases = &lean_contract_snapshot().graph_pipeline_revision_gate_cases;
     assert_eq!(
         cases.len(),
-        32,
-        "Lean must emit the complete revision gate matrix"
+        24,
+        "Lean must emit every status, completeness and pointer"
     );
 
     for test_case in cases {
@@ -239,13 +239,13 @@ fn generated_revision_gate_cases_fence_publication_and_start_readiness() {
         );
         assert_eq!(
             decision.may_activate, test_case.expected_activate,
-            "{} activate",
-            test_case.name
+            "{} activate (pointer {:?})",
+            test_case.name, test_case.active_pointer
         );
         assert_eq!(
             decision.may_start, test_case.expected_start,
-            "{} start",
-            test_case.name
+            "{} start (pointer {:?})",
+            test_case.name, test_case.active_pointer
         );
     }
 }

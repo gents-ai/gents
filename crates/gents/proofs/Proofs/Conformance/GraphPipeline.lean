@@ -146,44 +146,97 @@ def validationCaseJson (testCase : ValidationCase) : String :=
 def validationCasesJson : String :=
   jsonArray (validationCases.map validationCaseJson)
 
-structure RevisionGateCase where
-  name : String
-  status : String
-  artifactsComplete : Bool
-  activationPreconditionMet : Bool
-  pointerMatches : Bool
-  expectedActivate : Bool
-  expectedStart : Bool
+/-- Where `GraphDefinition.active_revision_digest` points relative to the
+candidate revision. `GraphPipeline.State.activeRevision` is one `Option`, so
+an empty slot (the activation precondition) and a pointer at this revision
+(the start precondition) exclude each other. `activate` requires an empty
+slot; the native activation's replacement of a predecessor is not covered by
+this family. -/
+inductive ActivePointer where
+  | empty
+  | current
+  | other
   deriving DecidableEq, Repr
 
-def revisionStatuses : List String := ["draft", "validated", "active", "retired"]
+def ActivePointer.wireName : ActivePointer → String
+  | .empty => "empty"
+  | .current => "current"
+  | .other => "other"
+
+def ActivePointer.target : ActivePointer → Option GraphPipeline.RevisionId
+  | .empty => none
+  | .current => some 2
+  | .other => some 9
+
+def activePointers : List ActivePointer := [.empty, .current, .other]
+
+def revisionStatuses : List (GraphPipeline.RevisionStatus × String) :=
+  [ (.draft, "draft")
+  , (.validated, "validated")
+  , (.active, "active")
+  , (.retired, "retired")
+  ]
+
+structure RevisionGateCase where
+  name : String
+  status : GraphPipeline.RevisionStatus
+  statusName : String
+  artifactsComplete : Bool
+  pointer : ActivePointer
+  deriving DecidableEq, Repr
+
+def gateState (c : RevisionGateCase) : GraphPipeline.State :=
+  { revision := fixtureRevision c.status c.artifactsComplete
+  , activeRevision := c.pointer.target
+  , run := none
+  }
+
+def RevisionGateCase.expectedActivate (c : RevisionGateCase) : Bool :=
+  transitionAllowed (gateState c) .activate
+
+def RevisionGateCase.expectedStart (c : RevisionGateCase) : Bool :=
+  transitionAllowed (gateState c) (.startRun 4 true)
+
+/-- The native gate's two inputs, projected from the one pointer so the
+adapter translates representation and decides nothing. -/
+def RevisionGateCase.activationPreconditionMet (c : RevisionGateCase) : Bool :=
+  c.pointer == .empty
+
+def RevisionGateCase.pointerMatches (c : RevisionGateCase) : Bool :=
+  c.pointer == .current
 
 def revisionGateCases : List RevisionGateCase :=
-  revisionStatuses.flatMap fun status =>
+  revisionStatuses.flatMap fun (status, statusName) =>
     boolValues.flatMap fun artifactsComplete =>
-      boolValues.flatMap fun activationPreconditionMet =>
-        boolValues.map fun pointerMatches =>
-          { name :=
-              "status=" ++ status ++
-                ",complete=" ++ toString artifactsComplete ++
-                ",activation_precondition=" ++ toString activationPreconditionMet ++
-                ",pointer_matches=" ++ toString pointerMatches
-          , status := status
-          , artifactsComplete := artifactsComplete
-          , activationPreconditionMet := activationPreconditionMet
-          , pointerMatches := pointerMatches
-          , expectedActivate :=
-              status == "validated" && artifactsComplete && activationPreconditionMet
-          , expectedStart := status == "active" && artifactsComplete && pointerMatches
-          }
+      activePointers.map fun pointer =>
+        { name :=
+            "status=" ++ statusName ++
+              ",complete=" ++ toString artifactsComplete ++
+              ",pointer=" ++ pointer.wireName
+        , status := status
+        , statusName := statusName
+        , artifactsComplete := artifactsComplete
+        , pointer := pointer
+        }
 
-theorem revisionGateCases_count : revisionGateCases.length = 32 := by native_decide
+theorem revisionGateCases_count : revisionGateCases.length = 24 := by native_decide
+
+/-- Activation needs a validated, complete revision and an empty slot; a start
+needs an active, complete revision that the pointer selects. -/
+theorem revisionGate_agrees_with_ready_predicate :
+    revisionGateCases.all (fun c =>
+      c.expectedActivate ==
+          (c.status == .validated && c.artifactsComplete && c.pointer == .empty) &&
+        c.expectedStart ==
+          (c.status == .active && c.artifactsComplete && c.pointer == .current)) = true := by
+  native_decide
 
 def revisionGateCaseJson (testCase : RevisionGateCase) : String :=
   "{"
     ++ "\"name\":" ++ jsonString testCase.name ++ ","
-    ++ "\"status\":" ++ jsonString testCase.status ++ ","
+    ++ "\"status\":" ++ jsonString testCase.statusName ++ ","
     ++ "\"artifacts_complete\":" ++ boolJson testCase.artifactsComplete ++ ","
+    ++ "\"active_pointer\":" ++ jsonString testCase.pointer.wireName ++ ","
     ++ "\"activation_precondition_met\":" ++
       boolJson testCase.activationPreconditionMet ++ ","
     ++ "\"pointer_matches\":" ++ boolJson testCase.pointerMatches ++ ","
@@ -213,21 +266,10 @@ def runStatuses : List (GraphPipeline.RunStatus × String) :=
   , (.cancelled, "cancelled")
   ]
 
-private def runState
+def runState
     (status : GraphPipeline.RunStatus)
     (cancellationRequested : Bool) : GraphPipeline.State :=
-  { revision :=
-      { graphId := 1
-      , revisionId := 2
-      , digest := 3
-      , status := .active
-      , typesValid := true
-      , topologyValid := true
-      , capabilitiesAuthorized := true
-      , withinBounds := true
-      , terminalResultDeclared := true
-      , artifactsComplete := true
-      }
+  { revision := fixtureRevision .active
   , activeRevision := some 2
   , run := some
       { runId := 4
