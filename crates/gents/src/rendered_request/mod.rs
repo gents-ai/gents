@@ -455,6 +455,9 @@ async fn decode_capture_json_from_cached<R: CaptureBaseReader + Sync>(
     for _ in 0..=encoding::MAX_DELTA_DEPTH {
         match encoding::decode_capture_record(next_version, &next_stored, kind)? {
             encoding::DecodedRecord::Legacy(_) | encoding::DecodedRecord::Full(_) => break,
+            encoding::DecodedRecord::Manifest { .. } => {
+                anyhow::bail!("capture manifest resolution requires a block source")
+            }
             encoding::DecodedRecord::Delta { base, .. } => {
                 if !cache.contains_key(&base.doc_id) {
                     let query = format!(

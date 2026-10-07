@@ -149,6 +149,9 @@ impl DefraRenderedRequestSink {
             super::encoding::DecodedRecord::Legacy(_) => {
                 anyhow::bail!("new capture encoding unexpectedly used legacy storage")
             }
+            super::encoding::DecodedRecord::Manifest { .. } => {
+                anyhow::bail!("new capture encoding unexpectedly stored a block manifest")
+            }
         };
         anyhow::ensure!(
             canonical_json(&reconstructed) == canonical_json(value),
