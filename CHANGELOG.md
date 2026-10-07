@@ -154,6 +154,13 @@ source consistency checks, not a separate runtime compatibility version.
   a client snapshot no longer grows with the number of started sessions
   (#2291).
 
+### Breaking
+
+- Graph compilation refuses a requested `limits.max_total_invocations` outside
+  `1..=1024` (`platform_limit_exceeded` at `/limits/max_total_invocations`).
+  Pack build, check and install recompile shipped graphs, so a pack that asks
+  for more, or for zero, stops installing.
+
 ## 0.20.0 - 2026-10-05
 
 - Trimmed tool results are recoverable: `sessions` gains an `output`
