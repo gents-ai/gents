@@ -756,8 +756,10 @@ async fn reconcile_created_block(
 ///
 /// Every entry pins the *current* field commit of its block document, read in
 /// this same transaction for created and reused rows alike, so the manifest
-/// never trusts a prior manifest's witness. The byte length is pinned beside
-/// it so a later short read fails closed instead of reassembling a truncated
+/// never trusts a prior manifest's witness; the reads issue one batched
+/// statement per [`super::commits::FIELD_COMMIT_ALIAS_BATCH`] documents rather
+/// than one round trip per entry. The byte length is pinned beside the witness
+/// so a later short read fails closed instead of reassembling a truncated
 /// body.
 async fn write_capture_blocks(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
@@ -798,21 +800,45 @@ async fn write_capture_blocks(
         stored.doc_ids.insert(block.content_key.clone(), doc_id);
     }
 
+    let chunks = super::encoding::chunk_capture_body(canonical);
+    let chunk_doc_ids = chunks
+        .iter()
+        .map(|chunk| {
+            stored
+                .doc_ids
+                .get(&chunk.content_key)
+                .context("capture block document id was not resolved")
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut witness_docs: Vec<String> = Vec::new();
+    let mut seen_docs = std::collections::BTreeSet::new();
+    for doc_id in &chunk_doc_ids {
+        if seen_docs.insert((*doc_id).clone()) {
+            witness_docs.push((*doc_id).clone());
+        }
+    }
+    // One batched read pins every block document's current payload commit in
+    // this same snapshot; a body may reference one block several times, so the
+    // witness is read once per document and applied per entry below.
+    let witnesses = super::commits::field_commits_in_txn(txn, &witness_docs, "payload").await?;
+    let witness_by_doc: std::collections::BTreeMap<&str, &super::commits::RequestJsonCommit> =
+        witness_docs
+            .iter()
+            .zip(witnesses.iter())
+            .filter_map(|(doc_id, commit)| commit.as_ref().map(|commit| (doc_id.as_str(), commit)))
+            .collect();
+
     let mut entries = Vec::new();
     let mut assembled = Vec::new();
-    for chunk in super::encoding::chunk_capture_body(canonical) {
-        let doc_id = stored
-            .doc_ids
-            .get(&chunk.content_key)
-            .context("capture block document id was not resolved")?;
-        let commit = super::commits::field_commit_in_txn(txn, doc_id, "payload")
-            .await?
+    for (chunk, doc_id) in chunks.iter().zip(&chunk_doc_ids) {
+        let commit = witness_by_doc
+            .get(doc_id.as_str())
             .with_context(|| format!("capture block {doc_id} lacks a payload field commit"))?;
         assembled.extend_from_slice(&chunk.bytes);
         entries.push(super::encoding::ManifestEntry {
-            doc_id: doc_id.clone(),
+            doc_id: (*doc_id).clone(),
             content_key: chunk.content_key.clone(),
-            field_commit_cid: commit.cid,
+            field_commit_cid: commit.cid.clone(),
             byte_len: u64::try_from(chunk.bytes.len()).context("capture block length overflow")?,
         });
     }

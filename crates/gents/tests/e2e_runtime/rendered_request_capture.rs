@@ -3306,7 +3306,29 @@ async fn measured_capture(
         .iter()
         .any(|(key, _)| !stored_before.contains_key(key));
     let sha256_calls = 2 * (req_chunks + prov_chunks) + found_rows + usize::from(readback);
-    let witness_queries = req_chunks + prov_chunks;
+    // The witness read is one aliased batch per payload: one statement per
+    // ceil(distinct block documents / alias cap). A content key names exactly
+    // one block document, so distinct manifest keys are the distinct documents.
+    let distinct_docs = |entries: &[(String, u64)]| {
+        entries
+            .iter()
+            .map(|(key, _)| key)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+    };
+    let req_docs = distinct_docs(&entries_by_payload[0]);
+    let prov_docs = distinct_docs(&entries_by_payload[1]);
+    let alias_cap = gents::rendered_request::commits::FIELD_COMMIT_ALIAS_BATCH;
+    let batched = |docs: usize| docs.div_ceil(alias_cap);
+    let witness_queries = batched(req_docs) + batched(prov_docs);
+    // The batched shape this table asserts: O(1) statements per capture, at
+    // most one partial batch per payload above the cap. A revert to one
+    // statement per manifest entry would push this past the bound.
+    assert!(
+        witness_queries <= 2 + (req_docs + prov_docs) / alias_cap,
+        "witness statements {witness_queries} for {req_docs}+{prov_docs} documents no longer \
+         batch at the alias cap {alias_cap}"
+    );
     let txn_statements = 1 + created.len() + usize::from(readback) + witness_queries + 1;
 
     // Soak: both payloads decode back to exactly what was captured.
@@ -3361,10 +3383,12 @@ fn print_measurement_header() {
         "[capture-hot-path] columns: wall=capture() wall time | txn=transact_local attempt \
          (begin+closure+commit) from write_attempt telemetry, whole-ms | outside=wall-txn \
          (canonicalize+chunk/hash+container) | reqC/prC=manifest entries per payload | \
-         sha256=exact analytic count | wit=one _commits query per manifest entry | txnq=GraphQL \
-         statements in the transaction | new_blk/new_B=blocks this capture created | row_B=stored \
-         manifest row | reuse_B=bytes referenced from pre-existing blocks | vread_B=payload bytes \
-         the in-txn existence read (+read-back) returned"
+         sha256=exact analytic count | wit=batched _commits statements, ceil(distinct block \
+         docs/{alias_cap}) per payload | txnq=GraphQL statements in the transaction | \
+         new_blk/new_B=blocks this capture created | row_B=stored manifest row | reuse_B=bytes \
+         referenced from pre-existing blocks | vread_B=payload bytes the in-txn existence read \
+         (+read-back) returned",
+        alias_cap = gents::rendered_request::commits::FIELD_COMMIT_ALIAS_BATCH,
     );
 }
 
@@ -3523,6 +3547,15 @@ async fn capture_hot_path_over_long_histories() {
             if turn == 0 || (turn + 1) % sample_step == 0 || turn + 1 == length {
                 print_measurement_row(&row);
             }
+            if length == 10 {
+                // Every payload of this history stays below the alias cap, so
+                // the witness read is exactly one statement per payload while
+                // the entries it covers grow from 4 to 15.
+                assert_eq!(
+                    row.witness_queries, 2,
+                    "below the alias cap each payload batches into one statement"
+                );
+            }
             rows.push(row);
         }
         assert_eq!(
@@ -3538,6 +3571,28 @@ async fn capture_hot_path_over_long_histories() {
         ));
         print_run_summary(&label, &rows);
     }
+
+    // Cost attribution, from the statement-shape experiment this change
+    // motivated: 201 `_commits` resolutions cost ~200ms whether issued as 201
+    // statements or 7 aliased ones. The witness reads are 201 of 207
+    // statements pre-batching and most of the ~290ms 200-turn transaction
+    // wall, but their cost is per-document commit resolution inside DefraDB,
+    // not per-statement overhead, so aliasing buys the statement count
+    // (207 -> 14) and a modest wall win (~290ms pre-batching, 276-281ms
+    // observed after), not the round-trip multiple. This fence keeps that win:
+    // a materially slower final turn than the pre-batching measurement means
+    // the batch or its fail-closed per-entry selection regressed.
+    const PRE_BATCHING_200_TURN_WALL_MS: f64 = 289.7;
+    let (_, wall_200, _) = final_walls
+        .iter()
+        .find(|(label, _, _)| label == "grow-200")
+        .expect("the grow-200 run recorded its final turn");
+    assert!(
+        *wall_200 < 287.0,
+        "final-turn wall at 200 turns is {wall_200:.1}ms, above the \
+         {PRE_BATCHING_200_TURN_WALL_MS:.1}ms pre-batching measurement; the witness batch \
+         regressed",
+    );
 
     // The compaction shape: a session grows to 100 turns, then one capture
     // replaces an early span with a summary while keeping the tail verbatim,
