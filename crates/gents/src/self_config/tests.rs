@@ -1556,6 +1556,74 @@ async fn config_tools_unrelated_edit_on_granted_tools_is_accepted() {
     .expect("keeping a stored grant while rewriting its group is not a raise");
 }
 
+#[tokio::test]
+async fn built_ins_enable_graph_tools_remains_self_grantable() {
+    let node = build_persona_node().await;
+    let identity = persona_identity("graph-tools-self-grant");
+    let agent_did = identity.did().to_string();
+    crate::test_support::install_test_behavior(&node, &agent_did, "setup").await;
+    let mut tool_config = config(&["tools"]);
+    tool_config.behavior_id = "setup".to_string();
+    let tools = build_self_config_tools(
+        node,
+        agent_did,
+        Some(identity),
+        &tool_config,
+        test_plugins(),
+    );
+    let applied = call_config_tool(
+        &tools,
+        vec![
+            "tools".into(),
+            "edit".into(),
+            "--set".into(),
+            r#"built_ins={"enable_graph_tools":true}"#.into(),
+        ],
+    )
+    .await
+    .expect("presenting graph run tools is not an operator-managed grant");
+    assert_eq!(
+        serde_json::from_str::<Value>(&applied).unwrap()["committed"],
+        true
+    );
+}
+
+#[tokio::test]
+async fn config_tools_holder_may_grant_pack_install_to_a_sibling() {
+    let node = build_persona_node().await;
+    let identity = persona_identity("pack-holder-sibling");
+    let agent_did = identity.did().to_string();
+    crate::test_support::install_test_behavior(&node, &agent_did, "setup").await;
+    crate::test_support::install_test_behavior(&node, &agent_did, "sibling").await;
+    let mut tool_config = config(&["persona", "tools"]);
+    tool_config.behavior_id = "setup".to_string();
+    tool_config.enable_pack_install = true;
+    let tools = build_self_config_tools(
+        node,
+        agent_did,
+        Some(identity),
+        &tool_config,
+        test_plugins(),
+    );
+    let applied = call_config_tool(
+        &tools,
+        vec![
+            "tools".into(),
+            "edit".into(),
+            "--behavior".into(),
+            "sibling".into(),
+            "--set".into(),
+            r#"self_config={"enable_self_config":true,"enable_pack_install":true}"#.into(),
+        ],
+    )
+    .await
+    .expect("a holder may grant pack installation to a sibling");
+    assert_eq!(
+        serde_json::from_str::<Value>(&applied).unwrap()["committed"],
+        true
+    );
+}
+
 // -- behavior commands (#Task 5) --
 
 #[test]
