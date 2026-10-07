@@ -2,9 +2,9 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::llm::rig_compat::ProviderClient;
 use crate::llm::tool::ToolDyn;
 use anyhow::Result;
-use rig::client::CompletionClient;
 use tokio::sync::{mpsc, watch, Mutex};
 
 use crate::admission::AdmissionRegistry;
@@ -206,8 +206,7 @@ impl RuntimeContext {
         client: C,
     ) -> Result<()>
     where
-        C: CompletionClient,
-        C::CompletionModel: 'static,
+        C: ProviderClient,
     {
         let model = Arc::new(build_admitted_model(
             client,

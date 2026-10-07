@@ -468,7 +468,7 @@ fn a_wide_declared_manifold_is_still_narrowed_to_this_runners_ceiling() {
     let wat_source = r#"(module (func (export "_start")))"#;
     let manifold = serde_json::json!({
         "fs": {"ReadWrite": ["/data"]},
-        "net": {"OutboundFull": null},
+        "net": {"OutboundHttp": null},
         "env": "Full",
         "crypto": true,
         "child_process": false,
@@ -633,26 +633,38 @@ const LARGE_OUTPUT_PREFIX: &[u8] = b"{\"filler\":\"";
 const LARGE_OUTPUT_SUFFIX: &[u8] = b"\"}";
 
 /// WAT for a guest that writes exactly `total_len` bytes of one valid JSON
-/// value to stdout: `{"filler":"aaa...a"}`, the `a`s filled in bulk with
-/// `memory.fill` rather than a giant literal in the module source. Used to
-/// prove `limits.max_output_mib` actually changes what a real call accepts,
-/// not just the arithmetic in [`PluginBudget::for_plugin`].
+/// value to stdout: `{"filler":"aaa...a"}`. Used to prove
+/// `limits.max_output_mib` actually changes what a real call accepts, not just
+/// the arithmetic in [`PluginBudget::for_plugin`].
 fn large_json_output_wat(total_len: usize) -> String {
     let envelope_len = LARGE_OUTPUT_PREFIX.len() + LARGE_OUTPUT_SUFFIX.len();
     assert!(total_len > envelope_len, "need room for the JSON envelope");
-    let filler_len = total_len - envelope_len;
-    let suffix_offset = total_len - LARGE_OUTPUT_SUFFIX.len();
-    let iovec_offset = total_len;
+    filled_output_wat(
+        LARGE_OUTPUT_PREFIX,
+        total_len - envelope_len,
+        LARGE_OUTPUT_SUFFIX,
+    )
+}
+
+/// WAT for a guest that writes `prefix`, `filler_len` bytes of `a`, then
+/// `suffix` to stdout. The `a`s are filled in bulk with `memory.fill` rather
+/// than a giant literal in the module source, and every envelope byte has its
+/// own `i32.store8` because an unescaped `"` would end a WAT string.
+pub(crate) fn filled_output_wat(prefix: &[u8], filler_len: usize, suffix: &[u8]) -> String {
+    let total_len = prefix.len() + filler_len + suffix.len();
+    let suffix_offset = total_len - suffix.len();
+    // WASI reads the iovec as an aligned guest pointer.
+    let iovec_offset = total_len.next_multiple_of(4);
     let nwritten_offset = iovec_offset + 8;
     let pages = (nwritten_offset + 4).div_ceil(65536);
 
     let mut stores = String::new();
-    for (offset, byte) in LARGE_OUTPUT_PREFIX.iter().enumerate() {
+    for (offset, byte) in prefix.iter().enumerate() {
         stores.push_str(&format!(
             "    (i32.store8 (i32.const {offset}) (i32.const {byte}))\n"
         ));
     }
-    for (index, byte) in LARGE_OUTPUT_SUFFIX.iter().enumerate() {
+    for (index, byte) in suffix.iter().enumerate() {
         stores.push_str(&format!(
             "    (i32.store8 (i32.const {}) (i32.const {byte}))\n",
             suffix_offset + index
@@ -671,7 +683,7 @@ fn large_json_output_wat(total_len: usize) -> String {
     (call $fd_write (i32.const 1) (i32.const {iovec_offset}) (i32.const 1) (i32.const {nwritten_offset}))
     drop))
 "#,
-        prefix_len = LARGE_OUTPUT_PREFIX.len(),
+        prefix_len = prefix.len(),
         iovec_len_offset = iovec_offset + 4,
     )
 }
@@ -1122,6 +1134,7 @@ fn bound_guest_can_read_inside_but_cannot_write_or_follow_a_symlink_out() {
             input_field: "root".into(),
             description: "test root".into(),
             access: crate::pack::BindAccess::Read,
+            write_fields: Vec::new(),
             original_field: None,
         });
         let runner = PluginRunner::compile(&afb, &plugin).unwrap();
@@ -1132,4 +1145,70 @@ fn bound_guest_can_read_inside_but_cannot_write_or_follow_a_symlink_out() {
         assert_eq!(result.output, serde_json::json!(denied), "{path}");
     }
     assert!(!inside.join("created.txt").exists());
+}
+
+/// Lean `ToolPolicy.pluginBindingValid`, `pluginCallAccess` and
+/// `pluginCallAdmitted`, driven through the manifest validator and the
+/// executor's headless bind admission over a real allowed-folders file.
+#[tokio::test]
+async fn generated_plugin_call_access_cases_drive_bind_admission() {
+    use crate::pack::BindAccess;
+    let cases = &crate::lean_vocab_test::lean_contract_snapshot().plugin_resource_cases;
+    let access = |value: &serde_json::Value| -> Option<BindAccess> {
+        value.as_str().map(|text| text.parse().unwrap())
+    };
+    let cases = cases["call_access"].as_array().unwrap();
+    assert_eq!(cases.len(), 24);
+    for case in cases {
+        let declared = access(&case["declared"]).unwrap();
+        let write_fields = case["write_fields"].as_bool().unwrap();
+        let sets = case["sets_write_field"].as_bool().unwrap();
+        let (home, mut record) = executor::installed_plugin(ECHO_WAT, Some(declared));
+        let binding = record.declaration.bind_dir.as_mut().unwrap();
+        if write_fields {
+            binding.write_fields = vec!["output".into()];
+        }
+        record.declaration.input_schema = serde_json::json!({
+            "type": "object",
+            "properties": {"path": {"type": "string"}, "output": {"type": "string"}},
+        });
+        assert_eq!(
+            record.declaration.validate().is_ok(),
+            case["valid"].as_bool().unwrap(),
+            "{case}"
+        );
+        if !case["valid"].as_bool().unwrap() {
+            continue;
+        }
+        crate::plugin::store::write_record(home.path(), &record).unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        if let Some(granted) = access(&case["granted"]) {
+            crate::plugin::allowed::add(home.path(), folder.path(), granted).unwrap();
+        }
+        let mut input = serde_json::json!({ "path": folder.path() });
+        if sets {
+            input["output"] = serde_json::json!("out.json");
+        }
+        let binding = record.declaration.bind_dir.as_ref().unwrap();
+        let call = access(&case["call"]).unwrap();
+        assert_eq!(binding.call_access(&input), call, "{case}");
+        let bound = crate::plugin::executor::PluginExecutor::new(Some(home.path().to_owned()))
+            .bind_input(
+                &record,
+                &input,
+                &crate::plugin::executor::BindContext::headless(None),
+            )
+            .await;
+        match bound {
+            Ok(Some(bound)) => {
+                assert!(case["admitted"].as_bool().unwrap(), "{case}");
+                assert_eq!(bound.access(), call, "{case}");
+            }
+            Ok(None) => panic!("the path field is set: {case}"),
+            Err(reason) => {
+                assert!(!case["admitted"].as_bool().unwrap(), "{case}: {reason}");
+                assert!(reason.contains("gents plugin dirs add"), "{reason}");
+            }
+        }
+    }
 }

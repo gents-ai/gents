@@ -161,8 +161,25 @@ fn bounded_structured_output_preview(raw: &str) -> String {
 
 #[derive(Debug)]
 #[allow(dead_code)]
-pub enum LoopStreamItem<R> {
-    Item(MultiTurnStreamItem<R>),
+pub enum LoopStreamItem {
+    Text(String),
+    Reasoning(gents_protocol::message::Reasoning),
+    ReasoningDelta {
+        id: Option<String>,
+        reasoning: String,
+    },
+    ToolCall {
+        tool_call: ToolCall,
+        internal_call_id: String,
+    },
+    ToolResult {
+        tool_result: ToolResult,
+        internal_call_id: String,
+    },
+    /// The final turn's text; the loop ends after it.
+    Final {
+        text: String,
+    },
     ProviderAudit(crate::provider_audit::ProviderAuditObservation),
     ProviderAttemptStarted {
         turn: usize,

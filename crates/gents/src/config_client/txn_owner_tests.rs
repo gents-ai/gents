@@ -399,6 +399,7 @@ async fn cancellation_after_embedded_begin_reports_and_completes_rollback() {
                     runner,
                     None,
                     false,
+                    operation,
                     Some(write_guard),
                     rollback_scheduled,
                     move |handle| async move {

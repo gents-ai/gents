@@ -2,9 +2,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use defra_node::EmbeddedNode;
-use rig::completion::CompletionError;
 
-use super::client::current_context;
+use super::client::{current_context, AdmissionError};
 #[cfg(test)]
 use super::client::{scope_request, AdmissionCallContext, CallKind};
 use super::config::BackendAdmissionConfig;
@@ -126,7 +125,7 @@ impl AdmissionRegistry {
         behavior_id: impl Into<String>,
         agent_did: impl Into<String>,
         call_kind: CallKind,
-    ) -> Result<AdmissionPermit, CompletionError> {
+    ) -> Result<AdmissionPermit, AdmissionError> {
         let backend_id = backend_id.into();
         self.acquire_with_connection_for_test(
             request_id,
@@ -148,7 +147,7 @@ impl AdmissionRegistry {
         agent_did: impl Into<String>,
         call_kind: CallKind,
         connection: &str,
-    ) -> Result<AdmissionPermit, CompletionError> {
+    ) -> Result<AdmissionPermit, AdmissionError> {
         use std::sync::atomic::AtomicU64;
         let context = AdmissionCallContext {
             request_id: request_id.into(),
@@ -174,7 +173,7 @@ impl AdmissionRegistry {
     #[cfg(test)]
     pub(crate) async fn acquire_current_call_for_test(
         &self,
-    ) -> Result<AdmissionPermit, CompletionError> {
+    ) -> Result<AdmissionPermit, AdmissionError> {
         self.acquire_current_call(TEST_SLOT_CONNECTION).await
     }
 
@@ -201,13 +200,13 @@ impl AdmissionRegistry {
     pub(super) async fn acquire_current_call(
         &self,
         connection: &str,
-    ) -> Result<AdmissionPermit, CompletionError> {
+    ) -> Result<AdmissionPermit, AdmissionError> {
         let context = current_context()?;
         let cancel_observer = context.inference_token.clone();
         let terminal_failure_observer = context.terminal_failure_reason.clone();
         let pending = context.next_call(&self.inner.runtime_instance_id);
         if pending.backend_id.trim().is_empty() {
-            return Err(CompletionError::ProviderError(format!(
+            return Err(AdmissionError(format!(
                 "behavior {} has no backend binding",
                 pending.behavior_id
             )));
@@ -244,7 +243,7 @@ impl AdmissionRegistry {
                 {
                     tracing::warn!(error = %error, "failed to persist backend-gone inference call");
                 }
-                Err(CompletionError::ProviderError(format!(
+                Err(AdmissionError(format!(
                     "BackendGone: backend admission controller is not active for backend {backend_id}; it is not configured or not available"
                 )))
             }

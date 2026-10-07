@@ -46,7 +46,7 @@ async fn flush_received_title_partial(context: &str) -> Result<()> {
     }
 }
 
-struct TitleTask<M: rig::completion::CompletionModel> {
+struct TitleTask<M: crate::llm::rig_compat::ProviderModel> {
     node: Arc<EmbeddedNode>,
     behavior: Arc<crate::config::ResolvedBehavior>,
     provider_family: Option<String>,
@@ -64,7 +64,7 @@ enum TitleResult {
     Interrupted,
 }
 
-impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
+impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
     fn title_task(&self) -> TitleTask<M> {
         TitleTask {
             node: Arc::clone(&self.node),
@@ -157,7 +157,7 @@ fn title_attempt_is_retryable(error: &anyhow::Error) -> bool {
         || error.is::<crate::agent::loop_stream::OneShotNoVisibleOutput>()
 }
 
-impl<M: rig::completion::CompletionModel + 'static> TitleTask<M> {
+impl<M: crate::llm::rig_compat::ProviderModel> TitleTask<M> {
     async fn run(self, request: AgentRequest, shutdown: watch::Receiver<bool>) -> Result<()> {
         anyhow::ensure!(
             request.purpose == RequestPurpose::TitleAudit,

@@ -26,6 +26,7 @@ pub(crate) fn installed_plugin(
         original_field: None,
         description: "a directory".into(),
         access,
+        write_fields: Vec::new(),
     });
     let home = tempfile::tempdir().unwrap();
     let hex = format!("{:x}", <sha2::Sha256 as sha2::Digest>::digest(&bytes));
@@ -45,6 +46,81 @@ pub(crate) fn installed_plugin(
     };
     store::write_record(home.path(), &record).unwrap();
     (home, record)
+}
+
+/// A plugin that reads its input and, while it is offered `service`
+/// (`"<service>":true` in its input), writes `canned` instead of a result:
+/// once (until `results` arrives) or forever. Otherwise, or once satisfied, it
+/// echoes its input as the result.
+pub(crate) fn asking_plugin_wat(
+    service: &str,
+    results: &str,
+    canned: &serde_json::Value,
+    forever: bool,
+) -> String {
+    let escape = |text: &str| {
+        text.bytes()
+            .map(|byte| format!("\\{byte:02x}"))
+            .collect::<String>()
+    };
+    let canned = canned.to_string();
+    let calls = format!("\"{service}\":true");
+    let stop = if forever {
+        "(i32.const 1)".to_owned()
+    } else {
+        format!(
+            "(i32.eqz (call $contains (i32.const 50000) (i32.const {}) (local.get $n)))",
+            results.len()
+        )
+    };
+    format!(
+        r#"(module
+  (import "wasi_snapshot_preview1" "fd_read" (func $fd_read (param i32 i32 i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "fd_write" (func $fd_write (param i32 i32 i32 i32) (result i32)))
+  (memory (export "memory") 2)
+  (data (i32.const 8192) "{canned_bytes}")
+  (data (i32.const 50000) "{results_bytes}")
+  (data (i32.const 50100) "{calls_bytes}")
+  (func $contains (param $needle i32) (param $nlen i32) (param $hlen i32) (result i32)
+    (local $i i32) (local $j i32)
+    (block $notfound
+      (loop $outer
+        (br_if $notfound (i32.gt_u (i32.add (local.get $i) (local.get $nlen)) (local.get $hlen)))
+        (local.set $j (i32.const 0))
+        (block $mismatch
+          (loop $inner
+            (if (i32.eq (local.get $j) (local.get $nlen)) (then (return (i32.const 1))))
+            (br_if $mismatch (i32.ne
+              (i32.load8_u (i32.add (local.get $i) (local.get $j)))
+              (i32.load8_u (i32.add (local.get $needle) (local.get $j)))))
+            (local.set $j (i32.add (local.get $j) (i32.const 1)))
+            (br $inner)))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $outer)))
+    (i32.const 0))
+  (func (export "_start")
+    (local $n i32)
+    (i32.store (i32.const 60000) (i32.const 0))
+    (i32.store (i32.const 60004) (i32.const 8000))
+    (drop (call $fd_read (i32.const 0) (i32.const 60000) (i32.const 1) (i32.const 60008)))
+    (local.set $n (i32.load (i32.const 60008)))
+    (if (call $contains (i32.const 50100) (i32.const {calls_len}) (local.get $n))
+      (then
+        (if {stop}
+          (then
+            (i32.store (i32.const 60000) (i32.const 8192))
+            (i32.store (i32.const 60004) (i32.const {canned_len}))
+            (drop (call $fd_write (i32.const 1) (i32.const 60000) (i32.const 1) (i32.const 60012)))
+            (return)))))
+    (i32.store (i32.const 60000) (i32.const 0))
+    (i32.store (i32.const 60004) (local.get $n))
+    (drop (call $fd_write (i32.const 1) (i32.const 60000) (i32.const 1) (i32.const 60012)))))"#,
+        canned_bytes = escape(&canned),
+        results_bytes = escape(results),
+        calls_bytes = escape(&calls),
+        calls_len = calls.len(),
+        canned_len = canned.len(),
+    )
 }
 
 fn tool_ref(digest: Option<&str>) -> PluginToolRef {
@@ -315,6 +391,74 @@ mod bound {
         assert!(!reader.join("out.json").exists());
 
         tool.call(args(&writer)).await.unwrap();
+        assert_eq!(
+            std::fs::read_to_string(writer.join("out.json")).unwrap(),
+            "{}"
+        );
+    }
+
+    /// One `read_write` plugin with a write field serves readers and writers
+    /// (#2301): a call that does not set `output` asks for `read`, so it binds
+    /// under a read-only folder and runs read-only even where writing is
+    /// allowed; a call that sets it asks for `read_write`.
+    #[tokio::test]
+    async fn one_plugin_writes_only_on_a_call_that_sets_its_write_field() {
+        let mut fx = fixture(&create_file_wat("out.json"), BindAccess::ReadWrite);
+        fx.record
+            .declaration
+            .bind_dir
+            .as_mut()
+            .unwrap()
+            .write_fields = vec!["output".into(), "delete".into()];
+        store::write_record(fx.home.path(), &fx.record).unwrap();
+        let tool = tool_for(&fx.home, &fx.record);
+        let reader = fx.root.join("docs");
+        let writer = fx.root.join("work");
+        allowed::add(fx.home.path(), &reader, BindAccess::Read).unwrap();
+        allowed::add(fx.home.path(), &writer, BindAccess::ReadWrite).unwrap();
+        let call = |path: &std::path::Path, output: bool| {
+            let mut input = serde_json::json!({ "path": path });
+            if output {
+                input["output"] = serde_json::json!("out.json");
+            }
+            tool.call(input.to_string())
+        };
+
+        let read = format!("{:#}", call(&reader, false).await.unwrap_err());
+        assert!(
+            read.contains("did not return a result") && !read.contains("dirs add"),
+            "a reading call binds under a read-only folder and its sandbox refuses the write: {read}"
+        );
+        let escalation = format!("{:#}", call(&reader, true).await.unwrap_err());
+        for expected in [
+            "allowed read-only",
+            r#"sets "output""#,
+            "--access read_write",
+            r#"call again without "output""#,
+        ] {
+            assert!(escalation.contains(expected), "{escalation}");
+        }
+        assert!(!reader.join("out.json").exists());
+        let both = format!(
+            "{:#}",
+            tool.call(
+                serde_json::json!({ "path": reader, "output": "out.json", "delete": true })
+                    .to_string()
+            )
+            .await
+            .unwrap_err()
+        );
+        assert!(
+            both.contains(r#"call again without "output", "delete" to only read"#),
+            "a call that sets two write fields is told to drop both: {both}"
+        );
+
+        call(&writer, false).await.unwrap_err();
+        assert!(
+            !writer.join("out.json").exists(),
+            "a reading call runs read-only even where writing is allowed"
+        );
+        call(&writer, true).await.unwrap();
         assert_eq!(
             std::fs::read_to_string(writer.join("out.json")).unwrap(),
             "{}"

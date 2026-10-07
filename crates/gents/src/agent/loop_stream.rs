@@ -17,7 +17,7 @@ use crate::llm::rig_compat;
 #[cfg(test)]
 use crate::rendered_request::{AssemblyBuildPath, AssemblyTrace, ContextCompactionReason};
 #[cfg(test)]
-use rig::agent::{MultiTurnStreamItem, StreamingError};
+use rig::agent::StreamingError;
 #[cfg(test)]
 use rig::completion::{GetTokenUsage, Usage};
 
