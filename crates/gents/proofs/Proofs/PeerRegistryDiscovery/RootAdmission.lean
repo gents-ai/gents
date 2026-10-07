@@ -179,8 +179,8 @@ theorem prefix_sibling_rejected (base sibling : String) (tail : List String)
 
 Edit payloads are patches, not replacement documents. `omitted` retains the
 stored value, `clear` removes an optional value, and `set` replaces it. Create
-continues to use the required composer values on `Request`; this type models the
-edit field-presence mask carried by the signed command DTO.
+continues to use the required composer values on the canonical agent request;
+this type models the edit field-presence mask carried by the signed command DTO.
 -/
 
 inductive FieldUpdate where
@@ -206,7 +206,7 @@ theorem explicit_clear_is_distinct (stored : String) :
 ## Root-selection admission
 
 The root-selection contracts belong to the root-admission owner so conformance
-and persona consumers reference this namespace directly.
+and canonical root consumers reference this namespace directly.
 -/
 
 /-- Shared create/edit root-selection contract. A blank root may inherit the
