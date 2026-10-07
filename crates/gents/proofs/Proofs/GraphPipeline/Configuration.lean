@@ -116,12 +116,13 @@ theorem plugin_digest_substitution_denied (capabilities : String → Option Capa
       .error .pluginDigestMismatch := by
   simp [resolveStage, resolvePlugin, hc, ha, ht, hi, hne]
 
-/-- A graph edge's concurrency is admissible unless it is `latest_only`: a
-`latest_only` trigger supersedes the same trigger's in-flight requests
-(`trigger_engine` `supersede_active_runtime_requests_for_trigger`), which on a
-per-document edge cancels earlier fan-out items and on a grouped edge cancels
-group members. The native compiler reports this refusal as
-`invalid_edge_concurrency` at `/edges/{i}/concurrency`. -/
+/-- A graph edge's concurrency is admissible unless it is `latest_only`. On a
+per-document edge a `latest_only` trigger supersedes the same trigger's
+in-flight requests (`trigger_engine` `supersede_active_runtime_requests_for_trigger`),
+which cancels earlier fan-out items. On a grouped edge the trigger engine never
+applies a concurrency mode, and the shared group validator's graph narrowing
+already refuses `latest_only` (`GroupConfig.validForGraph`). The native compiler
+reports this refusal as `invalid_edge_concurrency` at `/edges/{i}/concurrency`. -/
 def graphEdgeConcurrencyValid (mode : ConcurrencyMode) : Bool :=
   mode != .latestOnly
 
