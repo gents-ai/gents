@@ -579,3 +579,64 @@ async fn empty_registry_injectable_for_tests() {
     assert_eq!(report.baseline_registered, 0);
     node.shutdown().await;
 }
+
+/// `RenderedRequestBlock` is a baseline collection added after release
+/// (#2333): an existing store gains it on open at the pinned version, and the
+/// unique content key the capture sink dedupes through is enforcing from the
+/// first row.
+#[tokio::test]
+async fn capture_blocks_reach_a_pre_existing_store_through_the_baseline() {
+    let node = fresh_node().await;
+    for entry in gents_migration::DEFAULT_BASELINE {
+        if entry.name == gents_protocol::schemas::RENDERED_REQUEST_BLOCK_NAME {
+            continue;
+        }
+        node.add_schema(entry.sdl)
+            .await
+            .unwrap_or_else(|error| panic!("register {}: {error}", entry.name));
+    }
+    assert!(
+        node.get_collection(gents_protocol::schemas::RENDERED_REQUEST_BLOCK_NAME)
+            .expect("get_collection")
+            .is_none(),
+        "fixture must start without RenderedRequestBlock"
+    );
+
+    ensure_migrations(node.as_ref())
+        .await
+        .expect("upgrade an existing store");
+
+    let blocks = node
+        .get_collection(gents_protocol::schemas::RENDERED_REQUEST_BLOCK_NAME)
+        .expect("get_collection")
+        .expect("RenderedRequestBlock present after upgrade");
+    assert!(blocks.is_active && !blocks.is_placeholder);
+    let pin = gents_migration::DEFAULT_BASELINE
+        .iter()
+        .find(|entry| entry.name == gents_protocol::schemas::RENDERED_REQUEST_BLOCK_NAME)
+        .and_then(|entry| entry.expected_version)
+        .expect("RenderedRequestBlock baseline pin");
+    assert_eq!(blocks.version_id, pin);
+
+    let create = r#"mutation {
+        create_RenderedRequestBlock(input: {
+            content_key: "block-key-1"
+            payload: "{\"model\":\"m\"}"
+            byte_len: 12
+            created_at: "2026-10-07T00:00:00Z"
+        }) { _docID }
+    }"#;
+    let response = node.execute(create).await;
+    assert!(
+        !response.has_errors(),
+        "seed capture block: {:?}",
+        response.errors
+    );
+    let duplicate = node.execute(create).await;
+    assert!(
+        duplicate.has_errors(),
+        "the unique content key must reject a second row with the same key"
+    );
+
+    node.shutdown().await;
+}

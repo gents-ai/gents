@@ -6,6 +6,16 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- Capture storage stops re-signing the whole conversation (#2333). New
+  `RenderedRequest` captures split the rendered provider body and the assembly
+  trace into content-defined byte blocks stored once in a new
+  `RenderedRequestBlock` collection, and the capture row carries a manifest of
+  pinned references to them. Each provider call writes only the blocks its new
+  content needs, so capture storage grows linearly with the conversation instead
+  of repeating it on every turn; reads reassemble the body and verify each block
+  against the field commit the manifest pinned. Captures already stored in the
+  earlier formats keep decoding unchanged.
+
 - Grok subscription backends advertise client version 1.0.46, above the
   proxy's floor (#2274). A 426 version gate now fails fast instead of burning
   the retry ladder, and `grok-auth-probe` and model discovery name the version

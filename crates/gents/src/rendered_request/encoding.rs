@@ -20,6 +20,7 @@ use sha2::{Digest, Sha256};
 pub(crate) const LOSSLESS_JSON_VERSION: u32 = 1;
 const CAPTURE_CONTAINER_VERSION: u32 = 1;
 pub(crate) const MAX_DELTA_DEPTH: u8 = 8;
+#[cfg(test)]
 const MIN_DELTA_SAVINGS: usize = 256;
 
 /// Content-defined chunking parameters for v3 manifest captures (#2333):
@@ -30,27 +31,16 @@ const MIN_DELTA_SAVINGS: usize = 256;
 /// [`CHUNK_WINDOW_SIZE`]-byte window with a fixed multiplier, so chunking is
 /// deterministic and platform-stable for identical bytes; no keyed or
 /// randomized hash is involved.
-///
-/// The v3 write and block-resolution paths below are driven by the generated
-/// storage-case fence; the sink and durable-reader wiring lands in the stacked
-/// #2333 stages, so until then nothing outside tests calls them.
-#[cfg_attr(not(test), allow(dead_code))]
 const CHUNK_MIN_SIZE: usize = 2 * 1024;
-#[cfg_attr(not(test), allow(dead_code))]
 const CHUNK_MAX_SIZE: usize = 16 * 1024;
-#[cfg_attr(not(test), allow(dead_code))]
 const CHUNK_WINDOW_SIZE: usize = 48;
-#[cfg_attr(not(test), allow(dead_code))]
 const CHUNK_BOUNDARY_MASK: u64 = (1 << 11) - 1;
-#[cfg_attr(not(test), allow(dead_code))]
 const CHUNK_HASH_MULTIPLIER: u64 = 0x9E37_79B9_7F4A_7C15;
 
 /// `CHUNK_HASH_MULTIPLIER^(CHUNK_WINDOW_SIZE - 1)` (mod 2^64): the weight of
 /// the byte leaving the sliding window when the hash rolls.
-#[cfg_attr(not(test), allow(dead_code))]
 const CHUNK_HASH_ROLLOUT: u64 = chunk_hash_power(CHUNK_HASH_MULTIPLIER, CHUNK_WINDOW_SIZE - 1);
 
-#[cfg_attr(not(test), allow(dead_code))]
 const fn chunk_hash_power(mut base: u64, mut exponent: usize) -> u64 {
     let mut result = 1u64;
     while exponent > 0 {
@@ -197,6 +187,12 @@ pub(crate) struct EncodedJson {
     pub(crate) stored: String,
 }
 
+/// Test-only constructor for v2 full records. The durable writer stores every
+/// payload as a manifest (#2333), but rows already stored as full records must
+/// keep decoding forever, and the fences that pin that decode need to build
+/// real full records. Both it and the returned record keep the decode-what-you-
+/// wrote self-check the manifest writer mirrors.
+#[cfg(test)]
 pub(crate) fn encode_full(value: &Value) -> Result<EncodedJson> {
     let stored = encode_envelope(Payload::Full {
         value: value.clone(),
@@ -211,6 +207,11 @@ pub(crate) fn encode_full(value: &Value) -> Result<EncodedJson> {
     Ok(EncodedJson { stored })
 }
 
+/// Test-only constructor for v2 delta records. The durable writer stopped
+/// producing deltas in #2333 — new captures are manifests — but rows already
+/// stored as deltas must keep decoding forever, and the fences that pin that
+/// decode need to build real delta records.
+#[cfg(test)]
 pub(crate) fn encode_against(
     value: &Value,
     base_value: &Value,
@@ -261,7 +262,6 @@ fn encode_envelope(payload: Payload) -> Result<String> {
 }
 
 /// One content-defined block of a capture body, as the write path produces it.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct ChunkedBlock {
     /// sha256 of `bytes`, hex-encoded. A dedupe/lookup key only; integrity
     /// rides on the field-commit witness the stored entry pins.
@@ -270,7 +270,7 @@ pub(crate) struct ChunkedBlock {
 }
 
 /// The write-side v3 policy: split canonical capture bytes into content-defined
-/// blocks (#2333).
+/// blocks (#2333). Every cut lands on a UTF-8 character boundary.
 ///
 /// The chunker decides boundaries, never content: reconstruction is pure
 /// concatenation, so any partition is lossless and the chunker can change
@@ -281,7 +281,6 @@ pub(crate) struct ChunkedBlock {
 /// reuse O(edit) instead of O(body). Determinism is load-bearing: the fixed
 /// multiplier and mask make identical bytes chunk identically on every
 /// platform and build.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn chunk_capture_body(canonical: &str) -> Vec<ChunkedBlock> {
     let bytes = canonical.as_bytes();
     let mut blocks = Vec::new();
@@ -301,7 +300,11 @@ pub(crate) fn chunk_capture_body(canonical: &str) -> Vec<ChunkedBlock> {
 /// Length of the first chunk cut from `chunk`: a content-defined boundary
 /// after [`CHUNK_MIN_SIZE`] bytes, a forced cut at [`CHUNK_MAX_SIZE`], or the
 /// end of the body. A final block may be shorter than the minimum.
-#[cfg_attr(not(test), allow(dead_code))]
+///
+/// Cuts are advanced to the next UTF-8 character boundary, so a block carved
+/// out of a valid UTF-8 body is itself valid UTF-8 and stores byte for byte in
+/// the block document's String payload; a cut may therefore exceed its nominal
+/// limit by at most three bytes.
 fn next_chunk_end(chunk: &[u8]) -> usize {
     let limit = CHUNK_MAX_SIZE.min(chunk.len());
     if limit <= CHUNK_MIN_SIZE {
@@ -311,17 +314,25 @@ fn next_chunk_end(chunk: &[u8]) -> usize {
     let mut position = CHUNK_MIN_SIZE;
     while position < limit {
         if hash & CHUNK_BOUNDARY_MASK == 0 {
-            return position;
+            return utf8_chunk_boundary(chunk, position);
         }
         hash = roll_chunk_hash(hash, chunk[position - CHUNK_WINDOW_SIZE], chunk[position]);
         position += 1;
     }
-    limit
+    utf8_chunk_boundary(chunk, limit)
+}
+
+/// The next UTF-8 character boundary at or after `index`.
+fn utf8_chunk_boundary(bytes: &[u8], index: usize) -> usize {
+    let mut boundary = index;
+    while boundary < bytes.len() && (bytes[boundary] & 0xC0) == 0x80 {
+        boundary += 1;
+    }
+    boundary
 }
 
 /// Polynomial hash of a full window: `Σ (byte+1) · multiplier^(window-1-i)`,
 /// evaluated with wrapping u64 arithmetic.
-#[cfg_attr(not(test), allow(dead_code))]
 fn chunk_window_hash(window: &[u8]) -> u64 {
     debug_assert_eq!(window.len(), CHUNK_WINDOW_SIZE);
     window.iter().fold(0u64, |hash, byte| {
@@ -332,7 +343,6 @@ fn chunk_window_hash(window: &[u8]) -> u64 {
 
 /// Slide the window hash by one byte: drop `outgoing`'s term, multiply every
 /// remaining power up by one, and add `incoming`'s term.
-#[cfg_attr(not(test), allow(dead_code))]
 fn roll_chunk_hash(hash: u64, outgoing: u8, incoming: u8) -> u64 {
     hash.wrapping_sub((u64::from(outgoing) + 1).wrapping_mul(CHUNK_HASH_ROLLOUT))
         .wrapping_mul(CHUNK_HASH_MULTIPLIER)
@@ -340,7 +350,6 @@ fn roll_chunk_hash(hash: u64, outgoing: u8, incoming: u8) -> u64 {
 }
 
 /// sha256 over raw block bytes, hex-encoded.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn block_content_key(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
         .iter()
@@ -348,11 +357,30 @@ pub(crate) fn block_content_key(bytes: &[u8]) -> String {
         .collect()
 }
 
+/// Durable reader ceiling on one manifest's block count: the fuel the store
+/// resolver starts with, minus the manifest document and the terminal list
+/// frame (`k` full blocks first resolve at fuel `k + 2`). This is the Rust
+/// reading of the fuel parameter `RenderedCapture.resolveBytes` threads
+/// through every resolution, not a second policy: a manifest beyond it fails
+/// closed exactly like an over-fuel Lean resolution, and the writer refuses to
+/// produce one. At the mean chunk size it bounds a single captured body to
+/// roughly 40 MiB, far above any context window.
+pub(crate) const MAX_MANIFEST_BLOCKS: usize = 10_000;
+
+/// Fuel for durable manifest resolution: `MAX_MANIFEST_BLOCKS` blocks plus the
+/// manifest document and terminal list frame.
+pub(crate) const MANIFEST_RESOLUTION_FUEL: usize = MAX_MANIFEST_BLOCKS + 2;
+
 /// Encode the manifest record for already-stored blocks. The entries' document
 /// ids and field-commit witnesses come from the block writes that precede this
 /// call; like [`encode_full`], the envelope is decoded back before use.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn encode_manifest(blocks: &[ManifestEntry]) -> Result<EncodedJson> {
+    anyhow::ensure!(
+        blocks.len() <= MAX_MANIFEST_BLOCKS,
+        "capture manifest names {} blocks, above the {} the reader resolves",
+        blocks.len(),
+        MAX_MANIFEST_BLOCKS
+    );
     let stored = encode_envelope(Payload::Manifest {
         blocks: blocks.to_vec(),
     })?;
@@ -379,7 +407,6 @@ pub(crate) fn encode_manifest(blocks: &[ManifestEntry]) -> Result<EncodedJson> {
 /// every entry (with its block document), and the terminal list frame each
 /// consume one unit, so a manifest of `k` full blocks first resolves at fuel
 /// `k + 2` and anything less fails closed.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn resolve_manifest_with_limit<F>(
     fuel: usize,
     stored: &str,
@@ -473,6 +500,7 @@ pub(crate) fn capture_record_depth(
     )
 }
 
+#[cfg(test)]
 fn splice_delta(base: &Value, value: &Value) -> Option<FieldDelta> {
     let base = super::canonical_json_string(base).ok()?;
     let value = super::canonical_json_string(value).ok()?;
@@ -487,6 +515,7 @@ fn splice_delta(base: &Value, value: &Value) -> Option<FieldDelta> {
     (serde_json::to_vec(&splice).ok()?.len() < value.len()).then_some(splice)
 }
 
+#[cfg(test)]
 fn common_prefix_boundary(left: &str, right: &str) -> usize {
     let mut prefix = left
         .bytes()
@@ -499,6 +528,7 @@ fn common_prefix_boundary(left: &str, right: &str) -> usize {
     prefix
 }
 
+#[cfg(test)]
 fn common_suffix_boundary(left: &str, right: &str) -> usize {
     let mut suffix = left
         .bytes()
@@ -678,14 +708,16 @@ where
         })
 }
 
-pub(crate) fn resolve_capture_with<F>(
+pub(crate) fn resolve_capture_with<B, F>(
     capture_version: u32,
     stored: &str,
     kind: CapturePayloadKind,
     mut fetch_base: F,
+    mut fetch_block: B,
 ) -> Result<Value>
 where
     F: FnMut(&BaseWitness) -> Result<(u32, String, String)>,
+    B: FnMut(&ManifestEntry) -> Result<(Vec<u8>, String)>,
 {
     match capture_version {
         1 if kind == CapturePayloadKind::RequestBody => decode_inline_value(1, stored),
@@ -698,7 +730,19 @@ where
                 Ok((2, select_container_record(&container, kind)?, commit))
             })
         }
-        3 => anyhow::bail!("capture manifest resolution requires a block source"),
+        // A v3 row stores both container payloads as manifests; the writer
+        // never stores any other record kind under version 3.
+        3 => {
+            let selected = select_container_record(stored, kind)?;
+            match decode_record(&selected)? {
+                DecodedRecord::Manifest { .. } => {
+                    resolve_manifest_with_limit(MANIFEST_RESOLUTION_FUEL, &selected, |entry| {
+                        fetch_block(entry)
+                    })
+                }
+                _ => anyhow::bail!("v3 capture record is not a block manifest"),
+            }
+        }
         other => anyhow::bail!("unsupported rendered-request capture version {other}"),
     }
 }
@@ -964,6 +1008,32 @@ mod tests {
         }
     }
 
+    /// Every cut lands on a UTF-8 character boundary, so a block is itself
+    /// valid UTF-8 and stores byte for byte in a String column — a split
+    /// inside a multi-byte character would corrupt the payload and break the
+    /// content key. A forced cut may overshoot the maximum by at most the
+    /// three continuation bytes it takes to reach one.
+    #[test]
+    fn cuts_land_on_utf8_character_boundaries() {
+        let multibyte = "λ".repeat(9 * 1024);
+        let body = json!({"model": "m", "text": multibyte, "tail": "λ"});
+        let canonical = super::super::canonical_json_string(&body).unwrap();
+        let blocks = chunk_capture_body(&canonical);
+        assert!(blocks.len() >= 2, "the body should span several blocks");
+        for block in &blocks {
+            assert!(
+                std::str::from_utf8(&block.bytes).is_ok(),
+                "a block split inside a multi-byte character is not storable as written"
+            );
+            assert!(block.bytes.len() <= CHUNK_MAX_SIZE + 3);
+        }
+        let reassembled = blocks.iter().fold(String::new(), |mut out, block| {
+            out.push_str(std::str::from_utf8(&block.bytes).unwrap());
+            out
+        });
+        assert_eq!(reassembled, canonical);
+    }
+
     fn manifest_store(
         blocks: &[ChunkedBlock],
     ) -> (Vec<ManifestEntry>, BTreeMap<String, (String, Vec<u8>)>) {
@@ -1126,12 +1196,18 @@ mod tests {
         )
         .unwrap();
         let container = encode_container(&encoded, &encode_full(&next).unwrap()).unwrap();
-        let resolved = resolve_capture_with(2, &container, CapturePayloadKind::RequestBody, |_| {
-            let base_container =
-                encode_container(&encode_full(&base).unwrap(), &encode_full(&base).unwrap())
-                    .unwrap();
-            Ok((2, base_container, "cid".into()))
-        })
+        let resolved = resolve_capture_with(
+            2,
+            &container,
+            CapturePayloadKind::RequestBody,
+            |_| {
+                let base_container =
+                    encode_container(&encode_full(&base).unwrap(), &encode_full(&base).unwrap())
+                        .unwrap();
+                Ok((2, base_container, "cid".into()))
+            },
+            |_| unreachable!(),
+        )
         .unwrap();
         assert_eq!(resolved, next);
         assert_eq!(resolved["integer"].as_u64(), Some(9_007_199_254_740_991));
@@ -1169,6 +1245,7 @@ mod tests {
                     2,
                     &full_container,
                     CapturePayloadKind::RequestBody,
+                    |_| unreachable!(),
                     |_| unreachable!()
                 )
                 .unwrap(),
@@ -1206,7 +1283,8 @@ mod tests {
                     2,
                     &delta_container,
                     CapturePayloadKind::RequestBody,
-                    |_| Ok((2, base_container.clone(), "cid".into()))
+                    |_| Ok((2, base_container.clone(), "cid".into())),
+                    |_| unreachable!()
                 )
                 .unwrap(),
                 next
@@ -1363,15 +1441,20 @@ mod tests {
                 2,
                 &stored,
                 CapturePayloadKind::RequestBody,
+                |_| unreachable!(),
                 |_| unreachable!()
             )
             .unwrap(),
             body
         );
         assert_eq!(
-            resolve_capture_with(2, &stored, CapturePayloadKind::ProvenancePayload, |_| {
-                unreachable!()
-            })
+            resolve_capture_with(
+                2,
+                &stored,
+                CapturePayloadKind::ProvenancePayload,
+                |_| unreachable!(),
+                |_| unreachable!()
+            )
             .unwrap(),
             provenance
         );
@@ -1382,6 +1465,7 @@ mod tests {
             2,
             &malformed.to_string(),
             CapturePayloadKind::RequestBody,
+            |_| unreachable!(),
             |_| unreachable!()
         )
         .is_err());

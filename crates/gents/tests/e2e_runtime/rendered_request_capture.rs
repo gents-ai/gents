@@ -336,25 +336,51 @@ async fn capture_is_idempotent_and_never_rebinds_a_key() {
     );
 }
 
+/// The regression #2333 exists to fix, over a real store: a session whose
+/// captures grow by one message each turn writes only the new blocks plus a
+/// manifest row, so total capture bytes grow linearly with the conversation
+/// instead of repeating and re-signing it on every call.
+/// Deterministic per-message text: a fixed-seed xorshift64 stream mapped onto
+/// `a..z`. Content has to vary for content-defined boundaries to land; uniform
+/// runs almost never cut, which would make the reuse assertions meaningless.
+fn message_text(seed: u64, len: usize) -> String {
+    let mut state = seed;
+    let mut out = String::with_capacity(len);
+    while out.len() < len {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        out.push(char::from(b'a' + (state % 26) as u8));
+    }
+    out
+}
+
 #[tokio::test]
-async fn v2_capture_containers_delta_chain_round_trip_and_bound_logical_bytes() {
-    let db = test_db("rendered-request-v2-delta-chain").await;
+async fn manifest_captures_share_blocks_and_grow_linearly_across_turns() {
+    let db = test_db("rendered-request-manifest-linear").await;
     let sink = gents::rendered_request::DefraRenderedRequestSink::new(db.node.clone());
-    let mut rows = Vec::new();
+    let turns = 12usize;
     let mut old_bytes = 0usize;
     let mut new_bytes = 0usize;
-    for turn in 0..10usize {
+    let mut referenced_blocks = 0usize;
+    for turn in 0..turns {
         let body = serde_json::json!({
-            "model":"m", "messages": [{"role":"user","content": "x".repeat(32 * 1024 + turn * 1024)}]
+            "model":"m", "messages": (0..=turn).map(|index|
+                serde_json::json!({"role":"user","content": message_text(u64::try_from(index).unwrap(), 3 * 1024)})
+            ).collect::<Vec<_>>()
         });
         let mut rendered = rendered_fixture(body.clone());
-        // Compression is session/scoping based, not request based. Exercise
-        // the ordinary case where successive turns are distinct requests in
-        // the same session and must still share an immutable delta chain.
-        rendered.request_id = format!("req-delta-{turn}");
+        // Storage sharing is session/scoping based, not request based. Exercise
+        // the ordinary case where successive turns are distinct requests in the
+        // same session and must still share blocks.
+        rendered.request_id = format!("req-manifest-{turn}");
         rendered.assembly_trace = gents::rendered_request::AssemblyTrace::from_effective_messages(
             gents::rendered_request::AssemblyBuildPath::Budgeted,
-            vec![Message::user("λ".repeat(16 * 1024 + turn * 512))],
+            vec![Message::user(format!(
+                "λ {} {}",
+                turn,
+                message_text(1000 + u64::try_from(turn).unwrap(), 3 * 1024)
+            ))],
         );
         rendered.provenance_payload_json = serde_json::to_value(&rendered.assembly_trace).unwrap();
         rendered.provenance_json =
@@ -383,10 +409,16 @@ async fn v2_capture_containers_delta_chain_round_trip_and_bound_logical_bytes() 
         let response = db.node.execute(&query).await;
         assert!(!response.has_errors(), "{:?}", response.errors);
         let row = response.data.unwrap()["RenderedRequest"][0].clone();
+        assert_eq!(row["capture_version"].as_u64(), Some(3));
         let stored = row["request_json"].as_str().unwrap();
+        let container: Value = serde_json::from_str(stored).unwrap();
+        for payload in ["request_body", "provenance_payload"] {
+            assert_eq!(container[payload]["kind"], "manifest", "payload {payload}");
+            referenced_blocks += container[payload]["blocks"].as_array().unwrap().len();
+        }
         let decoded = gents::rendered_request::decode_capture_json_embedded(
             db.node.as_ref(),
-            2,
+            gents::rendered_request::CAPTURE_VERSION,
             stored,
             gents::rendered_request::CapturePayloadKind::RequestBody,
         )
@@ -395,7 +427,7 @@ async fn v2_capture_containers_delta_chain_round_trip_and_bound_logical_bytes() 
         assert_eq!(decoded, canonical(&body));
         let decoded_payload = gents::rendered_request::decode_capture_json_embedded(
             db.node.as_ref(),
-            2,
+            gents::rendered_request::CAPTURE_VERSION,
             stored,
             gents::rendered_request::CapturePayloadKind::ProvenancePayload,
         )
@@ -415,42 +447,218 @@ async fn v2_capture_containers_delta_chain_round_trip_and_bound_logical_bytes() 
                 .unwrap()
                 .len();
         new_bytes += stored.len() + row["provenance_json"].as_str().unwrap().len();
-        rows.push((rendered, stored.to_owned()));
     }
-    for (turn, (_, stored)) in rows.iter().enumerate() {
-        let container: Value = serde_json::from_str(stored).unwrap();
-        for payload in ["request_body", "provenance_payload"] {
-            assert_eq!(
-                container[payload]["kind"],
-                if turn == 0 || turn == 9 {
-                    "full"
-                } else {
-                    "object_delta"
-                },
-                "turn {turn}, payload {payload}"
-            );
-        }
-    }
-    assert_eq!(
-        rows.iter()
-            .map(|(rendered, _)| rendered.request_id.as_str())
-            .collect::<std::collections::BTreeSet<_>>()
-            .len(),
-        10,
-        "the delta chain must span distinct requests in one session"
+    // The linear claim, both directions: the store holds O(turns) blocks while
+    // the references the captures carry total O(turns^2), and a body whose
+    // per-turn growth is one message costs roughly that message's blocks.
+    let block_rows = block_count(db.node.as_ref()).await;
+    assert!(
+        referenced_blocks > turns * (turns + 1) / 2,
+        "{referenced_blocks} references must grow quadratically for this assertion to mean \
+         anything"
     );
-    tracing::info!(old_bytes, new_bytes, "capture logical payload replay");
+    assert!(
+        block_rows < 4 * turns,
+        "{block_rows} stored blocks for {turns} turns: storage must grow linearly, not with \
+         the conversation"
+    );
+    assert!(
+        block_rows * 2 < referenced_blocks,
+        "{block_rows} stored blocks against {referenced_blocks} referenced: turns must reuse \
+         blocks rather than re-store them"
+    );
     assert!(
         old_bytes > new_bytes * 2,
-        "old={old_bytes}, new={new_bytes}"
+        "storing each body and trace once must beat repeating them: old={old_bytes}, new={new_bytes}"
     );
-    let (last, _) = rows.last().unwrap();
-    let commits = commit_set(db.node.as_ref(), &last.capture_key).await;
-    sink.capture(last.clone()).await.unwrap();
+    // Linear, not quadratic: the last turn's own write is bounded by its new
+    // content and its references, not by the length of the whole conversation.
+    let per_turn_growth = new_bytes / turns;
+    assert!(
+        (per_turn_growth as f64) < 1.5 * (old_bytes / turns) as f64,
+        "per-turn capture bytes {per_turn_growth} must track per-turn new content {}",
+        old_bytes / turns
+    );
+    tracing::info!(old_bytes, new_bytes, block_rows, "capture manifest replay");
+}
+
+async fn block_count(node: &EmbeddedNode) -> usize {
+    let response = node.execute(r#"{ RenderedRequestBlock { _docID } }"#).await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    response.data.unwrap()["RenderedRequestBlock"]
+        .as_array()
+        .map(Vec::len)
+        .unwrap_or_default()
+}
+
+/// Rows written as v2 delta chains are immutable history: the writer no longer
+/// produces them (#2333) but they must keep decoding through their own arm.
+/// The chain is stored by hand, exactly as a v2 writer would have left it.
+#[tokio::test]
+async fn stored_v2_delta_rows_still_decode_through_their_own_arm() {
+    let db = test_db("rendered-request-stored-v2-delta").await;
+    let base = rendered_fixture(serde_json::json!({
+        "model":"m", "messages":[{"role":"user","content": "base λ"}],
+        "padding": "x".repeat(8 * 1024)
+    }));
+    let base_container = serde_json::json!({
+        "gents_capture_json": 1,
+        "request_body": {"gents_lossless_json": 1, "kind": "full", "value": base.request_json},
+        "provenance_payload": {
+            "gents_lossless_json": 1, "kind": "full", "value": base.provenance_payload_json
+        }
+    });
+    insert_stored_capture(db.node.as_ref(), &base, 2, &base_container.to_string()).await;
+    let base_doc_id = capture_doc_id(db.node.as_ref(), &base.capture_key).await;
+    let base_cid = request_json_commit_cid(db.node.as_ref(), &base_doc_id).await;
+
+    let mut next_body = base.request_json.clone();
+    next_body["messages"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({"role":"assistant","content":"tail"}));
+    let delta_container = serde_json::json!({
+        "gents_capture_json": 1,
+        "request_body": {
+            "gents_lossless_json": 1,
+            "kind": "object_delta",
+            "base": {
+                "doc_id": base_doc_id,
+                "field_commit_cid": base_cid,
+                "depth": 0,
+                "agent_did": base.agent_did,
+                "requester_did": base.requester_did,
+                "session_id": base.session_id,
+                "source": "openai_chat_completions",
+                "capture_scope": base.capture_scope,
+            },
+            "changed": {"messages": {"kind":"full","value": next_body["messages"]}},
+            "removed": []
+        },
+        "provenance_payload": {
+            "gents_lossless_json": 1, "kind": "full", "value": base.provenance_payload_json
+        }
+    });
+    let mut delta = rendered_fixture(next_body.clone());
+    delta.turn_index = 1;
+    delta.request_id = "req-stored-v2-delta".to_string();
+    delta.capture_key = gents::rendered_request::capture_key(
+        &delta.agent_did,
+        &delta.session_id,
+        &delta.request_doc_id,
+        &delta.capture_scope,
+        1,
+        delta.attempt,
+    )
+    .unwrap();
+    insert_stored_capture(db.node.as_ref(), &delta, 2, &delta_container.to_string()).await;
+
+    let stored = stored_request_json(db.node.as_ref(), &delta.capture_key).await;
     assert_eq!(
-        commit_set(db.node.as_ref(), &last.capture_key).await,
-        commits
+        gents::rendered_request::decode_capture_json_embedded(
+            db.node.as_ref(),
+            2,
+            &stored,
+            gents::rendered_request::CapturePayloadKind::RequestBody,
+        )
+        .await
+        .unwrap(),
+        canonical(&next_body)
     );
+    // The same row read as a v3 manifest must not silently reinterpret the
+    // delta record: version dispatch stays fail-closed.
+    assert!(gents::rendered_request::decode_capture_json_embedded(
+        db.node.as_ref(),
+        3,
+        &stored,
+        gents::rendered_request::CapturePayloadKind::RequestBody,
+    )
+    .await
+    .is_err());
+}
+
+async fn insert_stored_capture(
+    node: &EmbeddedNode,
+    rendered: &RenderedCompletionRequest,
+    capture_version: u32,
+    request_json: &str,
+) {
+    let provenance =
+        gents::rendered_request::canonical_json_string(&rendered.provenance_json).unwrap();
+    let source = serde_json::to_value(rendered.source).unwrap();
+    let mutation = format!(
+        r#"mutation {{ create_RenderedRequest(input: {{
+            capture_key:"{}", request_doc_id:"{}", request_commit_cid:"{}", request_id:"{}",
+            session_id:"{}", agent_did:"{}", requester_did:"{}", behavior_id:"{}",
+            capture_scope:"{}", turn_index:{}, attempt:{}, capture_version:{},
+            model_name:"{}", source:"{}", request_json:"{}", provenance_json:"{}",
+            created_at:"2026-10-07T00:00:00Z"
+        }}) {{ _docID }} }}"#,
+        escape_graphql_string(&rendered.capture_key),
+        escape_graphql_string(&rendered.request_doc_id),
+        escape_graphql_string(&rendered.request_commit_cid),
+        escape_graphql_string(&rendered.request_id),
+        escape_graphql_string(&rendered.session_id),
+        escape_graphql_string(&rendered.agent_did),
+        escape_graphql_string(&rendered.requester_did),
+        escape_graphql_string(&rendered.behavior_id),
+        escape_graphql_string(&rendered.capture_scope),
+        rendered.turn_index,
+        rendered.attempt,
+        capture_version,
+        escape_graphql_string(&rendered.model_name),
+        escape_graphql_string(source.as_str().unwrap()),
+        escape_graphql_string(request_json),
+        escape_graphql_string(&provenance),
+    );
+    let response = node.execute(&mutation).await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+}
+
+async fn stored_request_json(node: &EmbeddedNode, capture_key: &str) -> String {
+    let query = format!(
+        r#"{{ RenderedRequest(filter:{{capture_key:{{_eq:"{}"}}}},limit:1){{request_json}} }}"#,
+        escape_graphql_string(capture_key)
+    );
+    let response = node.execute(&query).await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    response.data.unwrap()["RenderedRequest"][0]["request_json"]
+        .as_str()
+        .expect("stored request_json")
+        .to_owned()
+}
+
+async fn capture_doc_id(node: &EmbeddedNode, capture_key: &str) -> String {
+    let query = format!(
+        r#"{{ RenderedRequest(filter:{{capture_key:{{_eq:"{}"}}}},limit:1){{_docID}} }}"#,
+        escape_graphql_string(capture_key)
+    );
+    let response = node.execute(&query).await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    response.data.unwrap()["RenderedRequest"][0]["_docID"]
+        .as_str()
+        .expect("capture doc id")
+        .to_owned()
+}
+
+/// The current `request_json` field commit of one capture document, selected in
+/// Rust from the full commit list because the `_commits` fieldName filter is
+/// evaluated in memory and degrades to unfiltered when malformed.
+async fn request_json_commit_cid(node: &EmbeddedNode, doc_id: &str) -> String {
+    let query = format!(
+        r#"{{ _commits(docID:"{}") {{ cid fieldName }} }}"#,
+        escape_graphql_string(doc_id)
+    );
+    let response = node.execute(&query).await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    response.data.unwrap()["_commits"]
+        .as_array()
+        .expect("commits")
+        .iter()
+        .find(|commit| commit["fieldName"].as_str() == Some("request_json"))
+        .and_then(|commit| commit["cid"].as_str())
+        .expect("request_json field commit")
+        .to_owned()
 }
 
 #[tokio::test]

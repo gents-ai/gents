@@ -56,6 +56,29 @@ pub async fn field_commit(
     select_field_commit(&response, field_name)
 }
 
+/// Read a field commit inside the caller's transaction.
+///
+/// The capture sink uses this to pin the `payload` witness of a block document
+/// in the same transaction that creates the block and the manifest referencing
+/// it, so the pinned CID and the block write commit as one unit. The CID a
+/// transaction observes for its own create is the CID every later reader
+/// observes, which is what makes the pin meaningful.
+pub(crate) async fn field_commit_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    doc_id: &str,
+    field_name: &str,
+) -> Result<Option<RequestJsonCommit>> {
+    let query = format!(
+        r#"query {{ _commits(docID: "{doc_id}") {{ cid height fieldName }} }}"#,
+        doc_id = escape_graphql_string(doc_id),
+    );
+    let response = txn
+        .execute(&query)
+        .await
+        .with_context(|| format!("reading _commits in transaction for {doc_id}"))?;
+    select_field_commit(&response, field_name)
+}
+
 pub(crate) async fn field_commit_embedded(
     node: &EmbeddedNode,
     doc_id: &str,
