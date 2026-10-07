@@ -936,15 +936,16 @@ fn validate_manifest(manifest: &ScenarioManifest) -> Result<()> {
 }
 
 /// What [`install_graph_dependencies`] needs beyond the packages themselves,
-/// grouped so the function stays under the argument-count lint: the spawned
-/// home, the running node it installs into, and the identity it installs as.
+/// grouped so the function stays under the argument-count lint: the run's
+/// home it installs into (before that home's node starts, since plugins
+/// install only on the node's own host), and the identity it installs as.
 struct GraphDependencyInstall<'a> {
     bin: &'a Path,
     home: &'a Path,
     registry: Option<&'a str>,
-    graphql: &'a GraphqlEndpoint,
     agent_did: &'a str,
     inference_profile_id: &'a str,
+    grant_authority: bool,
 }
 
 /// Installs every graph dependency the scenario's distribution manifest
@@ -963,8 +964,6 @@ async fn install_graph_dependencies(
             package.clone(),
             "--home".to_owned(),
             path_arg(ctx.home),
-            "--graphql".to_owned(),
-            ctx.graphql.url().to_owned(),
             "--agent-did".to_owned(),
             ctx.agent_did.to_owned(),
             "--output".to_owned(),
@@ -973,6 +972,9 @@ async fn install_graph_dependencies(
         if let Some(registry) = ctx.registry {
             args.push("--registry".to_owned());
             args.push(registry.to_owned());
+        }
+        if ctx.grant_authority {
+            args.push("--grant-authority".to_owned());
         }
         let graph_pack = super::resolve_pack_source(package, ctx.registry, ctx.home).await?;
         for slot in &graph_pack.manifest().metadata.inference_slots {
@@ -3376,7 +3378,6 @@ pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
     }
     std::fs::create_dir_all(&home)
         .with_context(|| format!("creating pack home {}", home.display()))?;
-    pre_store_with_packs(&home, &args.with_pack)?;
 
     println!("pack     {} ({})", manifest.name, pack.display());
     println!("job_id   {job_id}");
@@ -3400,6 +3401,8 @@ pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
         &pack_init_cli_args(&home, &manifest, tool_root.as_deref()),
     )
     .await?;
+    // `gents init --dangerously-overwrite` empties the home, store included.
+    pre_store_with_packs(&home, &args.with_pack)?;
     let agent_did = init
         .get("agent_did")
         .and_then(Value::as_str)
@@ -3438,6 +3441,23 @@ pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
     let log = run_dir.join("server.log");
     let started = Instant::now();
 
+    // Dependencies install before the node applies the scenario pack, so the
+    // pack's documents may name theirs and their plugins are on the host
+    // when the behaviors that call them start.
+    install_graph_dependencies(
+        &GraphDependencyInstall {
+            bin: &bin,
+            home: &home,
+            registry: args.registry.as_deref(),
+            agent_did: &agent_did,
+            inference_profile_id: &inference_profile_id,
+            grant_authority: args.grant_authority,
+        },
+        &manifest.graph_dependencies,
+        &manifest.graph_dependency_environment,
+    )
+    .await?;
+
     let mut server = spawn_server_with_pack(
         &bin,
         &home,
@@ -3456,19 +3476,6 @@ pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
         )
         .await?;
         wait_runtime_ready(&graphql, &agent_did, &mut server).await?;
-        install_graph_dependencies(
-            &GraphDependencyInstall {
-                bin: &bin,
-                home: &home,
-                registry: args.registry.as_deref(),
-                graphql: &graphql,
-                agent_did: &agent_did,
-                inference_profile_id: &inference_profile_id,
-            },
-            &manifest.graph_dependencies,
-            &manifest.graph_dependency_environment,
-        )
-        .await?;
         println!(
             "runtime  ready; waiting for {} event source collection(s)…",
             observed_collections.len()

@@ -6,6 +6,13 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- `gents pack scenario run` can run a pack whose agent calls plugins from a
+  dependency: `--with-pack` packs are stored after the run's `gents init`
+  (which empties the home), dependencies install into the run's home before
+  its node starts and applies the scenario pack (plugins install only on the
+  node's own host, and the scenario's documents may name the dependency's),
+  and `--grant-authority` reaches those installs.
+
 - Plugins reach the network through the host (#2300). A plugin whose granted
   manifold carries an `OutboundHttp` allow-list answers a call with
   `http_calls` request batches; the host performs the admitted ones and
