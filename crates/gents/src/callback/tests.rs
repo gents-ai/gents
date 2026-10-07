@@ -747,7 +747,7 @@ async fn first_seen_source_create_materializes_owner_invocation() {
     .unwrap();
     assert!(emit_plan_from_source(&callback(), &admitted).is_ok());
 
-    engine.handle_created_doc("WorkUnit", &doc_id).await;
+    engine.deliver_arrivals(Some("WorkUnit")).await;
 
     let query = format!(
         r#"{{
@@ -779,7 +779,7 @@ async fn first_seen_source_create_materializes_owner_invocation() {
     assert_eq!(rows[0]["origin"]["source_doc_id"], doc_id);
     assert_eq!(rows[0]["input"]["work_unit_id"], "unit-scan");
     assert!(rows[0]["input"].get("_docID").is_none());
-    engine.handle_created_doc("WorkUnit", &doc_id).await;
+    engine.deliver_arrivals(Some("WorkUnit")).await;
     let repeated = node.execute(&query).await;
     assert_eq!(
         crate::graphql::rows::<serde_json::Value>(&repeated, "CallbackInvocation")
@@ -1312,4 +1312,112 @@ fn every_invocation_origin_names_its_binding() {
     };
     assert_eq!(event.binding_id(), "one");
     assert_eq!(group.binding_id(), "two");
+}
+
+/// A document written after a binding is registered but before any callback
+/// engine observes its source (startup, downtime) is delivered once; a
+/// restarted engine neither redelivers it nor re-admits it after an edit
+/// (#2343). History before registration stays history.
+#[tokio::test]
+async fn document_written_before_engine_start_fires_once_across_restarts() {
+    use crate::config_client::{
+        apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
+    };
+    use crate::lifecycle::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
+    use crate::Collection;
+
+    let signing_home = tempfile::tempdir().unwrap();
+    let _identity = pin_fixed_signing_identity(signing_home.path());
+    let node = test_node().await;
+    let access = ConfigAccess::Local(node.clone());
+    access
+        .add_schema("type BacklogWork { label: String }")
+        .await
+        .unwrap();
+    let create = |label: &'static str| {
+        let access = access.clone();
+        async move {
+            let response = access
+                .write(
+                    "test.backlog_work",
+                    &format!("mutation {{ create_BacklogWork(input: {{label: \"{label}\"}}) {{ _docID }} }}"),
+                )
+                .await
+                .unwrap();
+            crate::graphql::created_doc_id(&response, "BacklogWork").unwrap()
+        }
+    };
+    let history = create("history").await;
+
+    let documents = [
+        (
+            Collection::Callback,
+            json!({"callback_id":"cb-backlog","handler":{"kind":"built_in","emitter":"create_workspace"},
+                "capabilities":["create_workspace"],"enabled":true}),
+        ),
+        (
+            Collection::EventSource,
+            json!({"event_source_id":"backlog","source_collection":"BacklogWork","event_kind":"created"}),
+        ),
+        (
+            Collection::CallbackBinding,
+            json!({"binding_id":"bind-backlog","event_source_id":"backlog","callback_id":"cb-backlog",
+                "input_fields":["label"],"enabled":true}),
+        ),
+    ]
+    .into_iter()
+    .map(|(collection, mut value)| {
+        value["agent_did"] = json!(PIN_FIXED_DID);
+        DesiredStateApplyDocument {
+            collection,
+            add: value.clone(),
+            update: value,
+        }
+    })
+    .collect();
+    let plan = DesiredStateApplyPlan::new(documents).unwrap();
+    access
+        .transact("test.backlog_config", |txn| {
+            let plan = &plan;
+            Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+        })
+        .await
+        .unwrap();
+
+    // Written while no callback engine runs.
+    let pending = create("pending").await;
+
+    let invocations = || {
+        let node = node.clone();
+        async move {
+            let response = node.execute("{ CallbackInvocation { origin } }").await;
+            crate::graphql::rows::<serde_json::Value>(&response, "CallbackInvocation")
+                .unwrap()
+                .into_iter()
+                .map(|row| row["origin"]["source_doc_id"].as_str().unwrap().to_owned())
+                .collect::<Vec<_>>()
+        }
+    };
+    let plugins = Arc::new(crate::plugin::executor::PluginExecutor::new(None));
+    super::scan_callbacks(node.clone(), PIN_FIXED_DID.into(), plugins.clone()).await;
+    assert_eq!(invocations().await, vec![pending.clone()]);
+    assert!(!invocations().await.contains(&history));
+
+    let edit = access
+        .write(
+            "test.backlog_edit",
+            &format!(
+                "mutation {{ update_BacklogWork(docID: \"{}\", input: {{label: \"edited\"}}) {{ _docID }} }}",
+                crate::graphql::escape_graphql_string(&pending)
+            ),
+        )
+        .await;
+    edit.unwrap();
+    super::scan_callbacks(node.clone(), PIN_FIXED_DID.into(), plugins).await;
+    assert_eq!(
+        invocations().await,
+        vec![pending],
+        "a restarted engine must not redeliver an admitted arrival"
+    );
+    node.shutdown().await;
 }

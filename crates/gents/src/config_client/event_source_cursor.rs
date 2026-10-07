@@ -1,6 +1,7 @@
 use super::ConfigApplyTxn;
 use crate::graphql::escape_graphql_string;
 use anyhow::{Context, Result};
+use gents_protocol::event_delivery::EventConsumer;
 use gents_protocol::trigger_delivery::EventSourceCursor;
 use serde_json::json;
 
@@ -10,7 +11,7 @@ pub(crate) struct CursorRecord {
     pub cursor: EventSourceCursor,
 }
 
-async fn event_binding(
+async fn trigger_binding(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
     trigger_id: &str,
@@ -48,27 +49,123 @@ async fn event_binding(
     Ok((trigger, serde_json::from_value(source)?))
 }
 
+/// The per-document delivery settings one consumer's cursor checkpoints under.
+struct ConsumerBinding {
+    enabled: bool,
+    serial: bool,
+    /// The callback whose invocations are a callback binding's receipts.
+    callback_id: Option<String>,
+    source: crate::document_config::EventSource,
+}
+
+async fn callback_binding(
+    txn: &ConfigApplyTxn<'_>,
+    owner: &str,
+    binding_id: &str,
+) -> Result<(
+    crate::document_config::CallbackBinding,
+    crate::document_config::EventSource,
+)> {
+    let value = super::read_desired_state_document_in_txn(
+        txn,
+        crate::Collection::CallbackBinding,
+        owner,
+        binding_id,
+    )
+    .await?
+    .context("cursor callback binding disappeared")?;
+    let binding: crate::document_config::CallbackBinding = serde_json::from_value(value)?;
+    let source = super::read_desired_state_document_in_txn(
+        txn,
+        crate::Collection::EventSource,
+        owner,
+        &binding.event_source_id,
+    )
+    .await?
+    .ok_or_else(|| crate::document_config::MissingReference {
+        collection: crate::Collection::CallbackBinding,
+        id: binding_id.to_owned(),
+        field: "event_source_id".into(),
+        target: crate::Collection::EventSource,
+        target_id: binding.event_source_id.clone(),
+        agent_did: owner.to_owned(),
+    })?;
+    Ok((binding, serde_json::from_value(source)?))
+}
+
+async fn event_binding(
+    txn: &ConfigApplyTxn<'_>,
+    owner: &str,
+    consumer: &EventConsumer,
+) -> Result<ConsumerBinding> {
+    match consumer {
+        EventConsumer::Trigger { trigger_id } => {
+            let (trigger, source) = trigger_binding(txn, owner, trigger_id).await?;
+            Ok(ConsumerBinding {
+                enabled: trigger.enabled,
+                serial: trigger.concurrency
+                    == Some(crate::document_config::ConcurrencyMode::Serial),
+                callback_id: None,
+                source,
+            })
+        }
+        EventConsumer::CallbackBinding { binding_id } => {
+            let (binding, source) = callback_binding(txn, owner, binding_id).await?;
+            let callback = super::read_desired_state_document_in_txn(
+                txn,
+                crate::Collection::Callback,
+                owner,
+                &binding.callback_id,
+            )
+            .await?
+            .map(serde_json::from_value::<crate::document_config::Callback>)
+            .transpose()?;
+            Ok(ConsumerBinding {
+                enabled: binding.enabled && callback.is_some_and(|callback| callback.enabled),
+                serial: false,
+                callback_id: Some(binding.callback_id),
+                source,
+            })
+        }
+    }
+}
+
+fn cursor_key(owner: &str, consumer: &EventConsumer, collection: &str) -> String {
+    match consumer {
+        EventConsumer::Trigger { trigger_id } => crate::trigger_engine::durable_fire_key(
+            "arrival-cursor",
+            &[owner, trigger_id, collection],
+        ),
+        EventConsumer::CallbackBinding { binding_id } => crate::trigger_engine::durable_fire_key(
+            "callback-arrival-cursor",
+            &[owner, binding_id, collection],
+        ),
+    }
+}
+
 pub(crate) async fn load_or_seed(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
-    trigger_id: &str,
+    consumer: &EventConsumer,
 ) -> Result<CursorRecord> {
-    let (_, source) = event_binding(txn, owner, trigger_id).await?;
-    load_or_seed_for_source(txn, owner, trigger_id, &source.source_collection).await
+    let binding = event_binding(txn, owner, consumer).await?;
+    load_or_seed_for_source(txn, owner, consumer, &binding.source.source_collection).await
 }
 
 /// Cursor creation belongs to the configuration transaction, including a
 /// source-only replacement while its consumers are disabled. Waiting until
 /// runtime reconciliation would skip documents arriving after that replacement.
-pub(crate) async fn seed_referencing_triggers(
+pub(crate) async fn seed_referencing_consumers(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
     event_source_id: &str,
 ) -> Result<()> {
     let response = txn
         .execute(&format!(
-            "{{ Trigger(filter: {{agent_did: {{_eq: \"{}\"}}}}) {{trigger_id source}} }}",
-            escape_graphql_string(owner),
+            "{{ Trigger(filter: {{agent_did: {{_eq: \"{owner}\"}}}}) {{trigger_id source}} \
+               CallbackBinding(filter: {{agent_did: {{_eq: \"{owner}\"}}, event_source_id: {{_eq: \"{}\"}}}}) {{binding_id}} }}",
+            escape_graphql_string(event_source_id),
+            owner = escape_graphql_string(owner),
         ))
         .await?;
     for row in response["data"]["Trigger"]
@@ -79,8 +176,23 @@ pub(crate) async fn seed_referencing_triggers(
             let trigger_id = row["trigger_id"]
                 .as_str()
                 .context("source consumer lacks trigger ID")?;
-            load_or_seed(txn, owner, trigger_id).await?;
+            let consumer = EventConsumer::Trigger {
+                trigger_id: trigger_id.to_owned(),
+            };
+            load_or_seed(txn, owner, &consumer).await?;
         }
+    }
+    for row in response["data"]["CallbackBinding"]
+        .as_array()
+        .context("source callback consumers omitted rows")?
+    {
+        let binding_id = row["binding_id"]
+            .as_str()
+            .context("source consumer lacks binding ID")?;
+        let consumer = EventConsumer::CallbackBinding {
+            binding_id: binding_id.to_owned(),
+        };
+        load_or_seed(txn, owner, &consumer).await?;
     }
     Ok(())
 }
@@ -93,7 +205,7 @@ pub(crate) async fn validate_event_admission(
     fire: &gents_protocol::trigger_delivery::TriggerFire,
 ) -> Result<()> {
     let (trigger, source) =
-        event_binding(txn, &fire.identity.owner_did, &fire.identity.trigger_id).await?;
+        trigger_binding(txn, &fire.identity.owner_did, &fire.identity.trigger_id).await?;
     anyhow::ensure!(trigger.enabled, "event trigger is disabled");
     anyhow::ensure!(
         crate::trigger_engine::durable::outcome_source_allowed(
@@ -120,12 +232,12 @@ pub(crate) async fn validate_event_admission(
 pub(crate) async fn exclude_arrival(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
-    trigger_id: &str,
+    consumer: &EventConsumer,
     expected_collection: &str,
     after: &str,
 ) -> Result<()> {
     anyhow::ensure!(
-        checkpoint_prefix(txn, owner, trigger_id, expected_collection, after, false).await?,
+        checkpoint_prefix(txn, owner, consumer, expected_collection, after, false).await?,
         "arrival prefix remains unadmitted"
     );
     Ok(())
@@ -134,12 +246,11 @@ pub(crate) async fn exclude_arrival(
 pub(crate) async fn load_for_source(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
-    trigger_id: &str,
+    consumer: &EventConsumer,
     collection: &str,
 ) -> Result<Option<CursorRecord>> {
-    let key =
-        crate::trigger_engine::durable_fire_key("arrival-cursor", &[owner, trigger_id, collection]);
-    let response = txn.execute(&format!("{{ EventSourceCursor(filter: {{cursor_key: {{_eq: \"{}\"}}}}, limit: 2) {{ _docID cursor_key owner_did trigger_id source_collection after }} }}", escape_graphql_string(&key))).await?;
+    let key = cursor_key(owner, consumer, collection);
+    let response = txn.execute(&format!("{{ EventSourceCursor(filter: {{cursor_key: {{_eq: \"{}\"}}}}, limit: 2) {{ _docID cursor_key owner_did consumer source_collection after }} }}", escape_graphql_string(&key))).await?;
     let rows = response["data"]["EventSourceCursor"]
         .as_array()
         .context("cursor query omitted rows")?;
@@ -158,7 +269,7 @@ pub(crate) async fn load_for_source(
             serde_json::from_value(value).context("invalid persisted arrival cursor")?;
         anyhow::ensure!(
             cursor.owner_did == owner
-                && cursor.trigger_id == trigger_id
+                && &cursor.consumer == consumer
                 && cursor.source_collection == collection,
             "arrival cursor scope disagrees with its key"
         );
@@ -170,14 +281,13 @@ pub(crate) async fn load_for_source(
 pub(crate) async fn load_or_seed_for_source(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
-    trigger_id: &str,
+    consumer: &EventConsumer,
     collection: &str,
 ) -> Result<CursorRecord> {
-    if let Some(record) = load_for_source(txn, owner, trigger_id, collection).await? {
+    if let Some(record) = load_for_source(txn, owner, consumer, collection).await? {
         return Ok(record);
     }
-    let key =
-        crate::trigger_engine::durable_fire_key("arrival-cursor", &[owner, trigger_id, collection]);
+    let key = cursor_key(owner, consumer, collection);
     let schema = txn
         .execute(&crate::defra_query::schema::introspection_query(
             collection,
@@ -202,7 +312,7 @@ pub(crate) async fn load_or_seed_for_source(
     let cursor = EventSourceCursor {
         cursor_key: key,
         owner_did: owner.into(),
-        trigger_id: trigger_id.into(),
+        consumer: consumer.clone(),
         source_collection: collection.into(),
         after,
     };
@@ -214,11 +324,11 @@ pub(crate) async fn load_or_seed_for_source(
 async fn persist_checkpoint(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
-    trigger_id: &str,
+    consumer: &EventConsumer,
     expected_collection: &str,
     after: &str,
 ) -> Result<()> {
-    let record = load_or_seed_for_source(txn, owner, trigger_id, expected_collection).await?;
+    let record = load_or_seed_for_source(txn, owner, consumer, expected_collection).await?;
     anyhow::ensure!(
         record.cursor.source_collection == expected_collection,
         "arrival source changed while fire was admitted"
@@ -247,18 +357,23 @@ async fn persist_checkpoint(
 pub(crate) async fn checkpoint_prefix(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
-    trigger_id: &str,
+    consumer: &EventConsumer,
     collection: &str,
     through: &str,
     legacy_serial_busy: bool,
 ) -> Result<bool> {
-    let (trigger, source) = event_binding(txn, owner, trigger_id).await?;
+    let ConsumerBinding {
+        enabled,
+        serial,
+        callback_id,
+        source,
+    } = event_binding(txn, owner, consumer).await?;
     anyhow::ensure!(
         source.source_collection == collection && source.group.is_none(),
         "event source binding changed before checkpoint"
     );
     crate::graphql::validate_collection_identifier(collection)?;
-    let record = load_or_seed_for_source(txn, owner, trigger_id, collection).await?;
+    let record = load_or_seed_for_source(txn, owner, consumer, collection).await?;
     let mut after: u64 = record
         .cursor
         .after
@@ -268,9 +383,7 @@ pub(crate) async fn checkpoint_prefix(
     if through_position < after {
         return Ok(false);
     }
-    let serial_exclusion = legacy_serial_busy
-        && trigger.enabled
-        && trigger.concurrency == Some(crate::document_config::ConcurrencyMode::Serial);
+    let serial_exclusion = legacy_serial_busy && enabled && serial;
     let mut excluded_busy = false;
     loop {
         let response = txn.execute(&format!(
@@ -315,10 +428,19 @@ pub(crate) async fn checkpoint_prefix(
             let doc_id = entry["docID"]
                 .as_str()
                 .context("arrival omitted document ID")?;
-            if admitted_arrival(txn, owner, trigger_id, collection, doc_id).await? {
+            if admitted_arrival(
+                txn,
+                owner,
+                consumer,
+                callback_id.as_deref(),
+                collection,
+                doc_id,
+            )
+            .await?
+            {
                 continue;
             }
-            if !trigger.enabled {
+            if !enabled {
                 return Ok(false);
             }
             let filter = crate::trigger_engine::event_delivery::selection_filter(
@@ -344,22 +466,37 @@ pub(crate) async fn checkpoint_prefix(
             return Ok(false);
         }
         let end = next.min(through_position);
-        if !trigger.enabled && visible != end - after {
+        if !enabled && visible != end - after {
             return Ok(false);
         }
         after = end;
     }
-    persist_checkpoint(txn, owner, trigger_id, collection, through).await?;
+    persist_checkpoint(txn, owner, consumer, collection, through).await?;
     Ok(true)
 }
 
 async fn admitted_arrival(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
-    trigger_id: &str,
+    consumer: &EventConsumer,
+    callback_id: Option<&str>,
     source_collection: &str,
     source_doc_id: &str,
 ) -> Result<bool> {
+    let trigger_id = match consumer {
+        EventConsumer::Trigger { trigger_id } => trigger_id.as_str(),
+        EventConsumer::CallbackBinding { binding_id } => {
+            return admitted_callback_arrival(
+                txn,
+                owner,
+                callback_id.context("callback consumer lacks its callback")?,
+                binding_id,
+                source_collection,
+                source_doc_id,
+            )
+            .await
+        }
+    };
     let identity = gents_protocol::trigger_delivery::FireIdentity {
         owner_did: owner.into(),
         trigger_id: trigger_id.into(),
@@ -396,17 +533,56 @@ async fn admitted_arrival(
         == 1)
 }
 
+/// A callback binding's receipt is its event invocation for the arrival. The
+/// idempotency key also names the source version, so the receipt is matched on
+/// the invocation's origin: a later edit of an admitted document is not a new
+/// arrival.
+async fn admitted_callback_arrival(
+    txn: &ConfigApplyTxn<'_>,
+    owner: &str,
+    callback_id: &str,
+    binding_id: &str,
+    source_collection: &str,
+    source_doc_id: &str,
+) -> Result<bool> {
+    // DefraDB's `_like` wildcard is `%` alone; an identifier containing one
+    // only widens the candidates the exact origin match then narrows.
+    let prefix = crate::callback::idempotency_key(binding_id, source_doc_id, "");
+    let response = txn
+        .execute(&format!(
+            "{{ CallbackInvocation(filter: {{owner_agent_did: {{_eq: \"{}\"}}, callback_id: {{_eq: \"{}\"}}, idempotency_key: {{_like: \"{}%\"}}}}) {{ origin }} }}",
+            escape_graphql_string(owner),
+            escape_graphql_string(callback_id),
+            escape_graphql_string(&prefix),
+        ))
+        .await?;
+    let rows = response["data"]["CallbackInvocation"]
+        .as_array()
+        .context("callback receipt query omitted rows")?;
+    Ok(rows.iter().any(|row| {
+        matches!(
+            serde_json::from_value::<crate::document_config::CallbackInvocationOrigin>(row["origin"].clone()),
+            Ok(crate::document_config::CallbackInvocationOrigin::Event {
+                binding_id: ref binding,
+                source_collection: ref collection,
+                source_doc_id: ref doc,
+                ..
+            }) if binding == binding_id && collection == source_collection && doc == source_doc_id
+        )
+    }))
+}
+
 #[cfg(test)]
 pub(crate) async fn acknowledge_fire(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
-    trigger_id: &str,
+    consumer: &EventConsumer,
     source_collection: &str,
     _source_doc_id: &str,
     after: &str,
 ) -> Result<()> {
     anyhow::ensure!(
-        checkpoint_prefix(txn, owner, trigger_id, source_collection, after, false).await?,
+        checkpoint_prefix(txn, owner, consumer, source_collection, after, false).await?,
         "arrival prefix remains unadmitted"
     );
     Ok(())
@@ -416,11 +592,11 @@ pub(crate) async fn acknowledge_fire(
 pub(crate) async fn advance(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
-    trigger_id: &str,
+    consumer: &EventConsumer,
     collection: &str,
     after: &str,
 ) -> Result<()> {
-    persist_checkpoint(txn, owner, trigger_id, collection, after).await
+    persist_checkpoint(txn, owner, consumer, collection, after).await
 }
 
 #[cfg(test)]

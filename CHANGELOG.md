@@ -6,6 +6,14 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- Per-document callback bindings no longer drop documents written before the
+  callback engine starts (#2343). Like event triggers, each binding now
+  checkpoints a receiving-node arrival cursor, seeded when its configuration
+  is applied. Any arrival after registration is delivered once, deduplicated
+  by its `CallbackInvocation`, including documents written while the node was
+  down. `EventSourceCursor` now names its typed `consumer` in place of
+  `trigger_id`. Existing homes must be re-initialized.
+
 - Plugins reach the network through the host (#2300). A plugin whose granted
   manifold carries an `OutboundHttp` allow-list answers a call with
   `http_calls` request batches; the host performs the admitted ones and

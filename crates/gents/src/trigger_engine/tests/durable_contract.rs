@@ -498,12 +498,20 @@ async fn create_arrival_source(
     crate::graphql::created_doc_id(&response, "Work").unwrap()
 }
 
+fn handoff_consumer() -> gents_protocol::event_delivery::EventConsumer {
+    gents_protocol::event_delivery::EventConsumer::Trigger {
+        trigger_id: "handoff".into(),
+    }
+}
+
 async fn saved_arrival_cursor(access: &crate::config_client::ConfigAccess) -> String {
     access
         .transact("test.read_arrival_cursor", |txn| {
             Box::pin(async move {
                 Ok(crate::config_client::event_source_cursor::load_or_seed(
-                    txn, "owner-a", "handoff",
+                    txn,
+                    "owner-a",
+                    &handoff_consumer(),
                 )
                 .await?
                 .cursor
@@ -582,7 +590,14 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
         access
             .transact("test.prior_checkpoint", |txn| {
                 Box::pin(async move {
-                    event_source_cursor::advance(txn, "owner-a", "handoff", "Work", pre_after).await
+                    event_source_cursor::advance(
+                        txn,
+                        "owner-a",
+                        &handoff_consumer(),
+                        "Work",
+                        pre_after,
+                    )
+                    .await
                 })
             })
             .await
@@ -641,7 +656,7 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
                         let accepted = event_source_cursor::checkpoint_prefix(
                             txn,
                             "owner-a",
-                            "handoff",
+                            &handoff_consumer(),
                             "Work",
                             &entry.position,
                             busy,

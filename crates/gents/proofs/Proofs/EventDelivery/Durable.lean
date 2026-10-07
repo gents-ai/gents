@@ -20,8 +20,12 @@ structure Journal where
   entries : List Arrival
   deriving DecidableEq, Repr
 
-/-- Registration seeds the native head even for disabled triggers. Progress is
-node-local, never replicated, and retained across restart and re-enable. -/
+/-- Registration seeds the native head even for disabled consumers. Progress is
+node-local, never replicated, and retained across restart and re-enable. Every
+per-document consumer of a source owns one cursor: a task trigger, whose receipt
+is its `TriggerFire`, and a callback binding, whose receipt is its
+`CallbackInvocation` for the arrival. Each seeds in the configuration
+transaction that registers it, not when an engine first observes the source. -/
 structure Cursor where
   seeded : Bool := false
   after : Nat := 0
@@ -100,6 +104,16 @@ theorem initial_seed_delivered (head : Nat) (committed : State) (journal : Journ
   intro entry _ hafter hbefore _
   simp [seed] at hbefore
   exact False.elim ((Nat.not_lt_of_ge hbefore) hafter)
+
+/-- An engine may first observe its source after documents arrived: at
+startup, after downtime, or while another engine is still starting (#2343).
+Observation is not registration, so every arrival after registration stays
+pending however late the observing engine seeds. -/
+theorem late_observation_keeps_registered_arrivals (registered observed : Nat)
+    (source : List Arrival) (entry : Arrival) (hmem : entry ∈ source)
+    (hafter : registered < entry.position) :
+    entry ∈ pending (seed (seed {} registered) observed) source true := by
+  simp [seed, pending, hmem, hafter]
 
 theorem disabled_does_not_deliver (cursor : Cursor) (source : List Arrival) :
     pending cursor source false = [] := by simp [pending]

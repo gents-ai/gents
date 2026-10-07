@@ -355,7 +355,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::EVENT_SOURCE_CURSOR_NAME,
         gents_protocol::schemas::EVENT_SOURCE_CURSOR,
-        "bafyreibmj2c3mvftyp3zj6te24ql5grwbzoxiztuvpxz7idukpoxytvo24"
+        "bafyreichgs26urdud6sk4qualskmzpcodc5o2mlljnswcxmleihz2vo2qq"
     ),
     baseline_entry!(
         gents_protocol::schemas::TRIGGER_FIRE_NAME,

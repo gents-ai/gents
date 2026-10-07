@@ -1,6 +1,6 @@
 //! Callback engine: first-seen source creates → journaled host actions.
 //!
-//! Bindings select shared EventSource configuration (first-seen create semantics).
+//! Bindings select shared EventSource configuration (first-arrival create semantics).
 //! Invocations are claimable only on `owner_agent_did`. `CallbackResult`
 //! is created only after IsolatedWorkspace + WorkspacePlacement are durable.
 
@@ -24,10 +24,10 @@ mod wasm;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use documents::load_invocation;
 pub use documents::reject_secret_bearing_callback_fields;
 #[cfg(test)]
 pub(crate) use documents::{create_callback_result, update_invocation, CallbackResultDoc};
+pub(crate) use documents::{idempotency_key, load_invocation};
 pub(crate) use run::recover_local_invocations;
 
 pub(crate) const LIFECYCLE_PENDING: &str = "pending";
@@ -46,6 +46,8 @@ pub(super) struct CallbackEngine {
     subscription: Option<events::Subscription>,
     desired_collections: HashSet<String>,
     seen_docs: HashMap<String, HashSet<String>>,
+    /// Per-document bindings, which deliver from their arrival cursor.
+    cursor_bindings: HashSet<String>,
     collection_id_to_name: HashMap<String, String>,
     group_page_cursors: HashMap<String, String>,
     group_recovery_cursor: usize,

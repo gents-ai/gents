@@ -2,11 +2,13 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
+use gents_protocol::event_delivery::EventConsumer;
 use serde_json::Value;
 use tokio::time::MissedTickBehavior;
 
+use crate::config_client::{event_source_cursor, ConfigAccess};
 use crate::graphql::{document_composite_version, escape_graphql_string};
 use crate::UpdateSubscriptionSource;
 
@@ -57,6 +59,7 @@ impl CallbackEngine {
             subscription: None,
             desired_collections: HashSet::new(),
             seen_docs: HashMap::new(),
+            cursor_bindings: HashSet::new(),
             collection_id_to_name: HashMap::new(),
             group_page_cursors: HashMap::new(),
             group_recovery_cursor: 0,
@@ -74,6 +77,7 @@ impl CallbackEngine {
             }
         };
         let mut desired = HashSet::new();
+        let mut cursor_bindings = HashSet::new();
         // Per collection, each binding and the source field that correlates it.
         let mut consumers: HashMap<String, Vec<(String, Option<String>)>> = HashMap::new();
         for binding in &bindings {
@@ -85,6 +89,15 @@ impl CallbackEngine {
             .await
             {
                 Ok(Some(source)) => {
+                    if source.group.is_none() {
+                        // Configuration applies seed this cursor when they
+                        // register the binding; this covers bindings written
+                        // outside them.
+                        if !self.cursor_bindings.contains(&binding.binding_id) {
+                            let _ = self.load_cursor(binding, &source).await;
+                        }
+                        cursor_bindings.insert(binding.binding_id.clone());
+                    }
                     consumers
                         .entry(source.source_collection.clone())
                         .or_default()
@@ -114,14 +127,16 @@ impl CallbackEngine {
             }
         }
         self.desired_collections = desired;
+        self.cursor_bindings = cursor_bindings;
         if self.subscription.is_none() && !self.desired_collections.is_empty() {
             self.subscription = Some(self.subscription_source.subscribe_updates());
         }
     }
 
-    /// Marks the documents already in `collection` as history, except those of
-    /// a graph run already underway on one of `consumers`' own revisions: those
-    /// are live work the new consumer must still deliver.
+    /// Marks the documents already in `collection` as history for grouped
+    /// bindings, except those of a graph run already underway on one of
+    /// `consumers`' own revisions: those are live work the new consumer must
+    /// still deliver.
     async fn seed_seen_docs(
         &mut self,
         collection: &str,
@@ -171,6 +186,7 @@ impl CallbackEngine {
 
     pub(super) async fn rescan_created_docs(&mut self) {
         self.recover_group_page().await;
+        self.deliver_arrivals(None).await;
         let collections: Vec<String> = self.desired_collections.iter().cloned().collect();
         for collection in collections {
             let ids = match load_doc_ids(self.node.as_ref(), &collection).await {
@@ -203,12 +219,179 @@ impl CallbackEngine {
         if !self.desired_collections.contains(&collection) {
             return;
         }
+        self.deliver_arrivals(Some(&collection)).await;
         if self.has_seen(&collection, doc_id) {
             return;
         }
         self.handle_created_doc(&collection, doc_id).await;
     }
 
+    async fn load_cursor(
+        &self,
+        binding: &CallbackBindingDoc,
+        source: &crate::document_config::EventSource,
+    ) -> Result<String> {
+        let consumer = EventConsumer::CallbackBinding {
+            binding_id: binding.binding_id.clone(),
+        };
+        let record =
+            ConfigAccess::transact_local(&self.node, None, "callback.seed_arrival_cursor", |txn| {
+                let consumer = &consumer;
+                Box::pin(async move {
+                    event_source_cursor::load_or_seed_for_source(
+                        txn,
+                        &binding.agent_did,
+                        consumer,
+                        &source.source_collection,
+                    )
+                    .await
+                })
+            })
+            .await;
+        match record {
+            Ok(record) => Ok(record.cursor.after),
+            Err(error) => {
+                tracing::warn!(
+                    binding_id = %binding.binding_id,
+                    %error,
+                    "callback arrival cursor unavailable; delivery remains pending"
+                );
+                Err(error)
+            }
+        }
+    }
+
+    /// Advances `binding`'s cursor through `position` when every arrival up
+    /// to it is admitted as an invocation or excluded by the cursor owner.
+    async fn checkpoint(
+        &self,
+        binding: &CallbackBindingDoc,
+        collection: &str,
+        position: &str,
+    ) -> Result<bool> {
+        let consumer = EventConsumer::CallbackBinding {
+            binding_id: binding.binding_id.clone(),
+        };
+        ConfigAccess::transact_local(&self.node, None, "callback.advance_arrival", |txn| {
+            let consumer = &consumer;
+            Box::pin(async move {
+                event_source_cursor::checkpoint_prefix(
+                    txn,
+                    &binding.agent_did,
+                    consumer,
+                    collection,
+                    position,
+                    false,
+                )
+                .await
+            })
+        })
+        .await
+    }
+
+    /// Per-document bindings deliver from their receiving-node arrival cursor,
+    /// the owner task triggers use: an arrival after a binding's registration
+    /// stays pending until admitted as an invocation or excluded, however late
+    /// this engine first observes the source.
+    pub(super) async fn deliver_arrivals(&mut self, collection: Option<&str>) {
+        let bindings = match list_enabled_bindings(self.node.as_ref(), &self.agent_did).await {
+            Ok(bindings) => bindings,
+            Err(error) => {
+                tracing::warn!(%error, "callback engine failed to load CallbackBinding rows");
+                return;
+            }
+        };
+        for binding in bindings {
+            if self.cancel.is_cancelled() {
+                return;
+            }
+            if !self.cursor_bindings.contains(&binding.binding_id) {
+                continue;
+            }
+            let source = match load_event_source(
+                self.node.as_ref(),
+                &binding.event_source_id,
+                &binding.agent_did,
+            )
+            .await
+            {
+                Ok(Some(source)) => source,
+                Ok(None) => continue,
+                Err(error) => {
+                    tracing::warn!(%error, binding_id = %binding.binding_id, "callback EventSource load failed");
+                    continue;
+                }
+            };
+            if source.group.is_some()
+                || collection.is_some_and(|collection| collection != source.source_collection)
+            {
+                continue;
+            }
+            if let Err(error) = self.deliver_binding_arrivals(&binding, &source).await {
+                tracing::warn!(
+                    binding_id = %binding.binding_id,
+                    source_collection = %source.source_collection,
+                    %error,
+                    "callback arrival delivery remains pending"
+                );
+            }
+        }
+    }
+
+    async fn deliver_binding_arrivals(
+        &mut self,
+        binding: &CallbackBindingDoc,
+        source: &crate::document_config::EventSource,
+    ) -> Result<()> {
+        let collection = source.source_collection.as_str();
+        let mut after = self.load_cursor(binding, source).await?;
+        loop {
+            let response = crate::graphql::graphql_with_transaction_retry(
+                &self.node,
+                &format!(
+                    "{{ _documentArrivals(collection: \"{}\", after: \"{}\", limit: 128) {{ next entries {{ cursor docID }} }} }}",
+                    escape_graphql_string(collection),
+                    escape_graphql_string(&after),
+                ),
+                "callback.read_arrivals",
+            )
+            .await?;
+            let data = response.data.context("arrival query omitted data")?;
+            let page = &data["_documentArrivals"];
+            let entries = page["entries"]
+                .as_array()
+                .context("arrival query omitted entries")?;
+            for entry in entries {
+                if self.cancel.is_cancelled() {
+                    return Ok(());
+                }
+                let doc_id = entry["docID"]
+                    .as_str()
+                    .context("arrival lacks document ID")?;
+                let position = entry["cursor"].as_str().context("arrival lacks cursor")?;
+                // An admitted or excluded arrival checkpoints without a second
+                // invocation, even when its document changed since admission.
+                if !self.checkpoint(binding, collection, position).await? {
+                    self.materialize_for_binding(binding, collection, doc_id)
+                        .await?;
+                    if !self.checkpoint(binding, collection, position).await? {
+                        return Ok(());
+                    }
+                }
+                after = position.to_owned();
+            }
+            let next = page["next"]
+                .as_str()
+                .context("arrival query omitted next cursor")?;
+            if next == after || !self.checkpoint(binding, collection, next).await? {
+                return Ok(());
+            }
+            after = next.to_owned();
+        }
+    }
+
+    /// Grouped bindings admit their sealed groups; per-document bindings
+    /// deliver from their arrival cursor instead.
     pub(super) async fn handle_created_doc(&mut self, collection: &str, doc_id: &str) {
         let bindings = match list_enabled_bindings(self.node.as_ref(), &self.agent_did).await {
             Ok(bindings) => bindings,
@@ -219,6 +402,9 @@ impl CallbackEngine {
         };
         let mut all_settled = true;
         for binding in bindings {
+            if self.cursor_bindings.contains(&binding.binding_id) {
+                continue;
+            }
             match self
                 .materialize_for_binding(&binding, collection, doc_id)
                 .await
