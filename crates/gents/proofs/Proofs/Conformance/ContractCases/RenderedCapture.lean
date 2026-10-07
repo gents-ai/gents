@@ -77,15 +77,20 @@ structure RenderedCaptureStorageCase where
   baseDepth : Nat
   maxDepth : Nat
   baseVerified : Bool
+  /-- How many block references a manifest row names; 0 for the other
+  encodings. The manifest document sits at ref 1 / witness 10 like every row,
+  its blocks at refs 2.. with their own pinned witnesses. -/
+  blockCount : Nat
   decodedRequest : Option Nat
   sendPermitted : Bool
   deriving Repr
 
 private def storageCase (name encoding : String) (store : ArtifactStore)
     (request : Nat) (baseWitness : Option Nat) (baseDepth maxDepth : Nat)
-    (baseVerified : Bool) : RenderedCaptureStorageCase :=
+    (baseVerified : Bool) (blockCount : Nat := 0) : RenderedCaptureStorageCase :=
   let decoded := resolveRequest store (maxDepth + 1) 1 10
   { name, encoding, request, baseWitness, baseDepth, maxDepth, baseVerified
+  , blockCount
   , decodedRequest := decoded.map CanonicalRequest.value
   , sendPermitted := decoded == some { value := request }
   }
@@ -109,6 +114,28 @@ def renderedCaptureStorageCases : List RenderedCaptureStorageCase :=
       (fun ref => if ref = 1 then some ⟨10, .delta 2 43 0 0 [104]⟩
         else if ref = 2 then some ⟨43, .full [99]⟩ else none)
       104 (some 43) 0 0 true
+  , storageCase "manifest_of_full_blocks_is_lossless" "manifest"
+      (fun ref => if ref = 1 then some ⟨10, .manifest [(2, 41), (3, 42)]⟩
+        else if ref = 2 then some ⟨41, .full [105]⟩
+        else if ref = 3 then some ⟨42, .full []⟩ else none)
+      105 none 0 3 false 2
+  , storageCase "manifest_missing_block_blocks_send" "manifest"
+      (fun ref => if ref = 1 then some ⟨10, .manifest [(2, 41), (3, 42)]⟩
+        else if ref = 2 then some ⟨41, .full [106]⟩ else none)
+      106 none 0 3 false 2
+  , storageCase "manifest_block_witness_mismatch_blocks_send" "manifest"
+      (fun ref => if ref = 1 then some ⟨10, .manifest [(2, 41), (3, 42)]⟩
+        else if ref = 2 then some ⟨41, .full [107]⟩
+        else if ref = 3 then some ⟨999, .full []⟩ else none)
+      107 none 0 3 false 2
+  , storageCase "empty_manifest_decode_fails_blocks_send" "manifest"
+      (fun ref => if ref = 1 then some ⟨10, .manifest []⟩ else none)
+      108 none 0 3 false
+  , storageCase "manifest_over_fuel_blocks_send" "manifest"
+      (fun ref => if ref = 1 then some ⟨10, .manifest [(2, 43), (3, 44)]⟩
+        else if ref = 2 then some ⟨43, .full [109]⟩
+        else if ref = 3 then some ⟨44, .full []⟩ else none)
+      109 none 0 2 false 2
   ]
 
 theorem renderedCaptureStorageCases_pinned :
@@ -119,7 +146,20 @@ theorem renderedCaptureStorageCases_pinned :
       , ("verified_delta_is_lossless", some 102, true)
       , ("missing_or_changed_base_blocks_send", none, false)
       , ("over_depth_delta_blocks_send", none, false)
+      , ("manifest_of_full_blocks_is_lossless", some 105, true)
+      , ("manifest_missing_block_blocks_send", none, false)
+      , ("manifest_block_witness_mismatch_blocks_send", none, false)
+      , ("empty_manifest_decode_fails_blocks_send", none, false)
+      , ("manifest_over_fuel_blocks_send", none, false)
       ] := by
+  rfl
+
+/-- No storage row may permit a send unless bounded resolution recovered the
+exact intended request. This is the fail-open guard on the emitted rows
+themselves, storage encodings included. -/
+theorem renderedCaptureStorageCases_no_fail_open :
+    renderedCaptureStorageCases.all
+      (fun row => !row.sendPermitted || row.decodedRequest == some row.request) = true := by
   rfl
 
 /-! ## Building the rows -/
