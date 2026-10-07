@@ -7,7 +7,8 @@ use gents::config_client::ConfigAccess;
 use gents::graph_package::{
     default_graph_package_install_bindings, install_loaded_graph_package,
     load_archive_graph_package_with_environment, load_installed_package_plan, prepare_entry_run,
-    EntryRunRequest, GraphInstallRecord, GraphPackageInstallBindings,
+    select_run_plan, EntryRunRequest, GraphInstallRecord, GraphPackageInstallBindings,
+    GraphRunSelector,
 };
 use gents::graph_pipeline::{
     activate_graph_revision_with_access, load_active_graph_plan_with_access,
@@ -253,40 +254,28 @@ async fn run(args: GraphRunArgs) -> Result<()> {
             "graph run requires the local Gents server to be running so workspace and request recovery remain active"
         );
     };
-    let (namespace, name) = super::pack::split_namespace(&args.package);
-    let coordinate = format!("{namespace}/{name}");
-    let plan = load_installed_package_plan(&access, name, &actor)
+    let package = args.package.as_deref().map(super::pack::split_namespace);
+    let coordinate = package.map(|(namespace, name)| format!("{namespace}/{name}"));
+    let selector = match (package, args.graph_id.as_deref(), args.digest.as_deref()) {
+        (Some((_, name)), None, None) => GraphRunSelector::Package {
+            name,
+            coordinate: coordinate.as_deref(),
+        },
+        (None, Some(graph_id), Some(digest)) => GraphRunSelector::Pinned { graph_id, digest },
+        _ => anyhow::bail!("graph run takes PACKAGE, or --graph-id ID with --digest sha256:..."),
+    };
+    let plan = select_run_plan(&access, &actor, &selector)
         .await?
-        .with_context(|| {
-            format!(
+        .with_context(|| match selector {
+            GraphRunSelector::Package { .. } => format!(
                 "graph is not installed; run `gents pack install {}` first",
-                args.package
-            )
+                args.package.as_deref().unwrap_or_default()
+            ),
+            GraphRunSelector::Pinned { graph_id, .. } => {
+                format!("graph {graph_id:?} has no active revision for {actor}")
+            }
         })?;
     let graph_id = plan.graph_id.clone();
-    let active_package = plan
-        .package
-        .as_ref()
-        .context("active revision has no package attribution")?;
-    if active_package.name != name {
-        anyhow::bail!(
-            "active revision does not belong to package {:?}",
-            args.package
-        );
-    }
-    let record = gents::pack::read_installed_pack(&access, &actor, &coordinate)
-        .await?
-        .with_context(|| {
-            format!("{coordinate} has no installation record; run `gents pack install {coordinate}` to reinstall")
-        })?;
-    if active_package.package_digest != record.digest {
-        anyhow::bail!(
-            "the active revision of {coordinate} was built from {} but the installed pack is {}; \
-             run `gents pack install {coordinate}` again",
-            active_package.package_digest,
-            record.digest
-        );
-    }
     let digest = plan.digest.clone();
     let input = apply_input_fields(parse_input_arg(args.input.as_deref())?, &args.field)?;
     let plugin_home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
