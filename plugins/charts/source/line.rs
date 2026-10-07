@@ -52,14 +52,20 @@ fn union_x(series: &[Vec<(f64, f64)>]) -> Vec<f64> {
 /// highest included) of every layer's upper boundary, each layer taking an
 /// equal share of the cap. Layers are accumulated one at a time, as
 /// [`stack`] does, so no series-by-position matrix is allocated; picking from
-/// the totals alone would lose a spike that another layer offsets.
-fn reduce_positions(xs: &[f64], data: &[Vec<(f64, f64)>]) -> Vec<f64> {
+/// the totals alone would lose a spike that another layer offsets. Values
+/// outside `y_min`/`y_max` are counted on the full boundaries, before sampling.
+fn reduce_positions(
+    ctx: &mut Ctx<'_>,
+    names: &[String],
+    xs: &[f64],
+    data: &[Vec<(f64, f64)>],
+) -> Vec<f64> {
     let mut pos = vec![0.0; xs.len()];
     let mut neg = vec![0.0; xs.len()];
     let share = MAX_LINE_POINTS / data.len().max(1);
     let mut keep = Vec::new();
     let mut boundary = Vec::with_capacity(xs.len());
-    for d in data {
+    for (name, d) in names.iter().zip(data) {
         let mut values = d.iter().peekable();
         boundary.clear();
         for (i, &x) in xs.iter().enumerate() {
@@ -71,6 +77,9 @@ fn reduce_positions(xs: &[f64], data: &[Vec<(f64, f64)>]) -> Vec<f64> {
             *base += v;
             boundary.push((x, *base));
         }
+        let ys = boundary.iter().map(|p| p.1);
+        let (lo, hi) = (ctx.spec.y_min, ctx.spec.y_max);
+        common::note_cut(&mut ctx.notes, name, "y", ys, lo, hi);
         keep.extend(lttb(&boundary, share));
     }
     keep.sort_unstable();
@@ -122,6 +131,7 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
     let names: Vec<String> = r.groups.iter().map(|g| g.name.clone()).collect();
     let mut layers = Vec::new();
     let mut aligned_x: Vec<f64> = Vec::new();
+    let mut reduced = false;
     if kind == Kind::StackedArea {
         if r.x.kind != XKind::Cat {
             for d in &mut data {
@@ -134,16 +144,17 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
             union_x(&data)
         };
         let positions = aligned_x.len();
+        reduced = positions > MAX_LINE_POINTS;
         for (name, d) in names.iter().zip(&data) {
             let missing = positions - d.iter().filter(|p| !p.1.is_nan()).count();
             if missing > 0 {
                 ctx.notes.add(format!("series {name} has no value at {missing} of {positions} positions; it counts as zero there in the stack", name = crate::text::quote(name)));
             }
         }
-        if positions > MAX_LINE_POINTS {
-            aligned_x = reduce_positions(&aligned_x, &data);
+        if reduced {
+            aligned_x = reduce_positions(ctx, &names, &aligned_x, &data);
             ctx.notes.add(format!(
-                "the stack has {positions} x positions; {} are drawn, chosen by largest-triangle reduction of the stack's top and bottom, which keeps the first, last, lowest and highest",
+                "the stack has {positions} x positions; {} are drawn, chosen by largest-triangle reduction of each layer's boundary, which keeps the first, last, lowest and highest",
                 aligned_x.len()
             ));
         }
@@ -185,7 +196,9 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
         } else {
             Box::new(data[i].iter().map(|p| p.1))
         };
-        common::note_cut(&mut ctx.notes, name, "y", ys, spec.y_min, spec.y_max);
+        if !reduced {
+            common::note_cut(&mut ctx.notes, name, "y", ys, spec.y_min, spec.y_max);
+        }
         if r.x.kind != XKind::Cat {
             let xs = data[i].iter().map(|p| p.0);
             common::note_cut(&mut ctx.notes, name, "x", xs, spec.x_min, spec.x_max);

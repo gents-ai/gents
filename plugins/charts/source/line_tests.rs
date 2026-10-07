@@ -561,6 +561,24 @@ fn a_spike_offset_by_another_layer_survives_the_reduction() {
 }
 
 #[test]
+fn values_cut_off_a_long_stack_are_counted_on_the_full_data() {
+    let rows: Vec<serde_json::Value> = (0..20_000).map(|i| json!([i, 10])).collect();
+    let r = ok(&with_rows(
+        "stacked_area",
+        r#""y_max":5"#,
+        &["t", "a"],
+        &rows,
+    ));
+    assert!(
+        r.warnings
+            .iter()
+            .any(|w| w == "series \"a\": 20000 values are above y_max and are cut off"),
+        "{:?}",
+        r.warnings
+    );
+}
+
+#[test]
 fn long_data_pivots_into_one_line_per_series_value() {
     let json = r#"{"chart":"line","x":"t","y":"v","series":"s","data":{"columns":["t","s","v"],"rows":[[1,"a",1],[2,"a",2],[1,"b",5],[2,"b",3]]}}"#;
     let r = ok(json);
