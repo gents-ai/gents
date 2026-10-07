@@ -37,7 +37,10 @@ pub use fork::{fork, fork_via_http, is_user_turn, ForkError, ForkOutcome, ForkPa
 #[cfg(test)]
 pub(crate) use history::load_history_through_sequence;
 pub use history::{load_history, sequence_message_key};
-pub(crate) use history::{load_sequenced_history_for_request, load_sequenced_history_projection};
+pub(crate) use history::{
+    load_sequenced_history_for_request, load_sequenced_history_projection,
+    retry_has_published_input,
+};
 pub use observations::apply_title_in_txn;
 pub(crate) use observations::{
     advance_session_request_observation_in_txn, derive_session_preview,

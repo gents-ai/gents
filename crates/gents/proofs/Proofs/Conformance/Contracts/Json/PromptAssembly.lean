@@ -16,6 +16,30 @@ def routingAffinityCasesJson : String := jsonArray (routingAffinityCases.map fun
   ",\"expected_session\":" ++ jsonOptionalString row.expected.session ++
   ",\"expected_token\":" ++ jsonOptionalString row.expected.token ++ "}")
 
+def retryFrontierCasesJson : String := jsonArray (
+  [("before-input", true, true, false), ("ready", true, true, true),
+   ("foreign-or-live-parent", false, true, true), ("unsettled", true, false, true)].map
+    fun (name, scopedTerminal, settledTools, published) =>
+      "{\"name\":" ++ jsonString name ++
+      ",\"scoped_terminal\":" ++ toString scopedTerminal ++
+      ",\"settled_tools\":" ++ toString settledTools ++
+      ",\"published\":" ++ toString published ++ ",\"expected\":" ++
+      (match PromptAssembly.CurrentInput.admitResume scopedTerminal settledTools published with
+       | some result => toString result
+       | none => "null") ++ "}")
+
+def retryEntryCasesJson : String := jsonArray (
+  [ (false, ([] : List Nat), (none : Option Nat)), (false, [1, 2, 3], none),
+    (true, [1], none), (true, [1, 2, 3], none), (true, [1, 2, 3, 4], none),
+    (true, [1, 2, 3], some 11), (false, [1], some 11) ].map fun (resume, history, context) =>
+    "{\"resume\":" ++ toString resume ++
+    ",\"history\":" ++ jsonArray (history.map toString) ++
+    ",\"context\":" ++ (match context with | some n => toString n | none => "null") ++
+    ",\"authored\":9,\"expected\":" ++
+      jsonArray ((PromptAssembly.CurrentInput.entryWithContext resume history 9 10 context
+        (history.getLast? == some 4)).map toString) ++
+    ",\"publish\":" ++ toString (PromptAssembly.CurrentInput.publishesAuthoredInput resume) ++ "}")
+
 def currentInputCaseJson (witness : CurrentInputCase) : String :=
   "{\"name\":" ++ jsonString witness.name ++
   ",\"current_request\":" ++ jsonString witness.currentRequest ++

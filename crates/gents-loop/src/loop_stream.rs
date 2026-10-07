@@ -197,6 +197,7 @@ where
         // differ from the provider input.
         let mut retain_effective_messages_oracle =
             config.context_message.is_some()
+                || config.resume_from_history
                 || !config.active_reduction_keys.is_empty()
                 || provider_profile == crate::provider_input::ProviderInputProfile::ClaudeMessages;
         let mut active_reduction_keys = config.active_reduction_keys.clone();
@@ -284,7 +285,7 @@ where
             // A resumed checkpoint already includes its original authored
             // input. New executions publish under their live request owner,
             // before dispatch, not when the request is merely queued.
-            if current_turn == 1 && hook.is_some() && turn_index == 0 {
+            if current_turn == 1 && hook.is_some() && turn_index == 0 && !config.resume_from_history {
                 yield LoopStreamItem::AuthoredInputReady {
                     context: config.context_message.clone(),
                     prompt: current_prompt.clone(),

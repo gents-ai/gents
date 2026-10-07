@@ -21,6 +21,34 @@ use crate::watcher::AgentRequest;
 
 type RequestDeadline = Option<DateTime<Utc>>;
 
+const RETRY_CONTINUATION: &str = "Continue the failed request from the recorded progress. Use recorded tool outcomes; do not repeat completed actions.";
+
+pub(super) fn request_entry(
+    mut history: Vec<TaggedMessage>,
+    content: &str,
+    resume: bool,
+    context: Option<&Message>,
+) -> Result<(Vec<TaggedMessage>, TaggedMessage)> {
+    if !resume {
+        history.push(TaggedMessage::unassociated(Message::user(
+            content.to_owned(),
+        )));
+    } else if let Some(context) = context {
+        history.push(TaggedMessage::unassociated(context.clone()));
+    } else if history
+        .last()
+        .is_some_and(|row| matches!(row.message, Message::Assistant { .. }))
+    {
+        history.push(TaggedMessage::unassociated(Message::user(
+            RETRY_CONTINUATION.to_owned(),
+        )));
+    }
+    let prompt = history
+        .pop()
+        .context("retry has no durable provider frontier")?;
+    Ok((history, prompt))
+}
+
 fn terminal_response_has_visible_output(streamed_text: &str, final_text: Option<&str>) -> bool {
     !streamed_text.trim().is_empty() || final_text.is_some_and(|text| !text.trim().is_empty())
 }
@@ -134,6 +162,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
         effective_seed: Option<i64>,
         workspace: crate::tool_call_lifecycle::runtime::ToolWorkspaceScope,
         request_context_message: Option<crate::llm::message::Message>,
+        resume_from_history: bool,
     ) -> Result<HandleRequestOutcome> {
         let request_deadline = lifecycle.claimed_deadline_at();
         let trigger_context = crate::lifecycle::TriggerExecutionContext::parse(
@@ -427,12 +456,17 @@ impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
                         .into_iter()
                         .map(|row| row.reduction_key)
                         .collect();
-                    (
+                    loop_config.resume_from_history = resume_from_history;
+                    let entry = request_entry(
                         history.to_vec(),
-                        TaggedMessage::unassociated(crate::llm::message::Message::user(
-                            request.content.clone(),
-                        )),
-                    )
+                        &request.content,
+                        resume_from_history,
+                        loop_config.context_message.as_ref(),
+                    )?;
+                    if resume_from_history {
+                        loop_config.context_message = None;
+                    }
+                    entry
                 };
                 loop_config.replay = replay;
                 let loop_tools = self.loop_tools.clone();
@@ -1316,6 +1350,68 @@ pub(super) mod tests {
             Some(Duration::ZERO)
         );
         assert!(ensure_request_deadline_open(Some(deadline), "test").is_err());
+    }
+
+    #[test]
+    fn retry_entry_matches_lean_frontier() {
+        for case in &crate::lean_vocab_test::lean_contract_snapshot().retry_entry_cases {
+            let message = |value: &serde_json::Value| {
+                use crate::llm::message::{
+                    AssistantContent, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
+                    UserContent,
+                };
+                let native = match value.as_u64().unwrap() {
+                    2 => crate::llm::message::Message::Assistant {
+                        id: None,
+                        content: vec![AssistantContent::ToolCall(ToolCall {
+                            id: "call-1".into(),
+                            call_id: Some("call-1".into()),
+                            signature: None,
+                            additional_params: None,
+                            function: ToolFunction {
+                                name: "read_file".into(),
+                                arguments: serde_json::json!({"path":"source.rs"}),
+                            },
+                        })],
+                    },
+                    3 => crate::llm::message::Message::User {
+                        content: vec![UserContent::ToolResult(ToolResult {
+                            id: "call-1".into(),
+                            call_id: Some("call-1".into()),
+                            content: vec![ToolResultContent::Text(Text {
+                                text: "recorded result".into(),
+                            })],
+                        })],
+                    },
+                    4 => crate::llm::message::Message::assistant("recorded progress"),
+                    10 => crate::llm::message::Message::user(super::RETRY_CONTINUATION),
+                    _ => crate::llm::message::Message::user(value.to_string()),
+                };
+                super::TaggedMessage::unassociated(native)
+            };
+            let history = case["history"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(message)
+                .collect();
+            let context = (!case["context"].is_null()).then(|| message(&case["context"]).message);
+            let (mut actual, prompt) = super::request_entry(
+                history,
+                &case["authored"].to_string(),
+                case["resume"].as_bool().unwrap(),
+                context.as_ref(),
+            )
+            .unwrap();
+            actual.push(prompt);
+            let expected: Vec<_> = case["expected"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(message)
+                .collect();
+            assert_eq!(actual, expected, "{case}");
+        }
     }
 
     #[tokio::test]

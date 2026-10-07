@@ -227,6 +227,8 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) prompt_assembly_assistant_order_cases: Vec<LeanPromptAssemblyAssistantOrderCase>,
     pub(crate) prompt_assembly_mode_sanitize_cases: Vec<LeanPromptAssemblyModeSanitizeCase>,
     pub(crate) routing_affinity_cases: Vec<serde_json::Value>,
+    pub(crate) retry_frontier_cases: Vec<serde_json::Value>,
+    pub(crate) retry_entry_cases: Vec<serde_json::Value>,
     pub(crate) current_input_cases: Vec<LeanCurrentInputCase>,
     pub(crate) prompt_assembly_layer_cases: Vec<LeanPromptAssemblyLayerCase>,
     pub(crate) prompt_assembly_repair_cases: Vec<LeanPromptAssemblyRepairCase>,

@@ -333,6 +333,7 @@ fn base_request() -> AgentRequest {
 
 fn request(request_id: &str, session_id: &str) -> AgentRequest {
     AgentRequest {
+        retry_parent_request_doc_id: None,
         purpose: gents_protocol::request_admission::RequestPurpose::Normal,
         doc_id: format!("doc-{request_id}"),
         request_id: request_id.to_string(),

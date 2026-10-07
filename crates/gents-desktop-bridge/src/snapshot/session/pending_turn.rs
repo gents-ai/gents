@@ -58,7 +58,9 @@ pub(super) fn build_pending_turn(
             && agent_did.is_none_or(|agent_did| request_matches_agent(row, agent_did))
     })?;
     let request_input = request.input.clone().unwrap_or_default();
-    if !gents::lifecycle::request_content_owns_user_projection(&request_input) {
+    if normalize_optional(request.retry_parent_request_doc_id.as_deref()).is_some()
+        || !gents::lifecycle::request_content_owns_user_projection(&request_input)
+    {
         return None;
     }
 
@@ -93,4 +95,25 @@ pub(super) fn build_pending_turn(
         lifecycle_state,
         created_at: normalize_optional(request.created_at.as_deref()),
     })
+}
+
+#[cfg(test)]
+mod retry_tests {
+    use super::*;
+
+    #[test]
+    fn retry_does_not_add_a_pending_copy_of_the_user_message() {
+        let mut store = ClientStore::default();
+        store.requests.push(AgentRequestRow {
+            request_id: "retry".into(),
+            agent_did: Some("agent".into()),
+            session_id: Some("session".into()),
+            content: Some("original instruction".into()),
+            retry_parent_request_doc_id: Some("failed-parent".into()),
+            ..Default::default()
+        });
+        assert!(build_pending_turn(&store, &store, Some("agent"), "session", "retry").is_none());
+        store.requests[0].retry_parent_request_doc_id = None;
+        assert!(build_pending_turn(&store, &store, Some("agent"), "session", "retry").is_some());
+    }
 }

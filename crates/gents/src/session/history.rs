@@ -1,4 +1,5 @@
 use super::*;
+use anyhow::Context;
 
 /// Injective key for a sequence within one canonical session scope.
 /// Explicit caller-owned keys keep their own vocabulary (steering, receipts).
@@ -64,6 +65,80 @@ pub(crate) async fn load_sequenced_history_for_request(
         Some(provider_profile),
     )
     .await
+}
+
+pub(crate) async fn retry_has_published_input(
+    node: &EmbeddedNode,
+    request: &crate::watcher::AgentRequest,
+) -> Result<bool> {
+    let Some(mut parent_id) = request.retry_parent_request_doc_id.clone() else {
+        return Ok(false);
+    };
+    let mut visited = std::collections::HashSet::new();
+    loop {
+        anyhow::ensure!(
+            visited.insert(parent_id.clone()),
+            "retry parent chain contains a cycle"
+        );
+        let parent = crate::graphql::escape_graphql_string(&parent_id);
+        let scope = super::query::session_scope_filter(
+            &request.agent_did,
+            &request.session_id,
+            request.requester_did.as_deref(),
+        );
+        let key = crate::graphql::escape_graphql_string(
+            &super::canonical_rows::authored_message_key(&parent_id, "prompt"),
+        );
+        let query = format!(
+            r#"{{
+            AgentRequest(filter: {{ {scope}, _docID: {{ _eq: "{parent}" }} }}, limit: 2) {{
+                _docID lifecycle_state retry_parent_request_doc_id
+            }}
+            AgentMessage(filter: {{ {scope}, message_key: {{ _eq: "{key}" }} }}, limit: 2) {{ _docID }}
+            AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{parent}" }},
+                lifecycle_state: {{ _in: ["pending", "running"] }} }}, limit: 1) {{ _docID }}
+        }}"#
+        );
+        let response =
+            crate::graphql::graphql_with_transaction_retry(node, &query, "resolve retry frontier")
+                .await?;
+        let rows = response
+            .data
+            .as_ref()
+            .context("retry frontier query omitted data")?;
+        let parents = rows["AgentRequest"]
+            .as_array()
+            .context("retry parent query omitted rows")?;
+        anyhow::ensure!(
+            parents.len() == 1
+                && matches!(
+                    parents[0]["lifecycle_state"].as_str(),
+                    Some("failed" | "dead")
+                ),
+            "retry parent must be an exact terminal request in the same session and requester scope"
+        );
+        anyhow::ensure!(
+            rows["AgentToolCall"].as_array().is_some_and(Vec::is_empty),
+            "retry parent still has unsettled tool execution; wait for tool recovery before retrying"
+        );
+        let prompts = rows["AgentMessage"]
+            .as_array()
+            .context("retry input query omitted rows")?;
+        anyhow::ensure!(
+            prompts.len() <= 1,
+            "retry parent has ambiguous authored input"
+        );
+        if !prompts.is_empty() {
+            return Ok(true);
+        }
+        match parents[0]["retry_parent_request_doc_id"]
+            .as_str()
+            .filter(|id| !id.is_empty())
+        {
+            Some(id) => parent_id = id.to_owned(),
+            None => return Ok(false),
+        }
+    }
 }
 
 #[cfg(test)]
