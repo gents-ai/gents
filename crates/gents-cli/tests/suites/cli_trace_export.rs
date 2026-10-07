@@ -2139,7 +2139,14 @@ async fn projection_graphql_mock(
     } else if query.contains("RenderedRequest(") {
         json!({ "data": { "RenderedRequest": [] } })
     } else if query.contains("AgentMessage(") {
-        json!({ "data": { "AgentMessage": projection_mock_agent_messages(query) } })
+        if let Some((key_selection, sequence_selection)) = query.split_once("sequence_matches:") {
+            json!({ "data": {
+                "key_matches": projection_mock_agent_messages(key_selection),
+                "sequence_matches": projection_mock_agent_messages(sequence_selection),
+            } })
+        } else {
+            json!({ "data": { "AgentMessage": projection_mock_agent_messages(query) } })
+        }
     } else if query.contains("AgentOutputSegment(") {
         json!({ "data": { "AgentOutputSegment": projection_mock_output_segments(query) } })
     } else if query.contains("AgentToolCall(") {
@@ -2423,6 +2430,19 @@ fn filter_projection_mock_headers(query: &str, rows: Vec<Value>) -> Value {
             query.contains(&format!(r#"message_key: {{ _eq: "{key}" }}"#))
                 || query.contains(&format!(r#"sequence: {{ _eq: {sequence} }}"#))
         });
+    } else {
+        if query.contains("message_key: { _eq:") {
+            rows.retain(|row| {
+                let key = row["message_key"].as_str().unwrap();
+                query.contains(&format!(r#"message_key: {{ _eq: "{key}" }}"#))
+            });
+        }
+        if query.contains("sequence: { _eq:") {
+            rows.retain(|row| {
+                let sequence = row["sequence"].as_u64().unwrap();
+                query.contains(&format!(r#"sequence: {{ _eq: {sequence} }}"#))
+            });
+        }
     }
     Value::Array(rows)
 }
