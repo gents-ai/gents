@@ -142,6 +142,38 @@ describe("transcript streaming follow", () => {
     expect(fixture.viewport.scrollTop).toBe(foot(700));
   });
 
+  it.each(["button", "scroll"])(
+    "captures a fresh reading position after returning to the foot by %s",
+    async (resume) => {
+      const fixture = transcriptFixture();
+      const row = fixture.viewport.firstElementChild as HTMLElement;
+      row.dataset.timelineKey = "reply";
+      row.getBoundingClientRect = () =>
+        ({
+          top: 100 - fixture.viewport.scrollTop,
+          bottom: 500 - fixture.viewport.scrollTop,
+        }) as DOMRect;
+      document.body.append(fixture.viewport);
+      const { result, unmount } = renderHook(() =>
+        useFollowTail(fixture.viewport, "session-1"),
+      );
+      readerScrollsTo(fixture.viewport, 100);
+      if (resume === "button") act(() => result.current.toBottom());
+      else readerScrollsTo(fixture.viewport, foot(500));
+      act(() => {
+        fixture.viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -40 }));
+      });
+      await act(async () => {
+        row.append(document.createElement("span"));
+      });
+      expect(fixture.viewport.scrollTop).toBe(foot(500));
+      readerScrollsTo(fixture.viewport, foot(500) - 40);
+      expect(result.current.atBottom).toBe(false);
+      unmount();
+      fixture.viewport.remove();
+    },
+  );
+
   it("lands at the foot of a scroller that mounts after its subject was chosen", () => {
     const fixture = transcriptFixture();
     const { rerender } = renderHook(

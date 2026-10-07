@@ -266,7 +266,10 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
        itself, before a content change can pin the view back down ahead of
        the scroll the input is about to make. */
     const release = () => {
-      if (following.current) setFollowing(false);
+      if (following.current) {
+        capture();
+        setFollowing(false);
+      }
     };
     const onWheel = (event: WheelEvent) => {
       intend();
