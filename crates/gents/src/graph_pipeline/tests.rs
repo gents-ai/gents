@@ -495,6 +495,31 @@ fn rejects_requested_and_actual_resource_limit_violations() {
 }
 
 #[test]
+fn platform_limit_messages_name_the_requested_value_and_the_range() {
+    let policy = CompilerPolicy::default();
+    let mut intent = linear_intent();
+    intent.limits.max_nodes = policy.max_nodes + 1;
+    intent.limits.max_runtime_secs = 0;
+    let error = compile(&intent, &catalog()).unwrap_err();
+    let message = |path: &str| {
+        error
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.path == path)
+            .map(|diagnostic| diagnostic.message.clone())
+            .unwrap_or_else(|| panic!("{path}: {:?}", error.diagnostics))
+    };
+    assert_eq!(
+        message("/limits/max_nodes"),
+        "requested 65, platform ceiling is 64"
+    );
+    assert_eq!(
+        message("/limits/max_runtime_secs"),
+        "requested 0, platform range is 1..=86400"
+    );
+}
+
+#[test]
 fn rejects_depth_and_fan_out_over_intent_limits() {
     let mut depth = linear_intent();
     depth.limits.max_depth = 1;
