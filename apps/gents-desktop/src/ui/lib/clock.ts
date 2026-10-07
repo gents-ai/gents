@@ -22,17 +22,21 @@ const stop = () => {
   }
 };
 
+/* stable across renders: a new subscribe each render would resubscribe,
+   restart the clock and rewrite `now`, rendering again without end */
+const subscribe = (notify: () => void) => {
+  listeners.add(notify);
+  start();
+  return () => {
+    listeners.delete(notify);
+    stop();
+  };
+};
+const idle = () => () => undefined;
+
 export function useNow(active: boolean) {
   return useSyncExternalStore(
-    (notify) => {
-      if (!active) return () => undefined;
-      listeners.add(notify);
-      start();
-      return () => {
-        listeners.delete(notify);
-        stop();
-      };
-    },
+    active ? subscribe : idle,
     () => (active ? now : 0),
     () => 0,
   );
