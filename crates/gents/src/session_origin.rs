@@ -118,18 +118,16 @@ impl From<&AgentSession> for SessionScope {
     }
 }
 
-/// The scopes of the given physical requests, keyed by document id. A batch
-/// whose read fails contributes no rows of its own; scopes already read from
-/// other batches are still returned.
+/// The scopes of the given physical requests, keyed by document id.
 pub async fn request_scopes<'a, R: ConfigRead + ?Sized>(
     access: &R,
     doc_ids: impl IntoIterator<Item = &'a str>,
-) -> Vec<(String, SessionScope)> {
-    let doc_ids = doc_ids.into_iter().collect::<BTreeSet<_>>();
-    if doc_ids.is_empty() {
-        return Vec::new();
-    }
-    let doc_ids = doc_ids.into_iter().collect::<Vec<_>>();
+) -> Result<Vec<(String, SessionScope)>> {
+    let doc_ids = doc_ids
+        .into_iter()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
     let mut scopes = Vec::new();
     // Bounded predicates, without truncating lineage or ever interpolating
     // an empty list literal into a database operation.
@@ -138,19 +136,19 @@ pub async fn request_scopes<'a, R: ConfigRead + ?Sized>(
             "{{AgentRequest(filter: {{_docID: {{_in: {}}}}}) {{{SCOPE_FIELDS}}}}}",
             graphql_string_list_literal(batch.iter().copied())
         );
-        match collection(access, &query, "AgentRequest").await {
-            Ok(rows) => scopes.extend(rows.iter().filter_map(|row| {
-                Some((
-                    row.get("_docID")?.as_str()?.to_owned(),
-                    SessionScope::of_row(row)?,
-                ))
-            })),
-            Err(error) => {
-                tracing::warn!(%error, requests = batch.len(), "request scope batch unreadable")
-            }
-        }
+        scopes.extend(
+            collection(access, &query, "AgentRequest")
+                .await?
+                .iter()
+                .filter_map(|row| {
+                    Some((
+                        row.get("_docID")?.as_str()?.to_owned(),
+                        SessionScope::of_row(row)?,
+                    ))
+                }),
+        );
     }
-    scopes
+    Ok(scopes)
 }
 
 /// The session stored under `session_id` for `requester_did` (any requester
@@ -193,7 +191,7 @@ pub async fn started_by(
         return Ok(None);
     };
     Ok(request_scopes(access, [doc_id])
-        .await
+        .await?
         .into_iter()
         .next()
         .map(|(cause, scope)| SessionLink {
@@ -269,7 +267,7 @@ pub async fn lineage(access: &ConfigAccess, scope: &SessionScope) -> Result<Sess
         .filter(|doc_id| !own_doc_ids.contains(*doc_id))
         .collect::<BTreeSet<_>>();
     let mut received = Vec::new();
-    for (cause, cause_scope) in request_scopes(access, causes).await {
+    for (cause, cause_scope) in request_scopes(access, causes).await? {
         if cause_scope == *scope
             || started_by
                 .as_ref()
@@ -495,64 +493,5 @@ mod tests {
         assert_eq!(from_existing.started_by, None);
         assert_eq!(ids(&from_existing.received), ["parent"]);
         node.shutdown().await;
-    }
-
-    /// Storage stand-in for the batch read: it holds a scope for every
-    /// document id a query names and fails any read that names `fail_on`.
-    struct BatchStore {
-        fail_on: String,
-    }
-
-    #[async_trait::async_trait]
-    impl ConfigRead for BatchStore {
-        async fn execute_read(&self, document: &str) -> Result<Value> {
-            if document.contains(&self.fail_on) {
-                anyhow::bail!("batch read failed");
-            }
-            let list = &document
-                [document.find("_in: [").unwrap() + "_in: [".len()..document.find("]}").unwrap()];
-            let rows = list
-                .split("\", \"")
-                .map(|id| {
-                    let id = id.trim_matches('"');
-                    serde_json::json!({
-                        "_docID": id,
-                        "agent_did": "did:test:agent",
-                        "session_id": format!("sess_{id}"),
-                        "requester_did": "did:test:agent",
-                    })
-                })
-                .collect::<Vec<_>>();
-            Ok(serde_json::json!({ "data": { "AgentRequest": rows } }))
-        }
-    }
-
-    /// A batch whose read fails drops only its own requests: scopes read in
-    /// earlier batches are still returned, so a single unreadable batch
-    /// cannot blank every scope in the result.
-    #[tokio::test]
-    async fn a_failed_batch_drops_only_its_own_requests() {
-        let unreadable = "req_zzz_unreadable";
-        let doc_ids = (0..=128)
-            .map(|i| format!("req_{i:03}"))
-            .chain([unreadable.to_owned()])
-            .collect::<Vec<_>>();
-        let access = BatchStore {
-            fail_on: unreadable.to_owned(),
-        };
-        let scopes = request_scopes(&access, doc_ids.iter().map(String::as_str)).await;
-        let expected = (0..=127)
-            .map(|i| {
-                (
-                    format!("req_{i:03}"),
-                    SessionScope {
-                        agent_did: "did:test:agent".into(),
-                        session_id: format!("sess_req_{i:03}"),
-                        requester_did: Some("did:test:agent".into()),
-                    },
-                )
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(scopes, expected);
     }
 }

@@ -394,8 +394,8 @@ async fn fleet_snapshot_resolves_all_starters_with_one_query_per_build() {
         "sess_fleet_parent_a",
         "sess_fleet_parent_b",
         "sess_fleet_child_shared_1",
-        "sess_fleet_child_shared_2",
         "sess_fleet_child_b",
+        "sess_fleet_child_shared_2",
         "sess_fleet_child_dangling",
         "sess_fleet_plain",
     ] {
@@ -411,14 +411,22 @@ async fn fleet_snapshot_resolves_all_starters_with_one_query_per_build() {
         );
     }
     let reads = crate::tests::support::CountingRead::new(access);
-    let mut summaries =
-        session_summaries(&sessions, &[], crate::tests::support::OPERATOR, &[], &[]);
-    super::super::runtime_tasks::resolve_summary_starters(&reads, &mut summaries).await;
+    // Two deployments whose children share `parent_a`: the snapshot resolves
+    // every deployment's starters in the same read.
+    let (first, second) = sessions.split_at(4);
+    let mut first = session_summaries(first, &[], crate::tests::support::OPERATOR, &[], &[]);
+    let mut second = session_summaries(second, &[], crate::tests::support::OPERATOR, &[], &[]);
+    super::super::runtime_tasks::resolve_summary_starters(
+        &reads,
+        first.iter_mut().chain(second.iter_mut()),
+    )
+    .await;
     assert_eq!(
         reads.queries(),
         1,
-        "starter resolution over four starter children with three distinct parent ids must issue one batched read"
+        "starter resolution over two deployments with three distinct parent ids must issue one batched read"
     );
+    let summaries = first.into_iter().chain(second).collect::<Vec<_>>();
 
     let starter_of = |session_id: &str| {
         summaries

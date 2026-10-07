@@ -298,42 +298,44 @@ mod trigger_recent_runs_tests {
 }
 
 /// Resolve immutable creation provenance through the runtime lineage owner,
-/// including causing requests outside the bounded client request cache.
-pub(super) async fn resolve_summary_starters<R: gents::config_client::ConfigRead + ?Sized>(
+/// including causing requests outside the bounded client request cache. One
+/// lineage read serves every summary passed, across deployments; if it fails,
+/// starters stay absent for this snapshot.
+pub(super) async fn resolve_summary_starters<'a, R: gents::config_client::ConfigRead + ?Sized>(
     access: &R,
-    summaries: &mut [SessionSummary],
+    summaries: impl IntoIterator<Item = &'a mut SessionSummary>,
 ) {
-    let parents = summaries
-        .iter()
-        .filter_map(|summary| {
-            summary
-                .provenance
-                .as_ref()
-                .and_then(|p| p.parent_request_doc_id.as_deref())
-        })
-        .collect::<std::collections::BTreeSet<_>>();
-    let scopes = gents::session_origin::request_scopes(access, parents)
-        .await
+    let mut started = summaries
         .into_iter()
-        .collect::<std::collections::BTreeMap<_, _>>();
-    for summary in summaries {
-        let Some(parent) = summary
-            .provenance
-            .as_ref()
-            .and_then(|p| p.parent_request_doc_id.as_deref())
-        else {
-            continue;
-        };
-        // A parent request no store holds stays an absent starter rather
-        // than an error.
+        .filter_map(|summary| {
+            let parent = summary.provenance.as_ref()?.parent_request_doc_id.clone()?;
+            Some((summary, parent))
+        })
+        .collect::<Vec<_>>();
+    let scopes = match gents::session_origin::request_scopes(
+        access,
+        started.iter().map(|(_, parent)| parent.as_str()),
+    )
+    .await
+    {
+        Ok(scopes) => scopes
+            .into_iter()
+            .collect::<std::collections::BTreeMap<_, _>>(),
+        Err(error) => {
+            tracing::warn!(%error, sessions = started.len(), "session starters unavailable");
+            return;
+        }
+    };
+    for (summary, parent) in &mut started {
+        // A parent request no store holds stays an absent starter.
         summary.started_by =
             scopes
-                .get(parent)
+                .get(parent.as_str())
                 .map(|scope| super::super::types::LinkedSessionView {
                     agent_did: scope.agent_did.clone(),
                     session_id: scope.session_id.clone(),
                     requester_did: scope.requester_did.clone(),
-                    cause_request_doc_id: parent.to_owned(),
+                    cause_request_doc_id: parent.clone(),
                 });
     }
 }
