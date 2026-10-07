@@ -17,6 +17,7 @@ import { chat } from "./chatStore";
 import { firstNode, nodeOf } from "./fleetStore";
 import { actionFailure, shownFailure } from "./desktopShellRuntime";
 import { selection } from "./selectionStore";
+import { heldFor, readSession } from "./sessionStore";
 import type { ShellProjection, ShellStores } from "./shellProjection";
 
 type ChatActionParams = {
@@ -161,10 +162,14 @@ export function createDesktopShellChatActions({
   }
 
   async function renameSession(sessionId: string, title: string) {
-    const node = selectedNode();
-    if (!node) return;
+    /* the selection, not the fleet read: a read can briefly not list the
+       node while the session it holds is still shown */
+    const agentDid =
+      heldFor(readSession(stores.session), sessionId, null)?.agentDid ??
+      store.getState().agentDid;
     try {
-      await api.renameSession({ agentDid: node.agentDid, sessionId, title });
+      if (!agentDid) throw new Error("no node holds this session");
+      await api.renameSession({ agentDid, sessionId, title });
       await refreshSnapshot();
       await refreshSession(sessionId);
     } catch (err) {
@@ -209,8 +214,9 @@ export function createDesktopShellChatActions({
      */
     retryMessage,
     /**
-     * Renames a session on the selected node, then reads the client and the
-     * session again. A failure is reported once, then rethrown.
+     * Renames a session on the node holding it (the selected node), then
+     * reads the client and the session again. A failure, or no node to ask,
+     * is reported once, then rethrown.
      */
     renameSession,
     /**

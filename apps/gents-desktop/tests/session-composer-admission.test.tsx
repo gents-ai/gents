@@ -371,6 +371,36 @@ describe("SessionScreen goal label", () => {
 });
 
 describe("renaming a session", () => {
+  it("asks the node holding it while a read does not list that node", async () => {
+    const renameSession = vi.fn().mockResolvedValue(undefined);
+    const app = testApp({
+      api: {
+        renameSession,
+        fetchSessionSnapshot: vi.fn().mockResolvedValue(null),
+        fetchDesktopSnapshot: vi
+          .fn()
+          .mockResolvedValue({ bootstrap: {}, client: null }),
+      },
+      deployments: [],
+      session: heldSession(),
+    });
+    await app.actions.renameSession("session", "Renamed");
+    expect(renameSession).toHaveBeenCalledWith({
+      agentDid: AGENT,
+      sessionId: "session",
+      title: "Renamed",
+    });
+  });
+
+  it("fails, and says so, when no node holds the session", async () => {
+    const renameSession = vi.fn();
+    const reportFailure = vi.fn();
+    const app = testApp({ api: { renameSession }, deployments: [], reportFailure });
+    await expect(app.actions.renameSession("session", "Renamed")).rejects.toBeDefined();
+    expect(renameSession).not.toHaveBeenCalled();
+    expect(reportFailure).toHaveBeenCalledOnce();
+  });
+
   it("renames through its action, then reads the session again", async () => {
     const renameSession = vi.fn().mockResolvedValue(undefined);
     const fetchSessionSnapshot = vi.fn().mockResolvedValue(null);
