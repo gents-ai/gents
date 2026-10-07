@@ -141,8 +141,8 @@ impl ProviderInputCounter {
     }
 
     /// The wire body as the byte estimate sees it. Claude counts an image by
-    /// its pixels, not its base64 length, so each base64 image's data is
-    /// charged [`CLAUDE_IMAGE_TOKENS`], the ceiling for current models.
+    /// its pixels, not its base64 length or URL, so each image source is charged
+    /// [`CLAUDE_IMAGE_TOKENS`], the ceiling for current models.
     fn estimated_body(&self, request: &CompletionRequest) -> Result<Value> {
         let mut body = self.project_body(request)?;
         if self.profile == ProviderInputProfile::ClaudeMessages {
@@ -356,11 +356,8 @@ pub const CLAUDE_IMAGE_TOKENS: usize = 4_784;
 fn charge_claude_images(value: &mut Value) {
     match value {
         Value::Object(map) if map.get("type").and_then(Value::as_str) == Some("image") => {
-            if let Some(data) = map
-                .get_mut("source")
-                .and_then(|source| source.get_mut("data"))
-            {
-                *data = Value::String("x".repeat(CLAUDE_IMAGE_TOKENS * 4));
+            if let Some(source) = map.get_mut("source") {
+                *source = Value::String("x".repeat(CLAUDE_IMAGE_TOKENS * 4));
             }
         }
         Value::Object(map) => map.values_mut().for_each(charge_claude_images),

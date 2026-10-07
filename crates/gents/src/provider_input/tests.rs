@@ -410,10 +410,15 @@ fn claude_image_request(images: usize, as_images: bool) -> CompletionRequest {
         DocumentSourceKind, Image, ImageMediaType, ToolCall, ToolFunction, ToolResultContent,
         UserContent,
     };
-    let part = || {
+    // Alternate base64 and URL images: Claude charges both by their pixels.
+    let part = |index: usize| {
         if as_images {
             ToolResultContent::Image(Image {
-                data: DocumentSourceKind::Base64("iVBORw0KGgo=".into()),
+                data: if index % 2 == 0 {
+                    DocumentSourceKind::Base64("iVBORw0KGgo=".into())
+                } else {
+                    DocumentSourceKind::Url("https://example.com/a.png".into())
+                },
                 media_type: Some(ImageMediaType::PNG),
                 detail: None,
                 additional_params: None,
@@ -434,7 +439,7 @@ fn claude_image_request(images: usize, as_images: bool) -> CompletionRequest {
         Message::User {
             content: vec![UserContent::tool_result(
                 "toolu_1",
-                std::iter::repeat_with(part).take(images).collect(),
+                (0..images).map(part).collect(),
             )],
         },
     ];
