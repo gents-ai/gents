@@ -26,7 +26,7 @@ use crate::cli::{
     GraphCancelArgs, GraphCommand, GraphResultArgs, GraphRunArgs, GraphScopeArgs, GraphToggleArgs,
     GraphWatchArgs, PackInstallArgs,
 };
-use crate::{print_json, resolve_agent_did, resolve_config_access};
+use crate::{print_json, print_ndjson, resolve_agent_did, resolve_config_access};
 
 pub(crate) async fn dispatch(command: GraphCommand) -> Result<()> {
     match command {
@@ -323,11 +323,12 @@ async fn run(args: GraphRunArgs) -> Result<()> {
         )
         .await
     } else {
-        match args
-            .output
-            .ensure_supported("graph run", &[OutputFormat::Text, OutputFormat::Json])?
-        {
+        match args.output.ensure_supported(
+            "graph run",
+            &[OutputFormat::Text, OutputFormat::Json, OutputFormat::Ndjson],
+        )? {
             OutputFormat::Json => print_json(&serde_json::to_value(receipt)?),
+            OutputFormat::Ndjson => print_ndjson(&serde_json::to_value(receipt)?),
             OutputFormat::Text => {
                 let mut out = io::stdout().lock();
                 writeln!(out, "Started {}", receipt.run_id)?;
@@ -662,6 +663,18 @@ fn print_result_text(view: &GraphRunView) -> Result<()> {
     write_result_text(&mut io::stdout().lock(), view)
 }
 
+/// One observation of a watched run. NDJSON is one compact object per line;
+/// the last line's `run.status` and the exit code mark the end.
+fn emit_progress(out: &mut impl io::Write, format: OutputFormat, value: &Value) -> Result<()> {
+    let line = match format {
+        OutputFormat::Json => serde_json::to_string_pretty(value)?,
+        OutputFormat::Ndjson => serde_json::to_string(value)?,
+        other => anyhow::bail!("graph progress has no {} rendering", other.as_str()),
+    };
+    writeln!(out, "{line}")?;
+    out.flush().context("writing graph progress to stdout")
+}
+
 async fn watch_run(
     access: &ConfigAccess,
     actor: &str,
@@ -669,8 +682,10 @@ async fn watch_run(
     interval: Duration,
     output: OutputFormat,
 ) -> Result<()> {
-    let output =
-        output.ensure_supported("graph watch", &[OutputFormat::Text, OutputFormat::Json])?;
+    let output = output.ensure_supported(
+        "graph watch",
+        &[OutputFormat::Text, OutputFormat::Json, OutputFormat::Ndjson],
+    )?;
     let mut last = Value::Null;
     let redraw = output == OutputFormat::Text && io::stdout().is_terminal();
     loop {
@@ -690,7 +705,9 @@ async fn watch_run(
         let current = json!({ "run": progress(&view), "activity": activity, "usage": usage });
         if current != last {
             match output {
-                OutputFormat::Json => print_json(&current)?,
+                OutputFormat::Json | OutputFormat::Ndjson => {
+                    emit_progress(&mut io::stdout().lock(), output, &current)?
+                }
                 OutputFormat::Text => print_progress_text(&view, &activity, redraw)?,
                 _ => unreachable!("validated output format"),
             }
@@ -764,6 +781,36 @@ async fn toggle(args: GraphToggleArgs, enabled: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ndjson_emits_one_compact_line_per_observation() {
+        let observations = [
+            json!({"run": {"status": "running"}, "activity": {"rows": [1, 2]}}),
+            json!({"run": {"status": "succeeded"}, "activity": {}}),
+        ];
+        let mut out = Vec::new();
+        for observation in &observations {
+            emit_progress(&mut out, OutputFormat::Ndjson, observation).unwrap();
+        }
+        let text = String::from_utf8(out).unwrap();
+        assert_eq!(text.matches('\n').count(), 2, "{text}");
+        for (line, observation) in text.lines().zip(&observations) {
+            assert_eq!(&serde_json::from_str::<Value>(line).unwrap(), observation);
+        }
+    }
+
+    #[test]
+    fn json_progress_stays_pretty_and_other_formats_are_refused() {
+        let mut out = Vec::new();
+        emit_progress(
+            &mut out,
+            OutputFormat::Json,
+            &json!({"run": {"status": "running"}}),
+        )
+        .unwrap();
+        assert!(String::from_utf8(out).unwrap().contains("\n  \"run\""));
+        assert!(emit_progress(&mut Vec::new(), OutputFormat::Table, &json!({})).is_err());
+    }
 
     #[test]
     fn parse_input_arg_defaults_to_an_empty_object() {

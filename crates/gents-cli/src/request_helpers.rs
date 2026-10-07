@@ -992,6 +992,21 @@ pub(crate) fn print_json(value: &Value) -> Result<()> {
         .context("writing JSON report to stdout")
 }
 
+/// One compact JSON object on its own line, for a stream a script reads line
+/// by line. Captured like `print_json` when an embedding caller captures.
+pub(crate) fn print_ndjson(value: &Value) -> Result<()> {
+    if CAPTURED_REPORT
+        .try_with(|report| *report.borrow_mut() = Some(value.clone()))
+        .is_ok()
+    {
+        return Ok(());
+    }
+    let mut stdout = io::stdout().lock();
+    writeln!(stdout, "{}", serde_json::to_string(value)?)
+        .and_then(|()| stdout.flush())
+        .context("writing NDJSON record to stdout")
+}
+
 /// Runs `command` and returns the report it would have printed; the last
 /// one when it prints several.
 pub(crate) async fn capture_report<F>(command: F) -> Result<Value>
