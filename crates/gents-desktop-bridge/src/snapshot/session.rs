@@ -8,7 +8,7 @@ use gents_desktop_core::client::{
 use gents_protocol::message::Message;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::{AgentRequestRow, AgentToolCallRow};
-use gents_protocol::transcript::{normalize_markdown_text, present_message};
+use gents_protocol::transcript::present_message;
 
 use super::super::cause_derivation::{derive_tool_call_cause, RequestEvidence, ToolCallEvidence};
 use super::super::types::{
@@ -251,6 +251,7 @@ fn build_hydration_only_session_snapshot(
     context_totals_exact: bool,
 ) -> DesktopSessionSnapshot {
     DesktopSessionSnapshot {
+        live_cursor: None,
         session_id: session_id.to_string(),
         agent_did: Some(agent_did.to_string()),
         behavior_id: None,

@@ -28,13 +28,19 @@ fn select_canonical_live_target(
     )
 }
 
+pub(super) struct CanonicalLiveText {
+    pub content: String,
+    pub reasoning: String,
+    pub cursor: String,
+}
+
 pub(super) fn canonical_live_text(
     request_store: &gents_desktop_core::client::ClientStore,
     canonical_store: &gents_desktop_core::client::ClientStore,
     session_id: &str,
     agent_did: Option<&str>,
     request_id: &str,
-) -> Option<(String, String)> {
+) -> Option<CanonicalLiveText> {
     use gents_protocol::output::live::{LiveView, OwnerLiveness};
     use gents_protocol::output::StreamPayload;
 
@@ -95,7 +101,23 @@ pub(super) fn canonical_live_text(
             _ => {}
         }
     }
-    Some((content, reasoning))
+    let identity = serde_json::to_vec(&(
+        session_id,
+        request_agent_did,
+        request.requester_did.as_deref(),
+        request_id,
+        request_doc_id,
+        execution_generation,
+        source,
+        writer,
+        message_id,
+    ))
+    .expect("canonical live identity serializes");
+    Some(CanonicalLiveText {
+        content,
+        reasoning,
+        cursor: blake3::hash(&identity).to_hex().to_string(),
+    })
 }
 
 fn live_text_hash(value: &str) -> String {
@@ -115,10 +137,7 @@ fn live_text_patch(
     base_byte_len: usize,
     base_hash: &str,
 ) -> SessionLiveTextPatchView {
-    let value = value
-        .map(normalize_markdown_text)
-        .filter(|value| !value.is_empty())
-        .unwrap_or_default();
+    let value = normalize_optional(value).unwrap_or_default();
     let byte_len = value.len();
     let hash = live_text_hash(&value);
     let prefix_matches = base_byte_len <= byte_len
@@ -139,170 +158,160 @@ fn live_text_patch(
     }
 }
 
+/// The cursor binds the source selected by the canonical owner. Revisions
+/// describe observer activity only; full session reads own history freshness.
+/// This is the native adapter of `ClientLiveDelta.accepts`.
+fn accepts_live_cursor(base: Option<&str>, current: Option<&str>, terminal: bool) -> bool {
+    !terminal && base.is_some() && base == current
+}
+
 #[allow(clippy::too_many_arguments)]
-pub fn build_session_live_delta(
+pub async fn build_session_live_delta(
     core: &ClientCore,
     session_id: &str,
     agent_did: Option<&str>,
     request_id: &str,
-    base_reconcile_version: u64,
+    base_live_cursor: &str,
     base_content_byte_len: usize,
     base_content_hash: &str,
     base_reasoning_byte_len: usize,
     base_reasoning_hash: &str,
-) -> SessionLiveDeltaView {
-    let (store, revision) = core.store().snapshot_with_revision();
-    build_session_live_delta_from_store(
-        store.as_ref(),
+) -> anyhow::Result<SessionLiveDeltaView> {
+    let started = std::time::Instant::now();
+    let (observed, revision) = core.store().snapshot_with_revision();
+    let mut live_store = ClientStore::default();
+    if let Some(agent_did) = agent_did {
+        if core
+            .session_unreadable_reason(session_id, agent_did)
+            .is_none()
+        {
+            let matches = observed
+                .requests
+                .iter()
+                .filter(|row| {
+                    row.request_id == request_id
+                        && row.session_id.as_deref() == Some(session_id)
+                        && row.agent_did.as_deref() == Some(agent_did)
+                })
+                .collect::<Vec<_>>();
+            if let [request] = matches.as_slice() {
+                let operator = core
+                    .operator_graphql(agent_did)
+                    .map(gents::config_client::ConfigAccess::Graphql);
+                let principal = core.transcript_principal_scope(agent_did);
+                let session = observed
+                    .sessions
+                    .iter()
+                    .find(|row| row.session_id == session_id && row.agent_did == agent_did);
+                let requester = gents_desktop_core::client::session_transcript_requester_scope(
+                    session,
+                    Some(agent_did),
+                    principal.as_deref(),
+                    operator.is_some(),
+                );
+                if request.requester_did == requester {
+                    live_store = match operator.as_ref() {
+                        Some(access) => {
+                            gents_desktop_core::client::load_session_live_store_on(access, request)
+                                .await?
+                        }
+                        None => {
+                            gents_desktop_core::client::load_session_live_store(
+                                core.node(),
+                                request,
+                            )
+                            .await?
+                        }
+                    };
+                }
+            }
+        }
+    }
+    let delta = build_session_live_delta_from_store(
+        &live_store,
         revision,
         session_id,
         agent_did,
         request_id,
-        base_reconcile_version,
+        base_live_cursor,
         base_content_byte_len,
         base_content_hash,
         base_reasoning_byte_len,
         base_reasoning_hash,
-    )
+    );
+    tracing::debug!(
+        target: "gents_desktop::chat", session_id, request_id,
+        outcome = %delta.outcome,
+        output_segments = live_store.output_segments.len(),
+        message_headers = live_store.transcript_messages.len(),
+        elapsed_ms = started.elapsed().as_secs_f64() * 1_000.0,
+        "projected scoped live session output"
+    );
+    Ok(delta)
 }
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_session_live_delta_from_store(
-    store: &gents_desktop_core::client::ClientStore,
+    store: &ClientStore,
     revision: gents_desktop_core::client::StoreProjectionRevision,
     session_id: &str,
     agent_did: Option<&str>,
     request_id: &str,
-    base_reconcile_version: u64,
+    base_live_cursor: &str,
     base_content_byte_len: usize,
     base_content_hash: &str,
     base_reasoning_byte_len: usize,
     base_reasoning_hash: &str,
 ) -> SessionLiveDeltaView {
-    let revision_view = SessionProjectionRevisionView {
+    let revision = SessionProjectionRevisionView {
         store_version: revision.store_version,
         reconcile_version: revision.reconcile_version,
     };
-    let snapshot_required =
-        |turn_state: Option<String>, status: Option<String>| SessionLiveDeltaView {
-            outcome: "snapshotRequired".to_string(),
-            revision: revision_view.clone(),
-            request_id: request_id.to_string(),
-            turn_state,
-            status,
-            content: None,
-            reasoning: None,
-        };
-
-    if revision.reconcile_version != base_reconcile_version {
-        return snapshot_required(None, None);
-    }
-
-    let request = store.requests.iter().find(|request| {
-        request.request_id == request_id
-            && request.session_id.as_deref() == Some(session_id)
-            && agent_did.is_none_or(|agent_did| request.agent_did.as_deref() == Some(agent_did))
-    });
-    if request.is_none() {
-        return snapshot_required(None, None);
-    }
     let turn_state = agent_did.map_or_else(
         || store.derive_turn_for_request(request_id),
-        |agent_did| store.derive_turn_for_request_for_agent(request_id, agent_did),
+        |agent| store.derive_turn_for_request_for_agent(request_id, agent),
     );
-    let turn_state_label = turn_state.map(turn_state_label).map(str::to_owned);
+    let mut result = SessionLiveDeltaView {
+        outcome: "snapshotRequired".into(),
+        revision,
+        request_id: request_id.into(),
+        turn_state: turn_state.map(turn_state_label).map(str::to_owned),
+        status: None,
+        content: None,
+        reasoning: None,
+        live_cursor: None,
+    };
     if !is_live_turn_state(turn_state) {
-        return snapshot_required(turn_state_label, None);
+        return result;
     }
-
-    let request = request.expect("request presence checked above");
-    let Some(request_doc_id) = request.doc_id.as_deref() else {
-        return snapshot_required(turn_state_label, None);
+    let Some(live) = canonical_live_text(store, store, session_id, agent_did, request_id) else {
+        return result;
     };
-    let Some(execution_generation) = request.execution_generation.as_deref() else {
-        return snapshot_required(turn_state_label, None);
-    };
-    let Some(request_agent_did) = request.agent_did.as_deref() else {
-        return snapshot_required(turn_state_label, None);
-    };
-    if let gents_protocol::output::live::LiveTargetSelection::Selected {
-        source,
-        writer,
-        message_id,
-    } = select_canonical_live_target(store, request_doc_id, execution_generation)
-    {
-        use gents_protocol::output::live::{LiveView, OwnerLiveness};
-        use gents_protocol::output::StreamPayload;
-
-        let request_terminal = request
-            .lifecycle_state
-            .is_some_and(gents_protocol::request_lifecycle::RequestLifecycleState::is_terminal);
-        let view = gents_desktop_core::client::canonical_output::project_canonical_live(
-            request_doc_id,
-            session_id,
-            request_doc_id,
-            &source,
-            &writer,
-            message_id.as_deref(),
-            request_agent_did,
-            request.requester_did.as_deref(),
-            &store.transcript_messages,
-            &store.output_segments,
-            &[],
-            &[],
-            &[],
-            OwnerLiveness {
-                current_request: gents_protocol::output::live::observed_request_execution_owner(
-                    request,
-                ),
-                live_tools: Vec::new(),
-            },
-            request_terminal,
-            request.terminal_output.clone(),
-        );
-        let streams = match view {
-            LiveView::Live { streams } | LiveView::Settling { streams } => streams,
-            _ => return snapshot_required(turn_state_label, None),
-        };
-        let mut content = String::new();
-        let mut reasoning = String::new();
-        for stream in streams {
-            match stream.declaration.payload {
-                StreamPayload::Text => content.push_str(&stream.text),
-                StreamPayload::Reasoning | StreamPayload::ReasoningSummary => {
-                    reasoning.push_str(&stream.text);
-                }
-                _ => {}
-            }
-        }
-        let content_patch =
-            live_text_patch(Some(&content), base_content_byte_len, base_content_hash);
-        let reasoning_patch = live_text_patch(
-            Some(&reasoning),
-            base_reasoning_byte_len,
-            base_reasoning_hash,
-        );
-        let unchanged = content_patch.mode == "unchanged" && reasoning_patch.mode == "unchanged";
-        return SessionLiveDeltaView {
-            outcome: if unchanged { "unchanged" } else { "delta" }.to_owned(),
-            revision: revision_view,
-            request_id: request_id.to_owned(),
-            turn_state: turn_state_label,
-            status: None,
-            content: Some(content_patch),
-            reasoning: Some(reasoning_patch),
-        };
+    if !accepts_live_cursor(Some(base_live_cursor), Some(&live.cursor), false) {
+        return result;
     }
-
-    // Canonical output has no mutable response tail. The shared live
-    // projector owns contiguous-prefix reconstruction; until that projection
-    // is supplied, force a bounded snapshot rather than repairing text in the
-    // desktop bridge.
-    let _ = (
+    let content = live_text_patch(
+        Some(&live.content),
         base_content_byte_len,
         base_content_hash,
+    );
+    let reasoning = live_text_patch(
+        Some(&live.reasoning),
         base_reasoning_byte_len,
         base_reasoning_hash,
     );
-    snapshot_required(turn_state_label, None)
+    result.outcome = if content.mode == "unchanged" && reasoning.mode == "unchanged" {
+        "unchanged"
+    } else {
+        "delta"
+    }
+    .into();
+    result.content = Some(content);
+    result.reasoning = Some(reasoning);
+    result.live_cursor = Some(live.cursor);
+    result
 }
+
+#[cfg(test)]
+#[path = "live_delta/tests.rs"]
+mod tests;

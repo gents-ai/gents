@@ -1102,6 +1102,11 @@ export function createDesktopUiHarness(
       if (!session) return null;
       const snapshot = clone(session);
       snapshot.projectionRevision = { storeVersion, reconcileVersion };
+      snapshot.liveCursor = session.timelineItems.some(
+        (item) => item.kind === "liveAssistant",
+      )
+        ? `${session.agentDid}:${sessionId}:${session.latestRequestId}:${reconcileVersion}`
+        : null;
       if (!timelinePage) return snapshot;
 
       const totalItems = snapshot.timelineItems.length;
@@ -1156,7 +1161,8 @@ export function createDesktopUiHarness(
       const session = sessions.get(request.sessionId);
       if (!session || session.latestRequestId !== request.requestId) return null;
       const revision = { storeVersion, reconcileVersion };
-      if (request.baseReconcileVersion !== reconcileVersion) {
+      const liveCursor = `${session.agentDid}:${request.sessionId}:${session.latestRequestId}:${reconcileVersion}`;
+      if (request.baseLiveCursor !== liveCursor) {
         return {
           outcome: "snapshotRequired",
           revision,
@@ -1187,6 +1193,7 @@ export function createDesktopUiHarness(
             ? "unchanged"
             : "delta",
         revision,
+        liveCursor,
         requestId: request.requestId,
         turnState: session.turnState,
         status: session.status,

@@ -280,7 +280,7 @@ fn session_snapshot_consumes_generated_live_overlay_cases() {
         "sess-1",
         Some("did:test:amy"),
         "req-1",
-        4,
+        "missing-source",
         0,
         "811c9dc5",
         0,
@@ -338,7 +338,7 @@ fn queried_timeline_page_drops_old_orphans_below_the_selected_sequence_window() 
 }
 
 #[test]
-fn live_delta_appends_only_the_new_suffix_and_fences_reconcile_gaps() {
+fn live_delta_requires_a_canonical_source() {
     let store = active_store();
     let revision = gents_desktop_core::client::StoreProjectionRevision {
         store_version: 9,
@@ -350,7 +350,7 @@ fn live_delta_appends_only_the_new_suffix_and_fences_reconcile_gaps() {
         "sess-1",
         Some("did:test:amy"),
         "req-1",
-        4,
+        "missing-source",
         5,
         "4f9f2cab",
         0,
@@ -363,7 +363,7 @@ fn live_delta_appends_only_the_new_suffix_and_fences_reconcile_gaps() {
         "sess-1",
         Some("did:test:amy"),
         "req-1",
-        3,
+        "other-source",
         5,
         "4f9f2cab",
         0,

@@ -756,18 +756,20 @@ pub(super) fn build_session_snapshot_from_store_for_agent_with_transcript(
         .collect::<Vec<_>>();
     let mut timeline_items = build_rendered_timeline(&messages, &tool_calls, &pending_turns);
 
+    let mut live_cursor = None;
     if include_live_tail {
         if let Some(request_id) = latest_request_id.as_deref() {
-            if let Some((content, reasoning)) = super::live_delta::canonical_live_text(
+            if let Some(live) = super::live_delta::canonical_live_text(
                 store,
                 context_store,
                 session_id,
                 agent_did,
                 request_id,
             ) {
-                let content = normalize_optional(Some(&content));
-                let reasoning = normalize_optional(Some(&reasoning));
+                let content = normalize_optional(Some(&live.content));
+                let reasoning = normalize_optional(Some(&live.reasoning));
                 if content.is_some() || reasoning.is_some() {
+                    live_cursor = Some(live.cursor);
                     timeline_items.push(crate::types::RenderedTimelineItem::LiveAssistant {
                         item_key: format!("live-assistant-{request_id}"),
                         content,
@@ -779,6 +781,7 @@ pub(super) fn build_session_snapshot_from_store_for_agent_with_transcript(
     }
 
     Some(DesktopSessionSnapshot {
+        live_cursor,
         session_id: session_id.to_string(),
         agent_did: resolved_agent_did,
         behavior_id: resolved_behavior_id,

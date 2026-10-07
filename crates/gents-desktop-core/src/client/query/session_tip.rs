@@ -1,7 +1,7 @@
 use super::*;
 use gents::session::canonical_rows::{
-    decode_output_segment_row, decode_transcript_message_row, AGENT_MESSAGE_FIELDS,
-    AGENT_OUTPUT_SEGMENT_FIELDS,
+    decode_scoped_canonical_rows, decode_scoped_request_output_segments,
+    decode_transcript_message_row, AGENT_MESSAGE_FIELDS, AGENT_OUTPUT_SEGMENT_FIELDS,
 };
 
 /// An exact prompt-owner lookup is independent of session-history coverage.
@@ -14,18 +14,58 @@ pub async fn load_session_tip_store(
     node: &EmbeddedNode,
     request: &AgentRequestRow,
 ) -> Result<ClientStore> {
-    let query = tip_query(request)?;
+    let query = tip_query(request, false)?;
     let data = execute_local_graphql_query(node, &query, "session tip").await?;
-    tip_store(&data)
+    tip_store(&data, request)
 }
 
 pub async fn load_session_tip_store_on(
     access: &gents::config_client::ConfigAccess,
     request: &AgentRequestRow,
 ) -> Result<ClientStore> {
-    let query = tip_query(request)?;
+    let query = tip_query(request, false)?;
     let data = execute_access_graphql_query(access, &query, "session tip").await?;
-    tip_store(&data)
+    tip_store(&data, request)
+}
+
+/// One indexed request read supplies both fresh lifecycle evidence and canonical
+/// output. These rows live only for this projection: never merge payloads into
+/// the observer or retain a per-request cache. Re-reading the bounded source
+/// observes late CRDT twins, gaps and closure-only records as well as appends.
+pub async fn load_session_live_store(
+    node: &EmbeddedNode,
+    request: &AgentRequestRow,
+) -> Result<ClientStore> {
+    let query = tip_query(request, true)?;
+    let data = execute_local_graphql_query(node, &query, "session live output").await?;
+    live_store(&data, request)
+}
+
+pub async fn load_session_live_store_on(
+    access: &gents::config_client::ConfigAccess,
+    request: &AgentRequestRow,
+) -> Result<ClientStore> {
+    let query = tip_query(request, true)?;
+    let data = execute_access_graphql_query(access, &query, "session live output").await?;
+    live_store(&data, request)
+}
+
+fn live_store(data: &Value, expected: &AgentRequestRow) -> Result<ClientStore> {
+    let requests: Vec<AgentRequestRow> = parse_query_rows(data, AGENT_REQUEST_NAME)?;
+    let [request] = requests.as_slice() else {
+        return Ok(ClientStore::default());
+    };
+    anyhow::ensure!(
+        request.doc_id == expected.doc_id
+            && request.request_id == expected.request_id
+            && request.agent_did == expected.agent_did
+            && request.session_id == expected.session_id
+            && request.requester_did == expected.requester_did,
+        "live request scope changed"
+    );
+    let mut rows = tip_rows(data, expected)?;
+    rows.requests = requests;
+    Ok(ClientStore::from_rows(rows))
 }
 
 /// Exact scoped prompt observations and compact durable anchors for one page read.
@@ -285,7 +325,7 @@ fn decode_prompt_ownership(
     Ok(())
 }
 
-fn tip_query(request: &AgentRequestRow) -> Result<String> {
+fn tip_query(request: &AgentRequestRow, include_request: bool) -> Result<String> {
     let doc = escape_graphql_string(
         request
             .doc_id
@@ -309,12 +349,15 @@ fn tip_query(request: &AgentRequestRow) -> Result<String> {
         .as_deref()
         .map(|value| format!("\"{}\"", escape_graphql_string(value)))
         .unwrap_or_else(|| "null".into());
-    let scope = format!(
-        r#"request_doc_id: {{ _eq: "{doc}" }}, agent_did: {{ _eq: "{agent}" }}, session_id: {{ _eq: "{session}" }}, requester_did: {{ _eq: {requester} }}"#
-    );
-    let live = request
-        .lifecycle_state
-        .is_some_and(|state| !state.is_terminal());
+    // DefraDB's capped cardinality estimates can tie once a request exceeds
+    // 1024 segments and choose an agent-wide index. One indexed predicate
+    // fixes the scan to this physical request; the canonical row owner checks the
+    // remaining namespace before decoding. ACP stays with ConfigAccess.
+    let scope = format!(r#"request_doc_id: {{ _eq: "{doc}" }}"#);
+    let live = include_request
+        || request
+            .lifecycle_state
+            .is_some_and(|state| !state.is_terminal());
     let limit = MAX_TIP_REQUEST_ROWS + 1;
     let header_filter = if live {
         scope.clone()
@@ -325,7 +368,6 @@ fn tip_query(request: &AgentRequestRow) -> Result<String> {
         ));
         format!(r#"{scope}, message_key: {{ _eq: "{key}" }}"#)
     };
-    let headers_limit = if live { limit } else { 2 };
     let segments = if live {
         format!(
             r#"AgentOutputSegment(filter: {{ {scope} }}, limit: {limit}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }}"#
@@ -333,30 +375,69 @@ fn tip_query(request: &AgentRequestRow) -> Result<String> {
     } else {
         String::new()
     };
+    let request_fields = if include_request {
+        format!(
+            r#"AgentRequest(filter: {{ _docID: {{ _eq: "{doc}" }}, agent_did: {{ _eq: "{agent}" }}, session_id: {{ _eq: "{session}" }}, requester_did: {{ _eq: {requester} }} }}, limit: 2) {{ {AGENT_REQUEST_FIELDS} }}"#
+        )
+    } else {
+        String::new()
+    };
     Ok(format!(
         r#"query DesktopSessionTip {{
-        AgentMessage(filter: {{ {header_filter} }}, limit: {headers_limit}) {{ {AGENT_MESSAGE_FIELDS} }}
+        {request_fields}
+        AgentMessage(filter: {{ {header_filter} }}, limit: {limit}) {{ {AGENT_MESSAGE_FIELDS} }}
         {segments}
     }}"#
     ))
 }
 
-fn tip_store(data: &Value) -> Result<ClientStore> {
-    let messages = parse_canonical_rows(data, AGENT_MESSAGE_NAME, decode_transcript_message_row)?;
+fn tip_store(data: &Value, request: &AgentRequestRow) -> Result<ClientStore> {
+    Ok(ClientStore::from_rows(tip_rows(data, request)?))
+}
+
+fn bounded_tip_rows<'a>(data: &'a Value, root: &str) -> Result<&'a [Value]> {
+    let rows = data
+        .get(root)
+        .and_then(Value::as_array)
+        .with_context(|| format!("session tip omitted {root} rows"))?;
+    anyhow::ensure!(
+        rows.len() <= MAX_TIP_REQUEST_ROWS,
+        "active request exceeds bounded session-tip read of {MAX_TIP_REQUEST_ROWS} rows"
+    );
+    Ok(rows)
+}
+
+fn tip_rows(data: &Value, request: &AgentRequestRow) -> Result<ClientStoreRows> {
+    let agent = request
+        .agent_did
+        .as_deref()
+        .context("tip request lacks principal")?;
+    let session = request
+        .session_id
+        .as_deref()
+        .context("tip request lacks session")?;
+    let messages = decode_scoped_canonical_rows(
+        bounded_tip_rows(data, AGENT_MESSAGE_NAME)?,
+        agent,
+        Some(session),
+        request.requester_did.as_deref(),
+        decode_transcript_message_row,
+    )?;
     let segments = if data.get(AGENT_OUTPUT_SEGMENT_NAME).is_some() {
-        parse_canonical_rows(data, AGENT_OUTPUT_SEGMENT_NAME, decode_output_segment_row)?
+        decode_scoped_request_output_segments(
+            bounded_tip_rows(data, AGENT_OUTPUT_SEGMENT_NAME)?,
+            agent,
+            Some(session),
+            request.requester_did.as_deref(),
+        )?
     } else {
         Vec::new()
     };
-    anyhow::ensure!(
-        messages.len() <= MAX_TIP_REQUEST_ROWS && segments.len() <= MAX_TIP_REQUEST_ROWS,
-        "active request exceeds bounded session-tip read of {MAX_TIP_REQUEST_ROWS} rows"
-    );
-    Ok(ClientStore::from_rows(ClientStoreRows {
+    Ok(ClientStoreRows {
         transcript_messages: messages,
         output_segments: segments,
         ..Default::default()
-    }))
+    })
 }
 
 #[cfg(test)]
@@ -531,3 +612,6 @@ mod tests {
         .is_err());
     }
 }
+
+#[cfg(test)]
+mod live_tests;

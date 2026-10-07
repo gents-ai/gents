@@ -37,14 +37,15 @@ describe("live session deltas", () => {
     });
     const request = sessionLiveDeltaRequest(current, "request-1");
     expect(request).toMatchObject({
-      baseReconcileVersion: 3,
+      baseLiveCursor: "cursor",
       baseContentByteLen: 5,
       baseContentHash: "4f9f2cab",
     });
 
     const next = applySessionLiveDelta(current, {
       outcome: "delta",
-      revision: { storeVersion: 8, reconcileVersion: 3 },
+      liveCursor: "cursor",
+      revision: { storeVersion: 8, reconcileVersion: 4 },
       requestId: "request-1",
       turnState: "running",
       status: null,
@@ -77,6 +78,7 @@ describe("live session deltas", () => {
 
     const next = applySessionLiveDelta(current, {
       outcome: "delta",
+      liveCursor: "cursor",
       revision: { storeVersion: 8, reconcileVersion: 3 },
       requestId: "request-1",
       turnState: "running",
@@ -129,6 +131,7 @@ describe("live session deltas", () => {
 
     const next = applySessionLiveDelta(withOlder, {
       outcome: "delta",
+      liveCursor: "cursor",
       revision: { storeVersion: 8, reconcileVersion: 3 },
       requestId: "request-1",
       turnState: "running",
@@ -168,6 +171,7 @@ describe("live session deltas", () => {
     ];
     const base = {
       outcome: "delta",
+      liveCursor: "cursor",
       revision: { storeVersion: 5, reconcileVersion: 2 },
       requestId: "request-1",
       turnState: "running",
@@ -200,6 +204,7 @@ function session(
   page: DesktopSessionSnapshot["timelinePage"],
 ): DesktopSessionSnapshot {
   return {
+    liveCursor: "cursor",
     sessionId: "session-1",
     agentDid: "did:key:test",
     behaviorId: "behavior-1",

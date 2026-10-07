@@ -93,11 +93,12 @@ export function startClientObservation(
       clearTimeout(pollTimer);
       pollTimer = undefined;
       if (key === null || pollMs === null) return;
+      const livePollMs = Math.min(250, pollMs);
       const poll = async () => {
         await controller.request("sessionDelta");
-        if (!stopped && polled === key) pollTimer = setTimeout(poll, pollMs);
+        if (!stopped && polled === key) pollTimer = setTimeout(poll, livePollMs);
       };
-      pollTimer = setTimeout(poll, pollMs);
+      pollTimer = setTimeout(poll, livePollMs);
     };
 
     publishSelection();
@@ -132,6 +133,7 @@ export function startClientObservation(
     return () => {
       stopped = true;
       controller.dispose();
+      actions.invalidateSessionReads();
       clearTimeout(pollTimer);
       unsubscribeSelection();
       unsubscribeTracked();

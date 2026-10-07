@@ -6,6 +6,7 @@ import {
   applySessionLiveDelta,
   acceptsAsyncResult,
   sessionLiveDeltaRequest,
+  timingConfig,
   SESSION_TIMELINE_PAGE_SIZE,
 } from "./desktopShellRuntime";
 import {
@@ -49,6 +50,8 @@ export function createSessionReads({
   setError,
 }: SessionReadParams) {
   let refreshSeq = 0;
+  let liveSeq = 0;
+  let reconciledAt = 0;
   const setSession = (next: Parameters<typeof writeSession>[1]) =>
     writeSession(sessionStore, next);
   const setSessionLoad = (load: SessionLoadState) =>
@@ -93,6 +96,7 @@ export function createSessionReads({
         (!next || next.sessionId === nextSessionId);
       if (!stillCurrent) return null;
       setSession((current) => (next ? mergeSessionTipSnapshot(current, next) : null));
+      reconciledAt = performance.now();
       setSessionLoad({
         phase: "loaded",
         sessionId: nextSessionId,
@@ -139,11 +143,25 @@ export function createSessionReads({
     const current = readSession(sessionStore);
     const requestId = trackedRequestId();
     if (!current || !requestId || !api.fetchSessionLiveDelta) return false;
+    // A delta covers only the live overlay. Enforce history reconciliation at
+    // this shared event/poll entry so a continuous wake stream cannot starve it.
+    const reconcileMs = timingConfig().activeSessionPollMs ?? 1_500;
+    if (performance.now() - reconciledAt >= reconcileMs) return false;
     const request = sessionLiveDeltaRequest(current, requestId);
     if (!request) return false;
+    const capturedRefresh = refreshSeq;
+    const capturedLive = ++liveSeq;
+    const capturedAgent = store.getState().agentDid;
+    const stillCurrent = () =>
+      capturedRefresh === refreshSeq &&
+      capturedLive === liveSeq &&
+      store.getState().agentDid === capturedAgent &&
+      store.getState().sessionId === current.sessionId &&
+      trackedRequestId() === requestId;
     try {
       const delta = await api.fetchSessionLiveDelta(request);
-      if (!delta || store.getState().sessionId !== current.sessionId) return false;
+      if (!stillCurrent()) return true;
+      if (!delta) return false;
       const latest = readSession(sessionStore);
       if (!latest || latest.sessionId !== current.sessionId) return true;
       const next = applySessionLiveDelta(latest, delta);
@@ -151,6 +169,7 @@ export function createSessionReads({
       setSession(next);
       return true;
     } catch (error) {
+      if (!stillCurrent()) return true;
       setError(String(error));
       return false;
     }
@@ -191,6 +210,11 @@ export function createSessionReads({
   }
 
   return {
+    /** Revoke pending reads when client observation stops. */
+    invalidateSessionReads() {
+      refreshSeq += 1;
+      liveSeq += 1;
+    },
     /**
      * Reads a session (the selected node's unless another is given) and holds
      * it, or clears the held session for null. Only the latest read commits,

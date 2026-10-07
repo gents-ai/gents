@@ -65,7 +65,7 @@ struct SessionLiveDeltaRequest {
     agent_did: Option<String>,
     session_id: String,
     request_id: String,
-    base_reconcile_version: u64,
+    base_live_cursor: String,
     base_content_byte_len: usize,
     base_content_hash: String,
     base_reasoning_byte_len: usize,
@@ -312,17 +312,17 @@ pub(super) fn handle_request(
         ("POST", "/desktop/session/live-delta") => {
             let request = serde_json::from_str::<SessionLiveDeltaRequest>(&request.body)
                 .context("decoding session live delta request")?;
-            let delta = build_session_live_delta(
+            let delta = runtime.block_on(build_session_live_delta(
                 fixture.desktop_core().as_ref(),
                 &request.session_id,
                 request.agent_did.as_deref(),
                 &request.request_id,
-                request.base_reconcile_version,
+                &request.base_live_cursor,
                 request.base_content_byte_len,
                 &request.base_content_hash,
                 request.base_reasoning_byte_len,
                 &request.base_reasoning_hash,
-            );
+            ))?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&delta)?))
         }
         ("POST", "/desktop/session/hydration/retry") => {

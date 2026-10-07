@@ -440,6 +440,9 @@ pub struct SessionLiveTextPatchView {
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionLiveDeltaView {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub live_cursor: Option<String>,
     /// delta | unchanged | snapshotRequired
     pub outcome: String,
     pub revision: SessionProjectionRevisionView,
@@ -469,6 +472,11 @@ pub struct SessionHydrationView {
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopSessionSnapshot {
+    /// Ephemeral identity of the canonical live source. Full reads still own
+    /// historical reconciliation; this cursor carries no history coverage.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub live_cursor: Option<String>,
     pub session_id: String,
     pub agent_did: Option<String>,
     pub behavior_id: Option<String>,

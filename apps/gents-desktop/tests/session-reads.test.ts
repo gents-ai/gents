@@ -14,6 +14,7 @@ function session(
   page: NonNullable<DesktopSessionSnapshot["timelinePage"]>,
 ): DesktopSessionSnapshot {
   return {
+    liveCursor: "cursor",
     sessionId: "session-1",
     agentDid: "did:key:test",
     behaviorId: "behavior-1",
@@ -277,6 +278,7 @@ describe("createSessionReads", () => {
     await reads.loadOlderSessionTimeline();
     resolveDelta({
       outcome: "delta",
+      liveCursor: "cursor",
       revision: { storeVersion: 8, reconcileVersion: 3 },
       requestId: "request-1",
       turnState: "running",
@@ -302,6 +304,117 @@ describe("createSessionReads", () => {
     expect(readSession(reads.sessionStore)?.timelineItems.at(-1)).toMatchObject({
       content: "hello world",
     });
+  });
+
+  it("rejects old live reads after a full refresh and after observation stops", async () => {
+    const tip = session([], {
+      totalItems: 0,
+      pageItems: 0,
+      hasOlder: false,
+      hasNewer: false,
+      oldestItemKey: null,
+      newestItemKey: null,
+    });
+    tip.projectionRevision = { storeVersion: 7, reconcileVersion: 3 };
+    tip.timelineItems = [
+      { kind: "liveAssistant", itemKey: "live", content: "hello", reasoning: null },
+    ];
+    let finish!: (value: SessionLiveDeltaView) => void;
+    const api = {
+      fetchSessionSnapshot: vi.fn(async () => tip),
+      fetchSessionLiveDelta: vi.fn(
+        () =>
+          new Promise<SessionLiveDeltaView>((resolve) => {
+            finish = resolve;
+          }),
+      ),
+    } as unknown as DesktopApiAdapter;
+    const reads = readsFor(api);
+    {
+      await reads.refreshSession("session-1");
+    }
+    const stale: SessionLiveDeltaView = {
+      outcome: "delta",
+      liveCursor: "cursor",
+      requestId: "request-1",
+      revision: { storeVersion: 8, reconcileVersion: 8 },
+      turnState: "running",
+      status: null,
+      content: { mode: "replace", value: "old", byteLen: 3, hash: "bd2b9bd6" },
+      reasoning: { mode: "unchanged", value: "", byteLen: 0, hash: "811c9dc5" },
+    };
+    let pending!: Promise<boolean>;
+    {
+      pending = reads.refreshSessionLiveDelta();
+    }
+    {
+      await reads.refreshSession("session-1");
+    }
+    {
+      finish(stale);
+      expect(await pending).toBe(true);
+    }
+    expect(readSession(reads.sessionStore)?.timelineItems[0]).toMatchObject({
+      content: "hello",
+    });
+    {
+      pending = reads.refreshSessionLiveDelta();
+    }
+    reads.invalidateSessionReads();
+    finish(stale);
+    expect(await pending).toBe(true);
+  });
+
+  it("requires history reconciliation even when every live read succeeds", async () => {
+    const clock = vi.spyOn(performance, "now").mockReturnValue(0);
+    try {
+      const tip = session([], {
+        totalItems: 0,
+        pageItems: 0,
+        hasOlder: false,
+        hasNewer: false,
+        oldestItemKey: null,
+        newestItemKey: null,
+      });
+      tip.projectionRevision = { storeVersion: 1, reconcileVersion: 1 };
+      tip.timelineItems = [
+        { kind: "liveAssistant", itemKey: "live", content: "hello", reasoning: null },
+      ];
+      const fetchSessionLiveDelta = vi.fn(async () => ({
+        outcome: "unchanged",
+        liveCursor: "cursor",
+        requestId: "request-1",
+        revision: { storeVersion: 2, reconcileVersion: 2 },
+        turnState: "running",
+        status: null,
+        content: { mode: "unchanged", value: "", byteLen: 5, hash: "4f9f2cab" },
+        reasoning: { mode: "unchanged", value: "", byteLen: 0, hash: "811c9dc5" },
+      }));
+      const reads = readsFor({
+        fetchSessionSnapshot: async () => tip,
+        fetchSessionLiveDelta,
+      } as unknown as DesktopApiAdapter);
+      {
+        await reads.refreshSession("session-1");
+    }
+      clock.mockReturnValue(250);
+      {
+        expect(await reads.refreshSessionLiveDelta()).toBe(true);
+    }
+      clock.mockReturnValue(1_500);
+      {
+        expect(await reads.refreshSessionLiveDelta()).toBe(false);
+    }
+      expect(fetchSessionLiveDelta).toHaveBeenCalledTimes(1);
+      {
+        await reads.refreshSession("session-1");
+    }
+      {
+        expect(await reads.refreshSessionLiveDelta()).toBe(true);
+    }
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it("drops a delayed snapshot after the selected session changes", async () => {

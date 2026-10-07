@@ -27,5 +27,13 @@ def main : IO Unit := do
         "{\"phase\":\"" ++ phaseName phase ++ "\",\"running\":" ++ toString running ++
         ",\"autostartDeclined\":" ++ toString autostartDeclined ++ ",\"expected\":\"" ++
         phaseName (ClientSnapshotObservation.observeStartup phase running autostartDeclined) ++ "\"}"
+  let cursors : List (Option Nat) := [none, some 0, some 1]
+  let encodeCursor := fun (value : Option Nat) => value.elim "null" toString
+  let liveRows := cursors.flatMap fun base => cursors.flatMap fun current =>
+    [false, true].map fun terminal =>
+      "{\"base\":" ++ encodeCursor base ++ ",\"current\":" ++ encodeCursor current ++
+      ",\"terminal\":" ++ toString terminal ++ ",\"accepted\":" ++
+      toString (ClientLiveDelta.accepts base current terminal) ++ "}"
   IO.println ("{\"fences\":[" ++ String.intercalate "," rows ++
-    "],\"startup\":[" ++ String.intercalate "," startupRows ++ "]}")
+    "],\"startup\":[" ++ String.intercalate "," startupRows ++
+    "],\"liveDeltas\":[" ++ String.intercalate "," liveRows ++ "]}")
