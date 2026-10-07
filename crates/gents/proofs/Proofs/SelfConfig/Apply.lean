@@ -134,6 +134,34 @@ def keepsGrants (decode : Doc → Option Grants) (held : Grants) (stored candida
   | some s, some c => c.boundedBy s held
   | _, _ => false
 
+/-- The grant bound across a reselection. A write that changes which Tools
+document a Context or Behavior selects is bounded like a Tools write from the
+previously selected Tools (`keepsGrants`), so a re-point cannot acquire what a
+Tools write could not. With no previous selection (a new Context, or a clone,
+which copies its source's whole Tools document, operator grants included) the
+newly selected Tools are bounded like a Tools write over a document with no
+grant (`Grants.bot`): each grant within its own bound with nothing stored, so
+pack installation needs the invoker to hold it. Selecting no Tools carries no
+grant. A clone is checked when its request is created and
+previewed; the reconciler publishes it later from the source as it is then,
+without the invoker's grants, so a grant an operator adds to the source in that
+window is copied. Operator writes are unguarded by design. -/
+def reselectionKeepsGrants (decode : Doc → Option Grants) (held : Grants)
+    (before after : Option Doc) : Bool :=
+  match before, after with
+  | _, none => true
+  | some storedTools, some candidateTools =>
+      keepsGrants decode held storedTools candidateTools
+  | none, some candidateTools => (decode candidateTools).any (·.boundedBy Grants.bot held)
+
+/-- `reselectionKeepsGrants` on the Tools documents a Context or Behavior
+selects. `resolve` follows the chain through the owner-scoped reads the native
+guard uses; `none` selects no Tools, including a reference to a missing
+document, which the reference validator refuses on its own. -/
+def chainKeepsGrants (decode : Doc → Option Grants) (held : Grants)
+    (resolve : Doc → Option Doc) (stored candidate : Doc) : Bool :=
+  reselectionKeepsGrants decode held (resolve stored) (resolve candidate)
+
 /-- The invoker's reachability, projected from its own behavior document:
 `enabled` (absent is true) and whether its tags carry the Setup tag. -/
 structure Reach where
