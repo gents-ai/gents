@@ -23,6 +23,13 @@
 # Every logical-record delta pins its base document and exact request_json
 # field-commit CID.
 #
+# v3 rows are manifests of RenderedRequestBlock references: the canonical body
+# and provenance bytes live in that collection, and `request_json` stores the
+# ordered references with their pinned field commits. The two collections are
+# one sync unit — a manifest without its blocks is undecodable and a block
+# without a referencing manifest is inert, so neither is delivered, backed up
+# or pruned without the other.
+#
 # No `@policy` and no encryption directives. ACP is blocked on defradb.rs#1318
 # (`EmbeddedNode` exposes no policy or relationship API), and a policy id that
 # is never installed deploys cleanly while leaving rows anonymously readable.

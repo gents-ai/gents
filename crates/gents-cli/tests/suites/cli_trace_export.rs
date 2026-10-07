@@ -679,8 +679,8 @@ async fn seed_v2_rendered_request_rows(node: &Arc<EmbeddedNode>) -> Result<()> {
                         created_at: "2026-10-07T00:00:0{turn}Z"
                     }}) {{ _docID }} }}"#,
                     capture_key = gents::graphql::escape_graphql_string(&rendered.capture_key),
-                    request_id = rendered.request_id,
-                    session_id = rendered.session_id,
+                    request_id = gents::graphql::escape_graphql_string(&rendered.request_id),
+                    session_id = gents::graphql::escape_graphql_string(&rendered.session_id),
                     request_json = gents::graphql::escape_graphql_string(&container.to_string()),
                     provenance = gents::graphql::escape_graphql_string(&canonical_provenance),
                 ),
@@ -762,8 +762,8 @@ async fn seed_v2_rendered_request_rows(node: &Arc<EmbeddedNode>) -> Result<()> {
                     created_at: "2026-10-07T00:00:0{turn}Z"
                 }}) {{ _docID }} }}"#,
                 capture_key = gents::graphql::escape_graphql_string(&rendered.capture_key),
-                request_id = rendered.request_id,
-                session_id = rendered.session_id,
+                request_id = gents::graphql::escape_graphql_string(&rendered.request_id),
+                session_id = gents::graphql::escape_graphql_string(&rendered.session_id),
                 request_json = gents::graphql::escape_graphql_string(&container.to_string()),
                 provenance = gents::graphql::escape_graphql_string(&canonical_provenance),
             ),

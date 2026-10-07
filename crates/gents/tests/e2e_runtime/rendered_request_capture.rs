@@ -363,6 +363,13 @@ async fn manifest_captures_share_blocks_and_grow_linearly_across_turns() {
     let mut old_bytes = 0usize;
     let mut new_bytes = 0usize;
     let mut referenced_blocks = 0usize;
+    // The last turn's own write, measured so the per-call bound below binds the
+    // bytes that turn put in the database rather than an average over totals an
+    // earlier assertion already bounds.
+    let mut previous_body_bytes = 0usize;
+    let mut last_turn_new_content_bytes = 0usize;
+    let mut last_turn_row_bytes = 0usize;
+    let mut blocks_before_last_turn = 0usize;
     for turn in 0..turns {
         let body = serde_json::json!({
             "model":"m", "messages": (0..=turn).map(|index|
@@ -401,6 +408,9 @@ async fn manifest_captures_share_blocks_and_grow_linearly_across_turns() {
             rendered.attempt,
         )
         .unwrap();
+        if turn + 1 == turns {
+            blocks_before_last_turn = block_payload_bytes(db.node.as_ref()).await;
+        }
         sink.capture(rendered.clone()).await.unwrap();
         let query = format!(
             r#"{{ RenderedRequest(filter:{{capture_key:{{_eq:"{}"}}}},limit:1){{request_json provenance_json capture_version}} }}"#,
@@ -440,13 +450,24 @@ async fn manifest_captures_share_blocks_and_grow_linearly_across_turns() {
         let mut legacy_manifest = rendered.provenance_json.clone();
         legacy_manifest["manifest_version"] = serde_json::json!(3);
         legacy_manifest["assembly_trace"] = rendered.provenance_payload_json.clone();
-        old_bytes += gents::rendered_request::canonical_json_string(&body)
+        let turn_body_bytes = gents::rendered_request::canonical_json_string(&body)
             .unwrap()
-            .len()
-            + gents::rendered_request::canonical_json_string(&legacy_manifest)
-                .unwrap()
-                .len();
-        new_bytes += stored.len() + row["provenance_json"].as_str().unwrap().len();
+            .len();
+        let turn_trace_bytes = gents::rendered_request::canonical_json_string(&legacy_manifest)
+            .unwrap()
+            .len();
+        let turn_row_bytes = stored.len() + row["provenance_json"].as_str().unwrap().len();
+        if turn + 1 == turns {
+            // The last turn's new content is the message its body appends plus
+            // its own fresh single-message trace — a fixed budget that does not
+            // grow with the conversation already behind it.
+            last_turn_new_content_bytes =
+                (turn_body_bytes - previous_body_bytes) + turn_trace_bytes;
+            last_turn_row_bytes = turn_row_bytes;
+        }
+        previous_body_bytes = turn_body_bytes;
+        old_bytes += turn_body_bytes + turn_trace_bytes;
+        new_bytes += turn_row_bytes;
     }
     // The linear claim, both directions: the store holds O(turns) blocks while
     // the references the captures carry total O(turns^2), and a body whose
@@ -471,15 +492,47 @@ async fn manifest_captures_share_blocks_and_grow_linearly_across_turns() {
         old_bytes > new_bytes * 2,
         "storing each body and trace once must beat repeating them: old={old_bytes}, new={new_bytes}"
     );
-    // Linear, not quadratic: the last turn's own write is bounded by its new
-    // content and its references, not by the length of the whole conversation.
-    let per_turn_growth = new_bytes / turns;
+    // The per-call bound, on the write the last turn actually issued: the new
+    // block rows it created plus its own manifest row, against the new content
+    // that turn added. A capture that regressed to writing the whole
+    // conversation — re-storing the history as blocks or falling back to a
+    // full record — pays the body's bytes here, which this fixed content
+    // budget cannot absorb.
+    let last_turn_block_bytes =
+        block_payload_bytes(db.node.as_ref()).await - blocks_before_last_turn;
+    let last_turn_write_bytes = last_turn_block_bytes + last_turn_row_bytes;
     assert!(
-        (per_turn_growth as f64) < 1.5 * (old_bytes / turns) as f64,
-        "per-turn capture bytes {per_turn_growth} must track per-turn new content {}",
-        old_bytes / turns
+        last_turn_write_bytes < 4 * last_turn_new_content_bytes,
+        "the last turn wrote {last_turn_write_bytes} DB bytes ({last_turn_block_bytes} of new \
+         blocks plus a {last_turn_row_bytes}-byte row) for {last_turn_new_content_bytes} bytes \
+         of new content: a capture must pay for its new content, not for the conversation it \
+         already stored"
     );
-    tracing::info!(old_bytes, new_bytes, block_rows, "capture manifest replay");
+    tracing::info!(
+        old_bytes,
+        new_bytes,
+        block_rows,
+        last_turn_write_bytes,
+        last_turn_new_content_bytes,
+        "capture manifest replay"
+    );
+}
+
+/// Total payload bytes currently stored across all capture blocks — the write
+/// amplification one capture is responsible for is the growth of this number.
+async fn block_payload_bytes(node: &EmbeddedNode) -> usize {
+    let response = node
+        .execute(r#"{ RenderedRequestBlock { byte_len } }"#)
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    response.data.unwrap()["RenderedRequestBlock"]
+        .as_array()
+        .map(|rows| {
+            rows.iter()
+                .map(|row| row["byte_len"].as_u64().unwrap_or_default() as usize)
+                .sum()
+        })
+        .unwrap_or_default()
 }
 
 async fn block_count(node: &EmbeddedNode) -> usize {
@@ -489,6 +542,242 @@ async fn block_count(node: &EmbeddedNode) -> usize {
         .as_array()
         .map(Vec::len)
         .unwrap_or_default()
+}
+
+/// The content keys of every stored capture block row.
+async fn stored_block_keys(node: &EmbeddedNode) -> std::collections::BTreeSet<String> {
+    let response = node
+        .execute(r#"{ RenderedRequestBlock { content_key } }"#)
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    response.data.unwrap()["RenderedRequestBlock"]
+        .as_array()
+        .map(|rows| {
+            rows.iter()
+                .map(|row| {
+                    row["content_key"]
+                        .as_str()
+                        .expect("block content key")
+                        .to_string()
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The stored `request_json` container of one capture row.
+async fn stored_capture_request_json(node: &EmbeddedNode, capture_key: &str) -> String {
+    let query = format!(
+        r#"{{ RenderedRequest(filter:{{capture_key:{{_eq:"{}"}}}},limit:1){{request_json}} }}"#,
+        escape_graphql_string(capture_key)
+    );
+    let response = node.execute(&query).await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    response.data.unwrap()["RenderedRequest"][0]["request_json"]
+        .as_str()
+        .expect("stored request_json")
+        .to_owned()
+}
+
+/// The ordered content keys one manifest payload references; also asserts the
+/// payload is a manifest, so a full-record fallback fails at the call site.
+fn manifest_payload_keys(container: &Value, payload: &str) -> Vec<String> {
+    assert_eq!(
+        container[payload]["kind"], "manifest",
+        "payload {payload} must stay a block manifest"
+    );
+    container[payload]["blocks"]
+        .as_array()
+        .expect("manifest block references")
+        .iter()
+        .map(|entry| {
+            entry["content_key"]
+                .as_str()
+                .expect("manifest entry content key")
+                .to_string()
+        })
+        .collect()
+}
+
+/// The longest suffix of `previous`'s completed blocks that `current`
+/// re-references as a contiguous, ordered run.
+///
+/// `previous`'s final block is excluded: it is the body's trailing partial
+/// block, which any appended content legitimately rewrites, so anchoring on it
+/// would report zero reuse for a perfectly re-synchronized edit. The completed
+/// blocks before it cover the unchanged tail bytes and are exactly the ones a
+/// mid-history edit must re-reference.
+fn shared_manifest_suffix(previous: &[String], current: &[String]) -> usize {
+    let completed = previous.len().saturating_sub(1);
+    (1..=completed.min(current.len()))
+        .filter(|length| {
+            current
+                .windows(*length)
+                .any(|window| window == &previous[completed - length..completed])
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+/// One turn of the manifest harness: a body over the given messages and a
+/// fresh single-message trace, under its own turn-indexed capture key.
+fn manifest_turn_fixture(body: Value, turn: usize) -> RenderedCompletionRequest {
+    let mut rendered = rendered_fixture(body);
+    rendered.request_id = format!("req-manifest-resync-{turn}");
+    rendered.turn_index = turn;
+    rendered.assembly_trace = gents::rendered_request::AssemblyTrace::from_effective_messages(
+        gents::rendered_request::AssemblyBuildPath::Budgeted,
+        vec![Message::user(format!(
+            "λ {turn} {}",
+            message_text(2000 + u64::try_from(turn).unwrap(), 4 * 1024)
+        ))],
+    );
+    rendered.provenance_payload_json = serde_json::to_value(&rendered.assembly_trace).unwrap();
+    rendered.provenance_json =
+        serde_json::to_value(gents::rendered_request::ProvenanceManifest::captured_only(
+            rendered.capture_scope.clone(),
+            None,
+            None,
+            rendered.assembly_trace.clone(),
+        ))
+        .unwrap();
+    rendered.capture_key = gents::rendered_request::capture_key(
+        &rendered.agent_did,
+        &rendered.session_id,
+        &rendered.request_doc_id,
+        &rendered.capture_scope,
+        turn,
+        rendered.attempt,
+    )
+    .unwrap();
+    rendered
+}
+
+/// The compaction shape over a real store: a mid-history edit re-uses the
+/// intact tail's blocks (#2333).
+///
+/// `encoding::mid_body_insertion_resynchronizes_chunk_boundaries` pins the
+/// property in memory; this fences it end to end, where it is the whole point
+/// of the format. A session captures a growing conversation, and then one
+/// capture replaces an early span of it with a summary while keeping the tail
+/// verbatim — exactly what compaction does to the next provider body. Because
+/// boundaries are content-defined, the boundaries after the edit re-synchronize
+/// onto the unchanged tail bytes, so the post-edit capture re-references the
+/// tail's existing block rows and stores only the replaced span's blocks, the
+/// seam and its own new tail. A chunker whose boundaries depended on position,
+/// or a writer that fell back to a full record, would re-store everything
+/// after the edit.
+#[tokio::test]
+async fn a_mid_history_edit_reuses_the_intact_tail_blocks() {
+    const TURNS: usize = 20;
+    const KEPT_FROM: usize = 12;
+    let db = test_db("rendered-request-manifest-resync").await;
+    let sink = gents::rendered_request::DefraRenderedRequestSink::new(db.node.clone());
+    let history: Vec<Value> = (0..TURNS)
+        .map(|index| {
+            serde_json::json!({
+                "role":"user","content": message_text(u64::try_from(index).unwrap(), 4 * 1024)
+            })
+        })
+        .collect();
+    let mut pre_edit_key = String::new();
+    for turn in 0..TURNS {
+        let body = serde_json::json!({"model":"m", "messages": history[..=turn]});
+        let rendered = manifest_turn_fixture(body, turn);
+        if turn + 1 == TURNS {
+            pre_edit_key = rendered.capture_key.clone();
+        }
+        sink.capture(rendered).await.unwrap();
+    }
+    let pre_edit_container: Value =
+        serde_json::from_str(&stored_capture_request_json(db.node.as_ref(), &pre_edit_key).await)
+            .unwrap();
+    let pre_edit_body = manifest_payload_keys(&pre_edit_container, "request_body");
+    assert!(
+        pre_edit_body.len() >= 16,
+        "the pre-edit body must span many blocks for tail reuse to mean anything: {}",
+        pre_edit_body.len()
+    );
+    let blocks_before = stored_block_keys(db.node.as_ref()).await;
+
+    // The edit: the first `KEPT_FROM` messages become one short summary, the
+    // tail stays byte-identical, and one new message follows it.
+    let edited_messages = std::iter::once(serde_json::json!({
+        "role":"user","content": message_text(7001, 2 * 1024)
+    }))
+    .chain(history[KEPT_FROM..].iter().cloned())
+    .chain(std::iter::once(serde_json::json!({
+        "role":"user","content": message_text(7002, 4 * 1024)
+    })))
+    .collect::<Vec<_>>();
+    let edited_body = serde_json::json!({"model":"m", "messages": edited_messages});
+    let rendered = manifest_turn_fixture(edited_body.clone(), TURNS);
+    let edited_provenance_payload = rendered.provenance_payload_json.clone();
+    let edited_key = rendered.capture_key.clone();
+    sink.capture(rendered).await.unwrap();
+
+    let edited_stored = stored_capture_request_json(db.node.as_ref(), &edited_key).await;
+    let edited_container: Value = serde_json::from_str(&edited_stored).unwrap();
+    let post_edit_body = manifest_payload_keys(&edited_container, "request_body");
+    // The provenance payload must stay a manifest too: no full-record fallback
+    // on either half of the capture.
+    manifest_payload_keys(&edited_container, "provenance_payload");
+
+    // The edit is real: a block of the replaced span is not referenced after it.
+    assert!(
+        !post_edit_body.contains(&pre_edit_body[0]),
+        "the post-edit manifest must not reference a block of the replaced span"
+    );
+    // The load-bearing property, measured on the store: the pre-edit tail's
+    // blocks are re-referenced verbatim, in order, because boundaries past the
+    // edit re-synchronized onto the unchanged bytes.
+    let shared_tail = shared_manifest_suffix(&pre_edit_body, &post_edit_body);
+    assert!(
+        shared_tail >= 4,
+        "only {shared_tail} of {} pre-edit blocks survive as a shared tail: \
+         content-defined boundaries did not re-synchronize after the mid-history edit",
+        pre_edit_body.len()
+    );
+    // The edit pays for itself: only the summary, the seam and the new tail
+    // become block rows, a budget that does not scale with the body.
+    let blocks_after = stored_block_keys(db.node.as_ref()).await;
+    let new_blocks: Vec<_> = blocks_after.difference(&blocks_before).collect();
+    assert!(
+        new_blocks.len() <= 8,
+        "{} new block rows for an edit that replaced an early span of a {}-block body \
+         and appended one message: the writer re-stored content it already had",
+        new_blocks.len(),
+        pre_edit_body.len()
+    );
+    assert_eq!(
+        blocks_after.len() - blocks_before.len(),
+        new_blocks.len(),
+        "new block rows are exactly the rows the edit added"
+    );
+
+    // And the edited capture still decodes to exactly what was captured.
+    assert_eq!(
+        gents::rendered_request::decode_capture_json_embedded(
+            db.node.as_ref(),
+            gents::rendered_request::CAPTURE_VERSION,
+            &edited_stored,
+            gents::rendered_request::CapturePayloadKind::RequestBody,
+        )
+        .await
+        .unwrap(),
+        canonical(&edited_body)
+    );
+    assert_eq!(
+        gents::rendered_request::decode_capture_json_embedded(
+            db.node.as_ref(),
+            gents::rendered_request::CAPTURE_VERSION,
+            &edited_stored,
+            gents::rendered_request::CapturePayloadKind::ProvenancePayload,
+        )
+        .await
+        .unwrap(),
+        canonical(&edited_provenance_payload)
+    );
 }
 
 /// Rows written as v2 delta chains are immutable history: the writer no longer
@@ -1902,7 +2191,10 @@ async fn serialized_input_threshold_equality_and_one_over_select_actual_compacti
         over.follow_up_bodies.len() >= 2,
         "one-over must summarize at least once before inference; captured scopes {:?}, build paths {:?}",
         coordinates(&over.follow_up_rows),
-        over.follow_up_rows.iter().map(build_path).collect::<Vec<_>>()
+        over.follow_up_rows
+            .iter()
+            .map(build_path)
+            .collect::<Vec<_>>()
     );
     assert_eq!(
         over.follow_up_rows.len(),
