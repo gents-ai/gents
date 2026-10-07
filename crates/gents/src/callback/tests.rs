@@ -1314,96 +1314,201 @@ fn every_invocation_origin_names_its_binding() {
     assert_eq!(group.binding_id(), "two");
 }
 
-/// A document written after a binding is registered but before any callback
-/// engine observes its source (startup, downtime) is delivered once; a
-/// restarted engine neither redelivers it nor re-admits it after an edit
-/// (#2343). History before registration stays history.
+/// Backlog fixture: a `BacklogWork` source with one document written before
+/// its binding is registered (history), registered through the configuration
+/// owner, so the binding's arrival cursor is seeded there.
+struct Backlog {
+    _identity: crate::identity::KeyIdentity,
+    _home: TempDir,
+    node: Arc<defra_node::EmbeddedNode>,
+    access: crate::config_client::ConfigAccess,
+    history: String,
+}
+
+const BACKLOG_OWNER: &str = crate::lifecycle::test_support::PIN_FIXED_DID;
+
+impl Backlog {
+    async fn registered() -> Self {
+        use crate::config_client::{
+            apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument,
+            DesiredStateApplyPlan,
+        };
+        use crate::Collection;
+        let home = tempfile::tempdir().unwrap();
+        let identity = crate::lifecycle::test_support::pin_fixed_signing_identity(home.path());
+        let node = test_node().await;
+        let access = ConfigAccess::Local(node.clone());
+        access
+            .add_schema("type BacklogWork { label: String }")
+            .await
+            .unwrap();
+        let mut backlog = Self {
+            _identity: identity,
+            _home: home,
+            node,
+            access,
+            history: String::new(),
+        };
+        backlog.history = backlog.create("history").await;
+        let documents = [
+            (
+                Collection::Callback,
+                json!({"callback_id":"cb-backlog","handler":{"kind":"built_in","emitter":"create_workspace"},
+                    "capabilities":["create_workspace"],"enabled":true}),
+            ),
+            (
+                Collection::EventSource,
+                json!({"event_source_id":"backlog","source_collection":"BacklogWork","event_kind":"created"}),
+            ),
+            (
+                Collection::CallbackBinding,
+                json!({"binding_id":"bind-backlog","event_source_id":"backlog","callback_id":"cb-backlog",
+                    "input_fields":["label"],"enabled":true}),
+            ),
+        ]
+        .into_iter()
+        .map(|(collection, mut value)| {
+            value["agent_did"] = json!(BACKLOG_OWNER);
+            DesiredStateApplyDocument {
+                collection,
+                add: value.clone(),
+                update: value,
+            }
+        })
+        .collect();
+        let plan = DesiredStateApplyPlan::new(documents).unwrap();
+        backlog
+            .access
+            .transact("test.backlog_config", |txn| {
+                let plan = &plan;
+                Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+            })
+            .await
+            .unwrap();
+        backlog
+    }
+
+    async fn create(&self, label: &str) -> String {
+        let response = self
+            .access
+            .write(
+                "test.backlog_work",
+                &format!(
+                    "mutation {{ create_BacklogWork(input: {{label: \"{label}\"}}) {{ _docID }} }}"
+                ),
+            )
+            .await
+            .unwrap();
+        crate::graphql::created_doc_id(&response, "BacklogWork").unwrap()
+    }
+
+    fn engine(&self) -> super::CallbackEngine {
+        let mut engine = super::CallbackEngine::new(
+            self.node.clone(),
+            BACKLOG_OWNER.into(),
+            None,
+            tokio_util::sync::CancellationToken::new(),
+        );
+        engine.plugins = Arc::new(crate::plugin::executor::PluginExecutor::new(None));
+        engine
+    }
+
+    /// One engine lifetime: startup reconciliation and one delivery pass.
+    async fn start_engine(&self) {
+        let mut engine = self.engine();
+        engine.reconcile_bindings().await;
+        engine.deliver_arrivals(None).await;
+    }
+
+    async fn invoked(&self) -> Vec<String> {
+        let response = self.node.execute("{ CallbackInvocation { origin } }").await;
+        let mut docs = crate::graphql::rows::<serde_json::Value>(&response, "CallbackInvocation")
+            .unwrap()
+            .into_iter()
+            .map(|row| row["origin"]["source_doc_id"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>();
+        docs.sort();
+        docs
+    }
+
+    async fn cursor(&self) -> String {
+        self.access
+            .transact("test.backlog_cursor", |txn| {
+                Box::pin(async move {
+                    Ok(crate::config_client::event_source_cursor::load_or_seed(
+                        txn,
+                        BACKLOG_OWNER,
+                        &gents_protocol::event_delivery::EventConsumer::CallbackBinding {
+                            binding_id: "bind-backlog".into(),
+                        },
+                    )
+                    .await?
+                    .cursor
+                    .after)
+                })
+            })
+            .await
+            .unwrap()
+    }
+}
+
+/// A document written after its binding is registered but before any callback
+/// engine observes the source (startup, downtime) is delivered exactly once,
+/// and a restart does not redeliver it (#2343). History before registration
+/// stays history.
 #[tokio::test]
 async fn document_written_before_engine_start_fires_once_across_restarts() {
-    use crate::config_client::{
-        apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
-    };
-    use crate::lifecycle::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
-    use crate::Collection;
+    let backlog = Backlog::registered().await;
+    let pending = backlog.create("pending").await;
+    backlog.start_engine().await;
+    assert_eq!(backlog.invoked().await, vec![pending.clone()]);
+    backlog.start_engine().await;
+    assert_eq!(backlog.invoked().await, vec![pending]);
+    assert!(!backlog.invoked().await.contains(&backlog.history));
+    backlog.node.shutdown().await;
+}
 
-    let signing_home = tempfile::tempdir().unwrap();
-    let _identity = pin_fixed_signing_identity(signing_home.path());
-    let node = test_node().await;
-    let access = ConfigAccess::Local(node.clone());
-    access
-        .add_schema("type BacklogWork { label: String }")
+/// The arrival journal pages at 128 entries; one delivery pass drains a larger
+/// backlog instead of one page per rescan.
+#[tokio::test]
+async fn one_delivery_pass_drains_a_backlog_beyond_one_journal_page() {
+    let backlog = Backlog::registered().await;
+    let mut written = Vec::new();
+    for index in 0..130 {
+        written.push(backlog.create(&format!("work-{index}")).await);
+    }
+    written.sort();
+    backlog.start_engine().await;
+    assert_eq!(backlog.invoked().await, written);
+    backlog.node.shutdown().await;
+}
+
+/// A crash after admission but before the cursor advanced, followed by an edit
+/// of the admitted document, recovers the same invocation instead of
+/// admitting the new version, and the cursor then advances past it.
+#[tokio::test]
+async fn edited_document_admitted_before_a_crash_is_not_readmitted() {
+    let backlog = Backlog::registered().await;
+    let pending = backlog.create("pending").await;
+    let seeded = backlog.cursor().await;
+    let mut crashed = backlog.engine();
+    crashed.reconcile_bindings().await;
+    let binding = super::documents::load_binding(&backlog.node, "bind-backlog", BACKLOG_OWNER)
         .await
+        .unwrap()
         .unwrap();
-    let create = |label: &'static str| {
-        let access = access.clone();
-        async move {
-            let response = access
-                .write(
-                    "test.backlog_work",
-                    &format!("mutation {{ create_BacklogWork(input: {{label: \"{label}\"}}) {{ _docID }} }}"),
-                )
-                .await
-                .unwrap();
-            crate::graphql::created_doc_id(&response, "BacklogWork").unwrap()
-        }
-    };
-    let history = create("history").await;
-
-    let documents = [
-        (
-            Collection::Callback,
-            json!({"callback_id":"cb-backlog","handler":{"kind":"built_in","emitter":"create_workspace"},
-                "capabilities":["create_workspace"],"enabled":true}),
-        ),
-        (
-            Collection::EventSource,
-            json!({"event_source_id":"backlog","source_collection":"BacklogWork","event_kind":"created"}),
-        ),
-        (
-            Collection::CallbackBinding,
-            json!({"binding_id":"bind-backlog","event_source_id":"backlog","callback_id":"cb-backlog",
-                "input_fields":["label"],"enabled":true}),
-        ),
-    ]
-    .into_iter()
-    .map(|(collection, mut value)| {
-        value["agent_did"] = json!(PIN_FIXED_DID);
-        DesiredStateApplyDocument {
-            collection,
-            add: value.clone(),
-            update: value,
-        }
-    })
-    .collect();
-    let plan = DesiredStateApplyPlan::new(documents).unwrap();
-    access
-        .transact("test.backlog_config", |txn| {
-            let plan = &plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
-        })
+    assert!(crashed
+        .materialize_for_binding(&binding, "BacklogWork", &pending, false)
         .await
-        .unwrap();
-
-    // Written while no callback engine runs.
-    let pending = create("pending").await;
-
-    let invocations = || {
-        let node = node.clone();
-        async move {
-            let response = node.execute("{ CallbackInvocation { origin } }").await;
-            crate::graphql::rows::<serde_json::Value>(&response, "CallbackInvocation")
-                .unwrap()
-                .into_iter()
-                .map(|row| row["origin"]["source_doc_id"].as_str().unwrap().to_owned())
-                .collect::<Vec<_>>()
-        }
-    };
-    let plugins = Arc::new(crate::plugin::executor::PluginExecutor::new(None));
-    super::scan_callbacks(node.clone(), PIN_FIXED_DID.into(), plugins.clone()).await;
-    assert_eq!(invocations().await, vec![pending.clone()]);
-    assert!(!invocations().await.contains(&history));
-
-    let edit = access
+        .unwrap());
+    drop(crashed);
+    assert_eq!(
+        backlog.cursor().await,
+        seeded,
+        "the crash precedes the checkpoint"
+    );
+    backlog
+        .access
         .write(
             "test.backlog_edit",
             &format!(
@@ -1411,13 +1516,41 @@ async fn document_written_before_engine_start_fires_once_across_restarts() {
                 crate::graphql::escape_graphql_string(&pending)
             ),
         )
-        .await;
-    edit.unwrap();
-    super::scan_callbacks(node.clone(), PIN_FIXED_DID.into(), plugins).await;
-    assert_eq!(
-        invocations().await,
-        vec![pending],
-        "a restarted engine must not redeliver an admitted arrival"
+        .await
+        .unwrap();
+    backlog.start_engine().await;
+    assert_eq!(backlog.invoked().await, vec![pending]);
+    assert_ne!(
+        backlog.cursor().await,
+        seeded,
+        "the recovered arrival is checkpointed"
     );
-    node.shutdown().await;
+    backlog.node.shutdown().await;
+}
+
+/// Admission rereads the persisted binding: a binding disabled while the
+/// engine still holds its enabled snapshot admits nothing.
+#[tokio::test]
+async fn admission_refuses_a_binding_disabled_after_its_snapshot() {
+    let backlog = Backlog::registered().await;
+    let pending = backlog.create("pending").await;
+    let snapshot = super::documents::load_binding(&backlog.node, "bind-backlog", BACKLOG_OWNER)
+        .await
+        .unwrap()
+        .unwrap();
+    backlog
+        .access
+        .write(
+            "test.backlog_disable",
+            r#"mutation { update_CallbackBinding(filter: {binding_id: {_eq: "bind-backlog"}}, input: {enabled: false}) { _docID } }"#,
+        )
+        .await
+        .unwrap();
+    let mut engine = backlog.engine();
+    assert!(!engine
+        .materialize_for_binding(&snapshot, "BacklogWork", &pending, false)
+        .await
+        .unwrap());
+    assert!(backlog.invoked().await.is_empty());
+    backlog.node.shutdown().await;
 }

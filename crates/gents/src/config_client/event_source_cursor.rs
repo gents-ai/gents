@@ -53,8 +53,6 @@ async fn trigger_binding(
 struct ConsumerBinding {
     enabled: bool,
     serial: bool,
-    /// The callback whose invocations are a callback binding's receipts.
-    callback_id: Option<String>,
     source: crate::document_config::EventSource,
 }
 
@@ -105,7 +103,6 @@ async fn event_binding(
                 enabled: trigger.enabled,
                 serial: trigger.concurrency
                     == Some(crate::document_config::ConcurrencyMode::Serial),
-                callback_id: None,
                 source,
             })
         }
@@ -123,7 +120,6 @@ async fn event_binding(
             Ok(ConsumerBinding {
                 enabled: binding.enabled && callback.is_some_and(|callback| callback.enabled),
                 serial: false,
-                callback_id: Some(binding.callback_id),
                 source,
             })
         }
@@ -365,7 +361,6 @@ pub(crate) async fn checkpoint_prefix(
     let ConsumerBinding {
         enabled,
         serial,
-        callback_id,
         source,
     } = event_binding(txn, owner, consumer).await?;
     anyhow::ensure!(
@@ -428,16 +423,7 @@ pub(crate) async fn checkpoint_prefix(
             let doc_id = entry["docID"]
                 .as_str()
                 .context("arrival omitted document ID")?;
-            if admitted_arrival(
-                txn,
-                owner,
-                consumer,
-                callback_id.as_deref(),
-                collection,
-                doc_id,
-            )
-            .await?
-            {
+            if admitted_arrival(txn, owner, consumer, collection, doc_id).await? {
                 continue;
             }
             if !enabled {
@@ -479,7 +465,6 @@ async fn admitted_arrival(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
     consumer: &EventConsumer,
-    callback_id: Option<&str>,
     source_collection: &str,
     source_doc_id: &str,
 ) -> Result<bool> {
@@ -489,7 +474,6 @@ async fn admitted_arrival(
             return admitted_callback_arrival(
                 txn,
                 owner,
-                callback_id.context("callback consumer lacks its callback")?,
                 binding_id,
                 source_collection,
                 source_doc_id,
@@ -533,43 +517,47 @@ async fn admitted_arrival(
         == 1)
 }
 
-/// A callback binding's receipt is its event invocation for the arrival. The
-/// idempotency key also names the source version, so the receipt is matched on
-/// the invocation's origin: a later edit of an admitted document is not a new
-/// arrival.
+/// A callback binding's receipt is its event invocation for the arrival: the
+/// unique `(owner, idempotency_key)` index names it by binding and document,
+/// never by callback or source version, so neither a later callback
+/// replacement nor an edit of the admitted document hides it.
 async fn admitted_callback_arrival(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
-    callback_id: &str,
     binding_id: &str,
     source_collection: &str,
     source_doc_id: &str,
 ) -> Result<bool> {
-    // DefraDB's `_like` wildcard is `%` alone; an identifier containing one
-    // only widens the candidates the exact origin match then narrows.
-    let prefix = crate::callback::idempotency_key(binding_id, source_doc_id, "");
+    let key = crate::callback::idempotency_key(binding_id, source_collection, source_doc_id);
     let response = txn
         .execute(&format!(
-            "{{ CallbackInvocation(filter: {{owner_agent_did: {{_eq: \"{}\"}}, callback_id: {{_eq: \"{}\"}}, idempotency_key: {{_like: \"{}%\"}}}}) {{ origin }} }}",
+            "{{ CallbackInvocation(filter: {{owner_agent_did: {{_eq: \"{}\"}}, idempotency_key: {{_eq: \"{}\"}}}}, limit: 2) {{ origin }} }}",
             escape_graphql_string(owner),
-            escape_graphql_string(callback_id),
-            escape_graphql_string(&prefix),
+            escape_graphql_string(&key),
         ))
         .await?;
     let rows = response["data"]["CallbackInvocation"]
         .as_array()
         .context("callback receipt query omitted rows")?;
-    Ok(rows.iter().any(|row| {
-        matches!(
-            serde_json::from_value::<crate::document_config::CallbackInvocationOrigin>(row["origin"].clone()),
-            Ok(crate::document_config::CallbackInvocationOrigin::Event {
-                binding_id: ref binding,
-                source_collection: ref collection,
-                source_doc_id: ref doc,
-                ..
-            }) if binding == binding_id && collection == source_collection && doc == source_doc_id
-        )
-    }))
+    let Some(row) = rows.first() else {
+        return Ok(false);
+    };
+    let origin: crate::document_config::CallbackInvocationOrigin =
+        serde_json::from_value(row["origin"].clone()).context("invalid callback receipt origin")?;
+    anyhow::ensure!(
+        rows.len() == 1
+            && matches!(
+                origin,
+                crate::document_config::CallbackInvocationOrigin::Event {
+                    binding_id: ref binding,
+                    source_collection: ref collection,
+                    source_doc_id: ref doc,
+                    ..
+                } if binding == binding_id && collection == source_collection && doc == source_doc_id
+            ),
+        "callback receipt disagrees with its arrival"
+    );
+    Ok(true)
 }
 
 #[cfg(test)]

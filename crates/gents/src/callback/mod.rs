@@ -26,7 +26,10 @@ mod tests;
 
 pub use documents::reject_secret_bearing_callback_fields;
 #[cfg(test)]
-pub(crate) use documents::{create_callback_result, update_invocation, CallbackResultDoc};
+pub(crate) use documents::{
+    create_callback_result, create_pending_invocation, update_invocation, CallbackInvocationDoc,
+    CallbackResultDoc,
+};
 pub(crate) use documents::{idempotency_key, load_invocation};
 pub(crate) use run::recover_local_invocations;
 
@@ -46,8 +49,11 @@ pub(super) struct CallbackEngine {
     subscription: Option<events::Subscription>,
     desired_collections: HashSet<String>,
     seen_docs: HashMap<String, HashSet<String>>,
-    /// Per-document bindings, which deliver from their arrival cursor.
-    cursor_bindings: HashSet<String>,
+    /// Per-document bindings, which deliver from their arrival cursor, by
+    /// source collection.
+    cursor_bindings: HashMap<String, String>,
+    /// Source collections of grouped bindings, which keep first-seen history.
+    group_collections: HashSet<String>,
     collection_id_to_name: HashMap<String, String>,
     group_page_cursors: HashMap<String, String>,
     group_recovery_cursor: usize,

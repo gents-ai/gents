@@ -14,7 +14,7 @@ use crate::UpdateSubscriptionSource;
 
 use super::claim::invocation_is_claimable;
 use super::documents::{
-    create_pending_invocation, idempotency_key, list_enabled_bindings, load_callback,
+    create_pending_invocation, idempotency_key, list_enabled_bindings, load_binding, load_callback,
     load_event_source, strip_secret_fields, validate_callback_binding, CallbackBindingDoc,
     CallbackInvocationDoc,
 };
@@ -59,7 +59,8 @@ impl CallbackEngine {
             subscription: None,
             desired_collections: HashSet::new(),
             seen_docs: HashMap::new(),
-            cursor_bindings: HashSet::new(),
+            cursor_bindings: HashMap::new(),
+            group_collections: HashSet::new(),
             collection_id_to_name: HashMap::new(),
             group_page_cursors: HashMap::new(),
             group_recovery_cursor: 0,
@@ -77,8 +78,9 @@ impl CallbackEngine {
             }
         };
         let mut desired = HashSet::new();
-        let mut cursor_bindings = HashSet::new();
-        // Per collection, each binding and the source field that correlates it.
+        let mut cursor_bindings = HashMap::new();
+        let mut group_collections = HashSet::new();
+        // Per grouped collection, each binding and the source field that correlates it.
         let mut consumers: HashMap<String, Vec<(String, Option<String>)>> = HashMap::new();
         for binding in &bindings {
             match load_event_source(
@@ -93,15 +95,18 @@ impl CallbackEngine {
                         // Configuration applies seed this cursor when they
                         // register the binding; this covers bindings written
                         // outside them.
-                        if !self.cursor_bindings.contains(&binding.binding_id) {
+                        if !self.cursor_bindings.contains_key(&binding.binding_id) {
                             let _ = self.load_cursor(binding, &source).await;
                         }
-                        cursor_bindings.insert(binding.binding_id.clone());
+                        cursor_bindings
+                            .insert(binding.binding_id.clone(), source.source_collection.clone());
+                    } else {
+                        consumers
+                            .entry(source.source_collection.clone())
+                            .or_default()
+                            .push((binding.binding_id.clone(), source.correlation_field.clone()));
+                        group_collections.insert(source.source_collection.clone());
                     }
-                    consumers
-                        .entry(source.source_collection.clone())
-                        .or_default()
-                        .push((binding.binding_id.clone(), source.correlation_field.clone()));
                     desired.insert(source.source_collection);
                 }
                 Ok(None) => {
@@ -112,8 +117,8 @@ impl CallbackEngine {
                 }
             }
         }
-        let added: Vec<String> = desired
-            .difference(&self.desired_collections)
+        let added: Vec<String> = group_collections
+            .difference(&self.group_collections)
             .cloned()
             .collect();
         for collection in &added {
@@ -128,6 +133,9 @@ impl CallbackEngine {
         }
         self.desired_collections = desired;
         self.cursor_bindings = cursor_bindings;
+        self.seen_docs
+            .retain(|collection, _| group_collections.contains(collection));
+        self.group_collections = group_collections;
         if self.subscription.is_none() && !self.desired_collections.is_empty() {
             self.subscription = Some(self.subscription_source.subscribe_updates());
         }
@@ -187,7 +195,7 @@ impl CallbackEngine {
     pub(super) async fn rescan_created_docs(&mut self) {
         self.recover_group_page().await;
         self.deliver_arrivals(None).await;
-        let collections: Vec<String> = self.desired_collections.iter().cloned().collect();
+        let collections: Vec<String> = self.group_collections.iter().cloned().collect();
         for collection in collections {
             let ids = match load_doc_ids(self.node.as_ref(), &collection).await {
                 Ok(ids) => ids,
@@ -216,11 +224,14 @@ impl CallbackEngine {
         let Some(collection) = self.resolve_collection_name(collection_id).await else {
             return;
         };
-        if !self.desired_collections.contains(&collection) {
-            return;
+        if self
+            .cursor_bindings
+            .values()
+            .any(|source| source == &collection)
+        {
+            self.deliver_arrivals(Some(&collection)).await;
         }
-        self.deliver_arrivals(Some(&collection)).await;
-        if self.has_seen(&collection, doc_id) {
+        if !self.group_collections.contains(&collection) || self.has_seen(&collection, doc_id) {
             return;
         }
         self.handle_created_doc(&collection, doc_id).await;
@@ -305,7 +316,10 @@ impl CallbackEngine {
             if self.cancel.is_cancelled() {
                 return;
             }
-            if !self.cursor_bindings.contains(&binding.binding_id) {
+            let Some(source_collection) = self.cursor_bindings.get(&binding.binding_id) else {
+                continue;
+            };
+            if collection.is_some_and(|collection| collection != source_collection) {
                 continue;
             }
             let source = match load_event_source(
@@ -346,6 +360,7 @@ impl CallbackEngine {
         let collection = source.source_collection.as_str();
         let mut after = self.load_cursor(binding, source).await?;
         loop {
+            let page_start = after.clone();
             let response = crate::graphql::graphql_with_transaction_retry(
                 &self.node,
                 &format!(
@@ -369,21 +384,24 @@ impl CallbackEngine {
                     .as_str()
                     .context("arrival lacks document ID")?;
                 let position = entry["cursor"].as_str().context("arrival lacks cursor")?;
-                // An admitted or excluded arrival checkpoints without a second
-                // invocation, even when its document changed since admission.
+                // Admission is idempotent per binding and document, so an
+                // arrival admitted before a crash finds its invocation again.
+                self.materialize_for_binding(binding, collection, doc_id, false)
+                    .await?;
                 if !self.checkpoint(binding, collection, position).await? {
-                    self.materialize_for_binding(binding, collection, doc_id)
-                        .await?;
-                    if !self.checkpoint(binding, collection, position).await? {
-                        return Ok(());
-                    }
+                    return Ok(());
                 }
                 after = position.to_owned();
             }
+            // A page ends at `min(head, after + limit)`; the journal is drained
+            // only when a page makes no progress.
             let next = page["next"]
                 .as_str()
                 .context("arrival query omitted next cursor")?;
-            if next == after || !self.checkpoint(binding, collection, next).await? {
+            if next != after && !self.checkpoint(binding, collection, next).await? {
+                return Ok(());
+            }
+            if next == page_start {
                 return Ok(());
             }
             after = next.to_owned();
@@ -402,11 +420,8 @@ impl CallbackEngine {
         };
         let mut all_settled = true;
         for binding in bindings {
-            if self.cursor_bindings.contains(&binding.binding_id) {
-                continue;
-            }
             match self
-                .materialize_for_binding(&binding, collection, doc_id)
+                .materialize_for_binding(&binding, collection, doc_id, true)
                 .await
             {
                 Ok(_) => {}
@@ -427,12 +442,25 @@ impl CallbackEngine {
         }
     }
 
-    async fn materialize_for_binding(
+    /// Admits `doc_id` for `binding` when the binding's persisted source is
+    /// `grouped` (or per-document) and both binding and callback are still
+    /// enabled; the engine's binding snapshot may be stale.
+    pub(super) async fn materialize_for_binding(
         &mut self,
         binding: &CallbackBindingDoc,
         collection: &str,
         doc_id: &str,
+        grouped: bool,
     ) -> Result<bool> {
+        let Some(binding) =
+            load_binding(self.node.as_ref(), &binding.binding_id, &binding.agent_did).await?
+        else {
+            return Ok(false);
+        };
+        let binding = &binding;
+        if !binding.enabled {
+            return Ok(false);
+        }
         if let Err(error) = validate_callback_binding(binding) {
             tracing::warn!(
                 binding_id = %binding.binding_id,
@@ -453,7 +481,7 @@ impl CallbackEngine {
                 binding.binding_id
             )
         })?;
-        if event.source_collection != collection {
+        if event.source_collection != collection || event.group.is_some() != grouped {
             return Ok(false);
         }
         anyhow::ensure!(
@@ -508,7 +536,7 @@ impl CallbackEngine {
             )
             .await?;
             (
-                idempotency_key(&binding.binding_id, doc_id, &source_version),
+                idempotency_key(&binding.binding_id, collection, doc_id),
                 input,
                 crate::document_config::CallbackInvocationOrigin::Event {
                     binding_id: binding.binding_id.clone(),

@@ -739,6 +739,228 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
     }
 }
 
+fn handoff_binding() -> gents_protocol::event_delivery::EventConsumer {
+    gents_protocol::event_delivery::EventConsumer::CallbackBinding {
+        binding_id: "handoff".into(),
+    }
+}
+
+/// Admits `doc_id` for the `handoff` binding through the invocation owner,
+/// freezing `version` as its source version.
+async fn admit_callback_arrival(node: &defra_node::EmbeddedNode, doc_id: &str, version: &str) {
+    crate::callback::create_pending_invocation(
+        node,
+        &crate::callback::CallbackInvocationDoc {
+            input: serde_json::json!({}),
+            invocation_id: uuid::Uuid::new_v4().to_string(),
+            owner_agent_did: "owner-a".into(),
+            callback_id: "callback".into(),
+            origin: crate::document_config::CallbackInvocationOrigin::Event {
+                binding_id: "handoff".into(),
+                source_collection: "Work".into(),
+                source_doc_id: doc_id.into(),
+                source_version: Some(version.into()),
+            },
+            idempotency_key: crate::callback::idempotency_key("handoff", "Work", doc_id),
+            caused_by_correlation: None,
+            lifecycle_state: crate::callback::LIFECYCLE_PENDING.into(),
+            attempts: Some(0),
+            action_plan: None,
+            action_journal: None,
+            error: None,
+            claimed_at: None,
+            created_at: None,
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
+    use crate::config_client::{event_source_cursor, ConfigAccess};
+    for case in contract()["callback_cursors"].as_array().unwrap() {
+        let name = &case["name"];
+        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        ensure_runtime_schemas(&node).await.unwrap();
+        let access = ConfigAccess::Local(node.clone());
+        access
+            .add_schema("type Work { label: String eligible: Boolean }")
+            .await
+            .unwrap();
+        let source: Vec<Arrival> = decode(&case["source"]);
+        let seed_head: usize = case["seed_head"].as_str().unwrap().parse().unwrap();
+        let eligible = case["matches_filter"].as_bool().unwrap();
+        let mut documents = std::collections::BTreeMap::new();
+        for entry in source.iter().take(seed_head) {
+            let label = &entry.identity.source_doc_id;
+            documents.insert(
+                label.clone(),
+                create_arrival_source(&access, label, eligible).await,
+            );
+        }
+        let binding_enabled = case["binding_enabled"].as_bool().unwrap();
+        let callback_enabled = case["callback_enabled"].as_bool().unwrap();
+        access.transact("test.callback_arrival_config", |txn| Box::pin(async move {
+            txn.execute_with_variables(
+                "mutation($input:CallbackMutationInputArg!){create_Callback(input:$input){_docID}}",
+                &serde_json::json!({"input":{"agent_did":"owner-a","callback_id":"callback",
+                    "enabled":callback_enabled,
+                    "handler":{"kind":"built_in","emitter":"create_workspace"}}}),
+            ).await?;
+            txn.execute_with_variables(
+                "mutation($input:EventSourceMutationInputArg!){create_EventSource(input:$input){_docID}}",
+                &serde_json::json!({"input":{"agent_did":"owner-a","event_source_id":"source",
+                    "source_collection":"Work","event_kind":"created", "filter":"{eligible: {_eq: true}}"}}),
+            ).await?;
+            txn.execute_with_variables(
+                "mutation($input:CallbackBindingMutationInputArg!){create_CallbackBinding(input:$input){_docID}}",
+                &serde_json::json!({"input":{"agent_did":"owner-a","binding_id":"handoff",
+                    "event_source_id":"source","callback_id":"callback","enabled":binding_enabled}}),
+            ).await?;
+            event_source_cursor::load_or_seed(txn, "owner-a", &handoff_binding()).await?;
+            Ok(())
+        })).await.unwrap();
+        let saved = || {
+            let access = access.clone();
+            async move {
+                access
+                    .transact("test.read_callback_cursor", |txn| {
+                        Box::pin(async move {
+                            Ok(event_source_cursor::load_or_seed(
+                                txn,
+                                "owner-a",
+                                &handoff_binding(),
+                            )
+                            .await?
+                            .cursor
+                            .after)
+                        })
+                    })
+                    .await
+                    .unwrap()
+            }
+        };
+        assert_eq!(saved().await, seed_head.to_string(), "{name}");
+        for entry in source.iter().skip(seed_head) {
+            let label = &entry.identity.source_doc_id;
+            documents.insert(
+                label.clone(),
+                create_arrival_source(&access, label, eligible).await,
+            );
+        }
+        let pre_after = case["pre_cursor"]["after"].as_str().unwrap();
+        access
+            .transact("test.prior_callback_checkpoint", |txn| {
+                Box::pin(async move {
+                    event_source_cursor::advance(
+                        txn,
+                        "owner-a",
+                        &handoff_binding(),
+                        "Work",
+                        pre_after,
+                    )
+                    .await
+                })
+            })
+            .await
+            .unwrap();
+        if case["restart"].as_bool().unwrap() {
+            assert_eq!(saved().await, pre_after, "{name}");
+        }
+        for receipt in decode::<Vec<FireIdentity>>(&case["pre_receipts"]) {
+            admit_callback_arrival(&node, &documents[&receipt.source_doc_id], "v1").await;
+        }
+        let entry: Arrival = decode(&case["entry"]);
+        let doc_id = documents[&entry.identity.source_doc_id].clone();
+        // An uncommitted admission leaves no invocation behind.
+        if case["admission_commit"].as_bool() == Some(true) {
+            admit_callback_arrival(&node, &doc_id, "v1").await;
+            if case["edit_after_admission"].as_bool().unwrap() {
+                access
+                    .write(
+                        "test.callback_arrival_edit",
+                        &format!(
+                            "mutation {{ update_Work(docID: \"{}\", input: {{label: \"edited\"}}) {{ _docID }} }}",
+                            escape_graphql_string(&doc_id)
+                        ),
+                    )
+                    .await
+                    .unwrap();
+                admit_callback_arrival(&node, &doc_id, "v2").await;
+            }
+        }
+        if let Some(commit) = case["checkpoint_commit"].as_bool() {
+            let checkpointed: anyhow::Result<bool> = access
+                .transact("test.callback_checkpoint_crash", |txn| {
+                    let entry = &entry;
+                    Box::pin(async move {
+                        let accepted = event_source_cursor::checkpoint_prefix(
+                            txn,
+                            "owner-a",
+                            &handoff_binding(),
+                            "Work",
+                            &entry.position,
+                            false,
+                        )
+                        .await?;
+                        anyhow::ensure!(commit, "injected crash before checkpoint commit");
+                        Ok(accepted)
+                    })
+                })
+                .await;
+            let accepted = if commit {
+                checkpointed.unwrap_or_else(|error| panic!("{name}: checkpoint error: {error:#}"))
+            } else {
+                assert!(
+                    checkpointed.is_err(),
+                    "{name}: injected checkpoint must roll back"
+                );
+                false
+            };
+            assert_eq!(
+                accepted,
+                case["checkpoint_succeeds"].as_bool().unwrap(),
+                "{name}"
+            );
+        }
+        let after = saved().await;
+        assert_eq!(
+            after,
+            case["post_cursor"]["after"].as_str().unwrap(),
+            "{name}"
+        );
+        let page = access.execute(&format!(
+            "{{ _documentArrivals(collection: \"Work\", after: \"{}\", limit: 128) {{ entries {{ cursor docID }} }} }}",
+            escape_graphql_string(&after),
+        )).await.unwrap();
+        let actual = page["data"]["_documentArrivals"]["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["docID"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>();
+        let expected = decode::<Vec<Arrival>>(&case["journal_after"])
+            .iter()
+            .map(|entry| documents[&entry.identity.source_doc_id].clone())
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected, "{name}");
+        let invocations = access
+            .execute("{ CallbackInvocation { origin } }")
+            .await
+            .unwrap();
+        assert_eq!(
+            invocations["data"]["CallbackInvocation"]
+                .as_array()
+                .unwrap()
+                .len(),
+            case["post_receipts"].as_array().unwrap().len(),
+            "{name}"
+        );
+        node.shutdown().await;
+    }
+}
+
 #[test]
 fn observed_claim_cohorts_match_lean() {
     let contract = gents_lean_contract::load_contract_snapshot::<serde_json::Value>().unwrap();
