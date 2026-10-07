@@ -403,6 +403,15 @@ impl PackPlugin {
                 "plugin {:?} asks to listen on a port; a pack's plugins are called, not served",
                 self.name
             );
+            crate::plugin::http_calls::validate_declared(
+                &crate::plugin::authority::declared_manifold(self)?,
+            )
+            .map_err(|why| {
+                anyhow::anyhow!(
+                    "plugin {:?} declares a network grant the host cannot serve: {why}",
+                    self.name
+                )
+            })?;
         }
         if let Some(bind_dir) = &self.bind_dir {
             anyhow::ensure!(

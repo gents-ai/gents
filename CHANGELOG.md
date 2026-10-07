@@ -6,6 +6,20 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- Plugins reach the network through the host (#2300). A plugin whose granted
+  manifold carries an `OutboundHttp` allow-list answers a call with
+  `http_calls` request batches; the host performs the admitted ones and
+  resumes it with `http_results`, for model tools and graph stages alike.
+  Entries are hosts, `*.domain`, or IP literals, with optional `http://` and
+  `:port`. Hostname entries reach public addresses only, checked on the
+  addresses each connection resolves. The host follows no redirect; a 3xx
+  goes back to the plugin, whose next request is admitted afresh. Only a
+  literal IP entry grants an internal address. Requests carry no host proxy,
+  cookies or credentials. Rounds, requests, body bytes and per-request time
+  are capped. The guest never runs with `net`, and a pack
+  declaring `OutboundFull` or a malformed entry is refused. Granting still
+  goes through `--grant-authority`.
+
 - Rig's completion-model and client traits, usage and error types no longer
   leak into the daemon, one-shot, title, compaction or backend admission code:
   those owners use native `ProviderModel`/`ProviderClient` handles and admission

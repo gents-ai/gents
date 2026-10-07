@@ -468,7 +468,7 @@ fn a_wide_declared_manifold_is_still_narrowed_to_this_runners_ceiling() {
     let wat_source = r#"(module (func (export "_start")))"#;
     let manifold = serde_json::json!({
         "fs": {"ReadWrite": ["/data"]},
-        "net": {"OutboundFull": null},
+        "net": {"OutboundHttp": null},
         "env": "Full",
         "crypto": true,
         "child_process": false,

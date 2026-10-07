@@ -1184,6 +1184,11 @@ def caseCoverage : List CoverageEntry :=
       "plugin::tests::generated_plugin_resource_cases_bind_budget_and_consent")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
+      "plugin_resource_cases"
+      "PluginNetworkCases"
+      "plugin::http_calls::tests::generated_plugin_network_cases_drive_admission")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
       "tool_timeout_cases"
       "ToolTimeoutCases"
       "tool_surface::timeouts::tests::generated_tool_timeout_cases_bind_native_resolution")
