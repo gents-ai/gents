@@ -1624,6 +1624,195 @@ async fn config_tools_holder_may_grant_pack_install_to_a_sibling() {
     );
 }
 
+fn argv_of(words: &[&str]) -> Vec<String> {
+    words.iter().map(|word| (*word).to_owned()).collect()
+}
+
+/// The `error` message of a refused `config` call, read from its JSON
+/// failure envelope, so quoted ids compare unescaped.
+fn config_error_message(error: crate::llm::tool::ToolError) -> String {
+    let crate::llm::tool::ToolError::ToolCallError(error) = error else {
+        panic!("missing typed config error: {error}");
+    };
+    let envelope: Value =
+        serde_json::from_str(&error.to_string()).expect("a config refusal is a JSON envelope");
+    envelope["error"]
+        .as_str()
+        .expect("the envelope carries an error message")
+        .to_owned()
+}
+
+/// `call_config_tool`, with a refusal reduced to its envelope's message.
+async fn config_call_message(
+    tools: &[Box<dyn crate::llm::tool::ToolDyn>],
+    argv: Vec<String>,
+) -> Result<String, String> {
+    let tool = tools
+        .iter()
+        .find(|tool| tool.name() == CONFIG_TOOL_NAME)
+        .expect("config registered");
+    tool.call(json!({ "argv": argv }).to_string())
+        .await
+        .map_err(config_error_message)
+}
+
+/// `worker` (the invoker) and `sibling` with plain chains, and two chains
+/// whose Tools the operator granted pack installation; the config tool runs
+/// as `worker` with the agent catalog grant, holding the grant or not.
+async fn reselection_tools(
+    label: &str,
+    hold_pack_install: bool,
+) -> Vec<Box<dyn crate::llm::tool::ToolDyn>> {
+    let node = build_persona_node().await;
+    let identity = persona_identity(label);
+    let owner = identity.did().to_string();
+    for behavior in ["worker", "sibling", "granted", "granted-2"] {
+        crate::test_support::install_test_behavior(&node, &owner, behavior).await;
+    }
+    operator_grant_pack_install(&node, &owner, "granted:tools").await;
+    operator_grant_pack_install(&node, &owner, "granted-2:tools").await;
+    let mut tool_config = config(&["persona", "behavior", "tools"]);
+    tool_config.behavior_id = "worker".to_owned();
+    tool_config.enable_pack_install = hold_pack_install;
+    build_self_config_tools(node, owner, Some(identity), &tool_config, test_plugins())
+}
+
+#[tokio::test]
+async fn context_reselect_cannot_acquire_grants() {
+    let tools = reselection_tools("context-reselect", false).await;
+    for target in [None, Some("sibling")] {
+        let mut argv = argv_of(&["behavior", "context", "edit"]);
+        if let Some(target) = target {
+            argv.extend(argv_of(&["--behavior", target]));
+        }
+        argv.extend(argv_of(&["--set", r#"tools_id="granted:tools""#]));
+        let refused = config_call_message(&tools, argv)
+            .await
+            .expect_err("re-pointing a Context at granted Tools must not acquire the grant");
+        assert!(
+            refused.contains(
+                "tools_id \"granted:tools\" selects Tools carrying an operator grant this agent does not hold"
+            ),
+            "{target:?}: {refused}"
+        );
+        assert!(
+            refused.contains("cannot be self-granted"),
+            "{target:?}: {refused}"
+        );
+    }
+    let missing = call_config_tool(
+        &tools,
+        argv_of(&[
+            "behavior",
+            "context",
+            "edit",
+            "--set",
+            r#"tools_id="missing""#,
+        ]),
+    )
+    .await
+    .expect_err("a missing Tools reference is still refused");
+    assert!(
+        !missing.contains("operator grant"),
+        "the reference validator, not the grant guard, refuses a missing document: {missing}"
+    );
+    let holder = reselection_tools("context-reselect-holder", true).await;
+    call_config_tool(
+        &holder,
+        argv_of(&[
+            "behavior",
+            "context",
+            "edit",
+            "--set",
+            r#"tools_id="granted:tools""#,
+        ]),
+    )
+    .await
+    .expect("an agent holding the grant may select Tools that carry it");
+}
+
+#[tokio::test]
+async fn behavior_reselect_cannot_acquire_grants() {
+    let tools = reselection_tools("behavior-reselect", false).await;
+    for target in ["worker", "sibling"] {
+        let refused = config_call_message(
+            &tools,
+            argv_of(&[
+                "behavior",
+                "edit",
+                target,
+                "--set",
+                r#"context_id="granted:context""#,
+            ]),
+        )
+        .await
+        .expect_err("re-pointing a Behavior at a granted chain must not acquire the grant");
+        assert!(
+            refused.contains(
+                "context_id \"granted:context\" selects Tools carrying an operator grant this agent does not hold"
+            ),
+            "{target}: {refused}"
+        );
+    }
+    let holder = reselection_tools("behavior-reselect-holder", true).await;
+    call_config_tool(
+        &holder,
+        argv_of(&[
+            "behavior",
+            "edit",
+            "sibling",
+            "--set",
+            r#"context_id="granted:context""#,
+        ]),
+    )
+    .await
+    .expect("an agent holding the grant may select a chain that carries it");
+}
+
+/// A non-holder may move between two Tools documents that both carry the
+/// grant: nothing is raised above the previous selection.
+#[tokio::test]
+async fn context_reselect_between_granted_tools_is_accepted() {
+    let tools = reselection_tools("context-between-granted", false).await;
+    call_config_tool(
+        &tools,
+        argv_of(&[
+            "behavior",
+            "context",
+            "edit",
+            "--behavior",
+            "granted",
+            "--set",
+            r#"tools_id="granted-2:tools""#,
+        ]),
+    )
+    .await
+    .expect("re-pointing between granted Tools raises nothing");
+}
+
+#[tokio::test]
+async fn context_create_selecting_granted_tools_requires_the_grant() {
+    let create = argv_of(&[
+        "context",
+        "create",
+        "fresh:context",
+        "--set",
+        r#"tools_id="granted:tools""#,
+    ]);
+    let tools = reselection_tools("context-create-granted", false).await;
+    let refused = config_call_message(&tools, create.clone())
+        .await
+        .expect_err("a new Context must not select Tools whose grant the agent does not hold");
+    assert!(
+        refused.contains("selects Tools carrying an operator grant this agent does not hold"),
+        "{refused}"
+    );
+    let holder = reselection_tools("context-create-holder", true).await;
+    call_config_tool(&holder, create)
+        .await
+        .expect("an agent holding the grant may create a Context that selects it");
+}
+
 // -- behavior commands (#Task 5) --
 
 #[test]

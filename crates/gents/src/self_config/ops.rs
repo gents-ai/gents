@@ -364,6 +364,14 @@ impl SelfConfigCore {
 
         (request.normalize)(txn, &anchor, &stored_doc, &mut merged).await?;
         (request.validate)(txn, &anchor, &stored_doc, &merged).await?;
+        guard_reselection_keeps_grants_in_txn(
+            txn,
+            self,
+            request.target,
+            (!creating).then_some(&stored_doc),
+            &merged,
+        )
+        .await?;
 
         if self.no_lockout && request.guard_selected_chain {
             if self.lockout_behavior_id == self.behavior_id {
@@ -565,6 +573,14 @@ impl SelfConfigCore {
         }
         (request.normalize)(txn, &anchor, &stored_doc, &mut merged).await?;
         (request.validate)(txn, &anchor, &stored_doc, &merged).await?;
+        guard_reselection_keeps_grants_in_txn(
+            txn,
+            self,
+            request.target,
+            (!creating).then_some(&stored_doc),
+            &merged,
+        )
+        .await?;
         if self.no_lockout && request.guard_selected_chain {
             if self.lockout_behavior_id == self.behavior_id {
                 (request.guard)(&anchor, &stored_doc, &merged)?;
@@ -859,6 +875,110 @@ pub fn reselection_keeps_grants(
     match after {
         None => Ok(()),
         Some(after) => guard_tools_keep_grants(held, before, after),
+    }
+}
+
+/// The native side of Lean `SelfConfig.chainKeepsGrants`: resolve the Tools a
+/// Context or Behavior selected before and selects after this write, through
+/// owner-scoped reads in the write's own transaction, and decide through
+/// [`reselection_keeps_grants`]. An unchanged selection passes without reads
+/// (Lean `chain_unchanged_selection_keeps_grants`); a reference to a missing
+/// document resolves to no Tools and is refused by the reference validator
+/// with its own message.
+pub(crate) async fn guard_reselection_keeps_grants_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    core: &SelfConfigCore,
+    target: SelfConfigTarget,
+    stored: Option<&Map<String, Value>>,
+    candidate: &Map<String, Value>,
+) -> Result<()> {
+    let field = match target {
+        SelfConfigTarget::AgentContext => "tools_id",
+        SelfConfigTarget::AgentBehavior => "context_id",
+        _ => return Ok(()),
+    };
+    let selected = |doc: &Map<String, Value>| {
+        doc.get(field)
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+            .map(ToOwned::to_owned)
+    };
+    let before = stored.and_then(|doc| selected(doc));
+    let after = selected(candidate);
+    if before == after {
+        return Ok(());
+    }
+    let owner = core.agent_did();
+    let before_tools = selected_tools_in_txn(txn, owner, target, before.as_deref()).await?;
+    let after_tools = selected_tools_in_txn(txn, owner, target, after.as_deref()).await?;
+    reselection_keeps_grants(core.held_grants(), before_tools.as_ref(), after_tools.as_ref())
+        .with_context(|| {
+            format!(
+                "{field} {:?} selects Tools carrying an operator grant this agent does not hold; select Tools without it or ask the operator to grant it",
+                after.as_deref().unwrap_or_default()
+            )
+        })
+}
+
+async fn selected_tools_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    owner: &str,
+    target: SelfConfigTarget,
+    id: Option<&str>,
+) -> Result<Option<Map<String, Value>>> {
+    let Some(id) = id else {
+        return Ok(None);
+    };
+    match target {
+        SelfConfigTarget::AgentContext => tools_by_id_in_txn(txn, owner, id).await,
+        _ => context_tools_in_txn(txn, owner, id).await,
+    }
+}
+
+async fn tools_by_id_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    owner: &str,
+    tools_id: &str,
+) -> Result<Option<Map<String, Value>>> {
+    Ok(
+        read_owned_doc(txn, SelfConfigTarget::Tools, owner, tools_id)
+            .await?
+            .map(|(_, doc)| doc),
+    )
+}
+
+async fn context_tools_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    owner: &str,
+    context_id: &str,
+) -> Result<Option<Map<String, Value>>> {
+    let Some((_, context)) =
+        read_owned_doc(txn, SelfConfigTarget::AgentContext, owner, context_id).await?
+    else {
+        return Ok(None);
+    };
+    match context.get("tools_id").and_then(Value::as_str) {
+        Some(tools_id) if !tools_id.is_empty() => tools_by_id_in_txn(txn, owner, tools_id).await,
+        _ => Ok(None),
+    }
+}
+
+/// The Tools document a stored Behavior's chain selects, if any.
+pub(crate) async fn behavior_tools_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    owner: &str,
+    behavior_id: &str,
+) -> Result<Option<Map<String, Value>>> {
+    let Some((_, behavior)) =
+        read_owned_doc(txn, SelfConfigTarget::AgentBehavior, owner, behavior_id).await?
+    else {
+        return Ok(None);
+    };
+    match behavior.get("context_id").and_then(Value::as_str) {
+        Some(context_id) if !context_id.is_empty() => {
+            context_tools_in_txn(txn, owner, context_id).await
+        }
+        _ => Ok(None),
     }
 }
 
