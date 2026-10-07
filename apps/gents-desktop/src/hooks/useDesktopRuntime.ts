@@ -148,22 +148,31 @@ export function useSelectionReconcile({
     if (!store.getState().agentDid && firstNode) actions.selectAgent(firstNode);
   }, [actions, agentDid, firstNode, store]);
 
+  // Read from the stores for the same reason: the route may have selected a
+  // node and behavior in this commit. The subscriptions above only rerun it.
   useEffect(() => {
-    if (!node) {
+    const current = store.getState();
+    const selected = current.agentDid
+      ? (stores.fleet.getState().nodes[current.agentDid] ?? null)
+      : null;
+    if (!selected) {
       selection.settleBehavior(store, null);
       return;
     }
     // A mailbox tap or the new-session screen chose this behavior. Preserve
     // it while the independently replicated behavior and session rows catch
     // up; explicit navigation lets go of it in the selection store.
-    if (composingFor === node.agentDid) return;
+    if (current.composingFor === selected.agentDid) return;
     // A snapshot may reconcile behavior availability, never user session
     // selection. Null is an intentional fresh composer, not a request to open
     // the first matching session. A missing selected row stays selected while
     // hydration/error presentation handles its availability (ClientShell's
     // snapshot_preserves_selection contract).
-    selection.settleBehavior(store, selectedBehaviorIdForDeployment(node, behaviorId));
-  }, [behaviorId, composingFor, node, store]);
+    selection.settleBehavior(
+      store,
+      selectedBehaviorIdForDeployment(selected, current.behaviorId),
+    );
+  }, [behaviorId, composingFor, node, store, stores.fleet]);
 }
 
 /** The host narrows its observation to the selected node. */
