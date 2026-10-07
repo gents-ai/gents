@@ -5,6 +5,11 @@ use super::*;
 pub const TOOL_RESULT_IMAGE_OMITTED: &str =
     "[image omitted: this model's provider does not accept images in tool results]";
 
+/// Stands in for an image part when a later request replays the call from the
+/// transcript, which records tool output as text.
+pub const TOOL_RESULT_IMAGE_NOT_REPLAYED: &str =
+    "[image omitted: images from earlier tool calls are not replayed; call the tool again to see it]";
+
 /// A dispatched tool's output as the provider receives it. Output with no
 /// image part is bounded whole and then split, as it always was. Output that
 /// splits into image parts (`{"response", "parts"}`, the plugin ABI in
@@ -18,28 +23,66 @@ pub(super) fn bounded_tool_result(
     tool_name: &str,
     output: &str,
 ) -> Vec<ToolResultContent> {
-    let mode = tool_result_truncation_mode(tool_name);
-    let limits = TruncationLimits::default();
     let content = ToolResultContent::from_tool_output(output);
     if !content
         .iter()
         .any(|part| matches!(part, ToolResultContent::Image(_)))
     {
-        let (bounded, _, truncated) = truncate_text(output, mode, &limits);
+        let (bounded, _, truncated) = truncate_text(
+            output,
+            tool_result_truncation_mode(tool_name),
+            &TruncationLimits::default(),
+        );
         return if truncated {
             ToolResultContent::from_tool_output(bounded)
         } else {
             content
         };
     }
+    let note = (!profile.carries_tool_result_images()).then_some(TOOL_RESULT_IMAGE_OMITTED);
+    bound_split_parts(tool_name, content, note)
+}
+
+/// The text a later request replays for output that splits into image parts:
+/// the parts [`bounded_tool_result`] threads, one per line, each image
+/// [`TOOL_RESULT_IMAGE_NOT_REPLAYED`]. `None` for output without an image part,
+/// which replays as bounded text.
+pub fn replayed_tool_result_text(tool_name: &str, output: &str) -> Option<String> {
+    let content = ToolResultContent::from_tool_output(output);
+    if !content
+        .iter()
+        .any(|part| matches!(part, ToolResultContent::Image(_)))
+    {
+        return None;
+    }
+    let lines: Vec<String> =
+        bound_split_parts(tool_name, content, Some(TOOL_RESULT_IMAGE_NOT_REPLAYED))
+            .into_iter()
+            .filter_map(|part| match part {
+                ToolResultContent::Text(text) => Some(text.text),
+                ToolResultContent::Image(_) => None,
+            })
+            .collect();
+    Some(lines.join("\n"))
+}
+
+/// Bounds each text part of split output; each image passes whole, or becomes
+/// `image_note` when one is given.
+fn bound_split_parts(
+    tool_name: &str,
+    content: Vec<ToolResultContent>,
+    image_note: Option<&str>,
+) -> Vec<ToolResultContent> {
+    let mode = tool_result_truncation_mode(tool_name);
+    let limits = TruncationLimits::default();
     content
         .into_iter()
-        .map(|part| match part {
-            ToolResultContent::Text(text) => {
+        .map(|part| match (part, image_note) {
+            (ToolResultContent::Text(text), _) => {
                 ToolResultContent::text(truncate_text(&text.text, mode, &limits).0)
             }
-            image if profile.carries_tool_result_images() => image,
-            ToolResultContent::Image(_) => ToolResultContent::text(TOOL_RESULT_IMAGE_OMITTED),
+            (image, None) => image,
+            (ToolResultContent::Image(_), Some(note)) => ToolResultContent::text(note),
         })
         .collect()
 }

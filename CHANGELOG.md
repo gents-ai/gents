@@ -6,6 +6,14 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- One tool-result image Claude would reject no longer fails the whole
+  request. The Claude Messages body reads each image's size from its PNG,
+  GIF, WebP or JPEG header and puts a note naming the reason in place of an
+  image over 8000 px on a side, over 2000 px on a side once the request
+  carries more than 20 images, or beyond 100 images (oldest first). A plugin
+  result with image parts now replays on later turns as its bounded text
+  parts plus a note per image, not as raw JSON with the image's base64.
+
 - Plugins reach the network through the host (#2300). A plugin whose granted
   manifold carries an `OutboundHttp` allow-list answers a call with
   `http_calls` request batches; the host performs the admitted ones and

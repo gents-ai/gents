@@ -33,9 +33,10 @@
 //! tool results receives them (Claude Messages today, see
 //! `ProviderInputProfile::carries_tool_result_images`). For any other provider
 //! the loop puts a short note in place of each image instead of failing the
-//! request. The model sees an image only within the request that ran the call.
-//! Later requests do not carry it, because the transcript records tool output
-//! as text, presented within the same text bound.
+//! request, and Claude gets a note in place of an image over its vision limits.
+//! The model sees an image only within the request that ran the call. Later
+//! requests replay the transcript, which presents the same bounded text parts
+//! and a note per image (`gents_loop::loop_stream::replayed_tool_result_text`).
 //! Called as a graph stage ([`crate::callback::plugin`]), the value is the
 //! stage's output documents and is never split.
 //!
