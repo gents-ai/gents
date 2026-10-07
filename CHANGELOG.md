@@ -167,6 +167,13 @@ source consistency checks, not a separate runtime compatibility version.
 - Self-configuration selection changes and clones are now bounded by the
   operator-grant guard, as Tools writes are.
 
+### Added
+
+- `gents graph run --graph-id ID --digest sha256:…` runs an active graph by id,
+  pinned to its revision; `graph run` and `graph watch` accept
+  `--output ndjson` (one compact JSON object per line). The `run_graph` tool's
+  `graph_id` runs select and prepare their entry like package runs.
+
 ### Fixed
 
 - Self-configuration no longer refuses edits of Tools that already carry
