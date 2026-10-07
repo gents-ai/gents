@@ -33,6 +33,13 @@ source consistency checks, not a separate runtime compatibility version.
 - iOS builds again: the DB Explorer window keeps its desktop-only title, size and
   focus calls off mobile targets, and CI checks the iOS simulator build on main.
 
+- Plugin tools can return images (#2302). A result shaped
+  `{"response", "parts": [{"type": "image", "data", "mimeType"}]}` reaches a
+  Claude model as one text part plus whole image parts. Before this change, an
+  image past the 50 KiB tool-result text bound was cut into broken text. OpenAI,
+  Responses, Codex and xAI backends, which refuse images in tool results, get a
+  note in place of each image. Before, the whole request failed. The shape is
+  now part of the documented plugin ABI.
 - Grok subscription backends advertise client version 1.0.46, above the
   proxy's floor (#2274). A 426 version gate now fails fast instead of burning
   the retry ladder, and `grok-auth-probe` and model discovery name the version

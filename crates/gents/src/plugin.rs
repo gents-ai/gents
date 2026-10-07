@@ -15,6 +15,30 @@
 //! is diagnostics for a human. Nothing else carries the call: no second
 //! channel, no shared memory, no side import for passing data.
 //!
+//! Called as a model tool ([`tool::PluginTool`]), that value is the tool's
+//! output, which the loop splits the way it splits every tool's output
+//! (`gents_protocol::message::ToolResultContent::from_tool_output`):
+//!
+//! - `{"response": <any JSON>, "parts": [...]}` (either key alone is enough)
+//!   is split into parts. `response` becomes one text part, written as compact
+//!   JSON. Each `parts` entry `{"type": "image", "data": "<base64>",
+//!   "mimeType": "image/png"}` becomes one image part, in order. Other entries
+//!   are dropped.
+//! - A lone `{"type": "image", "data", "mimeType"}` is one image part.
+//! - Anything else is one text part holding the value as JSON.
+//!
+//! Text parts are held to the loop's tool-result text bound. Image parts are
+//! passed whole and are bounded only by the plugin's output limit
+//! (`limits.max_output_mib`). Only a provider whose wire carries images in
+//! tool results receives them (Claude Messages today, see
+//! `ProviderInputProfile::carries_tool_result_images`). For any other provider
+//! the loop puts a short note in place of each image instead of failing the
+//! request. The model sees an image only within the request that ran the call.
+//! Later requests do not carry it, because the transcript records tool output
+//! as text, presented within the same text bound.
+//! Called as a graph stage ([`crate::callback::plugin`]), the value is the
+//! stage's output documents and is never split.
+//!
 //! Seven invariants hold for every call, each enforced here rather than
 //! trusted from the caller:
 //!
