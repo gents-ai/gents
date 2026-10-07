@@ -116,6 +116,46 @@ theorem plugin_digest_substitution_denied (capabilities : String → Option Capa
       .error .pluginDigestMismatch := by
   simp [resolveStage, resolvePlugin, hc, ha, ht, hi, hne]
 
+/-- A graph edge's concurrency is admissible unless it is `latest_only`: a
+`latest_only` trigger supersedes the same trigger's in-flight requests
+(`trigger_engine` `supersede_active_runtime_requests_for_trigger`), which on a
+per-document edge cancels earlier fan-out items and on a grouped edge cancels
+group members. The native compiler reports this refusal as
+`invalid_edge_concurrency` at `/edges/{i}/concurrency`. -/
+def graphEdgeConcurrencyValid (mode : ConcurrencyMode) : Bool :=
+  mode != .latestOnly
+
+/-- Edge admission for graph compilation, over every edge: the concurrency
+conjunct, and for a grouped edge the shared group validator's graph narrowing
+(`Triggers.Groups.GroupConfig.validForGraph`). -/
+def graphEdgeValid (delivery : Option Triggers.Groups.GroupConfig) (correlation : String)
+    (mode : ConcurrencyMode) : Bool :=
+  graphEdgeConcurrencyValid mode && delivery.all (·.validForGraph correlation mode)
+
+theorem latest_only_graph_edge_rejected
+    (delivery : Option Triggers.Groups.GroupConfig) (correlation : String) :
+    graphEdgeValid delivery correlation .latestOnly = false := by
+  simp [graphEdgeValid, graphEdgeConcurrencyValid]
+
+theorem grouped_graph_edge_valid_iff_valid_for_graph
+    (g : Triggers.Groups.GroupConfig) (correlation : String) (mode : ConcurrencyMode) :
+    graphEdgeValid (some g) correlation mode = g.validForGraph correlation mode := by
+  simp only [graphEdgeValid, graphEdgeConcurrencyValid, Option.all]
+  cases h : (mode != ConcurrencyMode.latestOnly) <;>
+    simp [Triggers.Groups.GroupConfig.validForGraph, h]
+
+theorem ungrouped_graph_edge_valid_iff_not_latest_only
+    (correlation : String) (mode : ConcurrencyMode) :
+    graphEdgeValid none correlation mode = (mode != .latestOnly) := by
+  simp [graphEdgeValid, graphEdgeConcurrencyValid]
+
+theorem graph_edge_valid_requires_concurrency_valid
+    (delivery : Option Triggers.Groups.GroupConfig) (correlation : String)
+    (mode : ConcurrencyMode) (h : graphEdgeValid delivery correlation mode = true) :
+    graphEdgeConcurrencyValid mode = true := by
+  simp only [graphEdgeValid, Bool.and_eq_true] at h
+  exact h.1
+
 /-- Graph delivery applies its cardinality bounds to the same resolved candidate
 used by ordinary event triggers, including counts loaded from source fields. -/
 def resolveGroup (config : Triggers.Groups.GroupConfig) (correlationField : String)
