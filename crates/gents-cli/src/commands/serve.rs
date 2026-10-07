@@ -681,15 +681,6 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
         crate::p2p_relay::log_relay_mode_diagnostics(args.p2p_relay_mode);
         log_p2p_admission_config(config);
     }
-    let mcp_query_scope = if !args.enable_mcp {
-        None
-    } else if args.mcp_query_collections.is_empty() {
-        Some(gents::defra_query::CollectionScope::all())
-    } else {
-        Some(gents::defra_query::CollectionScope::restricted(
-            args.mcp_query_collections.clone(),
-        ))
-    };
     let p2p_admission_state = p2p_config.as_ref().map(p2p_admission_state);
     let p2p_admission = p2p_admission_state.as_ref().map(P2pAdmissionState::to_json);
     let backend_health = gents::BackendHealthMap::new();
@@ -711,6 +702,17 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
     let enrollment_offer_issuer = crate::http::enrollment::empty_issuer_handle();
     let enrollment_decisions = crate::http::enrollment::empty_decision_service_handle();
     let activation_runtime = Arc::new(tokio::sync::OnceCell::new());
+    let mcp_options = args
+        .enable_mcp
+        .then(|| crate::http::mcp_server::McpServiceOptions {
+            scope: if args.mcp_query_collections.is_empty() {
+                gents::defra_query::CollectionScope::all()
+            } else {
+                gents::defra_query::CollectionScope::restricted(args.mcp_query_collections.clone())
+            },
+            write_collections: args.mcp_write_collections.iter().cloned().collect(),
+            graph_reads: args.mcp_graph_tools,
+        });
     let (activation_tx, activation_rx) = watch::channel(RuntimeActivationObservation::default());
     let replicated_schema = Arc::new(tokio::sync::OnceCell::new());
     let serve_lifecycle = ServeLifecycleHandle::default();
@@ -723,8 +725,7 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
             .as_ref()
             .map(|path| path.to_string_lossy().into_owned()),
         Some(home_dir.to_string_lossy().into_owned()),
-        mcp_query_scope,
-        args.mcp_write_collections.clone(),
+        mcp_options,
         Some(backend_health.clone()),
         p2p_admission_state.clone(),
         Some(codex_shim_health.clone()),

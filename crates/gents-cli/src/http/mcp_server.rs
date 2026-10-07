@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use gents::defra_query::{CollectionScope, QueryParams};
@@ -22,29 +23,36 @@ struct McpQueryArgs {
     options: serde_json::Map<String, Value>,
 }
 
+/// What `/mcp` exposes; present only with `--enable-mcp`.
+#[derive(Clone)]
+pub(crate) struct McpServiceOptions {
+    pub scope: CollectionScope,
+    pub write_collections: BTreeSet<String>,
+    /// `--mcp-graph-tools`: the read-only graph tools, each read made under
+    /// the caller's forwarded DefraDB bearer. Set only with an unrestricted
+    /// `scope` (the CLI refuses the flag with `--mcp-query-collection`): the
+    /// graph collections declare no per-caller policy, and the run views also
+    /// read request, callback and trigger documents.
+    pub graph_reads: bool,
+}
+
 #[derive(Clone)]
 pub(crate) struct DefraQueryMcp {
     graphql: String,
-    scope: CollectionScope,
-    write_collections: std::collections::BTreeSet<String>,
+    options: McpServiceOptions,
     tool_router: ToolRouter<Self>,
 }
 
 impl DefraQueryMcp {
-    fn new(
-        graphql: String,
-        scope: CollectionScope,
-        write_collections: std::collections::BTreeSet<String>,
-    ) -> Self {
+    fn new(graphql: String, options: McpServiceOptions) -> Self {
         let mut tool_router = Self::tool_router();
-        if write_collections.is_empty() {
+        if options.write_collections.is_empty() {
             tool_router.remove_route("write");
         }
         Self {
             graphql,
-            scope,
+            options,
             tool_router,
-            write_collections,
         }
     }
 }
@@ -61,7 +69,7 @@ impl DefraQueryMcp {
             options: args.options,
         };
         let access = gents::config_client::ConfigAccess::graphql(self.graphql.clone());
-        let value=gents::defra_query::execute_command(&access,&params,&self.scope).await
+        let value=gents::defra_query::execute_command(&access,&params,&self.options.scope).await
             .map_err(|error|ErrorData::internal_error(serde_json::json!({"error":format!("{error:#}"),"recovery":{"tool":"query","args":{"argv":["help"]}}}).to_string(),None))?;
         gents::defra_query::render_result(value)
             .map_err(|error| ErrorData::internal_error(error.to_string(), None))
@@ -88,7 +96,7 @@ impl DefraQueryMcp {
         .map_err(|e| ErrorData::invalid_request(e.to_string(), None))?;
         let tool = gents::application_write::WriteTool::new(
             gents::config_client::ConfigAccess::Graphql(endpoint),
-            self.write_collections.clone(),
+            self.options.write_collections.clone(),
             None,
         );
         let call = gents::application_write::WriteParams {
@@ -115,17 +123,10 @@ impl ServerHandler for DefraQueryMcp {
 
 pub(crate) fn defra_query_mcp_service(
     graphql: String,
-    scope: CollectionScope,
-    write_collections: std::collections::BTreeSet<String>,
+    options: McpServiceOptions,
 ) -> StreamableHttpService<DefraQueryMcp, LocalSessionManager> {
     StreamableHttpService::new(
-        move || {
-            Ok(DefraQueryMcp::new(
-                graphql.clone(),
-                scope.clone(),
-                write_collections.clone(),
-            ))
-        },
+        move || Ok(DefraQueryMcp::new(graphql.clone(), options.clone())),
         Arc::new(LocalSessionManager::default()),
         StreamableHttpServerConfig::default(),
     )
