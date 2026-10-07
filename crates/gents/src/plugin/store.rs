@@ -289,7 +289,11 @@ pub fn write_record(home: &Path, record: &InstalledPlugin) -> Result<()> {
     }
     let bytes =
         serde_json::to_vec_pretty(record).context("encoding the installed-plugin record")?;
-    std::fs::write(&path, bytes).with_context(|| format!("writing {}", path.display()))?;
+    // Readers take no lock, so a plain write can expose a torn record to a
+    // concurrent resolve; the rename makes every observed record complete.
+    let temp = path.with_extension("json.partial");
+    std::fs::write(&temp, &bytes).with_context(|| format!("writing {}", temp.display()))?;
+    std::fs::rename(&temp, &path).with_context(|| format!("publishing {}", path.display()))?;
     Ok(())
 }
 

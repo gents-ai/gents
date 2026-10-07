@@ -519,7 +519,7 @@ impl BehaviorToolConfig {
         let availability = RuntimeToolAvailability::from_online_mcp_services(available_service_ids);
         let mut surface =
             self.resolve_with_subagent_tools_for_runtime_availability(availability, subagent_tools);
-        surface.plugin_resolutions = resolve_plugin_identities(plugins, &surface.plugin_tools);
+        surface.plugin_resolutions = resolve_plugin_identities(plugins, &surface.plugin_tools)?;
         Ok(surface)
     }
 
@@ -730,21 +730,41 @@ impl Default for BehaviorToolConfig {
 fn resolve_plugin_identities(
     plugins: &std::sync::Arc<crate::plugin::executor::PluginExecutor>,
     plugin_tools: &[crate::document_config::PluginToolRef],
-) -> Vec<(
-    crate::document_config::PluginToolRef,
-    Option<super::PluginRecordIdentity>,
-)> {
+) -> anyhow::Result<
+    Vec<(
+        crate::document_config::PluginToolRef,
+        Option<super::PluginRecordIdentity>,
+    )>,
+> {
     plugin_tools
         .iter()
         .map(|plugin| {
-            let identity = plugins
-                .resolve(&plugin.plugin, plugin.digest.as_deref())
-                .ok()
-                .map(|record| super::PluginRecordIdentity {
+            let identity = match plugins.resolve(&plugin.plugin, plugin.digest.as_deref()) {
+                Ok(record) => Some(super::PluginRecordIdentity {
                     version: record.version,
                     digest: record.digest,
-                });
-            (plugin.clone(), identity)
+                }),
+                // Only an absent record means "not installed". A record that
+                // fails to read must not read as a removal: the watcher
+                // retries the resolve instead of proposing a fingerprint hop,
+                // and a build against the plugin still fails closed at the
+                // store, its own gate.
+                Err(error)
+                    if error
+                        .chain()
+                        .filter_map(|cause| cause.downcast_ref::<std::io::Error>())
+                        .any(|cause| cause.kind() == std::io::ErrorKind::NotFound) =>
+                {
+                    None
+                }
+                Err(error) => {
+                    return Err(error.context(format!(
+                        "resolving the installed record of plugin {}",
+                        plugin.plugin
+                    )));
+                }
+            };
+            Ok((plugin.clone(), identity))
         })
         .collect()
 }
