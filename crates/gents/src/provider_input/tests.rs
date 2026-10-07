@@ -403,6 +403,91 @@ async fn openrouter_projection_matches_the_actual_rig_wire_body() {
     assert!(actual.to_string().contains("openrouter-visible-reasoning"));
 }
 
+/// A Claude request with `images` image parts in one tool result, or the
+/// same result with a short note in place of each image.
+fn claude_image_request(images: usize, as_images: bool) -> CompletionRequest {
+    use crate::llm::message::{
+        DocumentSourceKind, Image, ImageMediaType, ToolCall, ToolFunction, ToolResultContent,
+        UserContent,
+    };
+    // Alternate base64 and URL images: Claude charges both by their pixels.
+    let part = |index: usize| {
+        if as_images {
+            ToolResultContent::Image(Image {
+                data: if index % 2 == 0 {
+                    DocumentSourceKind::Base64("iVBORw0KGgo=".into())
+                } else {
+                    DocumentSourceKind::Url("https://example.com/a.png".into())
+                },
+                media_type: Some(ImageMediaType::PNG),
+                detail: None,
+                additional_params: None,
+            })
+        } else {
+            ToolResultContent::text("[image]")
+        }
+    };
+    let messages = vec![
+        Message::user("draw it"),
+        Message::Assistant {
+            id: None,
+            content: vec![AssistantContent::ToolCall(ToolCall::new(
+                "toolu_1".into(),
+                ToolFunction::new("plugin".into(), serde_json::json!({})),
+            ))],
+        },
+        Message::User {
+            content: vec![UserContent::tool_result(
+                "toolu_1",
+                (0..images).map(part).collect(),
+            )],
+        },
+    ];
+    let mut request = core_request("unused");
+    request.chat_history =
+        OneOrMany::many(crate::llm::rig_compat::to_rig_messages(&messages)).unwrap();
+    request
+}
+
+/// Each Claude image block costs at least the per-image ceiling, however
+/// short its base64, so a request that fits without its images but not with
+/// them is refused at admission.
+#[test]
+fn claude_images_are_estimated_at_their_token_ceiling() {
+    use gents_loop::provider_input::CLAUDE_IMAGE_TOKENS;
+    const IMAGES: usize = 3;
+    let counter = ProviderInputCounter::new(
+        BackendProviderKind::AnthropicApiKey,
+        OpenAiWireApi::ChatCompletions,
+        "claude-sonnet-5",
+    );
+    let with_images = counter
+        .estimate_request(&claude_image_request(IMAGES, true))
+        .unwrap();
+    let without = counter
+        .estimate_request(&claude_image_request(IMAGES, false))
+        .unwrap();
+    assert!(with_images >= IMAGES * CLAUDE_IMAGE_TOKENS, "{with_images}");
+    assert_eq!(
+        counter
+            .project_request(&claude_image_request(IMAGES, true))
+            .unwrap()
+            .estimated_input_tokens,
+        with_images
+    );
+
+    let window = with_images;
+    let output = crate::provider_input::budget::configured_output_ceiling(Some(1_024));
+    assert!(crate::provider_input::budget::can_dispatch(
+        without, window, output
+    ));
+    assert!(!crate::provider_input::budget::can_dispatch(
+        with_images,
+        window,
+        output
+    ));
+}
+
 /// The Messages wire sends `build_messages_body` verbatim (no rig DTO, no
 /// rewrite), so the projection is that body; `openai_wire_api` is ignored.
 #[test]

@@ -5,7 +5,7 @@
 //! of a result. The host sends them to the slot's inference backend and calls
 //! the plugin again with the answers, until the plugin returns a result.
 //!
-//! The wire, in both directions:
+//! The wire, driven by [`super::rounds`]:
 //!
 //! - input: the caller's input plus `"model_calls": true`, then on later
 //!   rounds `"model_results": {id: {"text": ...} | {"error": ...}}` and the
@@ -13,23 +13,15 @@
 //! - output: `{"model_calls": {"requests": [{"id", "prompt", "images":
 //!   [{"mime", "data_base64"}], "max_tokens"}], "state": ...}}`.
 //!
-//! A bound call is always driven with a JSON object: the caller's `"state"`
-//! and `"model_results"` keys are stripped (only the host sets them) and a
-//! null input becomes `{}`; a call whose slot is unbound runs untouched.
-//!
 //! The endpoint and the key live only in [`ModelEndpoint`], which this module
 //! never serialises, logs or puts in any error: a plugin sees answers, never
-//! where they came from. Bounds: [`MAX_ROUNDS`] rounds, the call's wall clock
-//! and fuel across all rounds, [`MAX_REQUESTS_PER_ROUND`] requests a round,
-//! [`MAX_REQUESTS_PER_CALL`] requests and [`MAX_ANSWER_BYTES_PER_CALL`] answer
-//! bytes for the whole call (a request past either gets an error result),
-//! [`MAX_RESULT_BYTES`] an answer, the backend's `max_concurrent` in flight
-//! across every call in the process, and after [`DEAD_ENDPOINT_ROUNDS`]
-//! rounds in a row that all failed every further request fails at once, so a
-//! dead endpoint costs seconds. When the wall clock runs out during model
-//! requests, the unanswered ones get error results and the plugin gets one
-//! final round (the last [`FINAL_ROUND_RESERVE_DIVISOR`]th of the clock) to
-//! finish with what it has; only a plugin that asks again is a timeout.
+//! where they came from. Bounds beyond the round loop's own:
+//! [`MAX_REQUESTS_PER_ROUND`] requests a round, [`MAX_REQUESTS_PER_CALL`]
+//! requests and [`MAX_ANSWER_BYTES_PER_CALL`] answer bytes for the whole call
+//! (a request past either gets an error result), [`MAX_RESULT_BYTES`] an
+//! answer, the backend's `max_concurrent` in flight across every call in the
+//! process, and after [`DEAD_ENDPOINT_ROUNDS`] rounds in a row that all failed
+//! every further request fails at once, so a dead endpoint costs seconds.
 
 use std::collections::BTreeSet;
 use std::sync::{Arc, LazyLock};
@@ -42,14 +34,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use tokio::sync::Semaphore;
 
-use super::{PluginBudget, PluginOutcome, PluginVerdict};
 use crate::config_client::ConfigAccess;
 use crate::document_config::{InferenceBackend, InferenceProfile};
 use crate::openai_wire::OpenAiWireApi;
 use crate::Collection;
 
-/// Rounds of model requests one call may be answered.
-pub const MAX_ROUNDS: u32 = 64;
 /// Requests one round may carry.
 pub const MAX_REQUESTS_PER_ROUND: usize = 64;
 /// Bytes of one model answer handed back to the plugin.
@@ -64,9 +53,6 @@ pub const MAX_ANSWER_BYTES_PER_CALL: usize = 32 * 1024 * 1024;
 /// room for a dense page of text without letting a runaway answer fill the
 /// byte limits.
 pub const DEFAULT_MAX_TOKENS: u64 = 8192;
-/// The plugin's final round after model time runs out gets this fraction of
-/// the call's wall clock (one eighth).
-pub const FINAL_ROUND_RESERVE_DIVISOR: u32 = 8;
 /// Consecutive failed rounds after which the endpoint is treated as dead.
 pub const DEAD_ENDPOINT_ROUNDS: u32 = 2;
 const DEFAULT_CONNECT_TIMEOUT_SECS: i64 = 10;
@@ -219,21 +205,21 @@ struct Image {
     data_base64: String,
 }
 
-struct Request {
+pub(super) struct Request {
     id: String,
     prompt: String,
     images: Vec<Image>,
     max_tokens: Option<u64>,
 }
 
-struct Batch {
-    requests: Vec<Request>,
-    state: Option<Value>,
+pub(super) struct Batch {
+    pub(super) requests: Vec<Request>,
+    pub(super) state: Option<Value>,
 }
 
 /// The requests a plugin's output asks for: `None` when the output is a
 /// final result, an error naming what is malformed otherwise.
-fn parse_batch(output: &Value) -> Result<Option<Batch>, String> {
+pub(super) fn parse_batch(output: &Value) -> Result<Option<Batch>, String> {
     // Only an object under `model_calls` is a request: a result that merely
     // echoes the `"model_calls": true` it was given is a result.
     let Some(calls) = output
@@ -390,7 +376,11 @@ impl Session {
     /// Answers every request of one round. At most `max_concurrent` are in
     /// flight per backend across the process; a request past the call's
     /// request or answer-byte budget gets an error result without being sent.
-    async fn serve(&mut self, requests: Vec<Request>, deadline: Instant) -> Map<String, Value> {
+    pub(super) async fn serve(
+        &mut self,
+        requests: Vec<Request>,
+        deadline: Instant,
+    ) -> Map<String, Value> {
         let dead = self.failed_rounds >= DEAD_ENDPOINT_ROUNDS;
         let mut room = self.max_requests.saturating_sub(self.requests_sent);
         let bytes_left = self.answer_bytes < self.max_answer_bytes;
@@ -543,127 +533,6 @@ fn answer_text(answer: &Value) -> Option<String> {
         ),
         _ => None,
     }
-}
-
-/// One plugin run, as the executor supplies it.
-pub(super) type Round = Arc<dyn Fn(Value, PluginBudget) -> Result<PluginOutcome> + Send + Sync>;
-
-fn refused(started: Instant, fuel: u64, verdict: PluginVerdict, why: String) -> PluginOutcome {
-    PluginOutcome {
-        verdict,
-        output: Value::Null,
-        diagnostics: why,
-        fuel_used: fuel,
-        wall_ms: elapsed_ms(started),
-    }
-}
-
-/// Runs the plugin, answering its model requests until it returns a result.
-pub(super) async fn drive(
-    mut session: Session,
-    input: Value,
-    budget: PluginBudget,
-    round: Round,
-) -> Result<PluginOutcome> {
-    let started = Instant::now();
-    let deadline = started + budget.wall_clock;
-    // Model requests stop here; the plugin's final round runs on the rest.
-    let serve_deadline = deadline - budget.wall_clock / FINAL_ROUND_RESERVE_DIVISOR;
-    let mut base = match input {
-        Value::Null => Map::new(),
-        Value::Object(object) => object,
-        _ => anyhow::bail!("a plugin that can call a model takes a JSON object as input"),
-    };
-    base.remove("model_results");
-    base.remove("state");
-    base.insert("model_calls".to_owned(), Value::Bool(true));
-    let mut next = Value::Object(base.clone());
-    let mut fuel = 0u64;
-    let mut served = 0u32;
-    let mut last_round = false;
-    loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Ok(refused(
-                started,
-                fuel,
-                PluginVerdict::Timeout,
-                "the call used its whole wall-clock budget across model rounds".to_owned(),
-            ));
-        }
-        let fuel_left = budget.fuel.map(|total| total.saturating_sub(fuel));
-        if fuel_left == Some(0) {
-            return Ok(refused(
-                started,
-                fuel,
-                PluginVerdict::OutOfFuel,
-                "the call used its whole fuel budget across model rounds".to_owned(),
-            ));
-        }
-        let budget = PluginBudget {
-            wall_clock: remaining,
-            fuel: fuel_left,
-            ..budget
-        };
-        let run = round.clone();
-        let outcome = tokio::task::spawn_blocking(move || run(next, budget))
-            .await
-            .context("the plugin stopped unexpectedly")??;
-        fuel = fuel.saturating_add(outcome.fuel_used);
-        if outcome.verdict != PluginVerdict::Success {
-            return Ok(PluginOutcome {
-                fuel_used: fuel,
-                wall_ms: elapsed_ms(started),
-                ..outcome
-            });
-        }
-        let batch = match parse_batch(&outcome.output) {
-            Ok(None) => {
-                return Ok(PluginOutcome {
-                    fuel_used: fuel,
-                    wall_ms: elapsed_ms(started),
-                    ..outcome
-                })
-            }
-            Ok(Some(batch)) => batch,
-            Err(why) => return Ok(refused(started, fuel, PluginVerdict::BadOutput, why)),
-        };
-        if last_round {
-            return Ok(refused(
-                started,
-                fuel,
-                PluginVerdict::Timeout,
-                "the plugin asked for more model calls after the call's model time ran out"
-                    .to_owned(),
-            ));
-        }
-        if served == MAX_ROUNDS {
-            return Ok(refused(
-                started,
-                fuel,
-                PluginVerdict::Failed,
-                format!("the plugin asked for more than {MAX_ROUNDS} rounds of model calls"),
-            ));
-        }
-        served += 1;
-        tracing::debug!(
-            round = served,
-            requests = batch.requests.len(),
-            "serving plugin model calls"
-        );
-        let results = session.serve(batch.requests, serve_deadline).await;
-        last_round = Instant::now() >= serve_deadline;
-        let mut object = base.clone();
-        object.insert("model_results".to_owned(), Value::Object(results));
-        if let Some(state) = batch.state {
-            object.insert("state".to_owned(), state);
-        }
-        next = Value::Object(object);
-    }
-}
-
-fn elapsed_ms(started: Instant) -> u64 {
-    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 #[cfg(test)]

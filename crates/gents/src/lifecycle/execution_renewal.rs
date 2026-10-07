@@ -36,11 +36,33 @@ impl RenewalTask {
             // Poll more often than renewal is due, but only the bounded policy
             // writes. Skip missed ticks after suspension; never catch up with
             // a burst of renewals or revive an expired generation.
-            let mut ticker = tokio::time::interval(renewal_poll_interval(duration_ms));
+            let poll_interval = renewal_poll_interval(duration_ms);
+            let mut ticker = tokio::time::interval(poll_interval);
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
-                ticker.tick().await;
-                match renew_once(&node, &request_doc_id, &generation).await {
+                let scheduled = ticker.tick().await;
+                let delay = scheduled.elapsed();
+                if delay >= poll_interval {
+                    tracing::warn!(
+                        %request_doc_id, %generation,
+                        poll_delay_ms = delay.as_millis() as u64,
+                        poll_interval_ms = poll_interval.as_millis() as u64,
+                        lease_duration_ms = duration_ms,
+                        "execution lease renewal poll was delayed"
+                    );
+                }
+                let started = std::time::Instant::now();
+                let outcome = renew_once(&node, &request_doc_id, &generation).await;
+                let elapsed = started.elapsed();
+                if elapsed >= poll_interval {
+                    tracing::warn!(
+                        %request_doc_id, %generation,
+                        elapsed_ms = elapsed.as_millis() as u64,
+                        poll_interval_ms = poll_interval.as_millis() as u64,
+                        "execution lease renewal attempt was slow"
+                    );
+                }
+                match outcome {
                     Ok(true) => {}
                     Ok(false) => {
                         observed_lost.cancel();
@@ -49,7 +71,7 @@ impl RenewalTask {
                     Err(error) => {
                         // Do not invent liveness on errors. The next bounded
                         // poll rereads authoritative state; expiry remains final.
-                        tracing::warn!(%error, %request_doc_id, "execution lease renewal failed");
+                        tracing::warn!(%error, %request_doc_id, %generation, "execution lease renewal failed");
                     }
                 }
             }
@@ -184,10 +206,12 @@ pub(crate) async fn renew_in_transaction(
     expected_deadline: Option<DateTime<Utc>>,
     fixture_now: Option<DateTime<Utc>>,
 ) -> Result<RenewalAttemptOutcome> {
+    let started = std::time::Instant::now();
     let doc_id = escape_graphql_string(request_doc_id);
     let result = txn.execute_local_response(&format!(r#"{{ AgentRequest(
                 filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1
             ) {{ request_id lifecycle_state execution_generation execution_lease_expires_at execution_lease_secs }} }}"#)).await?;
+    let snapshot_read_ms = started.elapsed().as_millis() as u64;
     let Some(row) = crate::graphql::first_row::<AgentRequestRow>(&result, "AgentRequest")? else {
         return Ok(RenewalAttemptOutcome::Lost);
     };
@@ -217,6 +241,12 @@ pub(crate) async fn renew_in_transaction(
         deadline_ms: deadline,
     };
     if !renewable_lifecycle(state) || !is_live(observed, generation, now) {
+        tracing::warn!(
+            %request_doc_id, %generation, snapshot_read_ms,
+            expired_by_ms = now.saturating_sub(deadline),
+            lease_duration_ms = duration,
+            "execution lease renewal observed an expired lease"
+        );
         return Ok(RenewalAttemptOutcome::Lost);
     }
     let expected = expected_deadline
@@ -246,11 +276,14 @@ pub(crate) async fn renew_in_transaction(
             .is_some_and(response_has_documents),
         "lease renewal lost deadline CAS"
     );
-    if !is_live(
-        observed,
-        generation,
-        renewal_recheck_time(fixture_now).timestamp_millis(),
-    ) {
+    let recheck = renewal_recheck_time(fixture_now).timestamp_millis();
+    if !is_live(observed, generation, recheck) {
+        tracing::warn!(
+            %request_doc_id, %generation, snapshot_read_ms,
+            expired_by_ms = recheck.saturating_sub(deadline),
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "execution lease expired during renewal commit admission"
+        );
         return Err(RenewalAdmissionExpired.into());
     }
     Ok(RenewalAttemptOutcome::Committed)

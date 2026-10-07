@@ -18,8 +18,11 @@ pub(crate) async fn load_document_runtime_view(
     );
     ensure_agent_principal(node, agent_did).await?;
     let owner = agent_did.to_owned();
-    let mut view =
-        ConfigAccess::transact_local(node, None, "load_runtime_document_view", move |txn| {
+    let mut view = ConfigAccess::transact_local_readonly(
+        node,
+        None,
+        "load_runtime_document_view",
+        move |txn| {
             let owner = owner.clone();
             Box::pin(async move {
                 let mut principals = load_records(txn, &owner, Collection::AgentPrincipal).await?;
@@ -129,8 +132,9 @@ pub(crate) async fn load_document_runtime_view(
                 );
                 Ok(view)
             })
-        })
-        .await?;
+        },
+    )
+    .await?;
     for backend_id in view.backends.keys() {
         if let Some(observation) =
             crate::backend_registry::lookup_backend_observation(node, agent_did, backend_id).await?

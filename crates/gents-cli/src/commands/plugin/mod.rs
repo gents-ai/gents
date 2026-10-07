@@ -256,6 +256,74 @@ pub(crate) mod testing {
         dir
     }
 
+    /// A loopback server answering `/hello` with `hello`; its port.
+    pub(crate) async fn hello_server() -> u16 {
+        let app = axum::Router::new().route("/hello", axum::routing::get(|| async { "hello" }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        port
+    }
+
+    /// A pack whose `fetch` plugin declares the `OutboundHttp` entry
+    /// `http://127.0.0.1:{port}`, asks the host for its input's `url` and
+    /// returns `{"hello": true}` when the answer's body is `hello`. Its one
+    /// case, under its source's `tests/`, fetches `/hello` on `port`.
+    pub(crate) fn http_plugin_pack(port: u16) -> tempfile::TempDir {
+        let afb = build_plugin_afb(
+            "fetch",
+            br##"use std::io::Read;
+fn main() {
+    let mut input = String::new();
+    let _ = std::io::stdin().read_to_string(&mut input);
+    if input.contains("\"http_results\"") {
+        println!("{{\"hello\":{}}}", input.contains("\"body\":\"hello\""));
+    } else {
+        let url = input.split("\"url\":\"").nth(1).and_then(|rest| rest.split('"').next());
+        println!("{{\"http_calls\":{{\"requests\":[{{\"id\":\"a\",\"url\":\"{}\"}}]}}}}", url.unwrap_or_default());
+    }
+}
+"##,
+        );
+        let dir = tempfile::tempdir().expect("tempdir");
+        let tests = dir.path().join("plugins/fetch/tests");
+        std::fs::create_dir_all(&tests).unwrap();
+        std::fs::write(dir.path().join("plugins/fetch.afb"), afb).unwrap();
+        let manifest = serde_json::json!({
+            "manifest_version": 1,
+            "name": "http_plugin_fixture",
+            "version": "0.1.0",
+            "description": "A plugin that fetches through the host.",
+            "namespace": "fixture",
+            "authors": ["gents"],
+            "tags": [],
+            "kind": "plugins",
+            "assets": ["plugins/fetch.afb"],
+            "plugins": [{
+                "name": "fetch",
+                "description": "Fetches a URL through the host.",
+                "artifact": "plugins/fetch.afb",
+                "source": "plugins/fetch",
+                "language": "rust",
+                "input_schema": {"type": "object"},
+                "manifold": {
+                    "fs": "None",
+                    "net": {"OutboundHttp": [format!("http://127.0.0.1:{port}")]},
+                    "env": "None",
+                    "crypto": false,
+                    "child_process": false
+                }
+            }]
+        });
+        std::fs::write(dir.path().join("manifest.json"), manifest.to_string()).unwrap();
+        let case = serde_json::json!({
+            "input": {"url": format!("http://127.0.0.1:{port}/hello")},
+            "expect": {"hello": true}
+        });
+        std::fs::write(tests.join("hello.json"), case.to_string()).unwrap();
+        dir
+    }
+
     fn copy_tree(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
         std::fs::create_dir_all(to)?;
         for entry in std::fs::read_dir(from)? {

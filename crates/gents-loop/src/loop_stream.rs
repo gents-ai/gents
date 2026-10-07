@@ -15,7 +15,7 @@ use serde::de::DeserializeOwned;
 use crate::completion_retry::{
     CompletionRetryPolicy, CompletionRetryState, MidStreamDirective, PreStreamDirective,
 };
-use crate::error::InferenceError;
+use crate::error::{InferenceError, LoopStreamError};
 use crate::rendered_request::{
     AssemblyBuildPath, AssemblyTrace, ContextAccounting, ContextCompactionReason,
     CONTEXT_ACCOUNTING_VERSION,
@@ -28,14 +28,14 @@ use gents_protocol::message::{
     AssistantContent, Message, ToolCall, ToolResult, ToolResultContent, UserContent,
 };
 use gents_protocol::output::OutputSource;
-use rig::agent::{MultiTurnStreamItem, StreamingError};
+use rig::agent::StreamingError;
 use rig::completion::{
-    CompletionError, CompletionModel, CompletionRequest, GetTokenUsage, PromptError, Usage,
+    CompletionError, CompletionModel, CompletionRequest, GetTokenUsage, PromptError,
 };
 
 use crate::tool::ToolDyn;
 use crate::ToolChoice;
-use rig::streaming::{StreamedAssistantContent, StreamedUserContent};
+use rig::streaming::StreamedAssistantContent;
 
 use crate::output_obligation::OutputObligationCheck;
 use crate::provider_audit::ClaudeAuditEvent;
@@ -91,7 +91,8 @@ use request_assembly::{
     prepare_dispatch_attempt, repair_and_rebuild_request,
 };
 pub use tool_dispatch::value_to_json_string;
-use turn_threading::{add_usage_saturating, close_streaming_turn};
+pub use turn_threading::TOOL_RESULT_IMAGE_OMITTED;
+use turn_threading::{bounded_tool_result, close_streaming_turn};
 // The test suite stayed in gents (crates/gents/src/agent/loop_stream/tests/):
 // it builds real DefraSessionHook/EmbeddedNode fixtures for its end-to-end
 // cases and uses `include!` to share one big fixture module across files.
@@ -112,12 +113,10 @@ pub const NO_VISIBLE_OUTPUT_PREFIX: &str = "completion produced no visible outpu
 /// Whether a stream error is the loop's terminal no-visible-output failure.
 /// This is an ordinary unusable model result, not an output-persistence or
 /// ownership invariant.
-pub fn is_no_visible_output_failure(error: &StreamingError) -> bool {
-    matches!(
-        error,
-        StreamingError::Completion(CompletionError::ProviderError(reason))
-            if reason.starts_with(NO_VISIBLE_OUTPUT_PREFIX)
-    )
+pub fn is_no_visible_output_failure(error: &LoopStreamError) -> bool {
+    error
+        .provider_message()
+        .is_some_and(|reason| reason.starts_with(NO_VISIBLE_OUTPUT_PREFIX))
 }
 
 pub fn run_loop_stream<M, H>(
@@ -127,7 +126,23 @@ pub fn run_loop_stream<M, H>(
     history: Vec<TaggedMessage>,
     tools: Arc<Vec<Box<dyn ToolDyn>>>,
     config: LoopConfig,
-) -> impl Stream<Item = Result<LoopStreamItem<M::StreamingResponse>, StreamingError>>
+) -> impl Stream<Item = Result<LoopStreamItem, LoopStreamError>>
+where
+    M: rig_compat::ProviderModel,
+    H: SessionHook + 'static,
+{
+    owned_loop_stream(model, hook, prompt, history, tools, config)
+        .map(|item| item.map_err(rig_compat::loop_stream_error))
+}
+
+fn owned_loop_stream<M, H>(
+    model: M,
+    hook: Option<H>,
+    prompt: TaggedMessage,
+    history: Vec<TaggedMessage>,
+    tools: Arc<Vec<Box<dyn ToolDyn>>>,
+    config: LoopConfig,
+) -> impl Stream<Item = Result<LoopStreamItem, StreamingError>>
 where
     M: CompletionModel + 'static,
     M::StreamingResponse: 'static,
@@ -174,7 +189,6 @@ where
         // Request-local and cumulative across turns, retries, and compaction.
         let mut invalid_tool_progress = invalid_tool_progress::InvalidToolProgress::default();
         let mut repeated_tool_failure = repeated_tool_failure::RepeatedToolFailure::default();
-        let mut aggregated_usage = Usage::new();
         let aggregate_token_budget = config.aggregate_token_budget.clone();
         let mut current_turn: usize = config.initial_turn_index;
         let mut retry = CompletionRetryState::new(config.retry_policy.clone());
@@ -454,7 +468,7 @@ where
             // yielded items drive the consumer's own accumulation/persistence.
             let mut accumulator = AssistantTurnAccumulator::default();
             let mut pending_calls = Vec::new();
-            let mut pending_results: Vec<(ToolCall, String, String)> = Vec::new();
+            let mut pending_results: Vec<(ToolCall, String, Vec<ToolResultContent>)> = Vec::new();
             let mut turn_text = String::new();
             let mut saw_stream_item = false;
             let mut saw_final_usage_event = false;
@@ -669,25 +683,23 @@ where
                     StreamedAssistantContent::Text(text) => {
                         turn_text.push_str(&text.text);
                         accumulator.push_text(&text.text);
-                        yield LoopStreamItem::Item(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(text)));
+                        yield LoopStreamItem::Text(text.text);
                     }
                     StreamedAssistantContent::Reasoning(reasoning) => {
+                        let reasoning = rig_compat::from_rig_reasoning(&reasoning);
                         accumulator
-                            .push_provider_reasoning(
-                                provider_profile,
-                                rig_compat::from_rig_reasoning(&reasoning),
-                            )
+                            .push_provider_reasoning(provider_profile, reasoning.clone())
                             .map_err(|error| StreamingError::Completion(
                                 CompletionError::RequestError(Box::new(std::io::Error::new(
                                     std::io::ErrorKind::InvalidInput,
                                     error.to_string(),
                                 ))),
                             ))?;
-                        yield LoopStreamItem::Item(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Reasoning(reasoning)));
+                        yield LoopStreamItem::Reasoning(reasoning);
                     }
                     StreamedAssistantContent::ReasoningDelta { id, reasoning } => {
                         accumulator.push_provider_reasoning_delta(provider_profile, id.clone(), &reasoning);
-                        yield LoopStreamItem::Item(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::ReasoningDelta { id, reasoning }));
+                        yield LoopStreamItem::ReasoningDelta { id, reasoning };
                     }
                     StreamedAssistantContent::ToolCall { mut tool_call, internal_call_id } => {
                         if let Some(definition) = advertised_tools.iter().find(|tool| tool.name == tool_call.function.name) {
@@ -710,13 +722,12 @@ where
                                 );
                             }
                         }
-                        accumulator.push_tool_call(rig_compat::from_rig_tool_call(&tool_call));
-                        yield LoopStreamItem::Item(MultiTurnStreamItem::StreamAssistantItem(
-                            StreamedAssistantContent::ToolCall {
-                                tool_call: tool_call.clone(),
-                                internal_call_id: internal_call_id.clone(),
-                            },
-                        ));
+                        let native_call = rig_compat::from_rig_tool_call(&tool_call);
+                        accumulator.push_tool_call(native_call.clone());
+                        yield LoopStreamItem::ToolCall {
+                            tool_call: native_call,
+                            internal_call_id: internal_call_id.clone(),
+                        };
 
                         pending_calls.push((tool_call, internal_call_id));
                     }
@@ -725,9 +736,6 @@ where
                     StreamedAssistantContent::Final(raw) => {
                         saw_final_usage_event = true;
                         let usage = raw.token_usage();
-                        if let Some(usage) = usage {
-                            add_usage_saturating(&mut aggregated_usage, usage);
-                        }
                         if let Some(budget) = aggregate_token_budget.as_ref() {
                             let (charge, ledger) = budget.charge_reported(usage)?;
                             match charge {
@@ -1026,11 +1034,7 @@ where
                         &outcome,
                         command_envelope,
                     );
-                    let (bounded, _, _) = truncate_text(
-                        outcome.model_facing_text(),
-                        tool_result_truncation_mode(&tool_name),
-                        &TruncationLimits::default(),
-                    );
+                    let bounded = bounded_tool_result(provider_profile, &tool_name, outcome.model_facing_text());
                     pending_results.push((
                         rig_compat::from_rig_tool_call(&tool_call),
                         internal_call_id,
@@ -1078,7 +1082,7 @@ where
                     }
                     ToolCallHookAction::Skip { reason } => {
                         repeated_tool_failure.reset();
-                        reason
+                        ToolResultContent::from_tool_output(reason)
                     }
                     _ => {
                         let live_output = match hook.as_ref() {
@@ -1140,12 +1144,7 @@ where
                                 command_envelope,
                             );
                         }
-                        let (bounded, _, _) = truncate_text(
-                            outcome.model_facing_text(),
-                            tool_result_truncation_mode(&tool_name),
-                            &TruncationLimits::default(),
-                        );
-                        bounded
+                        bounded_tool_result(provider_profile, &tool_name, outcome.model_facing_text())
                     }
                 };
                 pending_results.push((
@@ -1197,7 +1196,7 @@ where
                         continue 'turns;
                     }
                 }
-                yield LoopStreamItem::Item(MultiTurnStreamItem::final_response(&turn_text, aggregated_usage));
+                yield LoopStreamItem::Final { text: turn_text.clone() };
                 break 'turns;
             }
 

@@ -1870,23 +1870,45 @@ async fn unrestricted_bash_timeout_kills_descendants_and_returns_promptly() {
     let pid_file = root.join("descendant.pid");
     let tool = UnrestrictedBashTool::with_policy(
         ToolContext::new(root, false).unwrap(),
-        Duration::from_secs(1),
-        Duration::from_secs(1),
+        Duration::from_secs(60),
+        Duration::from_secs(60),
         DEFAULT_MAX_COMMAND_CHARS,
         CommandExecutionPolicy::write_capable().with_mode(CommandExecutionMode::Unrestricted),
     );
-    let command = "trap '' TERM; while :; do sleep 1; done & child=$!; printf '%s' \"$child\" > descendant.pid; wait";
+    let command = "sleep 2; trap '' TERM; while :; do sleep 1; done & child=$!; printf '%s' \"$child\" > descendant.pid; wait";
 
     let boxed: Box<dyn crate::llm::tool::ToolDyn> = Box::new(tool);
     let call = crate::tool_call_lifecycle::runtime::call_tool_managed(
         boxed.as_ref(),
         serde_json::json!({
             "command": command,
-            "timeout_secs": 1,
+            "timeout_secs": 60,
         })
         .to_string(),
     );
-    let outcome = match tokio::time::timeout(Duration::from_secs(4), call).await {
+    tokio::pin!(call);
+    // The runtime converts a wall-clock deadline to a Tokio timer after spawn.
+    // Keep that deadline beyond fixture startup, then expire it only once the
+    // descendant exists; otherwise host load can make this test kill no child.
+    let ready = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            if let Some(pid) = std::fs::read_to_string(&pid_file)
+                .ok()
+                .and_then(|value| value.trim().parse::<i32>().ok())
+            {
+                break pid;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    });
+    let descendant_pid = tokio::select! {
+        outcome = &mut call => panic!("bash fixture exited before its descendant was ready: {outcome:?}"),
+        ready = ready => ready.expect("bash fixture must start its descendant before testing timeout"),
+    };
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(60)).await;
+    tokio::time::resume();
+    let outcome = match tokio::time::timeout(Duration::from_secs(4), &mut call).await {
         Ok(outcome) => outcome,
         Err(_) => {
             if let Ok(pid) =
@@ -1911,11 +1933,6 @@ async fn unrestricted_bash_timeout_kills_descendants_and_returns_promptly() {
     let meta = compact_exec_meta(&output);
     assert_eq!(meta["status"], "timeout");
     assert_eq!(meta["timed_out"], true);
-    let descendant_pid = std::fs::read_to_string(&pid_file)
-        .unwrap()
-        .trim()
-        .parse::<i32>()
-        .unwrap();
     assert_unix_process_exited(descendant_pid).await;
 }
 

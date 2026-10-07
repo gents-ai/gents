@@ -1,11 +1,9 @@
 use crate::llm::ToolChoice;
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
-use rig::client::CompletionClient;
-use rig::completion::CompletionModel;
 use serde::Deserialize;
 
-use crate::admission::{AdmissionRegistry, AdmittedCompletionClient};
+use crate::admission::{AdmissionRegistry, AdmittedCompletionModel};
 use crate::agent::completion_retry::CompletionRetryPolicy;
 use crate::agent::loop_stream::{AggregateTokenBudget, LoopConfig};
 use crate::backend_provider::BackendProviderKind;
@@ -46,19 +44,17 @@ pub(crate) fn behavior_slot_fingerprint(behavior: &ResolvedBehavior) -> String {
     )
 }
 
-pub(crate) fn build_admitted_model<C>(
+pub(crate) fn build_admitted_model<C: crate::llm::rig_compat::ProviderClient>(
     client: C,
     admission: AdmissionRegistry,
     behavior: &ResolvedBehavior,
-) -> <AdmittedCompletionClient<C> as CompletionClient>::CompletionModel
-where
-    C: CompletionClient,
-    C::CompletionModel: 'static,
-    <C::CompletionModel as CompletionModel>::Response: 'static,
-    <C::CompletionModel as CompletionModel>::StreamingResponse: 'static,
-{
-    AdmittedCompletionClient::new(client, admission, behavior_connection_fingerprint(behavior))
-        .completion_model(&behavior.model_name)
+) -> AdmittedCompletionModel<C::CompletionModel> {
+    crate::llm::rig_compat::admitted_model(
+        client,
+        admission,
+        behavior_connection_fingerprint(behavior),
+        &behavior.model_name,
+    )
 }
 
 /// Build a loop config for one completion loop.
@@ -398,11 +394,9 @@ fn provider_additional_params(
             }))
         }
         BackendProviderKind::OpenAiCompatible => None,
-        BackendProviderKind::OpenRouter => Some(
-            rig::providers::openrouter::ProviderPreferences::new()
-                .require_parameters(true)
-                .to_json(),
-        ),
+        BackendProviderKind::OpenRouter => Some(serde_json::json!({
+            "provider": { "require_parameters": true }
+        })),
         BackendProviderKind::ChatGptCodex
         | BackendProviderKind::XaiGrokOAuth
         | BackendProviderKind::ClaudeCliSubscription

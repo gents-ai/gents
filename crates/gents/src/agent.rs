@@ -67,7 +67,7 @@ pub(crate) async fn process_owned_request_with_model_for_test<M>(
     request: crate::watcher::AgentRequest,
 ) -> anyhow::Result<()>
 where
-    M: rig::completion::CompletionModel + 'static,
+    M: crate::llm::rig_compat::ProviderModel,
 {
     let allowed_targets =
         crate::tool_surface::resolve_subagent_target_descriptions(tool_surface.as_ref());

@@ -12,7 +12,9 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 
+use super::http_calls;
 use super::model_calls::{self, ModelResolver};
+use super::rounds::{self, HostCalls};
 use super::store::{self, InstalledPlugin};
 use super::{allowed, approval};
 use super::{BoundDir, Manifold, PluginBudget, PluginOutcome, PluginRunner};
@@ -25,7 +27,7 @@ const ADMITTED_BYTES_BUDGET: u64 = 512 * 1024 * 1024;
 struct Admitted {
     granted: Option<Manifold>,
     declaration: crate::pack::PackPlugin,
-    runner: PluginRunner,
+    runner: Arc<PluginRunner>,
     budget: PluginBudget,
     bytes: u64,
 }
@@ -51,10 +53,15 @@ impl BindContext<'_> {
     }
 }
 
-/// The refusal sentence for a path no folder covers and nobody approved.
+/// The refusal sentence for a path no folder covers for this call's `access`
+/// and nobody approved. It names the next call: the folder grant that admits
+/// it, and for a writing call under a read-only grant, the reading call that
+/// already would.
 fn not_allowed(
     resolved: &allowed::Resolved,
     access: crate::pack::BindAccess,
+    granted: Option<crate::pack::BindAccess>,
+    write_fields: &[&str],
     context: &BindContext<'_>,
 ) -> String {
     let flag = match access {
@@ -66,12 +73,30 @@ fn not_allowed(
     } else {
         ""
     };
-    format!(
-        "{} is outside the folders this call may {} ({asked}allow it with `gents plugin dirs add {}{flag}`)",
-        resolved.target.display(),
-        access.as_str().replace('_', " and "),
+    let allow = format!(
+        "allow it with `gents plugin dirs add {}{flag}`",
         resolved.folder().display()
-    )
+    );
+    let fields = write_fields
+        .iter()
+        .map(|field| format!("{field:?}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    match granted {
+        Some(crate::pack::BindAccess::Read) if !write_fields.is_empty() => format!(
+            "{} is allowed read-only and this call writes because it sets {fields} ({asked}{allow}, or call again without {fields} to only read)",
+            resolved.target.display(),
+        ),
+        Some(crate::pack::BindAccess::Read) => format!(
+            "{} is allowed read-only and this plugin writes on every call ({asked}{allow})",
+            resolved.target.display(),
+        ),
+        _ => format!(
+            "{} is outside the folders this call may {} ({asked}{allow})",
+            resolved.target.display(),
+            access.as_str().replace('_', " and "),
+        ),
+    }
 }
 
 /// One completed call: which artifact ran and what it returned.
@@ -176,8 +201,8 @@ impl PluginExecutor {
     /// Binds the path in `input` under `record`'s declared `bind_dir` field
     /// for one call: exactly the file or folder it names, when `context`'s
     /// working folder or the operator's allowed folders cover it with the
-    /// access the plugin declares, or when the operator approves it for this
-    /// call. `None` when the plugin declares no binding or the input does
+    /// access this call asks for (Lean `ToolPolicy.pluginCallAdmitted`), or
+    /// when the operator approves it for this call. `None` when the plugin declares no binding or the input does
     /// not carry the field (the plugin then runs sealed, e.g. on inline
     /// data). The one function a graph node and a model tool both call; the
     /// error is one sentence for the caller.
@@ -208,14 +233,15 @@ impl PluginExecutor {
             .map_err(refuse)?;
         let scope = allowed::Scope::load(home, context.workdir, user_home.as_deref())
             .map_err(|error| refuse(format!("{error:#}")))?;
+        let access = binding.call_access(input);
         let granted = scope.granted(&resolved.target);
-        let covered = granted.is_some_and(|granted| granted >= binding.access);
+        let covered = granted.is_some_and(|granted| granted >= access);
         if !covered {
             let allowed = context.interactive && {
                 let request = approval::Request::new(
                     &plugin,
                     &resolved,
-                    binding.access,
+                    access,
                     context.session_id.map(str::to_owned),
                 );
                 approval::ask(home, &request, approval::WAIT)
@@ -223,14 +249,20 @@ impl PluginExecutor {
                     .map_err(|error| refuse(format!("{error:#}")))?
             };
             if !allowed {
-                return Err(refuse(not_allowed(&resolved, binding.access, context)));
+                return Err(refuse(not_allowed(
+                    &resolved,
+                    access,
+                    granted,
+                    &binding.write_fields_set(input),
+                    context,
+                )));
             }
         }
         let folder_allowed = allowed::Scope::load(home, context.workdir, user_home.as_deref())
             .map_err(|error| refuse(format!("{error:#}")))?
             .granted(resolved.folder())
             .is_some();
-        allowed::bind(&resolved, binding.access, folder_allowed)
+        allowed::bind(&resolved, access, folder_allowed)
             .map(Some)
             .map_err(refuse)
     }
@@ -317,19 +349,16 @@ impl PluginExecutor {
     ) -> Result<PluginCall> {
         let admitted = self.admit(record)?;
         let coordinate = format!("{}/{}", record.namespace, record.name);
-        let (session, binding_note) = self.model_session(record).await?;
-        let budget = admitted.budget;
-        let bound = bound.map(Arc::new);
-        let round: model_calls::Round = Arc::new(move |input, budget| match &bound {
-            Some(bound) => admitted.runner.call_bound(&input, &budget, bound),
-            None => admitted.runner.call(&input, &budget),
-        });
-        let outcome = match session {
-            Some(session) => model_calls::drive(session, input, budget, round).await?,
-            None => tokio::task::spawn_blocking(move || round(input, budget))
-                .await
-                .with_context(|| format!("plugin {coordinate} stopped unexpectedly"))??,
-        };
+        let (model, binding_note) = self.model_session(record).await?;
+        let outcome = drive(
+            &coordinate,
+            admitted.runner.clone(),
+            model,
+            input,
+            admitted.budget,
+            bound,
+        )
+        .await?;
         Ok(PluginCall {
             coordinate,
             digest: record.digest.clone(),
@@ -372,7 +401,7 @@ impl PluginExecutor {
         let admitted = Arc::new(Admitted {
             granted: record.granted.clone(),
             declaration: record.declaration.clone(),
-            runner,
+            runner: Arc::new(runner),
             budget,
             bytes: bytes.len() as u64,
         });
@@ -397,5 +426,44 @@ impl PluginExecutor {
     #[cfg(test)]
     pub(crate) fn admitted_len(&self) -> usize {
         self.admitted.len()
+    }
+}
+
+/// Runs a plugin that is not installed, such as a pack author's own under
+/// `gents pack test` or a scenario `prepare` step, once on `input`: the host
+/// serves the network `runner`'s granted manifold allows, exactly as for an
+/// installed call. It has no model binding to serve.
+pub async fn call_runner(
+    coordinate: &str,
+    runner: Arc<PluginRunner>,
+    input: serde_json::Value,
+    budget: PluginBudget,
+    bound: Option<BoundDir>,
+) -> Result<PluginOutcome> {
+    drive(coordinate, runner, None, input, budget, bound).await
+}
+
+async fn drive(
+    coordinate: &str,
+    runner: Arc<PluginRunner>,
+    model: Option<model_calls::Session>,
+    input: serde_json::Value,
+    budget: PluginBudget,
+    bound: Option<BoundDir>,
+) -> Result<PluginOutcome> {
+    let calls = HostCalls {
+        model,
+        http: http_calls::Session::for_grant(coordinate, &runner.manifold)?,
+    };
+    let round: rounds::Round = Arc::new(move |input, budget| match &bound {
+        Some(bound) => runner.call_bound(&input, &budget, bound),
+        None => runner.call(&input, &budget),
+    });
+    if calls.is_empty() {
+        tokio::task::spawn_blocking(move || round(input, budget))
+            .await
+            .with_context(|| format!("plugin {coordinate} stopped unexpectedly"))?
+    } else {
+        rounds::drive(calls, input, budget, round).await
     }
 }
