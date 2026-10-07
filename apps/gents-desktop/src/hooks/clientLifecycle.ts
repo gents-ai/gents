@@ -366,9 +366,11 @@ export function createClientLifecycle({
         await home.adopt(error);
       }
     } finally {
+      /* cleared first: ending the start and stop asks recovery again, which
+         weighs a wedged transport seen during this restart */
+      recovery.autoRestartInFlight = false;
       setStopping(false);
       setStarting(false);
-      recovery.autoRestartInFlight = false;
     }
   }
 

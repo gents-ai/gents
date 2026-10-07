@@ -250,4 +250,34 @@ describe("desktop client restart selection ordering", () => {
     lifecycle.stores.chat.setState({ sending: false });
     await waitFor(() => expect(api.shutdownDesktopClient).toHaveBeenCalledOnce());
   });
+
+  it("restarts once more for a transport that wedged during a restart", async () => {
+    const withHealth = (status: string) => ({
+      bootstrap: { clientStateExists: true, savedPeers: [{}] },
+      client: {
+        p2pHealth: {
+          status,
+          connectedPeerCount: 0,
+          replicatorCount: 0,
+          consecutiveFailures: status === "wedged" ? 3 : 0,
+          lastError: null,
+          lastOkAt: null,
+          lastFailureAt: null,
+        },
+      },
+    });
+    const api = {
+      fetchDesktopSnapshot: vi
+        .fn()
+        .mockResolvedValueOnce(withHealth("healthy"))
+        .mockResolvedValue(withHealth("wedged")),
+      shutdownDesktopClient: vi.fn(async () => undefined),
+      startDesktopClient: vi.fn(async () => withHealth("wedged")),
+    };
+    const lifecycle = lifecycleFor(api);
+    await waitFor(() => expect(lifecycle.snapshot).not.toBeNull());
+
+    await lifecycle.restartDesktopClient("asked");
+    await waitFor(() => expect(api.shutdownDesktopClient).toHaveBeenCalledTimes(2));
+  });
 });
