@@ -48,6 +48,9 @@ def selfConfigBackendJson (entry : String × String × String) : String :=
     ++ "\"auth\":" ++ jsonString entry.2.2
   ++ "}"
 
+def selfConfigGrantsJson (g : Grants) : String :=
+  "{\"pack_install\":" ++ scBool g.packInstall ++ "}"
+
 def selfConfigCaseJson (w : CaseWitness) : String :=
   "{"
     ++ "\"name\":" ++ jsonString w.row.name ++ ","
@@ -55,6 +58,7 @@ def selfConfigCaseJson (w : CaseWitness) : String :=
     ++ "\"category\":" ++ jsonString w.row.target.category ++ ","
     ++ "\"guarded\":" ++ scBool w.row.guarded ++ ","
     ++ "\"validates\":" ++ scBool w.row.validates ++ ","
+    ++ "\"held_grants\":" ++ selfConfigGrantsJson w.row.held ++ ","
     ++ "\"doc\":" ++ jsonArray (w.row.doc.map fieldValuePairJson) ++ ","
     ++ "\"patch\":"
       ++ jsonArray (w.row.patch.map selfConfigPatchEntryJson) ++ ","

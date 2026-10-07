@@ -39,6 +39,12 @@ pub(crate) struct LeanSelfConfigBackend {
     pub(crate) auth: String,
 }
 
+/// Operator grants the invoking agent holds (`SelfConfig.Grants`).
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LeanSelfConfigGrants {
+    pub(crate) pack_install: bool,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct LeanSelfConfigCase {
     pub(crate) name: String,
@@ -46,6 +52,7 @@ pub(crate) struct LeanSelfConfigCase {
     pub(crate) category: String,
     pub(crate) guarded: bool,
     pub(crate) validates: bool,
+    pub(crate) held_grants: LeanSelfConfigGrants,
     pub(crate) doc: Vec<LeanSelfConfigFieldValue>,
     pub(crate) patch: Vec<LeanSelfConfigPatchEntry>,
     pub(crate) admissible: bool,

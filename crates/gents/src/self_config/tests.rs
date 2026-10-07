@@ -1466,6 +1466,25 @@ async fn config_tools_cannot_self_grant_pack_install() {
     );
 }
 
+#[test]
+fn operator_grants_project_from_the_tools_group() {
+    let project = |tools: Value| OperatorGrants::from_tools_json(tools.as_object().unwrap());
+    assert_eq!(project(json!({})).unwrap(), OperatorGrants::default());
+    assert_eq!(
+        project(json!({"self_config": null})).unwrap(),
+        OperatorGrants::default()
+    );
+    assert!(
+        project(json!({"self_config": {"enable_self_config": true, "enable_pack_install": true}}))
+            .unwrap()
+            .pack_install
+    );
+    assert!(
+        project(json!({"self_config": {"unknown": 1}})).is_err(),
+        "a group that does not decode fails closed"
+    );
+}
+
 // -- behavior commands (#Task 5) --
 
 #[test]

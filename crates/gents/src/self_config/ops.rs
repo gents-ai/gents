@@ -23,7 +23,7 @@ use crate::config_client::{
     DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
 use crate::config_client::{ConfigAccess, ConfigApplyTxn};
-use crate::document_config::{BackendAuth, Tools};
+use crate::document_config::{BackendAuth, SelfConfigTools, Tools};
 use crate::tool_surface::SelfConfigProcessCeiling;
 use crate::toolset::CommandNetworkMode;
 
@@ -732,8 +732,9 @@ pub fn guard_behavior_keeps_reach(
 
 /// Lean `SelfConfig.keepsControl`: the invoker's candidate Tools keep its
 /// self-config tool on and keep the agents group, the no-lockout guard and the
-/// `tools` category it already had. This is the only self-protection on its
-/// own Tools (#1796).
+/// `tools` category it already had. This is the only lockout protection on its
+/// own Tools (#1796); operator grants are bounded separately by
+/// [`guard_tools_keep_grants`].
 pub fn guard_tools_keep_control(
     stored: &Map<String, Value>,
     candidate: &Map<String, Value>,
@@ -772,6 +773,61 @@ pub fn guard_tools_keep_control(
     anyhow::ensure!(
         !had_tools || tools,
         "no-lockout guard: self-config must keep the tools category"
+    );
+    Ok(())
+}
+
+/// Operator-managed grants carried by a Tools document (Lean
+/// `SelfConfig.Grants`). Self-configuration keeps each grant within its own
+/// bound ([`guard_tools_keep_grants`]); operator writes are not bounded by it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct OperatorGrants {
+    /// `self_config.enable_pack_install`.
+    pub pack_install: bool,
+}
+
+impl OperatorGrants {
+    /// Project the grants from a Tools document. An absent or null
+    /// `self_config` group carries none; a group that does not decode as
+    /// [`SelfConfigTools`] is an error, so the guard fails closed.
+    pub fn from_tools_json(tools: &Map<String, Value>) -> Result<Self> {
+        let config = match tools.get("self_config") {
+            None | Some(Value::Null) => SelfConfigTools::default(),
+            Some(group) => serde_json::from_value::<SelfConfigTools>(group.clone())
+                .context("Tools.self_config does not decode; its operator grants cannot be read")?,
+        };
+        Ok(Self {
+            pack_install: config.enable_pack_install.unwrap_or(false),
+        })
+    }
+
+    /// Lean `Grants.boundedBy`: whether each grant `self` carries stays within
+    /// its own bound. Pack installation is held-bounded: carried by `stored` or
+    /// held by `held`.
+    pub fn bounded_by(&self, stored: &Self, held: &Self) -> bool {
+        !self.pack_install || stored.pack_install || held.pack_install
+    }
+}
+
+/// Lean `SelfConfig.keepsGrants`: a self-config write is accepted when each
+/// operator-managed grant of the candidate stays within its own bound against
+/// the Tools document it replaces, so pack installation is raised only up to
+/// what the invoking agent holds; a write that raises nothing is accepted
+/// whatever it holds. `stored` is `None` when no document is replaced. Unlike
+/// [`guard_tools_keep_control`] this always runs, from the validate slot.
+pub fn guard_tools_keep_grants(
+    held: &OperatorGrants,
+    stored: Option<&Map<String, Value>>,
+    candidate: &Map<String, Value>,
+) -> Result<()> {
+    let candidate = OperatorGrants::from_tools_json(candidate)?;
+    let stored = stored
+        .map(OperatorGrants::from_tools_json)
+        .transpose()?
+        .unwrap_or_default();
+    anyhow::ensure!(
+        candidate.bounded_by(&stored, held),
+        "pack installation is operator-managed and cannot be self-granted"
     );
     Ok(())
 }

@@ -898,7 +898,7 @@ def caseCoverage : List CoverageEntry :=
       "self_config_cases"
       "SelfConfigCases"
       "conformance::generated_self_config_cases_fence_patch_merge"
-      "Covers production patch admissibility and accepted merges, and replays guarded rows through the production Tools/Behavior no-lockout guards, the Backend auth fence and the Profile account choice fence. Reference validation and unchanged stored state after rejection require the shared configuration transaction owner.")
+      "Covers production patch admissibility and accepted merges, replays every Tools row through the always-on operator-grant guard (guard_tools_keep_grants), and replays guarded rows through the production Tools/Behavior no-lockout guards, the Backend auth fence and the Profile account choice fence. Reference validation and unchanged stored state after rejection require the shared configuration transaction owner.")
       "self-config" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
       "session_recovery_cases"

@@ -1,13 +1,19 @@
 //! Generated field tables and patch results checked against the existing patch owner.
-//! Guarded rows replay the Lean guard verdict through the production guard of
-//! their target (Tools and Behavior no-lockout, Backend auth, and the Profile
-//! account choice). Reference validation and transactional rejection need an
-//! end-to-end ConfigApplyTxn consumer; this test does not simulate them.
+//! Every Tools row replays the Lean always-on operator-grant verdict through
+//! `guard_tools_keep_grants`; guarded rows also replay the Lean guard verdict
+//! through the production guard of their target (Tools and Behavior no-lockout,
+//! Backend auth, and the Profile account choice). Reference validation and
+//! transactional rejection need an end-to-end ConfigApplyTxn consumer; this
+//! test does not simulate them.
 use crate::lean_vocab_test::{
     lean_self_config_cases, lean_self_config_field_tables, LeanSelfConfigCase,
 };
 use gents::config_client::patch::{
     apply_patch, ensure_admissible, SelfConfigPatch, SelfConfigTarget, ALL_SELF_CONFIG_TARGETS,
+};
+use gents::self_config::{
+    guard_backend_auth, guard_backend_choice, guard_behavior_keeps_reach, guard_tools_keep_control,
+    guard_tools_keep_grants, OperatorGrants,
 };
 use serde_json::{Map, Value};
 use std::collections::BTreeSet;
@@ -102,45 +108,52 @@ pub(super) fn generated_self_config_cases_fence_patch_merge() {
                 case.name
             );
         }
-        if case.guarded && case.admissible && case.validates {
-            let stored = typed_doc(target, &case.doc);
-            let patch = patch
-                .into_iter()
-                .map(|(field, value)| (field, value.map(parse_nested)))
-                .collect();
-            let candidate = apply_patch(target, &stored, &patch);
-            let verdict = match target {
+        let grant_guarded = target == SelfConfigTarget::Tools;
+        if (case.guarded || grant_guarded) && case.admissible && case.validates {
+            let held = OperatorGrants {
+                pack_install: case.held_grants.pack_install,
+            };
+            let typed = || typed_merge(target, case, &patch);
+            let grants = match target {
                 SelfConfigTarget::Tools => {
-                    gents::self_config::guard_tools_keep_control(&stored, &candidate)
+                    let (stored, candidate) = typed();
+                    guard_tools_keep_grants(&held, Some(&stored), &candidate)
                 }
-                SelfConfigTarget::AgentBehavior => {
-                    gents::self_config::guard_behavior_keeps_reach(&stored, &candidate)
-                }
-                SelfConfigTarget::InferenceBackend => {
-                    gents::self_config::guard_backend_auth(&stored, &candidate)
-                }
-                SelfConfigTarget::InferenceProfile => {
-                    let backend = |doc: &Map<String, Value>| {
-                        let id = doc.get("backend_id")?;
-                        case.backends
-                            .iter()
-                            .find(|backend| &parse_nested(backend.backend_id.clone().into()) == id)
-                            .map(typed_backend)
-                    };
-                    match backend(&candidate) {
-                        // The Lean rows fix the default account to the original one (`fun _ => none`).
-                        Some(next) => gents::self_config::guard_backend_choice(
-                            backend(&stored).as_ref(),
-                            &next,
-                            None,
-                        ),
-                        None => Err(anyhow::anyhow!("{}: unknown next backend", case.name)),
+                _ => Ok(()),
+            };
+            let guard = if case.guarded {
+                let (stored, candidate) = typed();
+                match target {
+                    SelfConfigTarget::Tools => guard_tools_keep_control(&stored, &candidate),
+                    SelfConfigTarget::AgentBehavior => {
+                        guard_behavior_keeps_reach(&stored, &candidate)
                     }
+                    SelfConfigTarget::InferenceBackend => guard_backend_auth(&stored, &candidate),
+                    SelfConfigTarget::InferenceProfile => {
+                        let backend = |doc: &Map<String, Value>| {
+                            let id = doc.get("backend_id")?;
+                            case.backends
+                                .iter()
+                                .find(|backend| {
+                                    &parse_nested(backend.backend_id.clone().into()) == id
+                                })
+                                .map(typed_backend)
+                        };
+                        match backend(&candidate) {
+                            // The Lean rows fix the default account to the original one (`fun _ => none`).
+                            Some(next) => {
+                                guard_backend_choice(backend(&stored).as_ref(), &next, None)
+                            }
+                            None => Err(anyhow::anyhow!("{}: unknown next backend", case.name)),
+                        }
+                    }
+                    other => panic!("{}: no runtime guard for {other:?}", case.name),
                 }
-                other => panic!("{}: no runtime guard for {other:?}", case.name),
+            } else {
+                Ok(())
             };
             assert_eq!(
-                verdict.is_ok(),
+                grants.and(guard).is_ok(),
                 case.accepted,
                 "{}: runtime guard",
                 case.name
@@ -170,6 +183,22 @@ fn parse_nested(value: Value) -> Value {
     serde_json::from_str(text).unwrap_or_else(|error| panic!("{text}: {error}"))
 }
 
+/// The stored document and the merged candidate in their typed shapes; Lean
+/// rows carry nested groups as canonical JSON text.
+fn typed_merge(
+    target: SelfConfigTarget,
+    case: &LeanSelfConfigCase,
+    patch: &SelfConfigPatch,
+) -> (Map<String, Value>, Map<String, Value>) {
+    let stored = typed_doc(target, &case.doc);
+    let patch: SelfConfigPatch = patch
+        .iter()
+        .map(|(field, value)| (field.clone(), value.clone().map(parse_nested)))
+        .collect();
+    let candidate = apply_patch(target, &stored, &patch);
+    (stored, candidate)
+}
+
 fn typed_doc(
     target: SelfConfigTarget,
     entries: &[crate::lean_vocab_test::LeanSelfConfigFieldValue],
@@ -178,7 +207,7 @@ fn typed_doc(
         .iter()
         .map(|entry| {
             let value = Value::String(entry.value.clone());
-            let value = if entry.field == target.unique_field() {
+            let value = if entry.field == target.unique_field() || entry.field == "agent_did" {
                 value
             } else {
                 parse_nested(value)

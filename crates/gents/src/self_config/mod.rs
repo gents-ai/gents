@@ -19,8 +19,9 @@ mod text_tests;
 
 pub use ops::{
     apply_tool_grant_selection, guard_backend_auth, guard_backend_choice,
-    guard_behavior_keeps_reach, guard_tools_keep_control, validate_tool_network_selection,
-    PatchOutcome, SelfConfigCore, EFFECT_TIMING_NOTE,
+    guard_behavior_keeps_reach, guard_tools_keep_control, guard_tools_keep_grants,
+    validate_tool_network_selection, OperatorGrants, PatchOutcome, SelfConfigCore,
+    EFFECT_TIMING_NOTE,
 };
 
 use std::collections::{BTreeMap, BTreeSet};
