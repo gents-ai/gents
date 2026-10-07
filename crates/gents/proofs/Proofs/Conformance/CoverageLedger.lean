@@ -523,7 +523,7 @@ def caseCoverage : List CoverageEntry :=
   [ tagged (consumerCoverage
       "root_admission_cases"
       "RootAdmissionCases"
-      "conformance::persona_request::generated_root_admission_cases_drive_production_root_policy")
+      "conformance::root_admission::generated_root_admission_cases_drive_production_root_policy")
       "apply-reconcile" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "pairing_reconcile_cases"
@@ -1915,11 +1915,6 @@ def followUpHookCoverage : List CoverageEntry :=
       "PromptAssembly.Template.assembled_preamble_literal"
       "The existing slot assembler preserves resolved context instructions literally; task_binding_preserves_context confines invocation substitutions to the task slot. Task render_determined proves dependency on declared task variables. The next layers must fence this model through the real provider-input serializer; slot content preservation alone is not a wire-format proof.")
       "prompt-assembly" []
-  , tagged (followUpCoverage
-      "follow_up_hook"
-      "PeerRegistryDiscovery.PersonaRequest.default_disable_rejected"
-      "Incomplete binding (#1737): persona admission cases are not generated from PersonaRequest.lean. The default-disable row in conformance::persona_request::admission_matrix_mirrors_lean_admits is hand-written against decide_persona_request; generating the admission matrix from the Lean opOk owner replaces it.")
-      "apply-reconcile" [Surface.agentFacing]
   ]
 
 def followUpHookIds : List String :=
