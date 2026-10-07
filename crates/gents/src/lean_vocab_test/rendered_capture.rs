@@ -43,6 +43,13 @@ pub(crate) struct LeanRenderedCaptureStorageCase {
     pub(crate) base_depth: usize,
     pub(crate) max_depth: usize,
     pub(crate) base_verified: bool,
+    /// How many block references a manifest row names (`RenderedCapture.
+    /// StoredRequest.manifest`); 0 for the other encodings and for the empty
+    /// manifest. The manifest document sits at ref 1 / witness 10 and its
+    /// blocks at refs 2.., each under its own pinned witness, so this count is
+    /// what lets the Rust fence rebuild the row's artifact store.
+    #[serde(default)]
+    pub(crate) block_count: usize,
     pub(crate) decoded_request: Option<u64>,
     pub(crate) send_permitted: bool,
 }

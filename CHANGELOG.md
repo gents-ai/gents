@@ -14,7 +14,15 @@ source consistency checks, not a separate runtime compatibility version.
   within 2000 px on a side, and at most 100 in all. A plugin
   result with image parts now replays on later turns as its bounded text
   parts plus a note per image, not as raw JSON with the image's base64.
-
+- Capture storage stops re-signing the whole conversation (#2333). New
+  `RenderedRequest` captures split the rendered provider body and the assembly
+  trace into content-defined byte blocks stored once in a new
+  `RenderedRequestBlock` collection, and the capture row carries a manifest of
+  pinned references to them. Each provider call writes only the blocks its new
+  content needs, so capture storage grows linearly with the conversation instead
+  of repeating it on every turn; reads reassemble the body and verify each block
+  against the field commit the manifest pinned. Captures already stored in the
+  earlier formats keep decoding unchanged.
 - `gents pack scenario run` can run a pack whose agent calls plugins from a
   dependency: `--with-pack` packs are stored after the run's `gents init`
   (which empties the home), dependencies install into the run's home before

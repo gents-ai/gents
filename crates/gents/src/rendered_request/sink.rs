@@ -16,6 +16,16 @@
 //! [`crate::rendered_request::transport::RenderedRequestCapturingHttpClient`],
 //! which refuses the HTTP call on any error this returns.
 //!
+//! ## Storage shape
+//!
+//! A capture is stored as content-defined byte blocks plus a manifest row that
+//! references them (#2333). The blocks and the manifest row commit in one
+//! transaction, so a capture is never durable with a manifest naming blocks
+//! that are not, and a failed capture leaves no orphan blocks. Both container
+//! payloads are blockified: the provider body and the assembly trace each grow
+//! with the conversation, so storing either inline would restore the quadratic
+//! cost the blocks exist to remove.
+//!
 //! ## Identity
 //!
 //! Reads and writes use the node identity installed on `EmbeddedNode`. DefraDB
@@ -50,139 +60,6 @@ impl std::fmt::Debug for DefraRenderedRequestSink {
 impl DefraRenderedRequestSink {
     pub fn new(node: Arc<EmbeddedNode>) -> Self {
         Self { node }
-    }
-
-    async fn latest_compatible_base(
-        &self,
-        rendered: &RenderedCompletionRequest,
-    ) -> Result<Option<Value>> {
-        let query = compatible_base_query(rendered)?;
-        let response = crate::graphql::graphql_with_transaction_retry(
-            &self.node,
-            &query,
-            "rendered_request::latest_encoding_base",
-        )
-        .await?;
-        let rows = response
-            .data
-            .as_ref()
-            .and_then(|data| data.get(RENDERED_REQUEST_COLLECTION))
-            .and_then(Value::as_array)
-            .context("reading rendered-request encoding base returned an unexpected shape")?;
-        Ok(rows.first().cloned())
-    }
-
-    async fn encode_from_base(
-        &self,
-        rendered: &RenderedCompletionRequest,
-        value: &Value,
-        kind: super::CapturePayloadKind,
-        base_row: Option<&Value>,
-        prepared: Option<(&Value, &super::commits::RequestJsonCommit)>,
-    ) -> Result<super::encoding::EncodedJson> {
-        let (Some(base_row), Some((base_value, commit))) = (base_row, prepared) else {
-            return super::encoding::encode_full(value);
-        };
-        let Some(doc_id) = base_row.get("_docID").and_then(Value::as_str) else {
-            return super::encoding::encode_full(value);
-        };
-        let Some(stored) = base_row.get("request_json").and_then(Value::as_str) else {
-            return super::encoding::encode_full(value);
-        };
-        let base_version = base_row
-            .get("capture_version")
-            .and_then(Value::as_u64)
-            .and_then(|value| u32::try_from(value).ok())
-            .unwrap_or(1);
-        if base_version != 2 {
-            return super::encoding::encode_full(value);
-        }
-        let Ok(depth) = super::encoding::capture_record_depth(base_version, stored, kind) else {
-            return super::encoding::encode_full(value);
-        };
-        // A depth-limit checkpoint cannot refer to this base. Avoid resolving
-        // its chain (and reading its commit witnesses) merely to discard it.
-        if depth >= super::encoding::MAX_DELTA_DEPTH {
-            return super::encoding::encode_full(value);
-        }
-        let source = serde_json::to_value(rendered.source)?
-            .as_str()
-            .context("rendered source is not a string")?
-            .to_owned();
-        let encoded = super::encoding::encode_against(
-            value,
-            &base_value,
-            super::encoding::BaseWitness {
-                doc_id: doc_id.to_owned(),
-                field_commit_cid: commit.cid.clone(),
-                depth,
-                agent_did: rendered.agent_did.clone(),
-                requester_did: rendered.requester_did.clone(),
-                session_id: rendered.session_id.clone(),
-                source,
-                capture_scope: rendered.capture_scope.clone(),
-            },
-        )?;
-        let reconstructed = match super::encoding::decode_versioned_record(2, &encoded.stored)? {
-            super::encoding::DecodedRecord::Full(value) => value,
-            super::encoding::DecodedRecord::Delta {
-                changed, removed, ..
-            } => super::encoding::apply_delta(base_value.clone(), changed, removed)?,
-            super::encoding::DecodedRecord::Legacy(_) => {
-                anyhow::bail!("new capture encoding unexpectedly used legacy storage")
-            }
-        };
-        anyhow::ensure!(
-            canonical_json(&reconstructed) == canonical_json(value),
-            "lossless capture encoding did not reconstruct the incoming value"
-        );
-        Ok(encoded)
-    }
-
-    async fn prepare_base(
-        &self,
-        base_row: Option<&Value>,
-    ) -> Option<(
-        Option<Value>,
-        Option<Value>,
-        super::commits::RequestJsonCommit,
-    )> {
-        let row = base_row?;
-        let version = row
-            .get("capture_version")
-            .and_then(Value::as_u64)
-            .and_then(|value| u32::try_from(value).ok())?;
-        let stored = row.get("request_json").and_then(Value::as_str)?;
-        let doc_id = row.get("_docID").and_then(Value::as_str)?;
-        if version != 2 {
-            return None;
-        }
-        let request = super::encoding::capture_record_depth(
-            version,
-            stored,
-            super::CapturePayloadKind::RequestBody,
-        )
-        .ok()
-        .is_some_and(|depth| depth < super::encoding::MAX_DELTA_DEPTH);
-        let provenance = super::encoding::capture_record_depth(
-            version,
-            stored,
-            super::CapturePayloadKind::ProvenancePayload,
-        )
-        .ok()
-        .is_some_and(|depth| depth < super::encoding::MAX_DELTA_DEPTH);
-        if !request && !provenance {
-            return None;
-        }
-        let access = crate::config_client::ConfigAccess::Local(Arc::clone(&self.node));
-        let (request, provenance) =
-            super::decode_capture_pair_selected(&access, version, stored, request, provenance)
-                .await
-                .ok()?;
-        let commit = super::commits::field_commit(&access, doc_id, "request_json")
-            .await
-            .ok()??;
-        Some((request, provenance, commit))
     }
 
     /// The immutable capture fact already stored under `capture_key`, if any.
@@ -240,8 +117,14 @@ impl DefraRenderedRequestSink {
         }
     }
 
-    async fn create(
-        &self,
+    /// Create the capture manifest row inside `txn`, after the blocks it names.
+    ///
+    /// A duplicate-key error is an expected input to reconciliation, so the
+    /// create itself does not warn; a genuine failure is logged by the
+    /// transport after the re-read outside the transaction cannot establish
+    /// idempotency.
+    async fn create_in_txn(
+        txn: &crate::config_client::ConfigApplyTxn<'_>,
         rendered: &RenderedCompletionRequest,
         request_json: &str,
         provenance_json: &str,
@@ -298,15 +181,7 @@ impl DefraRenderedRequestSink {
             created_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339()),
         );
 
-        // A duplicate-key error is an expected input to reconciliation, so the
-        // create itself does not warn. A genuine failure is logged by the
-        // transport after the re-read below cannot establish idempotency.
-        let response = crate::config_client::ConfigAccess::write_local_response(
-            &self.node,
-            "rendered_request.create",
-            &mutation,
-        )
-        .await?;
+        let response = txn.execute(&mutation).await?;
         // A mutation that returns no document wrote nothing, and "no errors" is
         // not the same as "durable". The field lookup is explicit rather than
         // handing the whole `data` object to `response_has_documents`, which
@@ -316,8 +191,7 @@ impl DefraRenderedRequestSink {
         // key `add_RenderedRequest`, and hard-coding either spelling would turn
         // a rename into a silently unverified write.
         if !response
-            .data
-            .as_ref()
+            .get("data")
             .and_then(single_mutation_result)
             .is_some_and(crate::graphql::response_has_documents)
         {
@@ -418,8 +292,8 @@ impl DefraRenderedRequestSink {
     }
 
     /// Persist one capture. See the outcome table at the top of this module.
-    /// Writes exactly the given stored bytes, bypassing encoding and base
-    /// selection, so tests can create captures the reader must reject.
+    /// Writes exactly the given stored bytes, bypassing chunking and block
+    /// writes, so tests can create captures the reader must reject.
     #[cfg(test)]
     pub(crate) async fn create_stored_for_test(
         &self,
@@ -427,7 +301,20 @@ impl DefraRenderedRequestSink {
         request_json: &str,
     ) -> Result<()> {
         let provenance_json = canonical_json_string(&rendered.provenance_json)?;
-        self.create(rendered, request_json, &provenance_json).await
+        crate::config_client::ConfigAccess::transact_local(
+            self.node.as_ref(),
+            None,
+            "rendered_request.create_stored_for_test",
+            |txn| {
+                let rendered = rendered.clone();
+                let request_json = request_json.to_owned();
+                let provenance_json = provenance_json.clone();
+                Box::pin(async move {
+                    Self::create_in_txn(txn, &rendered, &request_json, &provenance_json).await
+                })
+            },
+        )
+        .await
     }
 
     pub async fn capture(&self, rendered: RenderedCompletionRequest) -> Result<()> {
@@ -437,67 +324,61 @@ impl DefraRenderedRequestSink {
             rendered.capture_version,
             gents_protocol::rendered_request::CAPTURE_VERSION
         );
-        let base = self.latest_compatible_base(&rendered).await;
-        self.capture_with_base_result(rendered, base).await
-    }
-
-    async fn capture_with_base_result(
-        &self,
-        rendered: RenderedCompletionRequest,
-        base_result: Result<Option<Value>>,
-    ) -> Result<()> {
         // Canonicalize once. The stored bytes and the complete-fact comparison
         // have to use the same representation or "identical" means nothing.
-        let base = match base_result {
-            Ok(base) => base,
-            Err(error) => {
-                tracing::warn!(
-                    capture_key = %rendered.capture_key,
-                    request_id = %rendered.request_id,
-                    error = %error,
-                    "optional rendered-request compression base was unavailable; storing a full capture"
-                );
-                None
-            }
-        };
-        let prepared = self.prepare_base(base.as_ref()).await;
-        let request_encoding = self
-            .encode_from_base(
-                &rendered,
-                &rendered.request_json,
-                super::CapturePayloadKind::RequestBody,
-                base.as_ref(),
-                prepared
-                    .as_ref()
-                    .and_then(|(request, _, commit)| request.as_ref().map(|value| (value, commit))),
-            )
-            .await
+        let request_canonical = canonical_json_string(&rendered.request_json)
             .context("encoding rendered-request request_json")?;
+        let provenance_payload_canonical = canonical_json_string(&rendered.provenance_payload_json)
+            .context("encoding rendered-request provenance payload")?;
         let provenance_json = canonical_json_string(&rendered.provenance_json)
             .context("encoding rendered-request provenance_json")?;
-        let provenance_encoding = self
-            .encode_from_base(
-                &rendered,
-                &rendered.provenance_payload_json,
-                super::CapturePayloadKind::ProvenancePayload,
-                base.as_ref(),
-                prepared.as_ref().and_then(|(_, provenance, commit)| {
-                    provenance.as_ref().map(|value| (value, commit))
-                }),
-            )
-            .await
-            .context("encoding rendered-request provenance payload")?;
+        let blocks = pending_capture_blocks(&request_canonical, &provenance_payload_canonical);
 
-        // The preceding read selects an optional immutable compression base;
-        // this create remains the only write on the fresh path. Re-delivery and
-        // races additionally pay for the conflict read and semantic decode.
-        let capture_container =
-            super::encoding::encode_container(&request_encoding, &provenance_encoding)?;
-        let capture_result = match self
-            .create(&rendered, &capture_container, &provenance_json)
-            .await
-        {
-            Ok(()) => {
+        // Blocks and the manifest row commit together. The existence read runs
+        // inside the same transaction as the creates it gates: a snapshot that
+        // disagrees with the writes would turn a concurrent same-content writer
+        // into a failed capture instead of an idempotent reuse, and the
+        // transaction owner retries this whole closure on conflict, where a
+        // fresh snapshot re-decides what is missing. A block create that
+        // nevertheless loses the unique content key reconciles against the
+        // winning row inside the attempt, since the retry owner classifies
+        // neither that error nor the manifest's duplicate key as a conflict.
+        let capture_container = crate::config_client::ConfigAccess::transact_local(
+            self.node.as_ref(),
+            None,
+            "rendered_request.capture",
+            |txn| {
+                let blocks = blocks.clone();
+                let request_canonical = request_canonical.clone();
+                let provenance_payload_canonical = provenance_payload_canonical.clone();
+                let provenance_json = provenance_json.clone();
+                let rendered = rendered.clone();
+                Box::pin(async move {
+                    let mut stored = StoredCaptureBlocks::default();
+                    let request_entries =
+                        write_capture_blocks(txn, &blocks, &request_canonical, &mut stored).await?;
+                    verify_created_block_readback(txn, &request_entries, &stored).await?;
+                    let request_encoding = super::encoding::encode_manifest(&request_entries)?;
+                    let provenance_entries = write_capture_blocks(
+                        txn,
+                        &blocks,
+                        &provenance_payload_canonical,
+                        &mut stored,
+                    )
+                    .await?;
+                    let provenance_encoding =
+                        super::encoding::encode_manifest(&provenance_entries)?;
+                    let container =
+                        super::encoding::encode_container(&request_encoding, &provenance_encoding)?;
+                    Self::create_in_txn(txn, &rendered, &container, &provenance_json).await?;
+                    Ok(container)
+                })
+            },
+        )
+        .await;
+
+        let capture_result = match capture_container {
+            Ok(_) => {
                 tracing::debug!(
                     capture_key = %rendered.capture_key,
                     request_id = %rendered.request_id,
@@ -509,19 +390,18 @@ impl DefraRenderedRequestSink {
                 );
                 Ok(())
             }
-            Err(create_error) => {
-                // A concurrent writer may have won the unique index between the
-                // lookup and the create. Re-read: an identical value is still
-                // an idempotent success, a different one is still an integrity
-                // violation, and anything else keeps the original error.
-                match self.stored_fact(&rendered.capture_key).await {
-                    Ok(Some(stored)) => {
-                        self.reconcile_existing(&rendered, stored, "create_conflict")
-                            .await
-                    }
-                    _ => Err(create_error),
+            // A concurrent writer may have won the unique index between the
+            // lookup and the create, taking the block writes down with the
+            // transaction. Re-read: an identical value is still an idempotent
+            // success, a different one is still an integrity violation, and
+            // anything else keeps the original error.
+            Err(create_error) => match self.stored_fact(&rendered.capture_key).await {
+                Ok(Some(stored)) => {
+                    self.reconcile_existing(&rendered, stored, "create_conflict")
+                        .await
                 }
-            }
+                _ => Err(create_error),
+            },
         };
         capture_result?;
         self.persist_inference_call_context_accounting(&rendered)
@@ -660,6 +540,355 @@ fn canonical_capture_fact(rendered: &RenderedCompletionRequest) -> Result<Value>
 
 const RENDERED_REQUEST_COLLECTION: &str = gents_protocol::schemas::RENDERED_REQUEST_NAME;
 
+const RENDERED_REQUEST_BLOCK_COLLECTION: &str =
+    gents_protocol::schemas::RENDERED_REQUEST_BLOCK_NAME;
+
+/// Split one capture payload into its unique content-defined blocks, in
+/// first-seen order. A body may contain byte-identical chunks; the content key
+/// is the collection's unique identity, so each is stored once and referenced
+/// as many times as it occurs.
+fn pending_capture_blocks(
+    request_canonical: &str,
+    provenance_canonical: &str,
+) -> Vec<PendingBlock> {
+    let mut blocks = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for chunk in super::encoding::chunk_capture_body(request_canonical)
+        .iter()
+        .chain(super::encoding::chunk_capture_body(provenance_canonical).iter())
+    {
+        if seen.insert(chunk.content_key.clone()) {
+            blocks.push(PendingBlock {
+                content_key: chunk.content_key.clone(),
+                bytes: chunk.bytes.clone(),
+            });
+        }
+    }
+    blocks
+}
+
+/// One unique block a capture needs stored: the content key of its bytes and
+/// the bytes themselves.
+#[derive(Clone)]
+struct PendingBlock {
+    content_key: String,
+    bytes: Vec<u8>,
+}
+
+/// Create mutation for one capture block. The payload travels as a typed
+/// GraphQL variable, never as rendered GraphQL text: block bytes are canonical
+/// JSON text, and the variable encoder preserves them exactly where rendered
+/// text would have to escape its way back to the same bytes.
+const CREATE_RENDERED_REQUEST_BLOCK_MUTATION: &str = "mutation($input: \
+RenderedRequestBlockMutationInputArg!) { create_RenderedRequestBlock(input: $input) { _docID } }";
+
+/// Read the block rows already stored under `keys`, in one batched query.
+///
+/// Returns `content_key -> (doc_id, payload)`. A row whose payload does not
+/// hash to its own content key is an integrity error, not a reusable block:
+/// pinning it would name bytes the key does not describe.
+async fn stored_blocks_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    keys: &[String],
+) -> Result<std::collections::BTreeMap<String, (String, String)>> {
+    let mut stored = std::collections::BTreeMap::new();
+    if keys.is_empty() {
+        return Ok(stored);
+    }
+    let rendered_keys = keys
+        .iter()
+        .map(|key| format!("\"{}\"", escape_graphql_string(key)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let query = format!(
+        r#"{{ {collection}(filter: {{ content_key: {{ _in: [{rendered_keys}] }} }}) {{
+            _docID content_key payload
+        }} }}"#,
+        collection = RENDERED_REQUEST_BLOCK_COLLECTION,
+    );
+    let response = txn.execute(&query).await?;
+    let rows = response
+        .get("data")
+        .and_then(|data| data.get(RENDERED_REQUEST_BLOCK_COLLECTION))
+        .and_then(Value::as_array)
+        .context("reading stored capture blocks returned an unexpected shape")?;
+    for row in rows {
+        let content_key = row
+            .get("content_key")
+            .and_then(Value::as_str)
+            .context("stored capture block row lacks content_key")?
+            .to_owned();
+        let doc_id = row
+            .get("_docID")
+            .and_then(Value::as_str)
+            .context("stored capture block row lacks _docID")?
+            .to_owned();
+        let payload = row
+            .get("payload")
+            .and_then(Value::as_str)
+            .context("stored capture block row lacks payload")?
+            .to_owned();
+        anyhow::ensure!(
+            super::encoding::block_content_key(payload.as_bytes()) == content_key,
+            "stored capture block {doc_id} payload does not match its content key"
+        );
+        if stored
+            .insert(content_key.clone(), (doc_id, payload))
+            .is_some()
+        {
+            anyhow::bail!(
+                "capture block content key {content_key} matched more than one row; the unique \
+                 index is not enforcing"
+            );
+        }
+    }
+    Ok(stored)
+}
+
+/// Block documents this capture has already resolved or written, shared by both
+/// payload writes so the batched existence read runs once per capture.
+#[derive(Default)]
+struct StoredCaptureBlocks {
+    doc_ids: std::collections::BTreeMap<String, String>,
+    /// Blocks this attempt created, keyed by content key. Reused rows had
+    /// their stored payload byte-compared on read; created rows did not, which
+    /// is what the post-create read-back exists to close.
+    created: std::collections::BTreeMap<String, Vec<u8>>,
+}
+
+/// A unique-index violation surfaced through a transaction statement: DefraDB's
+/// shared `UniqueConstraintViolation` message, the same error class
+/// `gents-migration` tolerates at boot. The transaction owner classifies only
+/// snapshot conflicts as replayable, so this class neither retries nor
+/// reconciles on its own; the caller must.
+fn is_unique_index_violation(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|cause| cause.to_string().contains("violates unique index"))
+}
+
+/// Create one capture block document and return its document id.
+///
+/// The content key is unique on the collection, so the create can lose to a
+/// concurrent writer that stored the same block first. The loser reconciles
+/// inside this same attempt instead of failing the capture: the winning row is
+/// re-read by content key, byte-compared, and its document id returned so the
+/// manifest names the row that is actually durable — the entry loop then pins
+/// that row's current field commit. Only a winner holding different bytes for
+/// the same content key is an integrity error.
+async fn create_block_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    block: &PendingBlock,
+) -> Result<String> {
+    let payload = String::from_utf8(block.bytes.clone()).context(
+        "capture block bytes must be valid UTF-8; chunk boundaries land on character boundaries",
+    )?;
+    let input = serde_json::json!({
+        "content_key": block.content_key,
+        "payload": payload,
+        "byte_len": block.bytes.len(),
+        "created_at": chrono::Utc::now().to_rfc3339(),
+    });
+    let variables = serde_json::json!({ "input": input });
+    let response = match txn
+        .execute_with_variables(CREATE_RENDERED_REQUEST_BLOCK_MUTATION, &variables)
+        .await
+    {
+        Ok(response) => response,
+        Err(error) if is_unique_index_violation(&error) => {
+            return reconcile_created_block(txn, block).await;
+        }
+        Err(error) => return Err(error),
+    };
+    // The result field is taken as the response's single mutation entry
+    // rather than by name, for the same reason the capture-row verification
+    // above avoids both spellings: DefraDB answers a `create_X` mutation
+    // under an `add_X` key, and hard-coding either would turn a rename into
+    // a silently unverified write.
+    response
+        .get("data")
+        .and_then(single_mutation_result)
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("_docID"))
+        .and_then(Value::as_str)
+        .with_context(|| {
+            format!(
+                "creating capture block returned no document: {}",
+                block.content_key
+            )
+        })
+        .map(ToOwned::to_owned)
+}
+
+/// Resolve the winner of a lost block create: the row already holding the
+/// content key, which must carry the same bytes or the store is lying about
+/// content it addresses.
+async fn reconcile_created_block(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    block: &PendingBlock,
+) -> Result<String> {
+    let (doc_id, payload) = stored_blocks_in_txn(txn, &[block.content_key.clone()])
+        .await?
+        .get(&block.content_key)
+        .with_context(|| {
+            format!(
+                "capture block create lost the unique content key {} but its winner is unreadable",
+                block.content_key
+            )
+        })?
+        .clone();
+    anyhow::ensure!(
+        payload.as_bytes() == block.bytes.as_slice(),
+        "concurrent capture block {doc_id} holds different bytes under the same content key"
+    );
+    Ok(doc_id)
+}
+
+/// Write the blocks one capture payload needs and return its manifest entries,
+/// reusing rows another capture already stored.
+///
+/// The function gates its own commit the way `encode_full` does: it reassembles
+/// the stored bytes back over the canonical body and refuses to return entries
+/// that do not reproduce it exactly, so no manifest is ever written for a body
+/// the store cannot give back. Reused rows are byte-compared on read, created
+/// rows are read back once through [`verify_created_block_readback`].
+///
+/// Every entry pins the *current* field commit of its block document, read in
+/// this same transaction for created and reused rows alike, so the manifest
+/// never trusts a prior manifest's witness; the reads issue one batched
+/// statement per [`super::commits::FIELD_COMMIT_ALIAS_BATCH`] documents rather
+/// than one round trip per entry. The byte length is pinned beside the witness
+/// so a later short read fails closed instead of reassembling a truncated
+/// body.
+async fn write_capture_blocks(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    blocks: &[PendingBlock],
+    canonical: &str,
+    stored: &mut StoredCaptureBlocks,
+) -> Result<Vec<super::encoding::ManifestEntry>> {
+    let unresolved: Vec<&PendingBlock> = blocks
+        .iter()
+        .filter(|block| !stored.doc_ids.contains_key(&block.content_key))
+        .collect();
+    if !unresolved.is_empty() {
+        let keys = unresolved
+            .iter()
+            .map(|block| block.content_key.clone())
+            .collect::<Vec<_>>();
+        let present = stored_blocks_in_txn(txn, &keys).await?;
+        for block in &unresolved {
+            if let Some((doc_id, payload)) = present.get(&block.content_key) {
+                anyhow::ensure!(
+                    payload.as_bytes() == block.bytes.as_slice(),
+                    "stored capture block {doc_id} holds different bytes under the same content key"
+                );
+                stored
+                    .doc_ids
+                    .insert(block.content_key.clone(), doc_id.clone());
+            }
+        }
+    }
+    for block in blocks {
+        if stored.doc_ids.contains_key(&block.content_key) {
+            continue;
+        }
+        let doc_id = create_block_in_txn(txn, block).await?;
+        stored
+            .created
+            .insert(block.content_key.clone(), block.bytes.clone());
+        stored.doc_ids.insert(block.content_key.clone(), doc_id);
+    }
+
+    let chunks = super::encoding::chunk_capture_body(canonical);
+    let chunk_doc_ids = chunks
+        .iter()
+        .map(|chunk| {
+            stored
+                .doc_ids
+                .get(&chunk.content_key)
+                .context("capture block document id was not resolved")
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut witness_docs: Vec<String> = Vec::new();
+    let mut seen_docs = std::collections::BTreeSet::new();
+    for doc_id in &chunk_doc_ids {
+        if seen_docs.insert((*doc_id).clone()) {
+            witness_docs.push((*doc_id).clone());
+        }
+    }
+    // One batched read pins every block document's current payload commit in
+    // this same snapshot; a body may reference one block several times, so the
+    // witness is read once per document and applied per entry below.
+    let witnesses = super::commits::field_commits_in_txn(txn, &witness_docs, "payload").await?;
+    let witness_by_doc: std::collections::BTreeMap<&str, &super::commits::RequestJsonCommit> =
+        witness_docs
+            .iter()
+            .zip(witnesses.iter())
+            .filter_map(|(doc_id, commit)| commit.as_ref().map(|commit| (doc_id.as_str(), commit)))
+            .collect();
+
+    let mut entries = Vec::new();
+    let mut assembled = Vec::new();
+    for (chunk, doc_id) in chunks.iter().zip(&chunk_doc_ids) {
+        let commit = witness_by_doc
+            .get(doc_id.as_str())
+            .with_context(|| format!("capture block {doc_id} lacks a payload field commit"))?;
+        assembled.extend_from_slice(&chunk.bytes);
+        entries.push(super::encoding::ManifestEntry {
+            doc_id: (*doc_id).clone(),
+            content_key: chunk.content_key.clone(),
+            field_commit_cid: commit.cid.clone(),
+            byte_len: u64::try_from(chunk.bytes.len()).context("capture block length overflow")?,
+        });
+    }
+    anyhow::ensure!(
+        assembled == canonical.as_bytes(),
+        "chunked capture blocks did not reassemble into the canonical body"
+    );
+    Ok(entries)
+}
+
+/// Read one block this capture created back through the same transaction and
+/// byte-compare it with the bytes the writer holds.
+///
+/// The reassemble gate inside `write_capture_blocks` compares in-memory chunk
+/// bytes, and reused rows were byte-compared against a store read; created
+/// rows were the one path store-side mangling could survive unseen until a
+/// reader failed closed. One read per capture, on the first block of the
+/// request-body manifest the capture created; a manifest built entirely from
+/// already-stored rows read everything it names.
+async fn verify_created_block_readback(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    entries: &[super::encoding::ManifestEntry],
+    stored: &StoredCaptureBlocks,
+) -> Result<()> {
+    let Some(entry) = entries
+        .iter()
+        .find(|entry| stored.created.contains_key(&entry.content_key))
+    else {
+        return Ok(());
+    };
+    let Some(bytes) = stored.created.get(&entry.content_key) else {
+        return Ok(());
+    };
+    let (doc_id, payload) = stored_blocks_in_txn(txn, &[entry.content_key.clone()])
+        .await?
+        .get(&entry.content_key)
+        .with_context(|| {
+            format!(
+                "created capture block {} was unreadable in its own transaction",
+                entry.content_key
+            )
+        })?
+        .clone();
+    anyhow::ensure!(
+        payload.as_bytes() == bytes.as_slice(),
+        "created capture block {doc_id} did not read back the bytes it was written with"
+    );
+    Ok(())
+}
+
 /// The single result field of a single-operation mutation envelope.
 ///
 /// `None` when the envelope is not a one-entry object, which is the honest
@@ -687,38 +916,28 @@ pub(crate) fn defra_rendered_request_capture_factory(
     })
 }
 
-/// DefraDB recognizes ordered index scans only when ORDER BY names the index
-/// prefix. The equality-constrained fields are constant across matching rows,
-/// so including them preserves newest-first order and lets LIMIT stop the scan.
-fn compatible_base_query(rendered: &RenderedCompletionRequest) -> Result<String> {
-    let source = serde_json::to_value(rendered.source)?
-        .as_str()
-        .context("rendered source is not a string")?
-        .to_owned();
-    Ok(format!(
-        r#"{{ RenderedRequest(filter: {{
-                agent_did: {{_eq: "{agent_did}"}}, requester_did: {{_eq: "{requester_did}"}},
-                session_id: {{_eq: "{session_id}"}}, source: {{_eq: "{source}"}},
-                capture_scope: {{_eq: "{capture_scope}"}}
-            }}, order: [{{agent_did: DESC}}, {{requester_did: DESC}}, {{session_id: DESC}},
-                {{source: DESC}}, {{capture_scope: DESC}}, {{created_at: DESC}}], limit: 1) {{
-                _docID capture_version agent_did requester_did session_id source capture_scope
-                request_json
-            }} }}"#,
-        agent_did = escape_graphql_string(&rendered.agent_did),
-        requester_did = escape_graphql_string(&rendered.requester_did),
-        session_id = escape_graphql_string(&rendered.session_id),
-        source = escape_graphql_string(&source),
-        capture_scope = escape_graphql_string(&rendered.capture_scope),
-    ))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::{json, Value};
 
-    fn rendered_fixture() -> RenderedCompletionRequest {
+    /// Deterministic pseudo-text for capture bodies under test: a fixed-seed
+    /// xorshift64 stream mapped onto `a..z`. Long enough bodies to span several
+    /// content-defined blocks is what makes the block-count assertions below
+    /// meaningful, so every body here is built from it.
+    fn capture_text(seed: u64, len: usize) -> String {
+        let mut state = seed;
+        let mut out = String::with_capacity(len);
+        while out.len() < len {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            out.push(char::from(b'a' + (state % 26) as u8));
+        }
+        out
+    }
+
+    fn rendered_turn(turn_index: usize, request_json: Value) -> RenderedCompletionRequest {
         let capture_scope = "inference.1".to_string();
         let assembly_trace = super::super::AssemblyTrace::from_effective_messages(
             super::super::AssemblyBuildPath::Budgeted,
@@ -730,7 +949,7 @@ mod tests {
                 "session",
                 "",
                 &capture_scope,
-                0,
+                turn_index,
                 0,
             )
             .unwrap(),
@@ -739,7 +958,7 @@ mod tests {
             request_commit_cid: String::new(),
             request_id: "request".into(),
             capture_scope: capture_scope.clone(),
-            turn_index: 0,
+            turn_index,
             attempt: 0,
             agent_did: "did:key:test".into(),
             requester_did: String::new(),
@@ -747,7 +966,7 @@ mod tests {
             session_id: "session".into(),
             model_name: "model".into(),
             source: super::super::RenderedRequestSource::OpenAiChatCompletions,
-            request_json: json!({"messages":[{"role":"user","content":"body"}]}),
+            request_json,
             messages_json: json!([]),
             tools_json: json!([]),
             tool_choice_json: Value::Null,
@@ -764,66 +983,264 @@ mod tests {
         }
     }
 
+    async fn block_rows(node: &EmbeddedNode) -> Vec<Value> {
+        let response = node
+            .execute(r#"{ RenderedRequestBlock { _docID content_key byte_len } }"#)
+            .await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        response.data.unwrap()["RenderedRequestBlock"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    async fn stored_capture(node: &EmbeddedNode, capture_key: &str) -> Value {
+        let response = node
+            .execute(&format!(
+                r#"{{ RenderedRequest(filter: {{ capture_key: {{ _eq: "{}" }} }}, limit: 2) {{ capture_version request_json }} }}"#,
+                escape_graphql_string(capture_key)
+            ))
+            .await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        let rows = response.data.unwrap()["RenderedRequest"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(rows.len(), 1, "exactly one capture row per key");
+        rows.into_iter().next().unwrap()
+    }
+
     #[tokio::test]
-    async fn compression_base_order_stops_at_latest_compatible_capture() {
+    async fn capture_writes_blocks_and_a_manifest_that_decode_back() {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
         let sink = DefraRenderedRequestSink::new(Arc::clone(&node));
-        let mut rendered = rendered_fixture();
-        for index in 0..49 {
-            rendered.capture_key = format!("capture-{index}");
-            sink.create_stored_for_test(&rendered, &format!("capture-{index}"))
-                .await
-                .unwrap();
-        }
-        let mut incompatible = rendered.clone();
-        incompatible.capture_scope = "other-scope".into();
-        incompatible.capture_key = "incompatible-capture".into();
-        sink.create_stored_for_test(&incompatible, "incompatible")
-            .await
-            .unwrap();
-        let latest = sink
-            .latest_compatible_base(&rendered)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(latest["request_json"], "capture-48");
-
-        fn metric(value: &Value, field: &str) -> Option<u64> {
-            match value {
-                Value::Object(object) => object
-                    .get(field)
-                    .and_then(Value::as_u64)
-                    .or_else(|| object.values().find_map(|value| metric(value, field))),
-                Value::Array(array) => array.iter().find_map(|value| metric(value, field)),
-                _ => None,
-            }
-        }
-        let ordered = compatible_base_query(&rendered).unwrap();
-        let before = ordered.replace(
-            "order: [{agent_did: DESC}, {requester_did: DESC}, {session_id: DESC},\n                {source: DESC}, {capture_scope: DESC}, {created_at: DESC}]",
-            "order: {created_at: DESC}",
+        let rendered = rendered_turn(
+            0,
+            json!({"model": "m", "messages": [{"role": "user", "content": capture_text(1, 9 * 1024)}]}),
         );
-        assert_ne!(before, ordered);
-        let mut fetched = Vec::new();
-        for query in [before, ordered] {
-            let response = crate::graphql::graphql_with_transaction_retry(
-                &node,
-                &format!("query @explain(type: execute) {query}"),
-                "measure compression-base query",
+        sink.capture(rendered.clone()).await.expect("capture");
+
+        let row = stored_capture(node.as_ref(), &rendered.capture_key).await;
+        assert_eq!(row["capture_version"].as_u64(), Some(3));
+        let stored = row["request_json"].as_str().unwrap();
+        let container: Value = serde_json::from_str(stored).unwrap();
+        assert_eq!(container["request_body"]["kind"], "manifest");
+        assert_eq!(container["provenance_payload"]["kind"], "manifest");
+        let blocks = block_rows(node.as_ref()).await;
+        assert!(
+            blocks.len() > 1,
+            "a body spanning several blocks must be stored as blocks"
+        );
+
+        let (request, provenance) =
+            super::super::decode_capture_pair_embedded(node.as_ref(), 3, stored)
+                .await
+                .expect("decode v3 capture pair");
+        assert_eq!(
+            request,
+            super::super::canonical_json(&rendered.request_json)
+        );
+        assert_eq!(
+            provenance,
+            super::super::canonical_json(&rendered.provenance_payload_json)
+        );
+        node.shutdown().await;
+    }
+
+    /// The regression #2333 exists to fix: two turns sharing a conversation
+    /// prefix write only the new blocks and a manifest row, so total capture
+    /// storage grows linearly with the conversation instead of quadratically.
+    #[tokio::test]
+    async fn a_shared_prefix_writes_only_new_blocks_and_a_small_manifest() {
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        let sink = DefraRenderedRequestSink::new(Arc::clone(&node));
+
+        let prefix = capture_text(7, 24 * 1024);
+        let first = rendered_turn(
+            0,
+            json!({"model": "m", "messages": [{"role": "user", "content": prefix.clone()}]}),
+        );
+        sink.capture(first.clone()).await.expect("first capture");
+        let first_blocks = block_rows(node.as_ref()).await;
+
+        // Turn two repeats the whole conversation and appends one message.
+        let mut second_messages = first.request_json["messages"].clone();
+        second_messages
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"role": "assistant", "content": capture_text(9, 1024)}));
+        let second = rendered_turn(1, json!({"model": "m", "messages": second_messages}));
+        sink.capture(second.clone()).await.expect("second capture");
+        let second_blocks = block_rows(node.as_ref()).await;
+
+        assert!(
+            second_blocks.len() > first_blocks.len(),
+            "the new message must add blocks"
+        );
+        let added: std::collections::BTreeSet<String> = second_blocks
+            .iter()
+            .map(|row| row["content_key"].as_str().unwrap().to_owned())
+            .collect::<std::collections::BTreeSet<_>>()
+            .difference(
+                &first_blocks
+                    .iter()
+                    .map(|row| row["content_key"].as_str().unwrap().to_owned())
+                    .collect(),
+            )
+            .cloned()
+            .collect();
+        // Every block of the edited body but the ones covering the edit and the
+        // JSON tail is re-referenced, never rewritten.
+        assert!(
+            (added.len() as f64) < 0.4 * second_blocks.len() as f64,
+            "{} new of {} total blocks; the shared prefix must be reused",
+            added.len(),
+            second_blocks.len()
+        );
+
+        let row = stored_capture(node.as_ref(), &second.capture_key).await;
+        let stored = row["request_json"].as_str().unwrap();
+        assert!(
+            // Two manifests (request body + provenance payload) of small
+            // references, against the full canonical body.
+            stored.len() < 3 * prefix.len() / 4,
+            "the capture row must not repeat the conversation: {} bytes for a {} byte body",
+            stored.len(),
+            prefix.len()
+        );
+        assert_eq!(
+            super::super::decode_capture_json_embedded(
+                node.as_ref(),
+                3,
+                stored,
+                super::super::CapturePayloadKind::RequestBody,
             )
             .await
-            .unwrap();
-            let data = response.data.unwrap();
-            fetched.push(metric(&data, "docFetches").unwrap_or_else(|| panic!("{data}")));
-        }
-        assert_eq!(fetched, vec![49, 1]);
-        rendered.capture_scope = "absent-scope".into();
-        assert!(sink
-            .latest_compatible_base(&rendered)
-            .await
+            .unwrap(),
+            super::super::canonical_json(&second.request_json)
+        );
+        node.shutdown().await;
+    }
+
+    /// A block another capture already stored keeps that row's document and
+    /// field commit: the manifest pins the existing witness, never a fresh one,
+    /// and never rewrites the block.
+    #[tokio::test]
+    async fn a_reused_block_pins_the_existing_row_field_commit() {
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        let sink = DefraRenderedRequestSink::new(Arc::clone(&node));
+
+        let body = capture_text(11, 12 * 1024);
+        let first = rendered_turn(
+            0,
+            json!({"model": "m", "messages": [{"role": "user", "content": body}]}),
+        );
+        sink.capture(first).await.expect("first capture");
+        let first_row =
+            stored_capture(node.as_ref(), &rendered_turn(0, json!({})).capture_key).await;
+        let first_entries =
+            manifest_entries(&first_row["request_json"].as_str().unwrap(), "request_body");
+        let first_blocks = block_rows(node.as_ref()).await;
+
+        // Turn two appends, so it shares the leading blocks.
+        let mut messages = json!([{"role": "user", "content": body}]);
+        messages
+            .as_array_mut()
             .unwrap()
-            .is_none());
+            .push(json!({"role": "assistant", "content": capture_text(13, 512)}));
+        let second = rendered_turn(1, json!({"model": "m", "messages": messages}));
+        sink.capture(second.clone()).await.expect("second capture");
+
+        let second_row = stored_capture(node.as_ref(), &second.capture_key).await;
+        let second_entries = manifest_entries(
+            &second_row["request_json"].as_str().unwrap(),
+            "request_body",
+        );
+        let by_key = |entries: &[(String, String, String)]| {
+            entries
+                .iter()
+                .map(|(doc_id, key, cid)| (key.clone(), (doc_id.clone(), cid.clone())))
+                .collect::<std::collections::BTreeMap<_, _>>()
+        };
+        let first_map = by_key(&first_entries);
+        let second_map = by_key(&second_entries);
+        let shared = second_map
+            .keys()
+            .filter(|key| first_map.contains_key(*key))
+            .count();
+        assert!(shared > 0, "the turns must share blocks");
+        for (key, (doc_id, cid)) in &second_map {
+            if let Some((first_doc_id, first_cid)) = first_map.get(key) {
+                assert_eq!(
+                    doc_id, first_doc_id,
+                    "shared block {key} must reuse the row"
+                );
+                assert_eq!(
+                    cid, first_cid,
+                    "shared block {key} must pin the existing witness"
+                );
+            }
+        }
+        // Nothing was rewritten: the block rows are exactly the ones the first
+        // capture created plus the new content.
+        assert!(block_rows(node.as_ref()).await.len() > first_blocks.len());
+        node.shutdown().await;
+    }
+
+    fn manifest_entries(stored: &str, payload: &str) -> Vec<(String, String, String)> {
+        let container: Value = serde_json::from_str(stored).unwrap();
+        container[payload]["blocks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| {
+                (
+                    entry["doc_id"].as_str().unwrap().to_owned(),
+                    entry["content_key"].as_str().unwrap().to_owned(),
+                    entry["field_commit_cid"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect()
+    }
+
+    /// A block row whose payload does not hash to its content key names bytes
+    /// the key does not describe; reusing it would store a body nobody sent, so
+    /// the capture fails closed instead.
+    #[tokio::test]
+    async fn a_block_row_whose_payload_mismatches_its_content_key_fails_closed() {
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        let sink = DefraRenderedRequestSink::new(Arc::clone(&node));
+
+        let body = capture_text(17, 6 * 1024);
+        let rendered = rendered_turn(
+            0,
+            json!({"model": "m", "messages": [{"role": "user", "content": body}]}),
+        );
+        let canonical = canonical_json_string(&rendered.request_json).unwrap();
+        let first = super::super::encoding::chunk_capture_body(&canonical)
+            .into_iter()
+            .next()
+            .expect("body chunks");
+        let tampered = format!("{}tampered", first.bytes.len());
+        let response = node
+            .execute(&format!(
+                r#"mutation {{ create_RenderedRequestBlock(input: {{ content_key: "{}", payload: "{}", byte_len: {}, created_at: "2026-01-01T00:00:00Z" }}) {{ _docID }} }}"#,
+                escape_graphql_string(&first.content_key),
+                escape_graphql_string(&tampered),
+                tampered.len(),
+            ))
+            .await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+
+        let error = sink.capture(rendered).await.unwrap_err();
+        assert!(
+            error.to_string().contains("does not match its content key"),
+            "{error:#}"
+        );
         node.shutdown().await;
     }
 
@@ -832,7 +1249,10 @@ mod tests {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
         let sink = DefraRenderedRequestSink::new(Arc::clone(&node));
-        let mut first = rendered_fixture();
+        let mut first = rendered_turn(
+            0,
+            json!({"messages": [{"role": "user", "content": capture_text(3, 3 * 1024)}]}),
+        );
         first.provenance_json["provider_family"] = json!("OpenAiCompatible");
         first.provenance_json["provider_endpoint"] = json!("https://example.test");
         first.provenance_json["provider_route_path_sha256"] = json!("path-a");
@@ -848,72 +1268,169 @@ mod tests {
         node.shutdown().await;
     }
 
-    /// The collection name is interpolated as a bare GraphQL identifier, where
-    /// escaping cannot defend. It is a compile-time constant from the protocol
-    /// catalog, and this is the fence that keeps it a valid identifier if that
-    /// catalog ever changes.
-    #[test]
-    fn the_collection_name_is_a_valid_graphql_identifier() {
-        crate::graphql::validate_collection_identifier(RENDERED_REQUEST_COLLECTION)
-            .expect("RenderedRequest must be a valid GraphQL identifier");
-        assert_eq!(RENDERED_REQUEST_COLLECTION, "RenderedRequest");
-    }
-
-    /// The shape DefraDB actually answers a `create_RenderedRequest` mutation
-    /// with — note the `add_` key. A create whose result cannot be found reads
-    /// as "wrote nothing", so this is the difference between verifying the
-    /// write and assuming it.
-    #[test]
-    fn a_create_envelope_yields_its_single_result_field() {
-        use crate::graphql::response_has_documents;
-        use serde_json::json;
-
-        let created = json!({ "add_RenderedRequest": [{ "_docID": "bae-1" }] });
-        assert!(response_has_documents(
-            single_mutation_result(&created).expect("one result field")
-        ));
-
-        let wrote_nothing = json!({ "add_RenderedRequest": [] });
-        assert!(!response_has_documents(
-            single_mutation_result(&wrote_nothing).expect("one result field")
-        ));
-
-        // An envelope this sink does not recognise must not read as a write.
-        assert!(single_mutation_result(&json!({ "a": [], "b": [] })).is_none());
-        assert!(single_mutation_result(&json!([])).is_none());
-        assert!(single_mutation_result(&json!({})).is_none());
-    }
-
+    /// Re-delivering the identical capture is idempotent: the block writes roll
+    /// back with the conflicting manifest create, and the stored fact already
+    /// names the same canonical value.
     #[tokio::test]
-    async fn optional_base_lookup_failure_still_creates_a_full_capture() {
+    async fn re_delivering_a_capture_is_idempotent() {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
         let sink = DefraRenderedRequestSink::new(Arc::clone(&node));
-        let rendered = rendered_fixture();
+        let rendered = rendered_turn(
+            0,
+            json!({"messages": [{"role": "user", "content": capture_text(5, 5 * 1024)}]}),
+        );
+        sink.capture(rendered.clone()).await.expect("first capture");
+        let blocks_after_first = block_rows(node.as_ref()).await.len();
 
-        sink.capture_with_base_result(
-            rendered.clone(),
-            Err(anyhow!("injected latest-base read failure")),
-        )
-        .await
-        .expect("optional lookup failure must not block a new full capture");
+        sink.capture(rendered.clone())
+            .await
+            .expect("re-delivery is idempotent");
+        assert_eq!(
+            block_rows(node.as_ref()).await.len(),
+            blocks_after_first,
+            "no block may be written twice"
+        );
+        node.shutdown().await;
+    }
 
+    /// The block-create race: a concurrent writer stored the same content key
+    /// first, so the create loses the unique index rather than seeing the row
+    /// in the existence read. The write closure reconciles against the winning
+    /// row in the same attempt — identical bytes complete the work on the
+    /// winner's row, different bytes under the same key are an integrity
+    /// error — and the capture the reconciled block belongs to still succeeds.
+    #[tokio::test]
+    async fn a_lost_block_create_reconciles_the_winning_row() {
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        let sink = DefraRenderedRequestSink::new(Arc::clone(&node));
+
+        let request_json = json!({
+            "model": "m",
+            "messages": [{"role": "user", "content": capture_text(23, 6 * 1024)}]
+        });
+        let canonical = canonical_json_string(&request_json).unwrap();
+        let blocks: Vec<PendingBlock> = super::super::encoding::chunk_capture_body(&canonical)
+            .iter()
+            .map(|chunk| PendingBlock {
+                content_key: chunk.content_key.clone(),
+                bytes: chunk.bytes.clone(),
+            })
+            .collect();
+        assert!(blocks.len() > 1, "the body must span several blocks");
+
+        // The winner: identical content under its own created_at, committed
+        // before the transaction below, so the create finds its unique index
+        // entry rather than a reusable row in the existence read's place.
+        let winner = blocks[0].clone();
+        let winner_payload = String::from_utf8(winner.bytes.clone()).unwrap();
         let response = node
             .execute(&format!(
-                r#"{{RenderedRequest(filter:{{capture_key:{{_eq:"{}"}}}}){{capture_version request_json}}}}"#,
-                escape_graphql_string(&rendered.capture_key)
+                r#"mutation {{ create_RenderedRequestBlock(input: {{ content_key: "{}", payload: "{}", byte_len: {}, created_at: "2026-01-01T00:00:00Z" }}) {{ _docID }} }}"#,
+                escape_graphql_string(&winner.content_key),
+                escape_graphql_string(&winner_payload),
+                winner.bytes.len(),
             ))
             .await;
         assert!(!response.has_errors(), "{:?}", response.errors);
-        let row = &response.data.unwrap()["RenderedRequest"][0];
+        let winner_doc_id = response.data.unwrap()["add_RenderedRequestBlock"][0]["_docID"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        let expected_doc = winner_doc_id.clone();
+        let reconciled = crate::config_client::ConfigAccess::transact_local(
+            node.as_ref(),
+            None,
+            "test.reconcile_lost_block_create",
+            |txn| {
+                let winner = winner.clone();
+                let expected_doc = expected_doc.clone();
+                Box::pin(async move {
+                    let doc_id = create_block_in_txn(txn, &winner).await?;
+                    anyhow::ensure!(
+                        doc_id == expected_doc,
+                        "the reconciled reference must name the winner, not a new row"
+                    );
+                    Ok(doc_id)
+                })
+            },
+        )
+        .await
+        .expect("a create lost to identical bytes reconciles");
+        assert_eq!(reconciled, winner_doc_id);
+
+        // The failed create wrote nothing: the winner is still the only row
+        // under the content key.
+        let rows = node
+            .execute(&format!(
+                r#"{{ RenderedRequestBlock(filter: {{ content_key: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+                escape_graphql_string(&winner.content_key),
+            ))
+            .await;
+        assert!(!rows.has_errors(), "{:?}", rows.errors);
+        let holding = rows.data.unwrap()["RenderedRequestBlock"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(holding.len(), 1, "one row per content key");
+        assert_eq!(
+            holding[0]["_docID"].as_str(),
+            Some(winner_doc_id.as_str()),
+            "the winner keeps the content key"
+        );
+
+        // A winner holding different bytes under the same content key is an
+        // integrity error, not a block to pin.
+        let other_canonical = canonical_json_string(&json!({
+            "model": "m",
+            "messages": [{"role": "user", "content": capture_text(29, 6 * 1024)}]
+        }))
+        .unwrap();
+        let other = super::super::encoding::chunk_capture_body(&other_canonical)
+            .into_iter()
+            .next()
+            .expect("other body chunks");
+        let tampered = format!("{}tampered", other.bytes.len());
+        let response = node
+            .execute(&format!(
+                r#"mutation {{ create_RenderedRequestBlock(input: {{ content_key: "{}", payload: "{}", byte_len: {}, created_at: "2026-01-01T00:00:00Z" }}) {{ _docID }} }}"#,
+                escape_graphql_string(&other.content_key),
+                escape_graphql_string(&tampered),
+                tampered.len(),
+            ))
+            .await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        let error = crate::config_client::ConfigAccess::transact_local(
+            node.as_ref(),
+            None,
+            "test.reconcile_lost_block_create",
+            |txn| {
+                let other = PendingBlock {
+                    content_key: other.content_key.clone(),
+                    bytes: other.bytes.clone(),
+                };
+                Box::pin(async move { create_block_in_txn(txn, &other).await })
+            },
+        )
+        .await
+        .expect_err("a create lost to different bytes is an integrity error");
+        assert!(
+            error.to_string().contains("does not match its content key"),
+            "{error:#}"
+        );
+
+        // The reconciled winner is the row the real writer uses: the capture
+        // completes over it and decodes back through the reader.
+        let rendered = rendered_turn(0, request_json);
+        sink.capture(rendered.clone()).await.expect("capture");
+        let row = stored_capture(node.as_ref(), &rendered.capture_key).await;
         let stored = row["request_json"].as_str().unwrap();
-        let container: Value = serde_json::from_str(stored).unwrap();
-        assert_eq!(container["request_body"]["kind"], "full");
-        assert_eq!(container["provenance_payload"]["kind"], "full");
         assert_eq!(
             super::super::decode_capture_json_embedded(
                 node.as_ref(),
-                2,
+                3,
                 stored,
                 super::super::CapturePayloadKind::RequestBody,
             )
@@ -921,5 +1438,20 @@ mod tests {
             .unwrap(),
             super::super::canonical_json(&rendered.request_json)
         );
+        node.shutdown().await;
+    }
+
+    /// The collection names are interpolated as bare GraphQL identifiers, where
+    /// escaping cannot defend. They are compile-time constants from the protocol
+    /// catalog, and this is the fence that keeps them valid identifiers if that
+    /// catalog ever changes.
+    #[test]
+    fn the_collection_names_are_valid_graphql_identifiers() {
+        crate::graphql::validate_collection_identifier(RENDERED_REQUEST_COLLECTION)
+            .expect("RenderedRequest must be a valid GraphQL identifier");
+        assert_eq!(RENDERED_REQUEST_COLLECTION, "RenderedRequest");
+        crate::graphql::validate_collection_identifier(RENDERED_REQUEST_BLOCK_COLLECTION)
+            .expect("RenderedRequestBlock must be a valid GraphQL identifier");
+        assert_eq!(RENDERED_REQUEST_BLOCK_COLLECTION, "RenderedRequestBlock");
     }
 }
