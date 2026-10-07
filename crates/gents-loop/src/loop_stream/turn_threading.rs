@@ -40,14 +40,18 @@ pub(super) fn bounded_tool_result(
         };
     }
     let note = (!profile.carries_tool_result_images()).then_some(TOOL_RESULT_IMAGE_OMITTED);
-    bound_split_parts(tool_name, content, note)
+    bound_split_parts(tool_name, content, note, &TruncationLimits::default())
 }
 
 /// The text a later request replays for output that splits into image parts:
-/// the parts [`bounded_tool_result`] threads, one per line, each image
-/// [`TOOL_RESULT_IMAGE_NOT_REPLAYED`]. `None` for output without an image part,
-/// which replays as bounded text.
-pub fn replayed_tool_result_text(tool_name: &str, output: &str) -> Option<String> {
+/// the parts [`bounded_tool_result`] threads, text bounded by `limits`, one per
+/// line, each image [`TOOL_RESULT_IMAGE_NOT_REPLAYED`]. `None` for output
+/// without an image part, which replays as bounded text.
+pub fn replayed_tool_result_text(
+    tool_name: &str,
+    output: &str,
+    limits: &TruncationLimits,
+) -> Option<String> {
     let content = ToolResultContent::from_tool_output(output);
     if !content
         .iter()
@@ -55,14 +59,18 @@ pub fn replayed_tool_result_text(tool_name: &str, output: &str) -> Option<String
     {
         return None;
     }
-    let lines: Vec<String> =
-        bound_split_parts(tool_name, content, Some(TOOL_RESULT_IMAGE_NOT_REPLAYED))
-            .into_iter()
-            .filter_map(|part| match part {
-                ToolResultContent::Text(text) => Some(text.text),
-                ToolResultContent::Image(_) => None,
-            })
-            .collect();
+    let lines: Vec<String> = bound_split_parts(
+        tool_name,
+        content,
+        Some(TOOL_RESULT_IMAGE_NOT_REPLAYED),
+        limits,
+    )
+    .into_iter()
+    .filter_map(|part| match part {
+        ToolResultContent::Text(text) => Some(text.text),
+        ToolResultContent::Image(_) => None,
+    })
+    .collect();
     Some(lines.join("\n"))
 }
 
@@ -72,14 +80,14 @@ fn bound_split_parts(
     tool_name: &str,
     content: Vec<ToolResultContent>,
     image_note: Option<&str>,
+    limits: &TruncationLimits,
 ) -> Vec<ToolResultContent> {
     let mode = tool_result_truncation_mode(tool_name);
-    let limits = TruncationLimits::default();
     content
         .into_iter()
         .map(|part| match (part, image_note) {
             (ToolResultContent::Text(text), _) => {
-                ToolResultContent::text(truncate_text(&text.text, mode, &limits).0)
+                ToolResultContent::text(truncate_text(&text.text, mode, limits).0)
             }
             (image, None) => image,
             (ToolResultContent::Image(_), Some(note)) => ToolResultContent::text(note),

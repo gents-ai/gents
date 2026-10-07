@@ -419,6 +419,40 @@ fn past_twenty_images_each_is_held_to_two_thousand_px() {
     );
 }
 
+/// Past 20 images over 2000 px, the newest 20 are sent and older ones become
+/// notes; once a kept image is over 2000 px, no image past the 20th is sent.
+#[test]
+fn past_twenty_large_images_the_newest_twenty_are_sent() {
+    let large: Vec<String> = (0..21).map(|_| png_header(3000, 3000)).collect();
+    let wire = tool_result_images_on_the_wire(&large);
+    assert_eq!(
+        wire[0],
+        wire_note("[image omitted: 3000×3000 px exceeds Claude's 2000 px limit for requests with more than 20 images; ask the tool for a smaller view]")
+    );
+    assert_eq!(
+        wire[1..],
+        large[1..]
+            .iter()
+            .map(|data| wire_image(data))
+            .collect::<Vec<_>>()[..]
+    );
+
+    let mut mixed: Vec<String> = (0..20).map(|_| png_header(100, 100)).collect();
+    mixed.push(png_header(3000, 3000));
+    let wire = tool_result_images_on_the_wire(&mixed);
+    assert_eq!(
+        wire[0],
+        wire_note("[image omitted: a Claude request with an image over 2000 px carries at most 20 images and later ones were kept; ask the tool again to see it]")
+    );
+    assert_eq!(
+        wire[1..],
+        mixed[1..]
+            .iter()
+            .map(|data| wire_image(data))
+            .collect::<Vec<_>>()[..]
+    );
+}
+
 /// Over Claude's per-request image count the oldest images become notes.
 #[test]
 fn past_the_image_count_the_oldest_images_become_notes() {

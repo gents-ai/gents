@@ -77,7 +77,9 @@ pub(super) fn bounded_tool_result_with_presentation(
 ) -> (String, Option<gents_protocol::output::PayloadPresentation>) {
     use gents_protocol::output::{PayloadPresentation, PresentationPart};
 
-    if let Some(text) = gents_loop::loop_stream::replayed_tool_result_text(tool_name, raw_result) {
+    if let Some(text) =
+        gents_loop::loop_stream::replayed_tool_result_text(tool_name, raw_result, limits)
+    {
         return (
             text.clone(),
             Some(PayloadPresentation::Composed {

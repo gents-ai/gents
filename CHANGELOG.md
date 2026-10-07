@@ -9,8 +9,9 @@ source consistency checks, not a separate runtime compatibility version.
 - One tool-result image Claude would reject no longer fails the whole
   request. The Claude Messages body reads each image's size from its PNG,
   GIF, WebP or JPEG header and puts a note naming the reason in place of an
-  image over 8000 px on a side, over 2000 px on a side once the request
-  carries more than 20 images, or beyond 100 images (oldest first). A plugin
+  image over 8000 px on a side, or one Claude's count limits leave out:
+  the newest 20 images are kept, older ones only while every kept image is
+  within 2000 px on a side, and at most 100 in all. A plugin
   result with image parts now replays on later turns as its bounded text
   parts plus a note per image, not as raw JSON with the image's base64.
 
