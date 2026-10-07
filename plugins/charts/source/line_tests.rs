@@ -537,6 +537,30 @@ fn a_long_stack_is_drawn_at_reduced_positions_that_keep_its_extremes() {
 }
 
 #[test]
+fn a_spike_offset_by_another_layer_survives_the_reduction() {
+    // a spikes up at one x while b falls by the same amount: the total stays flat.
+    let rows: Vec<serde_json::Value> = (0..20_000)
+        .map(|i| {
+            let (a, b) = if i == 9_999 { (500, 0) } else { (10, 490) };
+            json!([i, a, b])
+        })
+        .collect();
+    let r = ok(&with_rows("stacked_area", "", &["t", "a", "b"], &rows));
+    let doc = parse(&r.svg);
+    let fy = y_fit(&doc, &r.plot);
+    let layers: Vec<Vec<(f64, f64)>> = all(&doc, "path")
+        .into_iter()
+        .filter(|p| p.attribute("fill-opacity") == Some("0.85"))
+        .map(|p| path_points(p.attribute("d").unwrap()))
+        .collect();
+    let spike = layers[0].iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
+    assert!(
+        (spike - fy.px(500.0)).abs() < 0.02,
+        "the spike of a is drawn"
+    );
+}
+
+#[test]
 fn long_data_pivots_into_one_line_per_series_value() {
     let json = r#"{"chart":"line","x":"t","y":"v","series":"s","data":{"columns":["t","s","v"],"rows":[[1,"a",1],[2,"a",2],[1,"b",5],[2,"b",3]]}}"#;
     let r = ok(json);

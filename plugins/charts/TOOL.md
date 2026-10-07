@@ -129,7 +129,7 @@ existing file is replaced. `response.files` lists what was written.
 
 Writing needs the operator's permission for that folder: the first save may
 ask, and a refusal is one sentence naming the folder. Tell the user that
-sentence; do not retry.
+sentence; do not retry the same save.
 
 ## Behaviour to know
 

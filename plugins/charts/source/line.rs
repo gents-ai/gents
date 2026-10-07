@@ -48,33 +48,31 @@ fn union_x(series: &[Vec<(f64, f64)>]) -> Vec<f64> {
 }
 
 /// The x positions a stack is drawn at when `xs` has more than
-/// [`MAX_LINE_POINTS`]: the largest-triangle picks of the stack's top (the
-/// positive total) and bottom (the negative total), computed in one merge
-/// pass so no full series-by-position matrix is ever allocated.
+/// [`MAX_LINE_POINTS`]: the largest-triangle picks (first, last, lowest and
+/// highest included) of every layer's upper boundary, each layer taking an
+/// equal share of the cap. Layers are accumulated one at a time, as
+/// [`stack`] does, so no series-by-position matrix is allocated; picking from
+/// the totals alone would lose a spike that another layer offsets.
 fn reduce_positions(xs: &[f64], data: &[Vec<(f64, f64)>]) -> Vec<f64> {
-    let mut top = vec![0.0; xs.len()];
-    let mut bottom = vec![0.0; xs.len()];
+    let mut pos = vec![0.0; xs.len()];
+    let mut neg = vec![0.0; xs.len()];
+    let share = MAX_LINE_POINTS / data.len().max(1);
+    let mut keep = Vec::new();
+    let mut boundary = Vec::with_capacity(xs.len());
     for d in data {
-        let mut i = 0;
-        for &(x, y) in d {
-            while xs[i] < x {
-                i += 1;
-            }
-            if y > 0.0 {
-                top[i] += y;
-            } else if y < 0.0 {
-                bottom[i] += y;
-            }
+        let mut values = d.iter().peekable();
+        boundary.clear();
+        for (i, &x) in xs.iter().enumerate() {
+            let v = match values.next_if(|p| p.0 == x) {
+                Some(p) if !p.1.is_nan() => p.1,
+                _ => 0.0,
+            };
+            let base = if v >= 0.0 { &mut pos[i] } else { &mut neg[i] };
+            *base += v;
+            boundary.push((x, *base));
         }
+        keep.extend(lttb(&boundary, share));
     }
-    let pts = |v: &[f64]| {
-        xs.iter()
-            .copied()
-            .zip(v.iter().copied())
-            .collect::<Vec<_>>()
-    };
-    let mut keep = lttb(&pts(&top), MAX_LINE_POINTS / 2);
-    keep.extend(lttb(&pts(&bottom), MAX_LINE_POINTS / 2));
     keep.sort_unstable();
     keep.dedup();
     keep.into_iter().map(|i| xs[i]).collect()
