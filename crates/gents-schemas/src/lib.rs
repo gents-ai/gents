@@ -45,6 +45,9 @@ pub const COMPACTION_ENTRY_NAME: &str = "CompactionEntry";
 pub const COMPACTION_ENTRY: &str = include_str!("../schemas/agent/compaction_entry.graphql");
 pub const RENDERED_REQUEST_NAME: &str = "RenderedRequest";
 pub const RENDERED_REQUEST: &str = include_str!("../schemas/agent/rendered_request.graphql");
+pub const RENDERED_REQUEST_BLOCK_NAME: &str = "RenderedRequestBlock";
+pub const RENDERED_REQUEST_BLOCK: &str =
+    include_str!("../schemas/agent/rendered_request_block.graphql");
 pub const PROVIDER_CONTEXT_REDUCTION_NAME: &str = "ProviderContextReduction";
 pub const PROVIDER_CONTEXT_REDUCTION: &str =
     include_str!("../schemas/agent/provider_context_reduction.graphql");
@@ -203,6 +206,7 @@ pub const ALL: &[&str] = &[
     AGENT_TOOL_CALL,
     COMPACTION_ENTRY,
     RENDERED_REQUEST,
+    RENDERED_REQUEST_BLOCK,
     PROVIDER_CONTEXT_REDUCTION,
     PROJECTION_ACP_BINDING,
     TASK,
@@ -276,6 +280,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     AGENT_TOOL_CALL_NAME,
     COMPACTION_ENTRY_NAME,
     RENDERED_REQUEST_NAME,
+    RENDERED_REQUEST_BLOCK_NAME,
     PROVIDER_CONTEXT_REDUCTION_NAME,
     PROJECTION_ACP_BINDING_NAME,
     TASK_NAME,
@@ -344,6 +349,7 @@ pub const BRANCHABLE_COLLECTION_NAMES: &[&str] = &[
 /// replication catalog filters these names explicitly.
 pub const LOCAL_AUDIT_COLLECTION_NAMES: &[&str] = &[
     RENDERED_REQUEST_NAME,
+    RENDERED_REQUEST_BLOCK_NAME,
     PROVIDER_CONTEXT_REDUCTION_NAME,
     ETH_SUBMISSION_NAME,
     EVAL_DEFINITION_NAME,

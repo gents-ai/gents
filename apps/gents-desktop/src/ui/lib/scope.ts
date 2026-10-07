@@ -3,12 +3,9 @@
    shell has selected (what every screen does today), `working` the node
    this machine runs, `all` every paired node, or a chosen set. Agents
    narrow within those nodes. */
-import type {
-  DeploymentView,
-  MailboxItemView,
-  SessionSummary,
-} from "@source-inc/gents-desktop-client";
-import { nodeDidOf, workingNode, type NodeDid } from "./nodes";
+import type { MailboxItemView, SessionSummary } from "@source-inc/gents-desktop-client";
+import type { FleetState, NodeView } from "../../hooks/fleetStore";
+import { nodeDidOf, workingNode, type NodeDid, type NodeLike } from "./nodes";
 
 export type NodeScope = "selected" | "working" | "all" | readonly NodeDid[];
 export type Scope = { nodes: NodeScope; agents: readonly string[] };
@@ -24,25 +21,31 @@ export const defaultScope = (view: ScopedView): Scope => ({
 });
 
 export type ScopeContext = {
-  nodes: readonly DeploymentView[];
+  nodes: readonly NodeLike[];
   selectedNodeDid: NodeDid | null;
   /** the home's agent DID, which marks the working node */
   homeDid: string | null | undefined;
+  /** each node's sessions and mailbox items from the fleet store, which keep
+      their identity while unchanged */
+  fleet: Pick<FleetState, "sessionsOf" | "mailboxOf">;
 };
 
-/* the context every screen has: the shell's nodes, its selection and its home */
-export const scopeContextOf = (shell: {
-  deployments: readonly DeploymentView[];
-  selectedAgentDid: string | null;
-  snapshot: { bootstrap: { initAgentDid?: string | null } } | null;
-}): ScopeContext => ({
-  nodes: shell.deployments,
-  selectedNodeDid: shell.selectedAgentDid,
-  homeDid: shell.snapshot?.bootstrap.initAgentDid,
-});
+/** The fleet's nodes, in the snapshot's order. */
+export const fleetNodes = (fleet: FleetState): NodeView[] =>
+  fleet.nodeKeys.flatMap((key) => fleet.nodes[key] ?? []);
+
+/** A scope's context from the fleet store and the selection. */
+export const scopeContextOf = (
+  fleet: FleetState,
+  selectedNodeDid: NodeDid | null,
+  homeDid: string | null,
+): ScopeContext => ({ nodes: fleetNodes(fleet), selectedNodeDid, homeDid, fleet });
 
 /* the nodes a scope names, in the snapshot's order */
-export function nodesInScope(scope: Scope, ctx: ScopeContext): DeploymentView[] {
+export function nodesInScope(
+  scope: Scope,
+  ctx: Omit<ScopeContext, "fleet">,
+): NodeLike[] {
   const { nodes } = ctx;
   if (scope.nodes === "all") return [...nodes];
   if (scope.nodes === "working" || scope.nodes === "selected") {
@@ -63,7 +66,10 @@ export function nodesInScope(scope: Scope, ctx: ScopeContext): DeploymentView[] 
    app's origin, not to a home, so a reset home or a removed peer leaves
    DIDs no node has, which would narrow a list to nothing. Only DIDs of
    nodes this client has count; before any node arrives the pick stands. */
-export function knownNodeIds(ids: readonly NodeDid[], ctx: ScopeContext): NodeDid[] {
+export function knownNodeIds(
+  ids: readonly NodeDid[],
+  ctx: Pick<ScopeContext, "nodes">,
+): NodeDid[] {
   if (ctx.nodes.length === 0) return [...ids];
   const known = new Set(ctx.nodes.map(nodeDidOf));
   return ids.filter((id) => known.has(id));
@@ -75,14 +81,16 @@ const agentPasses = (scope: Scope, agentId: string | null | undefined) =>
 /* every session the scope covers, across nodes, each still naming its node */
 export function sessionsInScope(scope: Scope, ctx: ScopeContext): SessionSummary[] {
   return nodesInScope(scope, ctx).flatMap((n) =>
-    n.sessions.filter((s) => agentPasses(scope, s.behaviorId)),
+    (ctx.fleet.sessionsOf[nodeDidOf(n)] ?? []).filter((s) =>
+      agentPasses(scope, s.behaviorId),
+    ),
   );
 }
 
 /* open mailbox items the scope covers; the node is who filed them */
 export function mailboxInScope(scope: Scope, ctx: ScopeContext): MailboxItemView[] {
   return nodesInScope(scope, ctx).flatMap((n) =>
-    n.mailboxItems.filter(
+    (ctx.fleet.mailboxOf[nodeDidOf(n)] ?? []).filter(
       (m) => m.status === "open" && agentPasses(scope, m.targetBehaviorId),
     ),
   );

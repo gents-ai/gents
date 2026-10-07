@@ -15,11 +15,10 @@ theorem matching_terminal_snapshot_allows_follow_up
     (hturn : obs.latestTurn = some turn)
     (hterminal : turn.isTerminal = true)
     (hclient : ctx.clientAvailable = true)
-    (htext : ctx.composerNonEmpty = true)
     (hbehavior : behaviorMismatch store sid ctx.requestedBehavior = false) :
     projectSendDecision (step s (.snapshot store) store .healthy ctx) store ctx = .ready := by
   simp [step, snapshotAdvanceWorkflow, hw, hfind, hreq, projectSendDecision,
-    hsel, hagent, hclient, htext, hbehavior, hturn, hterminal]
+    hsel, hagent, hclient, hbehavior, hturn, hterminal]
 
 /-- A terminal observation for another request cannot acknowledge this submit. -/
 theorem unrelated_terminal_does_not_retire_awaiting

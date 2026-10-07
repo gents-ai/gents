@@ -1,44 +1,42 @@
-import type { Dispatch, MutableRefObject, SetStateAction } from "react";
-
 import { formatPeerConnectionError } from "@source-inc/gents-desktop-fleet";
 import type {
   DesktopApiAdapter,
   DesktopClientSnapshot,
 } from "@source-inc/gents-desktop-client";
+import { shownFailure } from "./desktopShellRuntime";
+import type { ShellStores } from "./shellProjection";
+import { clientStatus } from "./clientStore";
 
 type PeerActionParams = {
   api: DesktopApiAdapter;
-  snapshot: DesktopClientSnapshot | null;
+  stores: ShellStores;
   /** Shared single-flight start used by autostart and peer actions. */
   ensureDesktopClientStarted: () => Promise<DesktopClientSnapshot>;
   mutateSnapshot: <T>(operation: () => Promise<T>) => Promise<T>;
   refreshSnapshot: () => Promise<void>;
-  setAddingPeer: Dispatch<SetStateAction<boolean>>;
-  setError: Dispatch<SetStateAction<string | null>>;
-  selectedAgentDidRef: MutableRefObject<string | null>;
+  /** shows a failed action to the person, once */
+  reportFailure: (message: string) => void;
   selectAgent: (agentDid: string | null) => void;
-  setStarting: Dispatch<SetStateAction<boolean>>;
 };
 
 export function createDesktopShellPeerActions({
   api,
-  snapshot,
+  stores,
   ensureDesktopClientStarted,
   mutateSnapshot,
   refreshSnapshot,
-  setAddingPeer,
-  setError,
-  selectedAgentDidRef,
+  reportFailure,
   selectAgent,
-  setStarting,
 }: PeerActionParams) {
-  async function onInitLocalRuntime(label?: string | null) {
-    const clientWasRunning = Boolean(snapshot?.client);
-    setAddingPeer(true);
+  const setStarting = (starting: boolean) =>
+    clientStatus.setStarting(stores.client, starting);
+  /** whether the client runs, as last read */
+  const clientRuns = () => Boolean(stores.client.getState().snapshot?.client);
+  async function initLocalRuntime(label?: string | null) {
+    const clientWasRunning = clientRuns();
     setStarting(true);
-    setError(null);
     try {
-      if (snapshot?.client) {
+      if (clientWasRunning) {
         await mutateSnapshot(() => api.shutdownDesktopClient());
       }
       const summary = await api.initLocalStandardRuntime({
@@ -59,30 +57,25 @@ export function createDesktopShellPeerActions({
           // Preserve the provisioning error that caused the rollback.
         }
       }
-      const message = formatPeerConnectionError(err, "local-runtime");
-      setError(message);
-      throw new Error(message);
+      throw new Error(formatPeerConnectionError(err, "local-runtime"));
     } finally {
       setStarting(false);
-      setAddingPeer(false);
     }
   }
 
-  async function onFetchPeerStatus(peerId: string) {
-    setError(null);
+  async function fetchPeerStatus(peerId: string) {
     try {
       return await api.fetchPeerStatus(peerId);
     } catch (err) {
       const message = formatPeerConnectionError(err, "peer-status");
-      setError(message);
-      throw new Error(message);
+      reportFailure(message);
+      throw shownFailure(new Error(message));
     }
   }
 
-  async function onRequestStatusEnrollment(serverAddress: string) {
-    setError(null);
+  async function requestStatusEnrollment(serverAddress: string) {
     try {
-      if (!snapshot?.client) {
+      if (!clientRuns()) {
         await ensureDesktopClientStarted();
       }
       const request = await api.requestStatusEnrollment(serverAddress);
@@ -90,43 +83,61 @@ export function createDesktopShellPeerActions({
       return request;
     } catch (err) {
       const message = formatPeerConnectionError(err, "peer-status");
-      setError(message);
-      throw new Error(message);
+      reportFailure(message);
+      throw shownFailure(new Error(message));
     }
   }
 
-  async function onRemovePeer(peerId: string, agentDid?: string) {
-    setError(null);
+  async function removePeer(peerId: string, agentDid?: string) {
     try {
       const next = await mutateSnapshot(() => api.removePeer(peerId));
-      if (agentDid && selectedAgentDidRef.current === agentDid) {
+      if (agentDid && stores.selection.getState().agentDid === agentDid) {
         selectAgent(null);
       }
       return next;
     } catch (err) {
       const message = formatPeerConnectionError(err, "remove-peer");
-      setError(message);
-      throw new Error(message);
+      reportFailure(message);
+      throw shownFailure(new Error(message));
     }
   }
 
-  async function onRenamePeer(peerId: string, label: string) {
-    setError(null);
-    try {
-      const next = await mutateSnapshot(() => api.renamePeer(peerId, label));
-      return next;
-    } catch (err) {
-      const message = formatPeerConnectionError(err, "rename-peer");
-      setError(message);
-      throw new Error(message);
-    }
+  function renamePeer(peerId: string, label: string) {
+    return mutateSnapshot(() => api.renamePeer(peerId, label)).catch((err) => {
+      throw new Error(formatPeerConnectionError(err, "rename-peer"));
+    });
   }
 
   return {
-    onFetchPeerStatus,
-    onRequestStatusEnrollment,
-    onInitLocalRuntime,
-    onRemovePeer,
-    onRenamePeer,
+    /**
+     * Asks a peer for its status, with nothing stored. A failure is reported
+     * once, in the peer's words, then rethrown.
+     */
+    fetchPeerStatus,
+    /**
+     * Asks the server at the address to enroll this desktop, starting the
+     * client first if it is not running, then reads the client again. A
+     * failure is reported once, then rethrown.
+     */
+    requestStatusEnrollment,
+    /**
+     * Provisions the local agent and starts the client on its route, then
+     * selects it. A running client is stopped first and, if provisioning
+     * fails, started again. A failure is not reported here: setup shows it in
+     * its step log, with a retry.
+     */
+    initLocalRuntime,
+    /**
+     * Removes a paired peer and reads the client again; when the removed node
+     * was selected, nothing is selected after. A failure is reported once,
+     * then rethrown.
+     */
+    removePeer,
+    /**
+     * Saves a peer's label on this desktop and reads the client again. A
+     * failure is not reported here: the rename dialog shows it inline and
+     * stays open.
+     */
+    renamePeer,
   };
 }

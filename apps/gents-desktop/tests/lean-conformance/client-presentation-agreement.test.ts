@@ -11,7 +11,7 @@ import {
 
 import { deployment } from "../config-panel-wiring/fixtures";
 
-import type { Shell } from "../../src/ui/hooks/useShell";
+import type { ChatShellProjection } from "@source-inc/gents-desktop-chat";
 import { presentedComposerSendStatus } from "../../src/ui/screens/SessionScreen";
 
 type GeneratedPresentationCase = {
@@ -71,7 +71,7 @@ describe("ClientShell presentation agreement", () => {
   it("matches Lean-generated draft and automatic recovery cases", async () => {
     const { presentationCases: cases, recoveryCases } =
       await generatedPresentationCases();
-    expect(cases).toHaveLength(22);
+    expect(cases).toHaveLength(20);
     expect(recoveryCases).toHaveLength(10);
     for (const contractCase of recoveryCases) {
       const actual =
@@ -95,7 +95,7 @@ describe("ClientShell presentation agreement", () => {
       expect(actual.action, contractCase.name).toBe(contractCase.expected_action);
     }
     for (const contractCase of cases) {
-      const canonical: Shell["nonEmptyContentSendStatus"] =
+      const canonical: ChatShellProjection["nonEmptyContentSendStatus"] =
         contractCase.canonical_reason
           ? {
               kind: "disabled",

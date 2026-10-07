@@ -109,8 +109,9 @@ structure CanonicalRequest where
 
 /-! ## Lossless bounded storage encoding
 
-The database may store the canonical request directly or as a delta against an
-immutable earlier field commit. The model treats equality of commit witnesses
+The database may store the canonical request directly, as a delta against an
+immutable earlier field commit, or as an ordered manifest of block references
+(#2333). The model treats equality of commit witnesses
 as an input supplied by DefraDB; proving CID computation and collision
 resistance remains an external database boundary. `CanonicalRequest` remains
 the model's opaque `Nat`; its singleton-list encoding represents lossless bytes
@@ -153,6 +154,16 @@ inductive StoredRequest where
   | full (bytes : CanonicalBytes)
   | delta (baseRef : ArtifactRef) (baseWitness : FieldCommitWitness)
       (prefixLen suffixLen : Nat) (middle : CanonicalBytes)
+  /-- A capture stored as ordered per-block references: resolution
+  concatenates the named blocks' bytes in list order. Each entry pins the
+  immutable field-commit witness of the block it names, so integrity rides on
+  the database's commit identity, never on a self-attested digest. Resolution
+  is uniform in the block encoding — a block may itself be stored full or as a
+  delta — but the round-trip theorem is stated over full blocks, the concrete
+  encoder's shape, mirroring how `splice_roundtrip` is conditional over the
+  encoder. Resolution fails closed if any reference is absent, any pinned
+  witness mismatches, or fuel runs out. -/
+  | manifest (blocks : List (ArtifactRef × FieldCommitWitness))
   deriving DecidableEq, Repr
 
 structure StoredVersion where
@@ -160,6 +171,8 @@ structure StoredVersion where
   encoded : StoredRequest
 
 abbrev ArtifactStore := ArtifactRef → Option StoredVersion
+
+mutual
 
 /-- Bounded recursive decode. Looking up by document reference is insufficient:
 the immutable base field commit must still equal the witness pinned by the
@@ -175,6 +188,30 @@ def resolveBytes (store : ArtifactStore) : Nat → ArtifactRef →
         | .delta baseRef baseWitness prefixLen suffixLen middle => do
             let base ← resolveBytes store fuel baseRef baseWitness
             splice base prefixLen suffixLen middle
+        | .manifest blocks => do
+            let chunks ← resolveBlocks store fuel blocks
+            some (chunks.foldr (· ++ ·) [])
+
+/-- Resolve the bytes of every block a manifest names, in list order. Fuel is
+one shared budget across the manifest and everything it references: the
+manifest document itself consumes one unit in `resolveBytes`, each entry
+consumes one when resolution moves past it, and every block document draws at
+least one more from what remains (a full block exactly one, a delta or nested
+manifest block as deep as its own chain). A manifest of `k` full blocks
+therefore first resolves at fuel `k + 2`, and `manifest_no_fuel_fails_closed`
+pins the matching failure side. Fuel `0` fails closed before any lookup,
+including for the empty manifest, so one budget bounds total reconstruction
+work and cycles fail closed. -/
+def resolveBlocks (store : ArtifactStore) : Nat →
+    List (ArtifactRef × FieldCommitWitness) → Option (List CanonicalBytes)
+  | 0, _ => none
+  | _, [] => some []
+  | fuel + 1, (ref, witness) :: rest => do
+      let chunk ← resolveBytes store fuel ref witness
+      let chunks ← resolveBlocks store fuel rest
+      some (chunk :: chunks)
+
+end
 
 def resolveRequest (store : ArtifactStore) (fuel : Nat) (ref : ArtifactRef)
     (expected : FieldCommitWitness) : Option CanonicalRequest := do
@@ -196,6 +233,215 @@ theorem witness_mismatch_fails_closed (store : ArtifactStore) (ref expected actu
 theorem no_fuel_fails_closed (store : ArtifactStore) (ref witness : Nat) :
     resolveRequest store 0 ref witness = none := by
   rfl
+
+/-! ### Ordered block manifests (#2333)
+
+Durability of a manifest capture is DAG closure in miniature: the manifest
+document *and every block it names* must be durable with exactly the pinned
+witnesses. The fence theorems P1/P1'/P2/P3 are untouched — physical durability
+still enters only through `captureEncoded` → `resolveRequest`, and the
+resolution predicate above is what extends, fail-closed. -/
+
+/-- `blocks` is stored, in list order aligned with `chunks`, as full documents
+whose commits are exactly the pinned witnesses. The alignment is the concrete
+full-block encoder's shape; blocks stored as deltas resolve through the same
+uniform recursion but have no round-trip theorem here. -/
+inductive FullBlocks (store : ArtifactStore) :
+    List (ArtifactRef × FieldCommitWitness) → List CanonicalBytes → Prop where
+  | nil : FullBlocks store [] []
+  | cons (blockRef : ArtifactRef) (blockWitness : FieldCommitWitness)
+      (chunk : CanonicalBytes) (rest : List (ArtifactRef × FieldCommitWitness))
+      (chunks : List CanonicalBytes)
+      (h : store blockRef = some { commit := blockWitness, encoded := .full chunk })
+      (hTail : FullBlocks store rest chunks) :
+      FullBlocks store ((blockRef, blockWitness) :: rest) (chunk :: chunks)
+
+theorem FullBlocks.lengths {store : ArtifactStore}
+    {blocks : List (ArtifactRef × FieldCommitWitness)} {chunks : List CanonicalBytes}
+    (h : FullBlocks store blocks chunks) : blocks.length = chunks.length := by
+  induction h with
+  | nil => rfl
+  | cons _ _ _ _ _ _ _ ih => simpa using ih
+
+theorem resolveBlocks_of_full (store : ArtifactStore) :
+    ∀ (blocks : List (ArtifactRef × FieldCommitWitness)) (chunks : List CanonicalBytes)
+      (fuel : Nat), chunks.length + 1 ≤ fuel → FullBlocks store blocks chunks →
+      resolveBlocks store fuel blocks = some chunks := by
+  intro blocks
+  induction blocks with
+  | nil =>
+      intro chunks fuel hFuel hFull
+      cases hFull
+      cases fuel with
+      | zero => simp at hFuel
+      | succ m => simp [resolveBlocks]
+  | cons entry rest ih =>
+      obtain ⟨headRef, headWitness⟩ := entry
+      intro chunks fuel hFuel hFull
+      cases hFull with
+      | cons _ _ chunk _ chunks hHeadStore hTail =>
+          cases fuel with
+          | zero => simp at hFuel
+          | succ m =>
+              have hLe : chunks.length + 1 ≤ m := by
+                simp only [List.length_cons] at hFuel; omega
+              have hHead : resolveBytes store m headRef headWitness = some chunk := by
+                cases m with
+                | zero => omega
+                | succ m' => simp [resolveBytes, hHeadStore]
+              have hRest := ih chunks m hLe hTail
+              simp only [resolveBlocks]
+              simp [hHead, hRest]
+
+/-- No fuel left before the last entry is passed fails closed, independent of
+what the store holds. -/
+theorem resolveBlocks_insufficient_fuel (store : ArtifactStore) :
+    ∀ (blocks : List (ArtifactRef × FieldCommitWitness)) (fuel : Nat),
+      fuel ≤ blocks.length → resolveBlocks store fuel blocks = none := by
+  intro blocks
+  induction blocks with
+  | nil =>
+      intro fuel hLe
+      cases fuel with
+      | zero => rfl
+      | succ m => simp at hLe
+  | cons entry rest ih =>
+      obtain ⟨headRef, headWitness⟩ := entry
+      intro fuel hLe
+      cases fuel with
+      | zero => rfl
+      | succ m =>
+          have hRestNone : resolveBlocks store m rest = none :=
+            ih m (by simp only [List.length_cons] at hLe; omega)
+          simp only [resolveBlocks]
+          cases h : resolveBytes store m headRef headWitness <;> simp [hRestNone]
+
+theorem resolveBytes_absent (store : ArtifactStore) :
+    ∀ (fuel : Nat) (ref : ArtifactRef) (witness : FieldCommitWitness),
+      (∀ encoded, store ref ≠ some { commit := witness, encoded }) →
+      resolveBytes store fuel ref witness = none := by
+  intro fuel
+  induction fuel with
+  | zero => intro _ _ _; rfl
+  | succ m =>
+      intro ref witness hAbsent
+      cases hStore : store ref with
+      | none => simp [resolveBytes, hStore]
+      | some version =>
+          have hNe : version.commit ≠ witness := by
+            intro hEq
+            exact hAbsent version.encoded (by
+              rw [hStore]
+              rw [← hEq])
+          simp [resolveBytes, hStore, hNe]
+
+/-- One unresolvable entry — absent, or stored under a different commit than
+the witness the manifest pins — sinks the whole manifest. -/
+theorem resolveBlocks_unresolvable (store : ArtifactStore) :
+    ∀ (blocks : List (ArtifactRef × FieldCommitWitness)) (fuel : Nat)
+      (blockRef : ArtifactRef) (blockWitness : FieldCommitWitness),
+      (blockRef, blockWitness) ∈ blocks →
+      (∀ encoded, store blockRef ≠ some { commit := blockWitness, encoded }) →
+      resolveBlocks store fuel blocks = none := by
+  intro blocks
+  induction blocks with
+  | nil => intro fuel blockRef blockWitness hMem _; cases hMem
+  | cons entry rest ih =>
+      obtain ⟨headRef, headWitness⟩ := entry
+      intro fuel blockRef blockWitness hMem hAbsent
+      cases fuel with
+      | zero => rfl
+      | succ m =>
+          simp only [List.mem_cons] at hMem
+          cases hMem with
+          | inl hHead =>
+              have hRefEq : blockRef = headRef := congrArg Prod.fst hHead
+              have hWitEq : blockWitness = headWitness := congrArg Prod.snd hHead
+              subst hRefEq
+              subst hWitEq
+              simp only [resolveBlocks]
+              rw [resolveBytes_absent _ _ _ _ hAbsent]
+              simp
+          | inr hMemTail =>
+              have hRestNone : resolveBlocks store m rest = none :=
+                ih m blockRef blockWitness hMemTail hAbsent
+              simp only [resolveBlocks]
+              cases h : resolveBytes store m headRef headWitness <;> simp [hRestNone]
+
+/-- A manifest of full blocks resolves to exactly the concatenation of their
+bytes, so it captures the request whose canonical bytes that concatenation is.
+The decomposition is a premise, exactly as in `splice_roundtrip`: the concrete
+encoder owns how a request splits into blocks. -/
+theorem manifest_of_fulls_resolves_exactly (store : ArtifactStore) (ref witness : Nat)
+    (blocks : List (ArtifactRef × FieldCommitWitness)) (chunks : List CanonicalBytes)
+    (request : CanonicalRequest)
+    (hStore : store ref = some { commit := witness, encoded := .manifest blocks })
+    (hBlocks : FullBlocks store blocks chunks)
+    (hConcat : chunks.foldr (· ++ ·) [] = canonicalBytes request) :
+    resolveRequest store (blocks.length + 2) ref witness = some request := by
+  have hLen := hBlocks.lengths
+  have hBlocks' : resolveBlocks store (blocks.length + 1) blocks = some chunks :=
+    resolveBlocks_of_full store blocks chunks _ (by omega) hBlocks
+  show resolveRequest store (blocks.length + 1 + 1) ref witness = some request
+  simp [resolveRequest, resolveBytes, hStore, hBlocks', hConcat]
+
+/-- A block stored under a commit other than the witness the manifest pins
+makes the whole manifest unresolvable, at any fuel. -/
+theorem manifest_witness_mismatch_fails_closed (store : ArtifactStore)
+    (fuel ref witness : Nat) (blocks : List (ArtifactRef × FieldCommitWitness))
+    (blockRef blockWitness : Nat) (version : StoredVersion)
+    (hStored : store ref = some { commit := witness, encoded := .manifest blocks })
+    (hListed : (blockRef, blockWitness) ∈ blocks)
+    (hMismatch : version.commit ≠ blockWitness)
+    (hBlock : store blockRef = some version) :
+    resolveRequest store fuel ref witness = none := by
+  have hAbsent : ∀ encoded, store blockRef ≠ some { commit := blockWitness, encoded } := by
+    intro encoded hEq
+    rw [hBlock] at hEq
+    injection hEq with hVer
+    exact hMismatch (by rw [hVer])
+  cases fuel with
+  | zero => rfl
+  | succ m =>
+      have hNone : resolveBlocks store m blocks = none :=
+        resolveBlocks_unresolvable store blocks m blockRef blockWitness hListed hAbsent
+      simp [resolveRequest, resolveBytes, hStored, hNone]
+
+/-- A manifest naming an absent block is unresolvable, at any fuel: the
+manifest and every block it references must be durable. -/
+theorem manifest_missing_ref_fails_closed (store : ArtifactStore)
+    (fuel ref witness : Nat) (blocks : List (ArtifactRef × FieldCommitWitness))
+    (blockRef blockWitness : Nat)
+    (hStored : store ref = some { commit := witness, encoded := .manifest blocks })
+    (hListed : (blockRef, blockWitness) ∈ blocks)
+    (hMissing : store blockRef = none) :
+    resolveRequest store fuel ref witness = none := by
+  have hAbsent : ∀ encoded, store blockRef ≠ some { commit := blockWitness, encoded } := by
+    intro encoded hEq
+    rw [hMissing] at hEq
+    exact Option.noConfusion hEq
+  cases fuel with
+  | zero => rfl
+  | succ m =>
+      have hNone : resolveBlocks store m blocks = none :=
+        resolveBlocks_unresolvable store blocks m blockRef blockWitness hListed hAbsent
+      simp [resolveRequest, resolveBytes, hStored, hNone]
+
+/-- Fuel `0` is the base instance; the sharp bound is that a manifest of full
+blocks first resolves at fuel `blocks.length + 2` (see
+`manifest_of_fulls_resolves_exactly`), so anything at or below
+`blocks.length + 1` fails closed. -/
+theorem manifest_no_fuel_fails_closed (store : ArtifactStore) (ref witness : Nat)
+    (blocks : List (ArtifactRef × FieldCommitWitness))
+    (hStored : store ref = some { commit := witness, encoded := .manifest blocks }) :
+    ∀ fuel ≤ blocks.length + 1, resolveRequest store fuel ref witness = none := by
+  intro fuel hLe
+  cases fuel with
+  | zero => rfl
+  | succ m =>
+      have hNone : resolveBlocks store m blocks = none :=
+        resolveBlocks_insufficient_fuel store blocks m (by omega)
+      simp [resolveRequest, resolveBytes, hStored, hNone]
 
 /-! ## Durable capture table -/
 
@@ -272,6 +518,37 @@ theorem encoded_decode_failure_blocks_capture (artifacts : ArtifactStore)
     (h : resolveRequest artifacts fuel ref witness = none) :
     captureEncoded artifacts fuel ref witness s k = none := by
   simp [captureEncoded, h]
+
+/-- Manifest closure failure is capture failure: an unresolvable manifest
+yields no capture step at all, so `send` stays unreachable through
+`encoded_decode_failure_blocks_capture` and P3. No fence theorem is restated. -/
+theorem manifest_resolution_failure_blocks_capture (artifacts : ArtifactStore)
+    (fuel ref witness : Nat) (blocks : List (ArtifactRef × FieldCommitWitness))
+    (s : Store) (k : CaptureKey)
+    (hStored : artifacts ref = some { commit := witness, encoded := .manifest blocks })
+    (hUnresolvable : ∀ blockRef blockWitness,
+        (blockRef, blockWitness) ∈ blocks →
+        ∀ encoded, artifacts blockRef ≠ some { commit := blockWitness, encoded }) :
+    captureEncoded artifacts fuel ref witness s k = none := by
+  refine encoded_decode_failure_blocks_capture artifacts fuel ref witness s k ?_
+  cases blocks with
+  | nil =>
+      cases fuel with
+      | zero => rfl
+      | succ m =>
+          cases m with
+          | zero => simp [resolveRequest, resolveBytes, hStored, resolveBlocks]
+          | succ m' =>
+              simp [resolveRequest, resolveBytes, hStored, resolveBlocks, decodeCanonical]
+  | cons entry rest =>
+      obtain ⟨blockRef, blockWitness⟩ := entry
+      cases fuel with
+      | zero => rfl
+      | succ m =>
+          have hNone : resolveBlocks artifacts m ((blockRef, blockWitness) :: rest) = none :=
+            resolveBlocks_unresolvable artifacts ((blockRef, blockWitness) :: rest) m
+              blockRef blockWitness (by simp) (hUnresolvable blockRef blockWitness (by simp))
+          simp [resolveRequest, resolveBytes, hStored, hNone]
 
 theorem capture_fresh (s : Store) (k : CaptureKey) (r : CanonicalRequest)
     (h : s k = none) :

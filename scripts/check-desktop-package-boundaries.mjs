@@ -456,30 +456,29 @@ const desktopApp = readFileSync(
   join(root, "apps/gents-desktop/src/App.tsx"),
   "utf8",
 );
-const desktopShell = readFileSync(
-  join(root, "apps/gents-desktop/src/hooks/useDesktopShell.ts"),
+const desktopAppFactory = readFileSync(
+  join(root, "apps/gents-desktop/src/hooks/desktopApp.ts"),
   "utf8",
 );
-const kitShell = readFileSync(
-  join(root, "apps/gents-desktop/src/ui/hooks/useShell.ts"),
-  "utf8",
-);
-const desktopShellOwnsInjectedBridge =
-  /export function useDesktopShell\(\{\s*api,\s*listenToUpdates(?:,\s*supportsManagedServer\s*=\s*false)?,?\s*\}: DesktopShellBridge\)/m.test(
-    desktopShell,
+/* the app's factory takes the bridge's adapter rather than reaching for a
+   global one, and the host makes one bridge and one app for the window's
+   life, passing the same bridge's listener to the runtime */
+const appOwnsInjectedBridge =
+  /export function createDesktopApp\(\{\s*api,[^}]*\}: DesktopAppParams\)/m.test(
+    desktopAppFactory,
   );
-const legacyShellComposition =
-  desktopApp.includes("const shell = useDesktopShell(bridge);") &&
-  desktopApp.includes("api={bridge.api}");
-const kitShellComposition =
-  desktopApp.includes("const bridge = explicitBridge ?? defaultBridge;") &&
-  desktopApp.includes("const shell = useShell(") &&
-  kitShell.includes("const d = useDesktopShell(bridge);") &&
-  kitShell.includes("const api = bridge.api;");
+const hostInjectsOneBridge =
+  /const \[bridge\] = useState\(\(\) => given \?\? defaultBridge\(\)\)/.test(
+    desktopApp,
+  ) &&
+  /useState\(\(\) =>\s*createDesktopApp\(\{[^}]*\.\.\.bridge\s*\}\)/m.test(
+    desktopApp,
+  ) &&
+  /useDesktopRuntime\(app,\s*bridge\.listenToUpdates\)/.test(desktopApp);
 if (
   !desktopApp.includes("const client = createDesktopClient();") ||
-  (!legacyShellComposition && !kitShellComposition) ||
-  !desktopShellOwnsInjectedBridge
+  !hostInjectsOneBridge ||
+  !appOwnsInjectedBridge
 ) {
   failures.push(
     "Gents Desktop production composition must own and inject one instance-bound bridge",

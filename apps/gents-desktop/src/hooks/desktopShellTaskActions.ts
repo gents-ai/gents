@@ -1,154 +1,56 @@
-import type { Dispatch, MutableRefObject, SetStateAction } from "react";
-
 import type {
   DesktopApiAdapter,
-  EventSourceSaveRequest,
   ScheduleRunRequest,
-  ScheduleSaveRequest,
   TaskRunRequest,
   TaskRunResult,
-  TaskSaveRequest,
-  TriggerSaveRequest,
 } from "@source-inc/gents-desktop-client";
-import { logShellEvent } from "./desktopShellRuntime";
+import { actionFailure, shownFailure } from "./desktopShellRuntime";
+import { selection, type SelectionStore } from "./selectionStore";
 
 type TaskActionParams = {
-  acceptsComposeIntent: (capturedGeneration: number) => boolean;
   api: DesktopApiAdapter;
-  captureComposeIntent: () => number;
-  mutateSnapshot: <T>(operation: () => Promise<T>) => Promise<T>;
+  /** the selection, whose intent a run's result is checked against */
+  store: SelectionStore;
   refreshSnapshot: () => Promise<void>;
-  runningTaskCountRef: MutableRefObject<number>;
-  setError: Dispatch<SetStateAction<string | null>>;
-  setRunningTask: Dispatch<SetStateAction<boolean>>;
-  setSavingConfig: Dispatch<SetStateAction<boolean>>;
+  /** shows a failed action to the person, once */
+  reportFailure: (message: string) => void;
 };
 
 export function createDesktopShellTaskActions({
-  acceptsComposeIntent,
   api,
-  captureComposeIntent,
-  mutateSnapshot,
+  store,
   refreshSnapshot,
-  runningTaskCountRef,
-  setError,
-  setRunningTask,
-  setSavingConfig,
+  reportFailure,
 }: TaskActionParams) {
-  function beginTaskRun() {
-    runningTaskCountRef.current += 1;
-    setRunningTask(true);
-  }
-
-  function finishTaskRun() {
-    runningTaskCountRef.current = Math.max(0, runningTaskCountRef.current - 1);
-    if (runningTaskCountRef.current === 0) setRunningTask(false);
-  }
-
-  async function observeAcceptedRun(kind: "task" | "schedule") {
+  /* a run, then the client read again once the bridge accepted it; a
+     failed read shows in the banner like any read, and the run stands */
+  async function run(label: string, start: () => Promise<TaskRunResult>) {
+    const intentGeneration = selection.captureIntent(store);
     try {
+      const result = await start();
       await refreshSnapshot();
-    } catch (error) {
-      logShellEvent(
-        `${kind} run accepted but observation refresh failed: ${String(error)}`,
-      );
-    }
-  }
-
-  async function onSaveTaskConfig(request: TaskSaveRequest) {
-    setSavingConfig(true);
-    setError(null);
-    try {
-      const next = await mutateSnapshot(() => api.saveTaskConfig(request));
-      return next;
-    } catch (err) {
-      setError(String(err));
-      throw err;
-    } finally {
-      setSavingConfig(false);
-    }
-  }
-
-  async function onSaveScheduleConfig(request: ScheduleSaveRequest) {
-    setSavingConfig(true);
-    setError(null);
-    try {
-      const next = await mutateSnapshot(() => api.saveScheduleConfig(request));
-      return next;
-    } catch (err) {
-      setError(String(err));
-      throw err;
-    } finally {
-      setSavingConfig(false);
-    }
-  }
-
-  async function onRunSchedule(request: ScheduleRunRequest): Promise<TaskRunResult> {
-    const intentGeneration = captureComposeIntent();
-    beginTaskRun();
-    setError(null);
-    try {
-      const result = await api.runSchedule(request);
-      await observeAcceptedRun("schedule");
       return result;
     } catch (err) {
-      if (acceptsComposeIntent(intentGeneration)) setError(String(err));
-      throw err;
-    } finally {
-      finishTaskRun();
-    }
-  }
-
-  async function onSaveTriggerConfig(request: TriggerSaveRequest) {
-    setSavingConfig(true);
-    setError(null);
-    try {
-      const next = await mutateSnapshot(() => api.saveTriggerConfig(request));
-      return next;
-    } catch (err) {
-      setError(String(err));
-      throw err;
-    } finally {
-      setSavingConfig(false);
-    }
-  }
-
-  async function onSaveEventSourceConfig(request: EventSourceSaveRequest) {
-    setSavingConfig(true);
-    setError(null);
-    try {
-      const next = await mutateSnapshot(() => api.saveEventSourceConfig(request));
-      return next;
-    } catch (err) {
-      setError(String(err));
-      throw err;
-    } finally {
-      setSavingConfig(false);
-    }
-  }
-
-  async function onRunTask(request: TaskRunRequest): Promise<TaskRunResult> {
-    const intentGeneration = captureComposeIntent();
-    beginTaskRun();
-    setError(null);
-    try {
-      const result = await api.runTask(request);
-      await observeAcceptedRun("task");
-      return result;
-    } catch (err) {
-      if (acceptsComposeIntent(intentGeneration)) setError(String(err));
-      throw err;
-    } finally {
-      finishTaskRun();
+      if (!selection.acceptsIntent(store, intentGeneration)) throw err;
+      reportFailure(actionFailure(label, err));
+      throw shownFailure(err);
     }
   }
 
   return {
-    onRunSchedule,
-    onRunTask,
-    onSaveEventSourceConfig,
-    onSaveScheduleConfig,
-    onSaveTaskConfig,
-    onSaveTriggerConfig,
+    /**
+     * Runs a schedule now and reads the client again once the bridge accepts
+     * it. A failure to start is reported once, unless the person has moved
+     * on, then rethrown.
+     */
+    runSchedule: (request: ScheduleRunRequest) =>
+      run("run the schedule", () => api.runSchedule(request)),
+    /**
+     * Runs a task now and reads the client again once the bridge accepts it.
+     * A failure to start is reported once, unless the person has moved on,
+     * then rethrown.
+     */
+    runTask: (request: TaskRunRequest) =>
+      run("run the task", () => api.runTask(request)),
   };
 }

@@ -1,6 +1,5 @@
 /* The agent itself: editable principal fields and identity/runtime facts. */
-import type { DeploymentView } from "@source-inc/gents-desktop-client";
-import type { Shell } from "@/hooks/useShell";
+import type { NodeView } from "../../../hooks/fleetStore";
 import { isLocalAgent } from "@/lib/firstRun";
 import { DraftActions, RefRow, SwitchRow, TagsRow, TextRow } from "./editors";
 import { useDraft } from "./draft";
@@ -8,14 +7,12 @@ import { Fact, Group, Row } from "./rows";
 import { LocalServer } from "./LocalServer";
 import { AgentCard } from "./AgentCard";
 import { saveDefault } from "./BehaviorsPanel";
+import { useApp } from "@/app/AppContext";
+import { useBootstrap } from "@/hooks/useClient";
 
-export function AgentPanel({
-  shell,
-  deployment,
-}: {
-  shell: Shell;
-  deployment: DeploymentView;
-}) {
+export function AgentPanel({ deployment }: { deployment: NodeView }) {
+  const bootstrap = useBootstrap();
+  const { changeConfig } = useApp().actions;
   const agent = deployment.agentPrincipal;
   const behaviors = deployment.behaviors.map((b) => ({
     value: b.behaviorId,
@@ -36,8 +33,8 @@ export function AgentPanel({
       /* a new default lands with its enablement first; the principal's other
          fields then save against an already valid default */
       if (next.defaultBehaviorId !== agent.defaultBehaviorId)
-        await saveDefault(shell, deployment, next.defaultBehaviorId);
-      await shell.saveAgentConfig({
+        await saveDefault(changeConfig, deployment, next.defaultBehaviorId);
+      await changeConfig("saveAgentConfig", {
         document: {
           agent_did: agent.agentDid,
           display_name: next.displayName.trim(),
@@ -53,7 +50,7 @@ export function AgentPanel({
 
   return (
     <div>
-      <AgentCard shell={shell} deployment={deployment} />
+      <AgentCard deployment={deployment} />
       <Group title="Agent details">
         <TextRow
           id="agent-name"
@@ -61,15 +58,13 @@ export function AgentPanel({
           description="How this agent is named across the desktop."
           value={d.draft.displayName}
           onChange={(v) => d.set("displayName", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <RefRow
           id="agent-default"
           label="Default behavior"
           description="Used when a session does not choose one."
           value={d.draft.defaultBehaviorId}
-          onChange={(v) => d.choose("defaultBehaviorId", v)}
+          onChange={(v) => d.set("defaultBehaviorId", v)}
           items={behaviors}
           createLabel="New behavior…"
           openRoute={(behaviorId) => ({
@@ -84,7 +79,7 @@ export function AgentPanel({
           label="Enabled"
           description="A disabled agent accepts no requests."
           checked={d.draft.enabled}
-          onChange={(v) => d.choose("enabled", v)}
+          onChange={(v) => d.set("enabled", v)}
         />
         <TagsRow
           id="agent-tags"
@@ -94,13 +89,7 @@ export function AgentPanel({
           onChange={(v) => d.set("tags", v)}
         />
       </Group>
-      <DraftActions
-        dirty={d.dirty}
-        saving={d.saving}
-        error={d.error}
-        onSave={d.save}
-        onCancel={d.reset}
-      />
+      <DraftActions draft={d} />
 
       <Group title="Identity">
         <Row
@@ -110,16 +99,16 @@ export function AgentPanel({
           <Fact mono>{agent.agentDid}</Fact>
         </Row>
         <Row label="Install name">
-          <Fact>{shell.snapshot?.bootstrap.initAgentName}</Fact>
+          <Fact>{bootstrap?.initAgentName}</Fact>
         </Row>
         <Row
           label="Tool ceiling"
           description="The most any behavior on this agent may do."
         >
-          <Fact>{shell.snapshot?.bootstrap.initToolCeiling ?? "not configured"}</Fact>
+          <Fact>{bootstrap?.initToolCeiling ?? "not configured"}</Fact>
         </Row>
         <Row label="Tool root" description="The directory tools are confined to.">
-          <Fact mono>{shell.snapshot?.bootstrap.initToolRoot ?? "not configured"}</Fact>
+          <Fact mono>{bootstrap?.initToolRoot ?? "not configured"}</Fact>
         </Row>
         <Row label="Peer" description="Where the agent's node runs.">
           <Fact mono>{deployment.peerId}</Fact>
@@ -148,9 +137,7 @@ export function AgentPanel({
           </Fact>
         </Row>
       </Group>
-      {isLocalAgent(deployment, shell.snapshot?.bootstrap.initAgentDid) && (
-        <LocalServer shell={shell} />
-      )}
+      {isLocalAgent(deployment, bootstrap?.initAgentDid) && <LocalServer />}
     </div>
   );
 }

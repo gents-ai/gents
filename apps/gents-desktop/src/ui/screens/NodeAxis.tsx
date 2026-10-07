@@ -3,8 +3,8 @@
    trigger wears the picked nodes' avatars, stacked when there are several,
    and the first few nodes, local first, when it is open to all. Hidden when the client
    can see only one node, since there is nothing to choose. */
+import type { NodeView } from "../../hooks/fleetStore";
 import { ChevronDown, Waypoints } from "lucide-react";
-import type { DeploymentView } from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
 import {
   DropdownMenu,
@@ -25,7 +25,7 @@ export function NodeAxis({
   value,
   onChange,
 }: {
-  nodes: readonly DeploymentView[];
+  nodes: readonly NodeView[];
   /** the home's agent DID, which marks the working node */
   homeDid: string | null | undefined;
   counts: Record<string, number>;
@@ -34,7 +34,7 @@ export function NodeAxis({
 }) {
   if (nodes.length < 2) return null;
   const working = workingNode(nodes, homeDid);
-  const nameOf = (n: DeploymentView) => n.agentPrincipal.displayName ?? n.label;
+  const nameOf = (n: NodeView) => n.agentPrincipal.displayName ?? n.label;
   const picked = nodes.filter((n) => value.includes(nodeDidOf(n)));
   /* open to all: the first few nodes stand in, the local one leading */
   const shown =

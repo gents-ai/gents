@@ -1,4 +1,5 @@
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, screen, within } from "@testing-library/react";
+import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import type {
@@ -18,6 +19,11 @@ import { diffText, lineCount, toolSummary } from "../src/ui/screens/tool-summary
 import { activityStatus, isStopping } from "../src/ui/screens/activity-status";
 import { NO_WORKERS } from "../src/ui/screens/workers";
 import { NO_PARENT } from "../src/ui/screens/parentWork";
+import { renderIn, testApp } from "./app-fixture";
+import { liveAssistant } from "./timeline-fixture";
+
+/* the rows read the selected node from the app */
+const render = (ui: ReactElement) => renderIn(testApp(), ui);
 
 function tool(
   presentation: RenderedToolCallView["presentation"],
@@ -26,7 +32,6 @@ function tool(
   return {
     itemKey: "tool-1",
     toolName: "tool",
-    status: "completed",
     statusKind,
     presentation,
     reconstruction: { state: "ready" },
@@ -55,6 +60,7 @@ function session(overrides: Partial<DesktopSessionSnapshot>): DesktopSessionSnap
     title: "Session",
     previewText: null,
     status: "processing",
+    goal: null,
     turnState: "processing",
     latestRequestId: "request-1",
     retryEligibility: { eligible: false, denialReason: null },
@@ -66,6 +72,7 @@ function session(overrides: Partial<DesktopSessionSnapshot>): DesktopSessionSnap
       contextWindow: 1,
       compactionThreshold: 0,
       compactionThresholdTokens: 0,
+      compactionStrategy: "StripThenSummarize",
       durableMessageCount: 0,
       providerMessageCount: 0,
       totalCompactedMessages: 0,
@@ -83,13 +90,6 @@ const panel = (
   stopping = false,
 ) => (
   <TranscriptPanel
-    actionsRef={{
-      current: {
-        loadOlderSessionTimeline: vi.fn(async () => false),
-        retryMessage: vi.fn(async () => null),
-      },
-    }}
-    holdsCount={0}
     inFlight={inFlight}
     stopping={stopping}
     scroller={null}
@@ -97,7 +97,6 @@ const panel = (
     workers={NO_WORKERS}
     parentWork={NO_PARENT}
     workerActions={{} as never}
-    deployment={null}
   />
 );
 
@@ -237,7 +236,7 @@ describe("activity status", () => {
     expect(activityStatus([group([edit])], false)).toBe("Reviewing results");
     expect(
       activityStatus(
-        [{ kind: "liveAssistant", itemKey: "live", content: "Here" }],
+        [liveAssistant({ kind: "liveAssistant", itemKey: "live", content: "Here" })],
         false,
       ),
     ).toBe("Writing");

@@ -1,22 +1,16 @@
 import type { ComponentProps } from "react";
-import type { DeploymentView } from "@source-inc/gents-desktop-client";
 import { cn } from "@gents/ui/lib/utils";
-import { behaviorName, initials } from "./behavior";
-import { BehaviorHoverCard } from "./HoverCards";
+import type { BehaviorEnvironmentView } from "@source-inc/gents-desktop-client";
+import { bashAccess, fileAccess, initials, network } from "./behavior";
 
 /* two-letter initials inside a quiet ring: raised face, hairline border,
-   ordinary text ink. Per-behavior color is parked for now; the hue
-   helpers in behavior.ts stay for when it comes back. */
+   ordinary text ink */
 /* forwards every span prop, so a hover-card or tooltip trigger can render it */
 export function BehaviorAvatar({
   name,
-  behaviorId: _behaviorId,
   className,
   ...props
-}: { name: string; behaviorId?: string | null; className?: string } & Omit<
-  ComponentProps<"span">,
-  "children"
->) {
+}: { name: string; className?: string } & Omit<ComponentProps<"span">, "children">) {
   return (
     <span
       {...props}
@@ -31,42 +25,26 @@ export function BehaviorAvatar({
   );
 }
 
-export function BehaviorChip({
-  behaviorId,
-  deployment,
-  meta,
-  showName = true,
-  description,
-  className,
+/** What a behavior may do, as one sentence: files and commands, then the
+    network. Its environment is read from the node, so it may still be
+    loading. */
+export function AccessSentence({
+  name,
+  env,
 }: {
-  behaviorId: string | null;
-  deployment: DeploymentView | null;
-  meta?: string;
-  showName?: boolean;
-  description?: string;
-  /* the avatar's own size, for a row that is smaller than a row */
-  className?: string;
+  name: string;
+  env:
+    | Pick<BehaviorEnvironmentView, "fileAccess" | "bashAccess" | "networkAccess">
+    | undefined;
 }) {
-  const name = behaviorName(behaviorId, deployment);
   return (
-    <span className="flex items-center gap-2 text-sm text-muted-foreground">
-      <BehaviorHoverCard
-        deployment={deployment}
-        behaviorId={behaviorId}
-        description={description}
-      >
-        <BehaviorAvatar
-          name={name}
-          behaviorId={behaviorId}
-          className={cn("cursor-default", className)}
-        />
-      </BehaviorHoverCard>
-      {showName && (
-        <span className="whitespace-nowrap">
-          {name}
-          {meta && <span> ◦ {meta}</span>}
-        </span>
-      )}
-    </span>
+    <>
+      {name} <strong className="font-medium text-foreground">can</strong>{" "}
+      {env
+        ? `${fileAccess(env.fileAccess)} files and ${bashAccess(env.bashAccess)} commands`
+        : "…"}
+      , and <strong className="font-medium text-foreground">has access</strong> to{" "}
+      {network(env?.networkAccess)}.
+    </>
   );
 }

@@ -1,5 +1,5 @@
+import type { NodeView } from "../../hooks/fleetStore";
 import type {
-  DeploymentView,
   InferenceDiscoveryResult,
   InferenceModelRecommendation,
   InferenceProviderId,
@@ -28,7 +28,7 @@ export function buildInferenceSetupPlan({
   settings,
   purpose = "onboarding",
 }: {
-  deployment: DeploymentView;
+  deployment: NodeView;
   provider: InferenceProviderId;
   apiKey: string;
   oauth: boolean;

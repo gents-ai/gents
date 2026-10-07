@@ -1,15 +1,15 @@
 import { useEffect, useState } from "react";
+import { Button } from "@gents/ui/components/button";
 
 import {
   projectStartupLoadingStatus,
-  type DesktopStartupPhase,
   type LoadingStepState,
 } from "../lib/loadingStatus";
-import {
-  describeManagedServerWait,
-  type ManagedServerWait,
-} from "../lib/managedServerStartup";
+import { describeManagedServerWait } from "../lib/managedServerStartup";
+import { useApp } from "../ui/app/AppContext";
 import { Mark } from "../ui/app/Mark";
+import { useStartup } from "../ui/hooks/useClient";
+import { useNow } from "../ui/lib/clock";
 import { DiagnosticsHint } from "../ui/screens/setup/SetupProgress";
 
 const STARTUP_ASIDES = [
@@ -21,32 +21,30 @@ const STARTUP_ASIDES = [
   "Aligning the durable timelines.",
 ];
 
-type StartupScreenProps = {
-  error: string | null;
-  managedServerSupported?: boolean;
-  onRetry: () => Promise<void>;
-  phase: Exclude<DesktopStartupPhase, "ready">;
-  managedServerWait?: ManagedServerWait | null;
-  onSkipManagedServerWait?: () => void;
-  onOpenLoginItems?: () => Promise<void>;
-  onRestartManagedServer?: () => Promise<void>;
-  diagnosticsHint?: string | null;
-};
+/* one aside after another while startup is under way */
+function useAside() {
+  const [index, setIndex] = useState(0);
+  useEffect(() => {
+    const interval = window.setInterval(
+      () => setIndex((current) => (current + 1) % STARTUP_ASIDES.length),
+      2200,
+    );
+    return () => window.clearInterval(interval);
+  }, []);
+  return { index, text: STARTUP_ASIDES[index] };
+}
 
-export function StartupScreen({
-  error,
-  managedServerSupported = false,
-  onRetry,
-  phase,
-  managedServerWait = null,
-  onSkipManagedServerWait,
-  onOpenLoginItems,
-  onRestartManagedServer,
-  diagnosticsHint = null,
-}: StartupScreenProps) {
-  const [asideIndex, setAsideIndex] = useState(0);
-  const [now, setNow] = useState(() => Date.now());
-  const status = projectStartupLoadingStatus(phase, managedServerSupported);
+/** Where startup has got to, until the client is ready: each step, the
+    managed server's wait, and on failure the ways on. */
+export function StartupScreen() {
+  const { api, lifecycle } = useApp();
+  const startup = useStartup();
+  const aside = useAside();
+  const waiting = startup.managedServerWait !== null;
+  const now = useNow(waiting);
+  if (startup.phase === "ready") return null;
+  const { phase, managedServerWait } = startup;
+  const status = projectStartupLoadingStatus(phase, lifecycle.supportsManagedServer);
   const wait =
     managedServerWait && phase === "checking-managed-server"
       ? describeManagedServerWait(
@@ -54,20 +52,16 @@ export function StartupScreen({
           Math.max(now, managedServerWait.since),
         )
       : null;
-
-  useEffect(() => {
-    if (!managedServerWait) return;
-    setNow(Date.now());
-    const interval = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(interval);
-  }, [managedServerWait]);
-
-  useEffect(() => {
-    const interval = window.setInterval(() => {
-      setAsideIndex((current) => (current + 1) % STARTUP_ASIDES.length);
-    }, 2200);
-    return () => window.clearInterval(interval);
-  }, []);
+  const openLoginItems = api.openManagedServerLoginItems;
+  const skip = (testId: string) => (
+    <Button
+      variant="outline"
+      data-testid={testId}
+      onClick={lifecycle.skipManagedServerWait}
+    >
+      Continue without the local agent
+    </Button>
+  );
 
   return (
     <section
@@ -90,130 +84,97 @@ export function StartupScreen({
           </h2>
           <p aria-live="polite" className="text-sm font-medium">
             {wait?.label ?? status.currentLabel}
-            {!status.failed ? (
-              <span aria-hidden="true" className="startup-ellipsis" />
-            ) : null}
+            {!status.failed && <span aria-hidden="true" className="startup-ellipsis" />}
           </p>
-          {wait ? (
+          {wait && (
             <div className="grid gap-3" data-testid="startup-managed-server-wait">
               <p className="text-sm text-muted-foreground">{wait.detail}</p>
               <div className="flex flex-wrap gap-2">
-                {managedServerWait?.kind === "approval" && onOpenLoginItems ? (
-                  <button
-                    className="inline-flex h-8 w-fit items-center rounded-lg bg-brand px-3 text-sm font-medium text-brand-foreground"
+                {managedServerWait?.kind === "approval" && openLoginItems && (
+                  <Button
+                    variant="brand"
                     data-testid="startup-open-login-items"
-                    onClick={() => void onOpenLoginItems()}
-                    type="button"
+                    onClick={() => void openLoginItems()}
                   >
                     Open Login Items settings
-                  </button>
-                ) : null}
-                {onSkipManagedServerWait ? (
-                  <button
-                    className="inline-flex h-8 w-fit items-center rounded-lg border border-border px-3 text-sm font-medium"
-                    data-testid="startup-skip-managed-server-wait"
-                    onClick={onSkipManagedServerWait}
-                    type="button"
-                  >
-                    Continue without the local agent
-                  </button>
-                ) : null}
+                  </Button>
+                )}
+                {skip("startup-skip-managed-server-wait")}
               </div>
             </div>
-          ) : !status.failed ? (
+          )}
+          {!wait && !status.failed && (
             <p
               aria-hidden="true"
               className="min-h-[1.5em] font-mono text-sm text-brand"
-              key={asideIndex}
+              key={aside.index}
             >
-              {STARTUP_ASIDES[asideIndex]}
+              {aside.text}
             </p>
-          ) : null}
+          )}
         </div>
 
         <ol aria-label="Startup progress" className="grid gap-2">
-          {status.managedServerState ? (
+          {status.managedServerState && (
             <StartupStep label="Check local agent" state={status.managedServerState} />
-          ) : null}
+          )}
           <StartupStep label="Read saved connections" state={status.connectionState} />
           <StartupStep label="Start secure client" state={status.clientState} />
         </ol>
 
-        {status.failed ? (
+        {status.failed && (
           <div className="grid gap-3">
             <p className="text-sm text-destructive">
-              {error ?? "Gents could not finish starting."}
+              {startup.error ?? "Gents could not finish starting."}
             </p>
-            <DiagnosticsHint hint={diagnosticsHint} />
+            <DiagnosticsHint hint={startup.diagnosticsHint} />
             <div className="flex flex-wrap gap-2">
-              <button
-                className="inline-flex h-8 w-fit items-center rounded-lg bg-brand px-3 text-sm font-medium text-brand-foreground"
+              <Button
+                variant="brand"
                 data-testid="startup-retry"
-                onClick={() => void onRetry()}
-                type="button"
+                onClick={() => void lifecycle.retryStartup()}
               >
                 Try again
-              </button>
-              {phase === "managed-server-error" ? (
+              </Button>
+              {phase === "managed-server-error" && (
                 <>
-                  {onRestartManagedServer ? (
-                    <button
-                      className="inline-flex h-8 w-fit items-center rounded-lg border border-border px-3 text-sm font-medium"
+                  {startup.canRestartManagedServer && (
+                    <Button
+                      variant="outline"
                       data-testid="startup-restart-managed-server"
-                      onClick={() => void onRestartManagedServer()}
-                      type="button"
+                      onClick={() => void lifecycle.restartManagedServer()}
                     >
                       Restart agent
-                    </button>
-                  ) : null}
-                  {onSkipManagedServerWait ? (
-                    <button
-                      className="inline-flex h-8 w-fit items-center rounded-lg border border-border px-3 text-sm font-medium"
-                      data-testid="startup-continue-without-managed-server"
-                      onClick={onSkipManagedServerWait}
-                      type="button"
-                    >
-                      Continue without the local agent
-                    </button>
-                  ) : null}
+                    </Button>
+                  )}
+                  {skip("startup-continue-without-managed-server")}
                 </>
-              ) : null}
+              )}
             </div>
           </div>
-        ) : null}
+        )}
       </div>
     </section>
   );
 }
 
+const STEP: Record<LoadingStepState, { dot: string; label: string }> = {
+  complete: { dot: "bg-brand", label: "Ready" },
+  active: { dot: "bg-foreground", label: "Working" },
+  error: { dot: "bg-destructive", label: "Needs attention" },
+  pending: { dot: "bg-border", label: "Queued" },
+};
+
 function StartupStep({ label, state }: { label: string; state: LoadingStepState }) {
+  const step = STEP[state];
   return (
     <li
       className="grid min-h-[42px] grid-cols-[12px_minmax(0,1fr)_auto] items-center gap-4 rounded-lg border border-border/60 px-4 py-3 text-sm text-muted-foreground"
       data-state={state}
     >
-      <span
-        aria-hidden="true"
-        className={
-          state === "complete"
-            ? "size-2 rounded-full bg-brand"
-            : state === "active"
-              ? "size-2 rounded-full bg-foreground"
-              : state === "error"
-                ? "size-2 rounded-full bg-destructive"
-                : "size-2 rounded-full bg-border"
-        }
-      />
+      <span aria-hidden="true" className={`size-2 rounded-full ${step.dot}`} />
       <span>{label}</span>
-      <span>
-        {state === "complete"
-          ? "Ready"
-          : state === "active"
-            ? "Working"
-            : state === "error"
-              ? "Needs attention"
-              : "Queued"}
-      </span>
+      <span>{step.label}</span>
     </li>
   );
 }

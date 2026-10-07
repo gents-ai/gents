@@ -15,6 +15,13 @@ const runner = {
   deploymentLabel: "desktop-live",
   agentDid: "did:key:zLive",
   toolRoot: "/private/tmp/gents-live",
+  /* what the live run measured of the transcript, none of it under test here */
+  transcriptQueryCount: 0,
+  transcriptQueriedRows: 0,
+  transcriptMessageQueryLimit: 0,
+  transcriptToolCallQueryLimit: 0,
+  preclosureLiveAssistantObserved: false,
+  preclosureLiveAssistantMaxTextLength: 0,
 };
 
 describe("live smoke evidence summaries", () => {

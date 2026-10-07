@@ -15,7 +15,8 @@ const SETTLED = new Set([
 export const isLive = (turnState: string | null | undefined) =>
   Boolean(turnState) && !SETTLED.has(turnState!.toLowerCase());
 
-/* what to say next to a session: nothing for a finished one */
+/* what to say next to a session: nothing for a finished one, and working
+   for a live state this build does not name, as its spinner says */
 export const turnLabel = (turnState: string | null | undefined): string | null => {
   switch (turnState) {
     case "waitingForClaim":
@@ -29,6 +30,6 @@ export const turnLabel = (turnState: string | null | undefined): string | null =
     case "superseded":
       return "Superseded";
     default:
-      return null;
+      return isLive(turnState) ? "Working" : null;
   }
 };

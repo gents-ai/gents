@@ -2,7 +2,7 @@
    fills the registry; a new surface is a file here and one entry. */
 import { ListTree, Users } from "lucide-react";
 import { registerSurface } from "@/app/surfaces";
-import { workersBySession } from "@/lib/nodes";
+import { workersOfId } from "@/hooks/useFleet";
 import { TraceSurface } from "./TracePanel";
 import { WorkersSurface } from "./WorkersSurface";
 
@@ -22,6 +22,5 @@ registerSurface({
   placements: ["dock", "sheet"],
   routes: ["session"],
   render: WorkersSurface,
-  badge: (nodes, sessionId) =>
-    sessionId ? (workersBySession(nodes).get(sessionId)?.length ?? 0) || null : null,
+  badge: (fleet, sessionId) => workersOfId(fleet, sessionId).length || null,
 });

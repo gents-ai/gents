@@ -1,7 +1,9 @@
+import { testApp } from "./app-fixture";
 import { describe, expect, it, vi } from "vitest";
 
 import { createDesktopShellTaskActions } from "../src/hooks/desktopShellTaskActions";
-import { acceptsAsyncResult } from "../src/hooks/desktopShellRuntime";
+import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
+import { createSelectionStore, selection } from "../src/hooks/selectionStore";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -14,32 +16,20 @@ function deferred<T>() {
 }
 
 function fixture(runTask: () => Promise<unknown>, runSchedule = runTask) {
-  let generation = 0;
+  const store = createSelectionStore();
   const effects = {
-    refreshSession: vi.fn(async () => null),
     refreshSnapshot: vi.fn(async () => undefined),
-    setError: vi.fn(),
-    setRunningTask: vi.fn(),
-    setSavingConfig: vi.fn(),
-    setSelectedSessionId: vi.fn(),
+    reportFailure: vi.fn(),
   };
   const actions = createDesktopShellTaskActions({
     ...effects,
-    acceptsComposeIntent: (captured: number) =>
-      acceptsAsyncResult(generation, captured),
-    advanceComposeIntent: () => {
-      generation += 1;
-    },
-    api: { runTask, runSchedule },
-    mutateSnapshot: async <T>(operation: () => Promise<T>) => operation(),
-    captureComposeIntent: () => generation,
-    runningTaskCountRef: { current: 0 },
-  } as unknown as Parameters<typeof createDesktopShellTaskActions>[0]);
+    api: { runTask, runSchedule } as unknown as DesktopApiAdapter,
+    store,
+  });
   return {
     actions,
-    advanceIntent: () => {
-      generation += 1;
-    },
+    store,
+    advanceIntent: () => selection.advanceIntent(store),
     ...effects,
   };
 }
@@ -51,7 +41,7 @@ describe("task and schedule async intent ordering", () => {
       sessionId: string;
     }>();
     const f = fixture(() => pending.promise);
-    const running = f.actions.onRunTask({ taskId: "task-a", args: {} });
+    const running = f.actions.runTask({ taskId: "task-a", args: {} });
     f.advanceIntent();
     pending.resolve({ requestId: "request-a", sessionId: "session-a" });
 
@@ -60,8 +50,7 @@ describe("task and schedule async intent ordering", () => {
       sessionId: "session-a",
     });
     expect(f.refreshSnapshot).toHaveBeenCalledOnce();
-    expect(f.setSelectedSessionId).not.toHaveBeenCalled();
-    expect(f.refreshSession).not.toHaveBeenCalled();
+    expect(f.store.getState().sessionId).toBeNull();
   });
 
   it("does not publish a stale schedule failure into the current intent", async () => {
@@ -70,14 +59,13 @@ describe("task and schedule async intent ordering", () => {
       async () => null,
       () => pending.promise,
     );
-    const running = f.actions.onRunSchedule({ scheduleId: "schedule-a" });
+    const running = f.actions.runSchedule({ scheduleId: "schedule-a" });
     f.advanceIntent();
     pending.reject(new Error("old schedule failed"));
 
     await expect(running).rejects.toThrow("old schedule failed");
-    expect(f.setError).toHaveBeenCalledTimes(1);
-    expect(f.setError).toHaveBeenCalledWith(null);
-    expect(f.setSelectedSessionId).not.toHaveBeenCalled();
+    expect(f.reportFailure).not.toHaveBeenCalled();
+    expect(f.store.getState().sessionId).toBeNull();
   });
 
   it("does not navigate to the result session while the run intent is current", async () => {
@@ -86,44 +74,32 @@ describe("task and schedule async intent ordering", () => {
       sessionId: "session-current",
     }));
 
-    await f.actions.onRunTask({ taskId: "task-a", args: {} });
+    await f.actions.runTask({ taskId: "task-a", args: {} });
 
-    expect(f.setSelectedSessionId).not.toHaveBeenCalled();
-    expect(f.refreshSession).not.toHaveBeenCalled();
+    expect(f.store.getState().sessionId).toBeNull();
   });
 
-  it("keeps running state active until every overlapping run completes", async () => {
-    const task = deferred<{ requestId: string }>();
-    const schedule = deferred<{ requestId: string }>();
-    const f = fixture(
-      () => task.promise,
-      () => schedule.promise,
-    );
-    const taskRun = f.actions.onRunTask({ taskId: "task-a", args: {} });
-    const scheduleRun = f.actions.onRunSchedule({ scheduleId: "schedule-a" });
-    expect(f.setRunningTask).toHaveBeenLastCalledWith(true);
+  it("preserves an accepted run when the read after it fails", async () => {
+    const reportFailure = vi.fn();
+    const app = testApp({
+      api: {
+        runTask: vi.fn().mockResolvedValue({
+          requestId: "accepted-request",
+          sessionId: "accepted-session",
+        }),
+        fetchDesktopSnapshot: vi
+          .fn()
+          .mockRejectedValue(new Error("observation unavailable")),
+      },
+      reportFailure,
+    });
 
-    task.resolve({ requestId: "task-request" });
-    await taskRun;
-    expect(f.setRunningTask).not.toHaveBeenCalledWith(false);
-
-    schedule.resolve({ requestId: "schedule-request" });
-    await scheduleRun;
-    expect(f.setRunningTask).toHaveBeenLastCalledWith(false);
-  });
-
-  it("preserves an accepted mutation when its observation refresh fails", async () => {
-    const f = fixture(async () => ({
-      requestId: "accepted-request",
-      sessionId: "accepted-session",
-    }));
-    f.refreshSnapshot.mockRejectedValueOnce(new Error("observation unavailable"));
-
-    await expect(f.actions.onRunTask({ taskId: "task-a", args: {} })).resolves.toEqual({
+    await expect(app.actions.runTask({ taskId: "task-a", args: {} })).resolves.toEqual({
       requestId: "accepted-request",
       sessionId: "accepted-session",
     });
-    expect(f.setError).toHaveBeenCalledTimes(1);
-    expect(f.setError).toHaveBeenCalledWith(null);
+    expect(reportFailure).not.toHaveBeenCalled();
+    /* the failed read is the client's own state, in the banner */
+    expect(app.stores.client.getState().error).toContain("observation unavailable");
   });
 });

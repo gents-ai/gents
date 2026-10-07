@@ -469,9 +469,13 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
         .collect::<Vec<_>>();
 
     let access = gents::config_client::ConfigAccess::Local(core.node_arc());
-    for deployment in &mut deployments {
-        super::runtime_tasks::resolve_summary_starters(&access, &mut deployment.sessions).await;
-    }
+    super::runtime_tasks::resolve_summary_starters(
+        &access,
+        deployments
+            .iter_mut()
+            .flat_map(|deployment| deployment.sessions.iter_mut()),
+    )
+    .await;
     deployments.sort_by(|left, right| left.label.cmp(&right.label));
 
     DesktopRuntimeSnapshot {

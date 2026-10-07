@@ -8,9 +8,9 @@ import type {
   SessionProvenanceView,
   SessionSummary,
 } from "@source-inc/gents-desktop-client";
-import type { Shell } from "@/hooks/useShell";
+import { useSelectedNode } from "@/hooks/useClient";
 import { behaviorName } from "./behavior";
-import { scopeKey, summariesByScope } from "./workers";
+import { scopeKey, summariesByScope, useListedScopes } from "./workers";
 
 export type Sender = {
   sessionId: string;
@@ -35,14 +35,20 @@ export const NO_PARENT: ParentWork = {
   hasSenders: false,
 };
 
-export function useParentWork(
-  shell: Shell,
-  provenance: SessionProvenanceView | null,
-): ParentWork {
-  const deployment = shell.selectedDeployment;
+export function useParentWork(provenance: SessionProvenanceView | null): ParentWork {
+  const deployment = useSelectedNode();
+  const sessions = useListedScopes(
+    deployment?.agentDid,
+    provenance
+      ? [
+          ...(provenance.startedBy ? [scopeKey(provenance.startedBy)] : []),
+          ...provenance.senders.map((turn) => scopeKey(turn.sender)),
+        ]
+      : [],
+  );
   return useMemo(() => {
     if (!provenance?.startedBy && !provenance?.senders.length) return NO_PARENT;
-    const summaries = summariesByScope(deployment?.sessions);
+    const summaries = summariesByScope(sessions);
     const sender = (link: LinkedSessionView): Sender => {
       const summary = summaries.get(scopeKey(link)) ?? null;
       return {
@@ -59,5 +65,5 @@ export function useParentWork(
       hasSenders: byRequest.size > 0,
       sentBy: (requestId) => (requestId ? (byRequest.get(requestId) ?? null) : null),
     };
-  }, [provenance, deployment]);
+  }, [provenance, deployment, sessions]);
 }

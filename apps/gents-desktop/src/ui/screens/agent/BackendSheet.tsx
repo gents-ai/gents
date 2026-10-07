@@ -1,21 +1,18 @@
 /* A backend's full editor beside the page that references it. */
-import type { DeploymentView } from "@source-inc/gents-desktop-client";
-import type { Shell } from "@/hooks/useShell";
+import type { NodeView } from "../../../hooks/fleetStore";
 import { EditorSheet } from "./EditorSheet";
 import { BackendEditor, useAccounts } from "./InferencePanel";
 
 export function BackendSheet({
-  shell,
   deployment,
   backendId,
   onClose,
 }: {
-  shell: Shell;
-  deployment: DeploymentView;
+  deployment: NodeView;
   backendId: string | null;
   onClose: () => void;
 }) {
-  const { accounts, reload } = useAccounts(shell, deployment.agentDid);
+  const { accounts, reload } = useAccounts(deployment.agentDid);
   const backend =
     deployment.inferenceBackends.find((b) => b.backendId === backendId) ?? null;
   return (
@@ -52,7 +49,7 @@ export function BackendSheet({
       {backend && (
         <BackendEditor
           key={backend.backendId}
-          shell={shell}
+
           deployment={deployment}
           backend={backend}
           accounts={accounts}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { TaskHook } from "@source-inc/gents-desktop-client";
+import type { TaskHook } from "@source-inc/gents-desktop-client/generated/TaskHook";
 import {
   formatCommand,
   hooksFromDraft,

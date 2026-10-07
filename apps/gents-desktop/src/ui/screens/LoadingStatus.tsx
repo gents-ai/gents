@@ -2,9 +2,10 @@ import { useState } from "react";
 import { Button } from "@gents/ui/components/button";
 import { Spinner } from "@gents/ui/components/spinner";
 import { cn } from "@gents/ui/lib/utils";
-import type { Shell } from "@/hooks/useShell";
 import { navigate } from "@/lib/router";
-import { toast } from "sonner";
+import { toastFailure } from "@/lib/failure";
+import { useApp, useView } from "@/app/AppContext";
+import { useSelectedAgentDid } from "@/hooks/useClient";
 
 const LABEL = {
   retryLocal: "Try again",
@@ -17,15 +18,20 @@ const BUSY = {
   configureInference: "Opening…",
 };
 
-export function LoadingStatus({ shell }: { shell: Shell }) {
-  const status = shell.conversationLoading;
+export function LoadingStatus() {
+  const status = useView((view) => view.loadingStatus);
+  const {
+    stores,
+    actions: { refreshSnapshot, retrySessionHydration },
+  } = useApp();
+  const agentDid = useSelectedAgentDid();
+  const selectedSessionId = stores.selection.use.sessionId();
   const [busy, setBusy] = useState(false);
   if (!status) return null;
   const act = async () => {
     const action = status.action;
     if (!action) return;
     if (action === "configureInference") {
-      const agentDid = shell.selectedAgentDid;
       navigate(
         agentDid
           ? { name: "agent", agentDid, section: "inference" }
@@ -35,11 +41,10 @@ export function LoadingStatus({ shell }: { shell: Shell }) {
     }
     setBusy(true);
     try {
-      if (action === "retryHydration")
-        await shell.retrySessionHydration(shell.selectedSessionId);
-      else await shell.refreshSnapshot();
+      if (action === "retryHydration") await retrySessionHydration(selectedSessionId);
+      else await refreshSnapshot();
     } catch (e) {
-      toast(String(e));
+      toastFailure("load the session", e);
     } finally {
       setBusy(false);
     }
