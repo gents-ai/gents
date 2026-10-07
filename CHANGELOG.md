@@ -84,6 +84,11 @@ source consistency checks, not a separate runtime compatibility version.
   the retry ladder, and `grok-auth-probe` and model discovery name the version
   gents sent and the `GENTS_XAI_GROK_CLIENT_VERSION` override.
 
+- Fleet snapshots resolve every session starter, across all deployments, with
+  one batched request read instead of two per started session, so the cost of
+  a client snapshot no longer grows with the number of started sessions
+  (#2291).
+
 ## 0.20.0 - 2026-10-05
 
 - Trimmed tool results are recoverable: `sessions` gains an `output`
