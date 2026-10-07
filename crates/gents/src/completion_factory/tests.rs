@@ -10,6 +10,7 @@ use crate::watcher::AgentRequest;
 
 fn request() -> AgentRequest {
     AgentRequest {
+        retry_parent_request_doc_id: None,
         purpose: gents_protocol::request_admission::RequestPurpose::Normal,
         doc_id: String::new(),
         request_id: "request-123".to_string(),

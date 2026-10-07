@@ -59,6 +59,7 @@ fn agent_runtime_writer_source_cannot_serialize_readiness_authority() {
 
 fn status_test_request(request_id: &str) -> crate::watcher::AgentRequest {
     crate::watcher::AgentRequest {
+        retry_parent_request_doc_id: None,
         purpose: gents_protocol::request_admission::RequestPurpose::Normal,
         doc_id: format!("{request_id}-doc"),
         request_id: request_id.to_string(),

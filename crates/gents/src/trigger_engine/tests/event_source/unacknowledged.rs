@@ -128,7 +128,9 @@ impl Delivery {
                         crate::config_client::event_source_cursor::load_or_seed_for_source(
                             txn,
                             owner,
-                            "ping-trigger",
+                            &gents_protocol::event_delivery::EventConsumer::Trigger {
+                                trigger_id: "ping-trigger".into(),
+                            },
                             "OutcomePing",
                         )
                         .await?

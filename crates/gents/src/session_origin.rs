@@ -13,7 +13,7 @@ use std::collections::BTreeSet;
 use anyhow::Result;
 use serde_json::Value;
 
-use crate::config_client::ConfigAccess;
+use crate::config_client::{ConfigAccess, ConfigRead};
 use crate::graphql::{escape_graphql_string, graphql_string_list_literal};
 use crate::session::{
     decode_session_row, public_request_filter, session_scope_filter, AGENT_SESSION_FIELDS,
@@ -74,9 +74,13 @@ pub struct SessionLineage {
 
 const SCOPE_FIELDS: &str = "_docID agent_did session_id requester_did";
 
-async fn collection(access: &ConfigAccess, query: &str, name: &str) -> Result<Vec<Value>> {
+async fn collection<R: ConfigRead + ?Sized>(
+    access: &R,
+    query: &str,
+    name: &str,
+) -> Result<Vec<Value>> {
     Ok(access
-        .execute(query)
+        .execute_read(query)
         .await?
         .pointer(&format!("/data/{name}"))
         .and_then(Value::as_array)
@@ -115,28 +119,36 @@ impl From<&AgentSession> for SessionScope {
 }
 
 /// The scopes of the given physical requests, keyed by document id.
-async fn request_scopes<'a>(
-    access: &ConfigAccess,
+pub async fn request_scopes<'a, R: ConfigRead + ?Sized>(
+    access: &R,
     doc_ids: impl IntoIterator<Item = &'a str>,
 ) -> Result<Vec<(String, SessionScope)>> {
-    let doc_ids = doc_ids.into_iter().collect::<BTreeSet<_>>();
-    if doc_ids.is_empty() {
-        return Ok(Vec::new());
+    let doc_ids = doc_ids
+        .into_iter()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let mut scopes = Vec::new();
+    // Bounded predicates, without truncating lineage or ever interpolating
+    // an empty list literal into a database operation.
+    for batch in doc_ids.chunks(128) {
+        let query = format!(
+            "{{AgentRequest(filter: {{_docID: {{_in: {}}}}}) {{{SCOPE_FIELDS}}}}}",
+            graphql_string_list_literal(batch.iter().copied())
+        );
+        scopes.extend(
+            collection(access, &query, "AgentRequest")
+                .await?
+                .iter()
+                .filter_map(|row| {
+                    Some((
+                        row.get("_docID")?.as_str()?.to_owned(),
+                        SessionScope::of_row(row)?,
+                    ))
+                }),
+        );
     }
-    let query = format!(
-        "{{AgentRequest(filter: {{_docID: {{_in: {}}}}}) {{{SCOPE_FIELDS}}}}}",
-        graphql_string_list_literal(doc_ids)
-    );
-    Ok(collection(access, &query, "AgentRequest")
-        .await?
-        .iter()
-        .filter_map(|row| {
-            Some((
-                row.get("_docID")?.as_str()?.to_owned(),
-                SessionScope::of_row(row)?,
-            ))
-        })
-        .collect())
+    Ok(scopes)
 }
 
 /// The session stored under `session_id` for `requester_did` (any requester

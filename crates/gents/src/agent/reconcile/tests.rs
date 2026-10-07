@@ -123,6 +123,7 @@ fn backend_admission_config(
 
 fn background_child_request(index: usize, behavior_id: &str) -> AgentRequest {
     AgentRequest {
+        retry_parent_request_doc_id: None,
         purpose: gents_protocol::request_admission::RequestPurpose::Normal,
         doc_id: format!("child-doc-{index}"),
         request_id: format!("child-request-{index}"),

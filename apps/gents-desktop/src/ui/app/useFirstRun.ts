@@ -29,8 +29,10 @@ export function useFirstRun(generation: number, startupReady: boolean) {
     phase: "unknown",
   });
   let phase: Phase = held.generation === generation ? held.phase : "unknown";
-  if (phase === "unknown" && startupReady && needsSetup) {
-    phase = "active";
+  /* decided either way: a home that needed no setup at startup does not get
+     the wizard later because its agent loses its inference */
+  if (phase === "unknown" && startupReady && read) {
+    phase = needsSetup ? "active" : "done";
     setHeld({ generation, phase });
   }
   return {
