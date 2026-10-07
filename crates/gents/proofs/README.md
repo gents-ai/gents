@@ -632,7 +632,7 @@ Provider-input assembly for Claude: the body's `system[]` order and tools omissi
 | `Proofs/Triggers/Queue.lean` | Single claim predicate for native arrival observations and the closed fire model; queued-serial FIFO, running-session exclusion, and the pre-journal ordinary cohort. |
 | `Proofs/Triggers/Refinement.lean` | Fresh queued document admission refines the legacy dispatch model after erasing durable identity and claim details; execution exclusion belongs to the shared claim predicate. |
 | `Proofs/Triggers/Durable.lean` | Atomic admission, configured outcome-chain rejection, shared session Goal assignments, separate terminal/publication transitions and idempotent outcome recovery. |
-| `Proofs/EventDelivery/Durable.lean` | Receiving-node arrival journal checkpoints and complete-prefix admission/disposition invariant, including disabled delivery, initial seeding and crash replay. |
+| `Proofs/EventDelivery/Durable.lean` | Receiving-node arrival journal checkpoints and complete-prefix admission/disposition invariant for trigger and callback-binding consumers (version-free invocation receipts; a callback binding is enabled only with its callback), including disabled delivery, registration-time seeding and crash replay. |
 | `Proofs/GraphPipeline/WorkspaceLineage.lean` | Pinned graph session selection for #1445, sharing authenticated existing session and ancestry owners. |
 | `Proofs/Workspace.lean` | Isolated workspace lifecycle, append-only bindings, seal/owner routing, and authority meet |
 | `Proofs/Callback.lean` | Callback invocation lifecycle, action-journal prefix, and claim uniqueness |

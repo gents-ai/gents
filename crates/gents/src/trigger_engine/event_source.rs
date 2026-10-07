@@ -581,16 +581,18 @@ impl EventSource {
                 continue;
             };
             let owner = delivery.owner();
+            let consumer = delivery.consumer();
             if let Err(error) = crate::config_client::ConfigAccess::transact_local(
                 &self.node,
                 None,
                 "trigger.seed_arrival_cursor",
                 |txn| {
+                    let consumer = &consumer;
                     Box::pin(async move {
                         crate::config_client::event_source_cursor::load_or_seed_for_source(
                             txn,
                             owner,
-                            &trigger.trigger_id,
+                            consumer,
                             &trigger.source_collection,
                         )
                         .await

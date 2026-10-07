@@ -86,15 +86,16 @@ pub struct FireOutcome {
     pub created_at: String,
 }
 
-/// Position in DefraDB's receiving-node document-arrival journal. Each trigger
-/// checkpoints independently in a non-branchable runtime document. Advancement
-/// requires a complete prefix of admitted or explicitly excluded arrivals.
+/// Position in DefraDB's receiving-node document-arrival journal. Each
+/// per-document consumer (trigger or callback binding) checkpoints
+/// independently in a non-branchable runtime document. Advancement requires a
+/// complete prefix of admitted or explicitly excluded arrivals.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EventSourceCursor {
     pub cursor_key: String,
     pub owner_did: String,
-    pub trigger_id: String,
+    pub consumer: crate::event_delivery::EventConsumer,
     pub source_collection: String,
     pub after: String,
 }

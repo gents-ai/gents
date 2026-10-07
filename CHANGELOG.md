@@ -6,6 +6,15 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- Per-document callback bindings no longer drop documents written before the
+  callback engine starts (#2343). Like event triggers, each binding now
+  checkpoints a receiving-node arrival cursor, seeded when its configuration
+  is applied. Any arrival after registration is delivered once, including
+  documents written while the node was down. A per-document invocation's
+  idempotency key is now its binding, source collection and document (no
+  source version), so an edit after admission is never admitted again.
+  `EventSourceCursor` now names its typed `consumer` in place of
+  `trigger_id`. Existing homes must be re-initialized.
 - A runtime that cannot start because a behavior is unavailable now logs each
   blocking behavior's diagnostic; a `--tool-root` that does not admit the
   live `Tools.host.root` names both roots (#2296).

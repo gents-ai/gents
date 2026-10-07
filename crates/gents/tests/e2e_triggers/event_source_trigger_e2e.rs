@@ -381,9 +381,8 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
     // Routing can advance for the Task before the Trigger's first scan seeds
     // its cursor at the journal head. Events written before that seed are historical.
     let cursor_query = format!(
-        r#"{{ EventSourceCursor(filter: {{owner_did: {{_eq: "{}"}}, trigger_id: {{_eq: "{}"}}, source_collection: {{_eq: "WebhookEvent"}}}}) {{_docID}} }}"#,
+        r#"{{ EventSourceCursor(filter: {{owner_did: {{_eq: "{}"}}, source_collection: {{_eq: "WebhookEvent"}}}}) {{consumer}} }}"#,
         escape_graphql_string(&agent_did),
-        escape_graphql_string(TRIGGER_ID)
     );
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
@@ -398,7 +397,12 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
             .data
             .as_ref()
             .and_then(|data| data["EventSourceCursor"].as_array())
-            .is_some_and(|rows| rows.len() == 1)
+            .is_some_and(|rows| {
+                rows.iter()
+                    .filter(|row| row["consumer"]["trigger_id"] == TRIGGER_ID)
+                    .count()
+                    == 1
+            })
         {
             break;
         }
