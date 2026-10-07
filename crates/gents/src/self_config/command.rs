@@ -275,7 +275,6 @@ pub struct ConfigCommandTool {
     pub(super) categories: BTreeSet<String>,
     pub(super) no_lockout: bool,
     pub(super) preview: bool,
-    pub(super) allow_pack_install: bool,
     pub(super) process_ceiling: crate::tool_surface::SelfConfigProcessCeiling,
     pub(super) execution: Arc<super::execution::ExecutionObservation>,
     /// Whose home holds the pack store and the plugin store this tool installs into.
@@ -564,7 +563,7 @@ impl ConfigCommandTool {
                 return (message, json!({"next_call":{"argv":[resource,"list"]}}));
             }
         }
-        let resources = model_resources(&self.categories, self.allow_pack_install);
+        let resources = model_resources(&self.categories, self.core.held_grants().pack_install);
         if error
             .downcast_ref::<super::ops::MissingBehavior>()
             .is_some()
@@ -709,7 +708,7 @@ impl ConfigCommandTool {
             "validate" => self.validate_saved(&argv[1..]).await,
             other => bail!(
                 "unknown config resource or command {other:?}; put the resource first, e.g. [\"profile\",\"list\"]. Accepted: help, get, {}. See [\"help\"]",
-                model_resources(&self.categories, self.allow_pack_install).join(", ")
+                model_resources(&self.categories, self.core.held_grants().pack_install).join(", ")
             ),
         }
     }
@@ -718,7 +717,7 @@ impl ConfigCommandTool {
         anyhow::ensure!(
             self.categories.contains("persona") || self.categories.contains("behavior"),
             "behavior configuration is not granted; enabled resources: {}",
-            model_resources(&self.categories, self.allow_pack_install).join(", ")
+            model_resources(&self.categories, self.core.held_grants().pack_install).join(", ")
         );
         let Some(verb) = argv.first().map(String::as_str) else {
             bail!("behavior command is required; see [\"help\",\"behavior\"]");
@@ -966,7 +965,7 @@ impl ConfigCommandTool {
                 let patch = parse_patch(&rest, target)?;
                 let request = match target {
                     SelfConfigTarget::Tools => refuse_silent_tools_drops(
-                        tools_request(&core, patch, self.allow_pack_install),
+                        tools_request(&core, patch),
                         allow_drop,
                     ),
                     SelfConfigTarget::InferenceBackend => backend_request(patch),
@@ -1518,7 +1517,10 @@ impl ConfigCommandTool {
     }
 
     async fn pack(&self, argv: &[String]) -> Result<String> {
-        anyhow::ensure!(self.allow_pack_install, "pack installation is not granted");
+        anyhow::ensure!(
+            self.core.held_grants().pack_install,
+            "pack installation is not granted"
+        );
         let installer = PackInstaller {
             core: self.core.clone(),
             node: self.node.clone(),
@@ -1602,7 +1604,7 @@ impl ConfigCommandTool {
         anyhow::ensure!(
             self.categories.contains(category),
             "{resource} configuration is not granted; enabled resources: {}",
-            model_resources(&self.categories, self.allow_pack_install).join(", ")
+            model_resources(&self.categories, self.core.held_grants().pack_install).join(", ")
         );
         Ok(())
     }
@@ -1791,6 +1793,7 @@ impl ConfigCommandTool {
             core.with_lockout_behavior_id(invoking_behavior_id)
                 .with_no_lockout(self.no_lockout)
                 .with_process_ceiling(self.process_ceiling.clone())
+                .with_held_grants(self.core.held_grants().clone())
         })
     }
 
@@ -2514,7 +2517,7 @@ pub(super) fn help_patch_contracts(resource: Option<&str>) -> Value {
                 "built_ins": {"enable_graph_tools":"boolean|null","enable_goal_tools":"boolean|null","enable_goal_creation":"boolean|null","enable_memory":"boolean|null","enable_session_history_tool":"boolean|null","enable_schema_tool":"boolean|null","enable_p2p_tool":"boolean|null","enable_p2p_mutations":"boolean|null","p2p_collections":"array<string>|null","enable_context_budget":"boolean|null"},
                 "datastore": {"enable_defra_query":"boolean|null","defra_query_collections":"array<string>|null","write_collections":"array<exact application collection>|null (empty denies all)","datastore_tool_surface_ids":"array<existing same-principal DatastoreToolSurface ID>|null"},
                 "integrations": {"lsp":{"config":"JSON encoded as a string|null","timeout_secs":"positive integer|null; default 20","max_timeout_secs":"positive integer|null; default 300; clamped to 300"},"eth_tool_ids":"array<existing same-principal EthTool ID>|null","plugins":"array<{plugin: installed namespace/name, digest: sha256:<hex>|null}>|null"},
-                "self_config": {"enable_self_config":"boolean|null; absent is disabled","self_config_categories":"array<behavior|tools|profile|backend|mcp_service|automation|persona>|null; absent selects behavior, tools, profile; persona is the behavior catalog grant (every behavior, not only the current one)","self_config_no_lockout":"boolean|null","self_config_preview":"boolean|null; grants the preview verb","enable_pack_install":"boolean|null; cannot be self-granted"},
+                "self_config": {"enable_self_config":"boolean|null; absent is disabled","self_config_categories":"array<behavior|tools|profile|backend|mcp_service|automation|persona>|null; absent selects behavior, tools, profile; persona is the behavior catalog grant (every behavior, not only the current one)","self_config_no_lockout":"boolean|null","self_config_preview":"boolean|null; grants the preview verb","enable_pack_install":"boolean|null; settable only by an agent that holds it"},
                 "tags": "array<string>; default []",
             }),
         )],

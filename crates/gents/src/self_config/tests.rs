@@ -1485,6 +1485,77 @@ fn operator_grants_project_from_the_tools_group() {
     );
 }
 
+/// Replace a Tools document through the operator route (no self-config
+/// guard), as the desktop and `config apply` do.
+async fn operator_replace_tools(node: &defra_node::EmbeddedNode, tools: Value) {
+    use crate::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
+    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+        collection: crate::Collection::Tools,
+        add: tools.clone(),
+        update: tools,
+    }])
+    .unwrap();
+    ConfigAccess::transact_local(node, None, "test.operator_tools", |txn| {
+        let plan = &plan;
+        Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
+    })
+    .await
+    .unwrap();
+}
+
+/// The operator grants pack installation on `tools_id`.
+async fn operator_grant_pack_install(node: &defra_node::EmbeddedNode, owner: &str, tools_id: &str) {
+    operator_replace_tools(
+        node,
+        json!({"agent_did": owner, "tools_id": tools_id,
+               "self_config": {"enable_self_config": true, "enable_pack_install": true}}),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn config_tools_unrelated_edit_on_granted_tools_is_accepted() {
+    let node = build_persona_node().await;
+    let identity = persona_identity("granted-tools-edit");
+    let owner = identity.did().to_string();
+    crate::test_support::install_test_behavior(&node, &owner, "granted").await;
+    operator_grant_pack_install(&node, &owner, "granted:tools").await;
+    let mut tool_config = config(&["tools"]);
+    tool_config.behavior_id = "granted".to_string();
+    let tools = build_self_config_tools(node, owner, Some(identity), &tool_config, test_plugins());
+
+    let edited = call_config_tool(
+        &tools,
+        vec![
+            "tools".into(),
+            "edit".into(),
+            "--set".into(),
+            r#"subagents={"enabled":true}"#.into(),
+        ],
+    )
+    .await
+    .expect("an edit that raises no grant is accepted without holding it");
+    assert_eq!(
+        serde_json::from_str::<Value>(&edited).unwrap()["committed"],
+        true
+    );
+    call_config_tool(
+        &tools,
+        vec![
+            "tools".into(),
+            "edit".into(),
+            "--set".into(),
+            format!(
+                "self_config={}",
+                json!({"enable_self_config": true, "enable_pack_install": true,
+                       "self_config_preview": true})
+            ),
+        ],
+    )
+    .await
+    .expect("keeping a stored grant while rewriting its group is not a raise");
+}
+
 // -- behavior commands (#Task 5) --
 
 #[test]
@@ -1696,7 +1767,6 @@ async fn skill_import_previews_without_writes_and_requires_file_authority() {
                 "root": root.path().to_str().unwrap(), "files": {"mode": "ReadOnly"}
             })),
         )],
-        false,
     ))
     .await
     .unwrap();
@@ -1865,7 +1935,6 @@ async fn configuration_discovery_is_read_only_root_bounded_and_sanitized() {
                 "root": root.path().to_str().unwrap(), "files": {"mode": "ReadOnly"}
             })),
         )],
-        false,
     ))
     .await
     .unwrap();
@@ -1982,7 +2051,6 @@ async fn setup_discovery_clarification_apply_and_verification_preserve_disabled_
                 "files": {"mode": "ReadOnly"}
             })),
         )],
-        false,
     ))
     .await
     .unwrap();
@@ -2386,7 +2454,6 @@ async fn datastore_preview_create_and_sparse_edit_use_owned_patch_path() {
                 "datastore_tool_surface_ids": ["jobs"]
             })),
         )],
-        false,
     ))
     .await
     .unwrap();
@@ -3059,7 +3126,6 @@ async fn config_targets_owned_working_behavior_for_all_bound_documents() {
                 "self_config".into(),
                 Some(json!({"enable_self_config": true})),
             )],
-            false,
         ))
         .await
         .unwrap();
@@ -3988,7 +4054,7 @@ async fn canonical_self_config_preview_and_apply_preserve_scope_and_reject_locko
         Some(json!({"enable_self_config":true})),
     )];
     let preview = core
-        .preview(tools_request(&core, patch.clone(), false))
+        .preview(tools_request(&core, patch.clone()))
         .await
         .unwrap();
     assert!(!preview.committed);
@@ -3997,16 +4063,10 @@ async fn canonical_self_config_preview_and_apply_preserve_scope_and_reject_locko
         .await
         .unwrap();
     assert!(read["documents"]["Tools"]["self_config"].is_null());
-    core.apply(tools_request(&core, patch, false))
-        .await
-        .unwrap();
+    core.apply(tools_request(&core, patch)).await.unwrap();
     let guarded = core.clone().with_no_lockout(true);
     assert!(guarded
-        .apply(tools_request(
-            &guarded,
-            vec![("self_config".into(), None)],
-            false,
-        ))
+        .apply(tools_request(&guarded, vec![("self_config".into(), None)],))
         .await
         .is_err());
     assert!(guarded
@@ -4028,7 +4088,6 @@ async fn canonical_self_config_preview_and_apply_preserve_scope_and_reject_locko
         .preview(tools_request(
             &core,
             vec![("host".into(), Some(json!({"unexpected":true})))],
-            false,
         ))
         .await
         .is_err());
@@ -4091,20 +4150,20 @@ async fn direct_tools_preview_and_apply_enforce_and_persist_canonical_workspace_
 
     let authored_inside = selected.join("detour").join("..");
     let preview = core
-        .preview(tools_request(&core, patch(&authored_inside), false))
+        .preview(tools_request(&core, patch(&authored_inside)))
         .await
         .expect("preview admits a descendant and does not persist it");
     assert!(!preview.committed);
     assert!(core
-        .preview(tools_request(&core, patch(&sibling), false))
+        .preview(tools_request(&core, patch(&sibling)))
         .await
         .is_err());
     assert!(core
-        .apply(tools_request(&core, patch(&sibling), false))
+        .apply(tools_request(&core, patch(&sibling)))
         .await
         .is_err());
 
-    core.apply(tools_request(&core, patch(&authored_inside), false))
+    core.apply(tools_request(&core, patch(&authored_inside)))
         .await
         .expect("apply admits the selected root");
     let tools_id = format!("{behavior_id}:tools");
@@ -5335,7 +5394,6 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
                 ),
                 ("subagents".into(), Some(json!({"enabled": true}))),
             ],
-            false,
         ))
         .await
         .unwrap();

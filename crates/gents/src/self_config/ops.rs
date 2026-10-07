@@ -74,6 +74,7 @@ pub struct SelfConfigCore {
     lockout_behavior_id: String,
     no_lockout: bool,
     process_ceiling: SelfConfigProcessCeiling,
+    held_grants: OperatorGrants,
 }
 
 /// Outcome of an applied (or previewed) patch. Field order is the order the
@@ -166,12 +167,25 @@ impl SelfConfigCore {
             behavior_id,
             no_lockout: false,
             process_ceiling: SelfConfigProcessCeiling::default(),
+            held_grants: OperatorGrants::default(),
         })
     }
 
     pub fn with_no_lockout(mut self, no_lockout: bool) -> Self {
         self.no_lockout = no_lockout;
         self
+    }
+
+    /// The operator grants the invoking agent holds, from its resolved
+    /// self-config tool configuration. Sibling cores built for a
+    /// catalog-authorized target carry the invoker's grants, never the target's.
+    pub fn with_held_grants(mut self, held: OperatorGrants) -> Self {
+        self.held_grants = held;
+        self
+    }
+
+    pub fn held_grants(&self) -> &OperatorGrants {
+        &self.held_grants
     }
 
     /// Preserve the invoking behavior as the recoverability anchor while a

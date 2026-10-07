@@ -246,8 +246,9 @@ fn fence_profile_pick(request: &mut ApplyRequest<'static>) {
 }
 
 /// Model-facing patches may target any owned behavior, including the invoking
-/// configurator itself; the no-lockout guard is its only self-protection
-/// (Lean `SelfConfig.keepsControl`). Keep the shared-reference check inside the
+/// configurator itself; its lockout protection is the no-lockout guard (Lean
+/// `SelfConfig.keepsControl`), and operator grants are bounded in the validate
+/// slot (Lean `SelfConfig.keepsGrants`). Keep the shared-reference check inside the
 /// same transaction as validation/publication so a stale preflight cannot
 /// authorize a write.
 fn protect_working_behavior(mut request: ApplyRequest<'static>) -> ApplyRequest<'static> {
@@ -322,13 +323,10 @@ fn protect_working_behavior(mut request: ApplyRequest<'static>) -> ApplyRequest<
     });
     request
 }
-fn tools_request(
-    core: &SelfConfigCore,
-    patch: SelfConfigPatch,
-    allow_pack_install: bool,
-) -> ApplyRequest<'static> {
+fn tools_request(core: &SelfConfigCore, patch: SelfConfigPatch) -> ApplyRequest<'static> {
     let mut request = anchored_request(SelfConfigTarget::Tools, "tools_id", patch);
     let ceiling_root = core.process_ceiling().root.clone();
+    let held = core.held_grants().clone();
     request.normalize = Box::new(move |txn, _, _, merged| {
         let ceiling_root = ceiling_root.clone();
         Box::pin(async move {
@@ -347,23 +345,13 @@ fn tools_request(
             Ok(())
         })
     });
-    request.validate = Box::new(move |_, _, _, merged| {
+    request.validate = Box::new(move |_, _, stored, merged| {
+        let stored = stored.clone();
         let merged = merged.clone();
+        let held = held.clone();
         Box::pin(async move {
             validate_merged_selection(&merged)?;
-            if !allow_pack_install {
-                let grants_pack_install = merged
-                    .get("self_config")
-                    .and_then(Value::as_object)
-                    .and_then(|config| config.get("enable_pack_install"))
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
-                anyhow::ensure!(
-                    !grants_pack_install,
-                    "pack installation is operator-managed and cannot be self-granted"
-                );
-            }
-            Ok(())
+            guard_tools_keep_grants(&held, Some(&stored), &merged)
         })
     });
     request.guard = Box::new(|_, stored, merged| guard_tools_keep_control(stored, merged));
@@ -375,7 +363,7 @@ fn tools_request(
 /// no-lockout guard would catch, so such a patch is refused and names what it
 /// would drop unless `allow_drop` names the group. This confirms intent; it
 /// narrows no legal transition (Lean `SelfConfig.keepsControl` stays the only
-/// self-protection). Like that guard it applies only to the invoker under
+/// lockout protection). Like that guard it applies only to the invoker under
 /// no_lockout, which the Engineer's grant sets.
 fn refuse_silent_tools_drops(
     mut request: ApplyRequest<'static>,
@@ -2886,7 +2874,10 @@ pub fn build_self_config_tools(
         match SelfConfigCore::new(node.clone(), agent_did.clone(), config.behavior_id.clone()) {
             Ok(core) => core
                 .with_no_lockout(config.no_lockout)
-                .with_process_ceiling(config.process_ceiling.clone()),
+                .with_process_ceiling(config.process_ceiling.clone())
+                .with_held_grants(OperatorGrants {
+                    pack_install: config.enable_pack_install,
+                }),
             Err(error) => {
                 tracing::warn!(
                     behavior_id = %config.behavior_id,
@@ -2937,7 +2928,6 @@ pub fn build_self_config_tools(
         categories: config.categories.clone(),
         no_lockout: config.no_lockout,
         preview: config.preview,
-        allow_pack_install: config.enable_pack_install,
         process_ceiling: config.process_ceiling.clone(),
         execution: Arc::new(execution::ExecutionObservation::default()),
         plugins,
