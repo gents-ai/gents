@@ -34,6 +34,7 @@ use super::super::principal_identity::PrincipalIdentity;
 use super::route_manager::ClientRouteManager;
 use super::sync_state::{ClientSyncStateOwner, RuntimeSchemaObservation};
 use super::{ClientCore, P2P_OPERATION_TIMEOUT};
+use crate::client::peer_directory::RemovalCause;
 
 pub(super) async fn current_local_endpoint(
     p2p: &Arc<dyn P2POps>,
@@ -537,13 +538,6 @@ impl ClientCore {
         )
         .await?;
         let rows = rows::<EnrollmentRequestRow>(&response, "NetworkEnrollmentRequest")?;
-        // A locally retired generation must not be reused or resent inside its
-        // offer window; a new enrollment authors a fresh request instead.
-        let retired = self.sync_state.retired_enrollment_digests().await;
-        let rows = rows
-            .into_iter()
-            .filter(|row| !retired.contains(&row.request_digest))
-            .collect::<Vec<_>>();
         let Some(row) = select_retryable_local_request(
             &rows,
             self.principal.did(),
@@ -553,6 +547,19 @@ impl ClientCore {
         else {
             return Ok(None);
         };
+        // A locally retired request stays durable, so a second request under
+        // this offer would share its challenge and neither could be approved.
+        anyhow::ensure!(
+            !self
+                .sync_state
+                .retired_enrollment_digests()
+                .await
+                .contains(&row.request_digest),
+            "enrollment request {} for offer {} was removed on this desktop; fetch a fresh \
+             offer from the server's /status to enroll again",
+            row.request_id,
+            offer.offer_id
+        );
         let doc_id = row.doc_id.clone();
         let request = row.to_record()?;
         anyhow::ensure!(
@@ -899,7 +906,7 @@ pub(super) async fn reconcile_status_enrollment_approvals(
         record.source.as_deref() == Some("enrollment") && !outcomes.contains_key(&record.peer_id)
     }) {
         let removal = route_manager
-            .remove_peer(sync_state, &existing.peer_id)
+            .remove_peer(sync_state, &existing.peer_id, RemovalCause::Reconciliation)
             .await?;
         if let Some(error) = removal.cleanup_error {
             tracing::warn!(peer_id = %existing.peer_id, error = %error, "revoked enrollment route cleanup will retry");
@@ -2992,7 +2999,9 @@ mod tests {
             Ok(())
         }
         async fn disconnect_peer(&self, _addr: &str) -> P2PResult<()> {
-            unimplemented!()
+            self.connected
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
         }
         async fn get_replicators(&self) -> P2PResult<Vec<ReplicatorInfo>> {
             unimplemented!()
@@ -3012,7 +3021,7 @@ mod tests {
             _collections: Vec<String>,
             _addr: Option<&str>,
         ) -> P2PResult<()> {
-            unimplemented!()
+            Ok(())
         }
         async fn get_collections(&self) -> P2PResult<Vec<String>> {
             unimplemented!()
@@ -3427,7 +3436,7 @@ mod tests {
             panic!("one enrollment record is configured, got {installed:?}");
         };
         core.sync_state
-            .queue_removal(record)
+            .queue_removal(record, RemovalCause::Operator)
             .await
             .unwrap()
             .expect("removal is queued");
@@ -3497,7 +3506,7 @@ mod tests {
         );
 
         core.sync_state
-            .queue_removal(&installed[0])
+            .queue_removal(&installed[0], RemovalCause::Operator)
             .await
             .unwrap()
             .expect("removal is queued");
@@ -3591,7 +3600,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_locally_retired_request_is_not_reused_for_the_same_offer() {
+    async fn a_locally_retired_request_refuses_its_offer_instead_of_sharing_its_challenge() {
         use super::super::ClientCoreOptions;
         use crate::client::paths::DesktopPaths;
 
@@ -3611,13 +3620,13 @@ mod tests {
         locally_retire(&core, &authority).await;
 
         let offer = decode_offer(&authority.offer_token).unwrap();
-        let reused = core
+        let error = core
             .existing_request_for_offer(&offer, &authority.offer_token, core.local_peer_id())
             .await
-            .unwrap();
+            .expect_err("a retired request must not be reused or replaced under its offer");
         assert!(
-            reused.is_none(),
-            "a retired generation must not be reused inside its offer window: {reused:?}"
+            error.to_string().contains("fetch a fresh offer"),
+            "{error:#}"
         );
 
         core.shutdown().await.unwrap();
@@ -3661,6 +3670,101 @@ mod tests {
         assert_eq!(listed.len(), 1, "{listed:?}");
         assert_eq!(listed[0].state, "approved");
         assert_eq!(listed[0].request_id, authority.request.request_id);
+
+        core.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_saved_peer_removed_for_an_absent_receipt_reinstalls_when_it_returns() {
+        use super::super::ClientCoreOptions;
+        use crate::client::paths::DesktopPaths;
+
+        let temp = tempfile::tempdir().unwrap();
+        let core = ClientCore::start_with_paths_and_options(
+            DesktopPaths::from_root(temp.path().to_path_buf()),
+            ClientCoreOptions::local_only(),
+        )
+        .await
+        .unwrap();
+        let admin =
+            PrincipalIdentity::load_or_create(&DesktopPaths::from_root(temp.path().join("admin")))
+                .await
+                .unwrap();
+        let authority = signed_enrollment_authority(&admin, core.principal(), core.local_peer_id());
+        commit_admin_pin(&core, &authority).await;
+        commit_enrollment_request(&core, &authority.request).await;
+        commit_decision(&core, &authority).await;
+        commit_revision(&core, &authority.revision).await;
+        core.sync_state
+            .upsert_enrollment_peer(
+                &authority.request.server_peer,
+                "Enrolled server",
+                &authority.offer.server_ticket,
+                &authority.request.owner_agent,
+                &authority.request.network_id,
+                &authority.request.request_id,
+                &authority.request.request_digest,
+                &authority.request.admin_did,
+                authority.decision.authorization_sequence,
+                &authority.decision.authorization_expires_at,
+            )
+            .await
+            .unwrap();
+
+        let transport = Arc::new(EnrollmentTransport {
+            peer: authority.offer.server_ticket.clone(),
+            resolved: Some(identity::Did::new(admin.did().to_string()).unwrap()),
+            connected: false.into(),
+            dials: 0.into(),
+            observations: 0.into(),
+        });
+        let p2p: Arc<dyn P2POps> = transport.clone();
+        let principal = Arc::new(core.principal().clone());
+        let route_manager = Arc::new(ClientRouteManager::new(
+            core.node_arc(),
+            Arc::clone(&p2p),
+            Arc::clone(&principal),
+        ));
+        let reconcile = || async {
+            reconcile_status_enrollment_approvals(
+                &core.node_arc(),
+                &p2p,
+                &principal,
+                core.local_peer_id(),
+                &core.sync_state,
+                &route_manager,
+            )
+            .await
+            .unwrap()
+        };
+
+        reconcile().await;
+        assert!(
+            core.peer_records().await.is_empty(),
+            "reconciliation tears down a saved peer whose route receipt is unobserved"
+        );
+        assert!(
+            core.sync_state
+                .retired_enrollment_digests()
+                .await
+                .is_empty(),
+            "an automatic teardown must not retire a generation the operator kept"
+        );
+
+        commit_route_receipt(&core, &authority).await;
+        let authority_map = reconcile().await;
+        assert!(
+            authority_map.contains_key(&authority.request.server_peer),
+            "the restored receipt reinstalls the enrolled server: {authority_map:?}"
+        );
+        let installed = core.peer_records().await;
+        assert_eq!(
+            installed
+                .iter()
+                .map(|record| record.enrollment_request_digest.as_deref())
+                .collect::<Vec<_>>(),
+            vec![Some(authority.request.request_digest.as_str())]
+        );
 
         core.shutdown().await.unwrap();
     }

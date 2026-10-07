@@ -9,8 +9,9 @@ source consistency checks, not a separate runtime compatibility version.
 - Removing an enrolled agent stays removed. Removal records the ended
   authorization generation locally, so the enrollment reconciler stops
   reinstalling and redialling the server every tick until the authorization
-  lease expires or the network owner revokes; a fresh enrollment installs
-  again. The enrollment list also derives "approved" from the durable
+  lease expires or the network owner revokes; re-enrolling needs a fresh
+  offer from the server's `/status`. The reconciler's own teardown of a peer
+  whose route receipt is briefly unobserved does not retire it. The enrollment list also derives "approved" from the durable
   projection the reconciler uses, so a locally removed or revoked request
   stops listing as approved before its own expiry (#2295).
 

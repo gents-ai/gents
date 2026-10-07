@@ -188,6 +188,16 @@ impl RetiredEnrollment {
     }
 }
 
+/// Why a peer leaves the directory. Only an operator's removal retires an
+/// enrollment generation: reconciliation also removes a peer whose authority
+/// is current but whose route receipt is momentarily unobserved, and that
+/// peer must reinstall once the receipt returns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::client) enum RemovalCause {
+    Operator,
+    Reconciliation,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct StoredPeerDirectory {
     peers: Vec<PeerRecord>,
@@ -592,6 +602,7 @@ impl PeerDirectory {
     pub(in crate::client) async fn queue_removal(
         &mut self,
         expected: &PeerRecord,
+        cause: RemovalCause,
     ) -> Result<Option<PeerRecord>> {
         let mut candidate = self.clone();
         let Some(index) = candidate.peers.iter().position(|record| record == expected) else {
@@ -602,7 +613,9 @@ impl PeerDirectory {
             .pending_removals
             .retain(|record| record.peer_id != removed.peer_id);
         candidate.pending_removals.push(removed.clone());
-        if let Some(retired) = RetiredEnrollment::from_record(&removed) {
+        if let Some(retired) =
+            RetiredEnrollment::from_record(&removed).filter(|_| cause == RemovalCause::Operator)
+        {
             candidate
                 .retired_enrollments
                 .retain(|existing| existing.request_digest != retired.request_digest);
@@ -868,7 +881,10 @@ mod tests {
         let mut directory = PeerDirectory::load(&path).await.unwrap();
         let record = PeerRecord::new("Amy", "iroh://amy", "did:test:amy");
         directory.upsert(record.clone()).await.unwrap();
-        directory.queue_removal(&record).await.unwrap();
+        directory
+            .queue_removal(&record, RemovalCause::Operator)
+            .await
+            .unwrap();
 
         tokio::fs::remove_file(&path).await.unwrap();
         tokio::fs::create_dir(&path).await.unwrap();
@@ -949,7 +965,7 @@ mod tests {
             .unwrap();
         let removed = directory.records()[0].clone();
         directory
-            .queue_removal(&removed)
+            .queue_removal(&removed, RemovalCause::Operator)
             .await
             .unwrap()
             .expect("enrollment record is removed");
