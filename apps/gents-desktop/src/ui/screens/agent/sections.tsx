@@ -1,8 +1,13 @@
-/* The configuration sections the app brings, grouped by what the person is
-   doing (gents-design config flows). Importing this module once fills the
-   section registry. Contexts have no entry: each behavior edits its own
-   instructions and tools, and the Behaviors list links to unused contexts,
-   so the `contexts` route stays for those links. */
+/* The agent configuration screen's sections, grouped by what the person is
+   doing (gents-design config flows). Each is a route (`agent/<id>`), so a
+   section is linkable, and a section in the sidebar names its group, label
+   and mark. A route that has no entry of its own (an older link, or a page
+   reached from another section) names the entry it lights up instead.
+   Contexts have no entry: each behavior edits its own instructions and
+   tools, and the Behaviors list links to unused contexts, so the `contexts`
+   route stays for those links. */
+import type { NodeView } from "../../../hooks/fleetStore";
+import type { ComponentType } from "react";
 import {
   Bot,
   FolderOpen,
@@ -26,14 +31,37 @@ import { InferencePanel } from "./InferencePanel";
 import { PacksPanel } from "./PacksPanel";
 import { ProfilesPanel } from "./ProfilesPanel";
 import { SchedulesPanel } from "./SchedulesPanel";
-import { agentSections, type AgentSection } from "./sections";
 import { SkillsPanel } from "./SkillsPanel";
 import { TasksPanel } from "./TasksPanel";
 import { ToolServicesPanel } from "./ToolServicesPanel";
 import { ToolsPanel } from "./ToolsPanel";
 import { TriggersPanel } from "./TriggersPanel";
 
-const BUILT_IN: AgentSection[] = [
+export type SectionPanelProps = {
+  deployment: NodeView;
+  /** the document the route opens, when it names one */
+  item?: string;
+};
+
+type Listed = {
+  /** the sidebar's group */
+  group: string;
+  label: string;
+  icon: ComponentType<{ className?: string }>;
+  /** how many the sidebar shows beside the label */
+  count?: (deployment: NodeView) => number;
+};
+
+export type AgentSection = {
+  id: string;
+  Panel: ComponentType<SectionPanelProps>;
+} & (Listed | { under: string });
+
+export const isListed = (section: AgentSection): section is AgentSection & Listed =>
+  !("under" in section);
+
+/** The sections, in sidebar order; groups show in the order their first section does. */
+export const SECTIONS: AgentSection[] = [
   { group: "Configure", id: "agent", label: "Agent", icon: Bot, Panel: AgentPanel },
   {
     group: "Configure",
@@ -132,5 +160,3 @@ const BUILT_IN: AgentSection[] = [
   },
   { group: "Packs", id: "packs", label: "Packs", icon: Package, Panel: PacksPanel },
 ];
-
-for (const section of BUILT_IN) agentSections.register(section);

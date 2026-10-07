@@ -26,7 +26,6 @@ import {
 } from "./lib/shellPlatform";
 import { AppProvider, useApp } from "./ui/app/AppContext";
 import { AppShell } from "./ui/app/AppShell";
-import { RouteScreenOutlet } from "./ui/app/routeScreens";
 import { usePlatformSetup, useWindowTitle } from "./ui/app/platform";
 import { useFirstRun } from "./ui/app/useFirstRun";
 import { WindowControls } from "./ui/app/WindowControls";
@@ -44,12 +43,17 @@ import {
   navigate,
   useHistory,
   useRoute,
+  type Route,
 } from "./ui/lib/router";
 import { useSwipeNav } from "./ui/lib/swipe-nav";
+import { AgentScreen } from "./ui/screens/agent/AgentScreen";
+import { AgentsScreen } from "./ui/screens/AgentsScreen";
+import { MailboxScreen } from "./ui/screens/MailboxScreen";
 import { PluginAccessPrompt } from "./ui/screens/PluginAccessPrompt";
+import { SessionScreen } from "./ui/screens/SessionScreen";
+import { SessionsScreen } from "./ui/screens/SessionsScreen";
 import { SetupScreen } from "./ui/screens/setup/SetupScreen";
 import { Shortcuts } from "./ui/screens/Shortcuts";
-import "./ui/screens/routes";
 import "./ui/screens/surfaces";
 
 import "./App.css";
@@ -191,13 +195,36 @@ function AppBody() {
   return (
     <TooltipProvider>
       <AppShell route={route} history={history}>
-        <RouteScreenOutlet route={route} />
+        <RouteScreen route={route} />
       </AppShell>
       <Toaster />
       {hasLocalAgent && <PluginAccessPrompt />}
       <Shortcuts />
     </TooltipProvider>
   );
+}
+
+/* The screen each route draws in the pane. */
+function RouteScreen({ route }: { route: Route }) {
+  switch (route.name) {
+    case "sessions":
+      return <SessionsScreen nodeDid={route.nodeDid} />;
+    case "session":
+      return <SessionScreen />;
+    case "mailbox":
+      return <MailboxScreen nodeDid={route.nodeDid} />;
+    case "agents":
+    case "nodes":
+      return <AgentsScreen />;
+    case "agent":
+      return (
+        <AgentScreen
+          agentDid={route.agentDid}
+          section={route.section}
+          item={route.item}
+        />
+      );
+  }
 }
 
 export default App;

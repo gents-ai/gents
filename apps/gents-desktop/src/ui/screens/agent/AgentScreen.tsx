@@ -19,8 +19,7 @@ import {
 import { href, navigate } from "@/lib/router";
 import { useFleet } from "@/hooks/useFleet";
 import { nodeOf } from "../../../hooks/fleetStore";
-import "./builtInSections";
-import { agentSections, isListed } from "./sections";
+import { isListed, SECTIONS } from "./sections";
 
 export function AgentScreen({
   agentDid,
@@ -31,7 +30,6 @@ export function AgentScreen({
   section: string;
   item?: string;
 }) {
-  const sections = agentSections.useList();
   /* a new section, document or agent starts at the top; the scroll area
      keeps its position across hash changes otherwise */
   const content = useRef<HTMLDivElement>(null);
@@ -48,10 +46,10 @@ export function AgentScreen({
       </p>
     );
   }
-  const current = sections.find((s) => s.id === section) ?? null;
+  const current = SECTIONS.find((s) => s.id === section) ?? null;
   /* the sidebar entry this route lights up: its own, or the one it sits under */
   const entry = current && !isListed(current) ? current.under : section;
-  const listed = sections.filter(isListed);
+  const listed = SECTIONS.filter(isListed);
   const groups = [...new Set(listed.map((s) => s.group))];
   const Panel = current?.Panel;
   return (
