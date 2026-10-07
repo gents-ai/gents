@@ -2671,110 +2671,102 @@ impl Tool for RunGraphTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let access = graph_access(&self.node);
-        let (graph_id, digest, prepared) = if let Some(package) = args.package.as_deref() {
-            if args.graph_id.is_some() || args.revision_digest.is_some() {
+        let selector = match (
+            args.package.as_deref(),
+            args.graph_id.as_deref(),
+            args.revision_digest.as_deref(),
+        ) {
+            (Some(name), None, None) => crate::graph_package::GraphRunSelector::Package {
+                name,
+                coordinate: None,
+            },
+            (None, Some(graph_id), Some(digest)) => {
+                crate::graph_package::GraphRunSelector::Pinned { graph_id, digest }
+            }
+            (Some(_), _, _) => {
                 return Err(anyhow!(
                     "package runs must not include generic graph_id/revision_digest selectors"
                 )
-                .into());
+                .into())
             }
-            let plan = crate::graph_package::load_installed_package_plan(
-                &access,
-                package,
-                self.core.agent_did(),
-            )
-            .await?
-            .with_context(|| {
-                format!(
-                    "package {package:?} is not installed; run config pack install {package} first"
-                )
-            })?;
-            let attribution = plan
-                .package
-                .as_ref()
-                .context("active graph revision has no package attribution")?;
-            if attribution.name != package {
+            (None, Some(_), None) => {
                 return Err(anyhow!(
-                    "active graph package attribution changed; call list_graphs again"
+                    "a graph_id run requires the revision_digest list_graphs returns"
+                )
+                .into())
+            }
+            (None, None, _) => {
+                return Err(anyhow!(
+                    "run_graph requires package or graph_id; list_graphs returns both"
+                )
+                .into())
+            }
+        };
+        let plan = crate::graph_package::select_run_plan(&access, self.core.agent_did(), &selector)
+            .await?
+            .with_context(|| match selector {
+                crate::graph_package::GraphRunSelector::Package { name, .. } => format!(
+                    "package {name:?} is not installed; run config pack install {name} first"
+                ),
+                crate::graph_package::GraphRunSelector::Pinned { graph_id, .. } => {
+                    format!("graph {graph_id:?} has no active revision; call list_graphs again")
+                }
+            })?;
+        // The same selection `prepare_entry_run` makes below, so the
+        // ceiling decision can never disagree with which entry actually
+        // runs (a mismatch here would let a model-invoked run reach a
+        // `git_diff` host step with no ceiling at all).
+        let selected_entry = crate::graph_package::select_entry(&plan, args.entry.as_deref()).ok();
+        let requires_git_diff_ceiling = selected_entry
+            .and_then(|entry| entry.prepare.as_ref())
+            .is_some_and(|prepare| {
+                prepare
+                    .host
+                    .iter()
+                    .any(|step| matches!(step, crate::graph_pipeline::HostInput::GitDiff { .. }))
+            });
+        let host_root = if requires_git_diff_ceiling {
+            let effective = self
+                .core
+                .read_effective_config(&BTreeSet::new(), false, false)
+                .await?;
+            let effective_file_mode = effective
+                .pointer("/runtime_effective/effective/file_mode")
+                .and_then(Value::as_str)
+                .map(crate::tool_surface::FileToolMode::parse)
+                .transpose()?
+                .unwrap_or_default();
+            if effective_file_mode == crate::tool_surface::FileToolMode::Off {
+                return Err(anyhow!(
+                    "this graph's prepare step requires effective read authority on the current behavior"
                 )
                 .into());
             }
-            // The same selection `prepare_entry_run` makes below, so the
-            // ceiling decision can never disagree with which entry actually
-            // runs (a mismatch here would let a model-invoked run reach a
-            // `git_diff` host step with no ceiling at all).
-            let selected_entry =
-                crate::graph_package::select_entry(&plan, args.entry.as_deref()).ok();
-            let requires_git_diff_ceiling = selected_entry
-                .and_then(|entry| entry.prepare.as_ref())
-                .is_some_and(|prepare| {
-                    prepare.host.iter().any(|step| {
-                        matches!(step, crate::graph_pipeline::HostInput::GitDiff { .. })
-                    })
-                });
-            let host_root = if requires_git_diff_ceiling {
-                let effective = self
-                    .core
-                    .read_effective_config(&BTreeSet::new(), false, false)
-                    .await?;
-                let effective_file_mode = effective
-                    .pointer("/runtime_effective/effective/file_mode")
-                    .and_then(Value::as_str)
-                    .map(crate::tool_surface::FileToolMode::parse)
-                    .transpose()?
-                    .unwrap_or_default();
-                if effective_file_mode == crate::tool_surface::FileToolMode::Off {
-                    return Err(anyhow!(
-                        "this graph's prepare step requires effective read authority on the current behavior"
-                    )
-                    .into());
-                }
-                let effective_root = effective
-                    .pointer("/runtime_effective/effective/root")
-                    .and_then(Value::as_str)
-                    .context(
-                        "this graph's prepare step requires an explicit effective managed root",
-                    )?;
-                Some(std::path::PathBuf::from(effective_root))
-            } else {
-                None
-            };
-            let prepared = crate::graph_package::prepare_entry_run(
-                &access,
-                self.core.agent_did(),
-                crate::graph_package::EntryRunRequest {
-                    plan: &plan,
-                    entry: args.entry.as_deref(),
-                    input: args.input.unwrap_or_else(|| json!({})),
-                    host_root: host_root.as_deref(),
-                    plugins: &self.plugins,
-                },
-            )
-            .await?;
-            (plan.graph_id, plan.digest, prepared)
+            let effective_root = effective
+                .pointer("/runtime_effective/effective/root")
+                .and_then(Value::as_str)
+                .context("this graph's prepare step requires an explicit effective managed root")?;
+            Some(std::path::PathBuf::from(effective_root))
         } else {
-            (
-                args.graph_id
-                    .context("run_graph requires package or graph_id")?,
-                args.revision_digest
-                    .context("generic graph run requires revision_digest from list_graphs")?,
-                crate::graph_package::PreparedEntryRun {
-                    entry_name: args
-                        .entry
-                        .context("generic graph run requires entry from list_graphs")?,
-                    input: args.input.context(
-                        "generic graph run requires input matching the advertised entry contract",
-                    )?,
-                    origin: crate::graph_pipeline::EntryInputOrigin::Operator,
-                    documents: 0,
-                },
-            )
+            None
         };
+        let prepared = crate::graph_package::prepare_entry_run(
+            &access,
+            self.core.agent_did(),
+            crate::graph_package::EntryRunRequest {
+                plan: &plan,
+                entry: args.entry.as_deref(),
+                input: args.input.unwrap_or_else(|| json!({})),
+                host_root: host_root.as_deref(),
+                plugins: &self.plugins,
+            },
+        )
+        .await?;
         let receipt = crate::graph_pipeline::start_graph_run_with_access(
             &access,
             self.core.agent_did(),
-            &graph_id,
-            Some(&digest),
+            &plan.graph_id,
+            Some(&plan.digest),
             &prepared.entry_name,
             prepared.input,
             prepared.origin,

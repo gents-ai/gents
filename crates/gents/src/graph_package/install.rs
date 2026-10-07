@@ -178,6 +178,77 @@ pub async fn load_installed_package_plan(
         .await
 }
 
+/// Which active graph plan a run starts.
+#[derive(Clone, Copy, Debug)]
+pub enum GraphRunSelector<'a> {
+    /// An installed graph package by its plan name (`PackagePlan.name`, the
+    /// `run_with.package` that `list_graphs` reports). With `coordinate`
+    /// (`namespace/name`), the active revision must also match that
+    /// coordinate's installation record.
+    Package {
+        name: &'a str,
+        coordinate: Option<&'a str>,
+    },
+    /// A graph by id, pinned to the digest of its active revision.
+    Pinned { graph_id: &'a str, digest: &'a str },
+}
+
+/// The one selection owner for graph runs (`gents graph run` and the
+/// `run_graph` tool). `None` when nothing is installed or active under the
+/// selector, so each surface names its own next step.
+pub async fn select_run_plan(
+    access: &ConfigAccess,
+    owner_did: &str,
+    selector: &GraphRunSelector<'_>,
+) -> Result<Option<GraphPlan>> {
+    match *selector {
+        GraphRunSelector::Package { name, coordinate } => {
+            let Some(plan) = load_installed_package_plan(access, name, owner_did).await? else {
+                return Ok(None);
+            };
+            let attribution = plan
+                .package
+                .as_ref()
+                .context("active graph revision has no package attribution")?;
+            anyhow::ensure!(
+                attribution.name == name,
+                "the active revision of graph {} belongs to package {:?}, not {name:?}; list the installed graphs again",
+                plan.graph_id,
+                attribution.name
+            );
+            if let Some(coordinate) = coordinate {
+                let record = crate::pack::read_installed_pack(access, owner_did, coordinate)
+                    .await?
+                    .with_context(|| {
+                        format!("{coordinate} has no installation record; install it again under that coordinate")
+                    })?;
+                anyhow::ensure!(
+                    attribution.package_digest == record.digest,
+                    "the active revision of {coordinate} was built from {} but the installed pack is {}; install {coordinate} again",
+                    attribution.package_digest,
+                    record.digest
+                );
+            }
+            Ok(Some(plan))
+        }
+        GraphRunSelector::Pinned { graph_id, digest } => {
+            let Some(plan) = crate::graph_pipeline::load_active_graph_plan_with_access(
+                access, owner_did, graph_id,
+            )
+            .await?
+            else {
+                return Ok(None);
+            };
+            anyhow::ensure!(
+                plan.digest == digest,
+                "graph {graph_id} is active at revision {}, not {digest}; pass the active digest to run it",
+                plan.digest
+            );
+            Ok(Some(plan))
+        }
+    }
+}
+
 fn response_rows<'a>(response: &'a Value, collection: &str) -> &'a [Value] {
     response
         .get("data")
