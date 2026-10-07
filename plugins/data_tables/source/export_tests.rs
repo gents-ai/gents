@@ -217,7 +217,7 @@ fn a_folder_that_cannot_be_written_is_one_sentence() {
         let e = e.unwrap_err();
         assert_eq!(
             e,
-            "cannot create the output file: the folder is read-only for this call; export needs a tool call the user allowed to write there"
+            "cannot create the output file: the folder is read-only for this call; allow writing to it, or call again without output to only read"
         );
     }
 }
@@ -264,14 +264,14 @@ fn an_export_that_widens_types_midway_restarts_cleanly() {
 }
 
 #[test]
-fn a_name_that_leaves_room_for_the_temporary_file_is_written_and_a_longer_one_is_refused() {
+fn a_name_of_255_bytes_is_written_and_a_longer_one_is_refused() {
     let d = sales();
-    let name = format!("{}.csv", "n".repeat(244));
-    assert_eq!(name.len(), 248);
+    let name = format!("{}.csv", "n".repeat(251));
+    assert_eq!(name.len(), 255);
     let r = export(&d, json!({"output": name})).unwrap();
     assert_eq!(r["rows"], 5);
     assert!(d.path().join(&name).is_file());
-    let too_long = format!("{}.csv", "n".repeat(245));
+    let too_long = format!("{}.csv", "n".repeat(252));
     let e = export(&d, json!({"output": too_long})).unwrap_err();
     assert!(e.starts_with("output must be a plain file name"), "{e}");
 }

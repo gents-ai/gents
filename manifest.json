@@ -6,7 +6,6 @@
     "pack_config.json",
     "plugins/data_tables.afb",
     "plugins/data_tables/TOOL.md",
-    "plugins/data_tables_export/TOOL.md",
     "schemas/data_job.graphql",
     "schemas/data_result.graphql",
     "schemas/data_row.graphql",
@@ -21,7 +20,7 @@
   ],
   "config": "pack_config.json",
   "dependencies": [],
-  "description": "Runs SQL over CSV, TSV, JSON, NDJSON, Parquet, XLSX and ODS files, a folder of them, or rows sent inline, with bounded memory and exact types, as a Data analyst agent and two plugins.",
+  "description": "Runs SQL over CSV, TSV, JSON, NDJSON, Parquet, XLSX and ODS files, a folder of them, or rows sent inline, with exact types, and saves a result as CSV or Parquet, as a Data analyst agent and one plugin.",
   "inference_slots": [
     {
       "behaviors": [
@@ -39,12 +38,15 @@
     {
       "artifact": "plugins/data_tables.afb",
       "bind_dir": {
-        "access": "read",
-        "description": "The folder holding the data files, or the one data file to query",
+        "access": "read_write",
+        "description": "The folder holding the data files, or the one data file to query; a call that sets output also writes the result file into the folder",
         "input_field": "path",
-        "original_field": "path_original"
+        "original_field": "path_original",
+        "write_fields": [
+          "output"
+        ]
       },
-      "description": "Runs SQL (Apache DataFusion) over CSV, TSV, JSON, NDJSON, Parquet, XLSX and ODS files, a folder of them, or inline rows: lists tables, describes columns with statistics, and returns query results with exact types, stable paging and a Markdown table.",
+      "description": "Runs SQL (Apache DataFusion) over CSV, TSV, JSON, NDJSON, Parquet, XLSX and ODS files, a folder of them, or inline rows: lists tables, describes columns with statistics, returns query results with exact types, stable paging and a Markdown table, and with output writes the whole result as a CSV or Parquet file in the folder.",
       "input_schema": {
         "additionalProperties": false,
         "properties": {
@@ -136,6 +138,23 @@
               "array",
               "object"
             ]
+          },
+          "format": {
+            "description": "The file format; taken from output when it ends in .csv or .parquet.",
+            "enum": [
+              "csv",
+              "parquet"
+            ],
+            "type": "string"
+          },
+          "output": {
+            "description": "Write the whole result of sql to this file in the folder path instead of returning rows, such as result.csv: a plain name, no folders, not starting with a dot. Only a call with output writes.",
+            "type": "string"
+          },
+          "overwrite": {
+            "default": false,
+            "description": "Replace output when it already exists; otherwise an existing file is an error.",
+            "type": "boolean"
           }
         },
         "type": "object"
@@ -148,89 +167,6 @@
         "wall_clock_secs": 900
       },
       "name": "data_tables",
-      "source": "plugins/data_tables"
-    },
-    {
-      "artifact": "plugins/data_tables.afb",
-      "bind_dir": {
-        "access": "read_write",
-        "description": "The folder holding the data files, where the exported file is written",
-        "input_field": "path",
-        "original_field": "path_original"
-      },
-      "description": "Runs one SELECT over data files like data_tables and writes the whole result as a CSV or Parquet file in the folder.",
-      "input_schema": {
-        "additionalProperties": false,
-        "properties": {
-          "delimiter": {
-            "description": "The CSV field delimiter, one character or tab; detected when omitted.",
-            "type": "string"
-          },
-          "files": {
-            "description": "Relative paths inside the folder path to use as tables, in this order; without it every readable file below path is a table.",
-            "items": {
-              "type": "string"
-            },
-            "maxItems": 10000,
-            "minItems": 1,
-            "type": "array"
-          },
-          "format": {
-            "description": "The file format; taken from output when it ends in .csv or .parquet.",
-            "enum": [
-              "csv",
-              "parquet"
-            ],
-            "type": "string"
-          },
-          "header": {
-            "description": "Whether the first CSV row is a header; detected when omitted.",
-            "type": "boolean"
-          },
-          "output": {
-            "description": "The file name to write inside the folder path, such as result.csv: no folders, not starting with a dot.",
-            "type": "string"
-          },
-          "overwrite": {
-            "default": false,
-            "description": "Replace output when it already exists; otherwise an existing file is an error.",
-            "type": "boolean"
-          },
-          "path": {
-            "description": "Path of the data file or folder; a relative path starts at the working folder. Without it only inline tables are available.",
-            "type": "string"
-          },
-          "path_original": {
-            "description": "Set by the host to the real path of the file or folder named in path; leave it out.",
-            "type": "string"
-          },
-          "sql": {
-            "description": "One SELECT whose whole result is written.",
-            "type": "string"
-          },
-          "tables": {
-            "description": "Rows sent inline: a list of {name, columns, rows} tables, one such table, or an object of name to rows. Rows are lists or objects; columns may declare types.",
-            "type": [
-              "array",
-              "object"
-            ]
-          }
-        },
-        "required": [
-          "path",
-          "sql",
-          "output"
-        ],
-        "type": "object"
-      },
-      "instructions": "plugins/data_tables_export/TOOL.md",
-      "language": "rust",
-      "limits": {
-        "max_output_mib": 4,
-        "memory_mib": 3072,
-        "wall_clock_secs": 900
-      },
-      "name": "data_tables_export",
       "source": "plugins/data_tables"
     }
   ],

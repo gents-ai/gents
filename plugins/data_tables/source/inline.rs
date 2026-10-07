@@ -17,7 +17,7 @@ use crate::Res;
 use crate::csv::{MAX_COLUMNS, column_names};
 use crate::names::{Taken, sanitize, unique};
 use crate::table::{BATCH_ROWS, Batches, Fnv, TableSource, Warnings};
-use crate::typed::{Builder, ColType, FLOAT, INT, Inferrer, parse_float, parse_int};
+use crate::typed::{Builder, ColType, FLOAT, INT, Inferrer, parse_float, parse_int, parse_uint};
 
 /// The most rows an inline table may carry.
 pub const MAX_ROWS: usize = 1_000_000;
@@ -35,6 +35,7 @@ fn declared(name: &str) -> ColType {
     match name.trim().to_ascii_lowercase().as_str() {
         "bool" | "boolean" => ColType::Bool,
         "int" | "integer" | "bigint" | "smallint" | "tinyint" => ColType::Int,
+        "uint64" => ColType::UInt,
         t if t.starts_with("int") || t.starts_with("uint") => ColType::Int,
         "float" | "double" | "real" | "number" | "float32" | "float64" => ColType::Float,
         "date" => ColType::Date,
@@ -86,6 +87,14 @@ fn push(b: &mut Builder, v: &Value, t: ColType) -> bool {
         },
         (ColType::Int, Value::String(s)) => match parse_int(s.as_bytes()) {
             Some(i) => b.int(i),
+            None => return false,
+        },
+        (ColType::UInt, Value::Number(n)) => match n.as_u64() {
+            Some(u) => b.uint(u),
+            None => return false,
+        },
+        (ColType::UInt, Value::String(s)) => match parse_uint(s.as_bytes()) {
+            Some(u) => b.uint(u),
             None => return false,
         },
         (ColType::Float, Value::Number(n)) => b.float(n.as_f64().unwrap_or(f64::NAN)),
@@ -393,6 +402,26 @@ mod tests {
             vec![json!(2), json!("b"), json!(false), json!(2.0), Value::Null]
         );
         assert_eq!(t.row_count(), Some(2));
+    }
+
+    #[test]
+    fn a_uint64_result_chains_back_exactly() {
+        let out = crate::testkit::run(json!({
+            "tables": {"r": {"columns": [{"name": "s", "type": "uint64"}], "rows": [["18446744073709551615"], [5], [null]]}},
+            "sql": "SELECT s FROM r WHERE s > 4 ORDER BY s",
+        }))
+        .unwrap();
+        assert_eq!(out["columns"], json!([{"name": "s", "type": "uint64"}]));
+        assert_eq!(out["rows"], json!([[5], ["18446744073709551615"]]));
+        for bad in [
+            json!(-1),
+            json!("-1"),
+            json!("18446744073709551616"),
+            json!("007"),
+        ] {
+            let e = one(json!({"columns": [{"name": "s", "type": "uint64"}], "rows": [[bad]]}));
+            assert!(e.is_err(), "{bad}");
+        }
     }
 
     #[test]

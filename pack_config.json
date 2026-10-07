@@ -28,10 +28,7 @@
         "delimiter",
         "header",
         "sample_rows",
-        "columns",
-        "output",
-        "format",
-        "overwrite"
+        "columns"
       ]
     }
   ],
@@ -95,9 +92,6 @@
         "plugins": [
           {
             "plugin": "gents/data_tables"
-          },
-          {
-            "plugin": "gents/data_tables_export"
           }
         ]
       },

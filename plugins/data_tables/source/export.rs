@@ -1,12 +1,12 @@
 //! The `export` mode: write a query result into the bound folder as CSV or
 //! Parquet. It streams, so a result of any size is written with flat memory,
-//! and it writes under a temporary hidden name that replaces the target only
-//! when the whole result was written.
+//! and it writes a hidden temporary file of its own that becomes the target
+//! only when the whole result was written.
 //!
 //! CSV keeps NULL (an empty field) apart from the empty string (`""`), so a
 //! file read back gives the same rows; floats are written with their shortest
 //! round-trip digits.
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
 use std::path::Path;
 use std::sync::Arc;
@@ -115,8 +115,8 @@ fn header_line(names: &[String]) -> Vec<u8> {
     line
 }
 
-/// The longest output name: the hidden `.{name}.part` written beside it must fit in 255 bytes too.
-const MAX_NAME_BYTES: usize = 248;
+/// The longest file name most filesystems hold.
+const MAX_NAME_BYTES: usize = 255;
 
 fn valid_name(name: &str) -> Res<()> {
     let bad = name.is_empty()
@@ -135,7 +135,7 @@ fn io_error(what: &str, e: &std::io::Error) -> String {
         || e.raw_os_error() == Some(63)
     {
         return format!(
-            "{what}: the folder is read-only for this call; export needs a tool call the user allowed to write there"
+            "{what}: the folder is read-only for this call; allow writing to it, or call again without output to only read"
         );
     }
     format!("{what}: {e}")
@@ -159,11 +159,35 @@ impl From<String> for Stop {
     }
 }
 
+/// Creates a temporary file in `dir` that no other call is using: created exclusively, so
+/// concurrent exports and a leftover of a call that died never share one.
+fn temp_file(dir: &Path) -> Res<(std::path::PathBuf, File)> {
+    let mut n = 0u32;
+    loop {
+        let path = dir.join(format!(".data_tables-{n}.part"));
+        match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(file) => return Ok((path, file)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && n < 1000 => n += 1,
+            Err(e) => return Err(io_error("cannot create the output file", &e)),
+        }
+    }
+}
+
+/// Makes the finished `tmp` the file `target`. Without `overwrite` a hard link publishes it only
+/// while the name is free, so a file that appeared since it was checked is never replaced.
+fn publish(tmp: &Path, target: &Path, overwrite: bool) -> std::io::Result<()> {
+    if overwrite {
+        std::fs::rename(tmp, target)
+    } else {
+        std::fs::hard_link(tmp, target).and_then(|()| std::fs::remove_file(tmp))
+    }
+}
+
 async fn write_all(
     catalog: &Arc<Catalog>,
     sql: &str,
     format: ExportFormat,
-    tmp: &Path,
+    file: File,
 ) -> Result<u64, Stop> {
     let engine = Engine::new(Arc::clone(catalog), POOL_BYTES).map_err(Stop::Fail)?;
     let prepared = engine.prepare(sql).await.map_err(Stop::Fail)?;
@@ -172,8 +196,6 @@ async fn write_all(
         .await
         .map_err(|e| Stop::Fail(explain(&e)))?;
     let schema = stream.schema();
-    let file =
-        File::create(tmp).map_err(|e| Stop::Fail(io_error("cannot create the output file", &e)))?;
     let names: Vec<String> = schema.fields().iter().map(|f| f.name().clone()).collect();
     let mut sink = match format {
         ExportFormat::Csv => {
@@ -265,25 +287,36 @@ pub async fn export(input: &Input, catalog: &Arc<Catalog>) -> Res<Value> {
         );
     }
     let target = dir.join(name);
-    if target.exists() && input.overwrite != Some(true) {
-        return Err(format!(
-            "{name} already exists; choose another output name or set overwrite to true"
-        ));
+    let overwrite = input.overwrite == Some(true);
+    let exists =
+        || format!("{name} already exists; choose another output name or set overwrite to true");
+    if target.exists() && !overwrite {
+        return Err(exists());
     }
-    let tmp = dir.join(format!(".{name}.part"));
+    let (tmp, mut file) = temp_file(dir)?;
     let rows = loop {
-        match write_all(catalog, sql, format, &tmp).await {
+        let failed = match write_all(catalog, sql, format, file).await {
             Ok(rows) => break rows,
-            Err(Stop::Retry) => {}
-            Err(Stop::Fail(e)) => {
-                let _ = std::fs::remove_file(&tmp);
-                return Err(e);
-            }
-        }
-    };
-    std::fs::rename(&tmp, &target).map_err(|e| {
+            // Our own temporary file: start it again.
+            Err(Stop::Retry) => match File::create(&tmp) {
+                Ok(f) => {
+                    file = f;
+                    continue;
+                }
+                Err(e) => io_error("cannot create the output file", &e),
+            },
+            Err(Stop::Fail(e)) => e,
+        };
         let _ = std::fs::remove_file(&tmp);
-        io_error("cannot finish the output file", &e)
+        return Err(failed);
+    };
+    publish(&tmp, &target, overwrite).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        if e.kind() == std::io::ErrorKind::AlreadyExists {
+            exists()
+        } else {
+            io_error("cannot finish the output file", &e)
+        }
     })?;
     let bytes = std::fs::metadata(&target).map(|m| m.len()).unwrap_or(0);
     Ok(json!({
@@ -331,7 +364,7 @@ mod tests {
 
     #[test]
     fn output_names_are_plain_file_names() {
-        for ok in ["a.csv", "out.parquet", "x", &"x".repeat(248)] {
+        for ok in ["a.csv", "out.parquet", "x", &"x".repeat(255)] {
             assert!(valid_name(ok).is_ok(), "{ok}");
         }
         for bad in [
@@ -341,10 +374,36 @@ mod tests {
             "a/b.csv",
             "a\\b.csv",
             "x\0.csv",
-            &"x".repeat(249),
+            &"x".repeat(256),
         ] {
             assert!(valid_name(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn publishing_without_overwrite_never_replaces_a_file_that_appeared() {
+        let d = crate::testkit::Dir::new();
+        let (tmp, target) = (d.path().join(".t.part"), d.path().join("out.csv"));
+        std::fs::write(&tmp, "new").unwrap();
+        std::fs::write(&target, "theirs").unwrap();
+        let e = publish(&tmp, &target, false).unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "theirs");
+        publish(&tmp, &target, true).unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "new");
+        assert!(!tmp.exists());
+    }
+
+    #[test]
+    fn temporary_files_are_never_shared() {
+        let d = crate::testkit::Dir::new();
+        let (a, _) = temp_file(d.path()).unwrap();
+        let (b, _) = temp_file(d.path()).unwrap();
+        assert_ne!(a, b);
+        std::fs::write(&a, "a leftover").unwrap();
+        let (c, _) = temp_file(d.path()).unwrap();
+        assert!(c != a && c != b);
+        assert_eq!(std::fs::read_to_string(&a).unwrap(), "a leftover");
     }
 
     #[test]

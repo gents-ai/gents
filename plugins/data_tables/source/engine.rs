@@ -167,7 +167,7 @@ fn check_select(statement: &Statement) -> Res<()> {
         Statement::Statement(s) if matches!(**s, Ast::Query(_)) => check_depth(s),
         Statement::Explain(e) => check_select(&e.statement),
         _ => Err(
-            "only SELECT queries are accepted; to save a result as a file use the export mode"
+            "only SELECT queries are accepted; to save a result as a file, give output a file name"
                 .into(),
         ),
     }

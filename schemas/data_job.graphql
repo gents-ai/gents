@@ -14,7 +14,4 @@ type DataJob {
   header: Boolean
   sample_rows: Int
   columns: [String]
-  output: String
-  format: String
-  overwrite: Boolean
 }

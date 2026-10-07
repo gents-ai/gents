@@ -9,8 +9,7 @@
       "Tools/data-analyst-tools"
     ],
     "plugins": [
-      "data_tables",
-      "data_tables_export"
+      "data_tables"
     ],
     "slots": [
       "data_analyst"

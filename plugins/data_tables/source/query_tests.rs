@@ -321,7 +321,7 @@ fn only_select_queries_are_accepted_and_nothing_is_written() {
     ] {
         assert_eq!(
             err(&d, sql),
-            "only SELECT queries are accepted; to save a result as a file use the export mode",
+            "only SELECT queries are accepted; to save a result as a file, give output a file name",
             "{sql}"
         );
     }
@@ -336,7 +336,7 @@ fn only_select_queries_are_accepted_and_nothing_is_written() {
         ] {
             assert_eq!(
                 err(&d, &format!("{prefix} {inner}")),
-                "only SELECT queries are accepted; to save a result as a file use the export mode",
+                "only SELECT queries are accepted; to save a result as a file, give output a file name",
                 "{prefix} {inner}"
             );
         }

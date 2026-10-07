@@ -101,11 +101,6 @@ fn records(mode: &str, out: &Value) -> Value {
                 .collect();
             json!({"result": result, "rows": rows})
         }
-        "export" => {
-            result["rows_written"] = out["rows"].clone();
-            result["file"] = out["written"].clone();
-            json!({"result": result})
-        }
         _ => {
             let tables: Vec<Value> = out["tables"]
                 .as_array()
@@ -271,27 +266,6 @@ mod tests {
             json!({"run_id": "r2", "tables": json!({"prev": {"columns": columns, "rows": rows}}).to_string(), "sql": "SELECT sum(column_1) AS s FROM prev"}),
         );
         assert_eq!(chained["rows"], json!([{"row": 0, "values": "[3]"}]));
-    }
-
-    #[test]
-    fn an_export_job_reports_the_file_it_wrote() {
-        let d = folder();
-        let out = node(
-            json!({"run_id": "r", "path": d.s(), "mode": "export", "sql": "SELECT n FROM t", "output": "o.csv"}),
-        );
-        assert_eq!(out["result"]["mode"], "export");
-        assert_eq!(
-            (
-                out["result"]["file"].clone(),
-                out["result"]["rows_written"].clone(),
-                out["result"]["complete"].clone()
-            ),
-            (json!("o.csv"), json!(3), json!(true))
-        );
-        assert_eq!(
-            std::fs::read_to_string(d.path().join("o.csv")).unwrap(),
-            "n\n1\n2\n4\n"
-        );
     }
 
     #[test]

@@ -10,6 +10,4 @@ type DataResult {
   markdown: String
   warnings: [String]
   error: String
-  file: String
-  rows_written: Int
 }

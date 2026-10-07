@@ -4,8 +4,8 @@ SQL over the data files people actually have: CSV, TSV, JSON (an array of record
 Parquet, and XLSX and ODS spreadsheets, a folder of them, or rows another tool produced. Results keep exact
 types, page deterministically and come with a Markdown table the model can read. The pack ships the
 `data_tables` plugin (a WebAssembly module running Apache DataFusion, so it behaves the same on every
-operating system gents runs on), a second plugin `data_tables_export` that writes a result to a file, and a
-ready-made **Data analyst** agent that uses them.
+operating system gents runs on), which also saves a result as a file, and a ready-made **Data analyst** agent
+that uses it.
 
 | Input | Notes |
 | --- | --- |
@@ -20,7 +20,7 @@ ready-made **Data analyst** agent that uses them.
 | `tables` | lists tables with columns, types and the row count when it is known without a scan |
 | `describe` | per column type, non-null, distinct, min, max, mean over a sample, and sample rows |
 | `query` | runs one SELECT; a page of rows with exact types, `markdown`, `next.cursor` and `warnings` |
-| `export` | `data_tables_export` only: writes a result as CSV or Parquet into the bound folder |
+| `query` with `output` | writes the whole result as CSV or Parquet into the bound folder instead of returning rows |
 
 ## Use it from the desktop
 
@@ -32,8 +32,8 @@ No configuration.
    `budget.xlsx`".
 
 Files in the working folder of the chat are readable at once; a file elsewhere raises "Allow data_tables to
-read `<path>`?". The tool sees only the file or folder the question names. Saving a result with
-`data_tables_export` asks to allow writing to that folder, because that is the only tool that writes.
+read `<path>`?". The tool sees only the file or folder the question names. Only a call that saves a result
+(one with `output`) asks to allow writing to that folder; every other call reads.
 
 From a terminal:
 
@@ -44,9 +44,9 @@ gents chat --behavior-id data-analyst "Which region sold the most in reports/sal
 
 ## Use it as a model tool
 
-The `data-analyst` behavior's Tools document grants both plugins as model tools
-(`integrations.plugins: [{"plugin": "gents/data_tables"}, {"plugin": "gents/data_tables_export"}]`). To give
-them to another behavior, add the same entries to that behavior's Tools. The model calls
+The `data-analyst` behavior's Tools document grants the plugin as a model tool
+(`integrations.plugins: [{"plugin": "gents/data_tables"}]`). To give it to another behavior, add the same entry
+to that behavior's Tools. The model calls
 
 ```json
 {"path": "reports", "sql": "SELECT region, sum(units) AS units FROM sales GROUP BY region"}
@@ -61,15 +61,17 @@ Installing the pack also installs one plugin node, `data-run`, wired as a plain 
 graph pack is needed: create a `DataJob` document and the records below appear.
 
 ```sh
-gents server --home <home> --http-port 8080 &   # started in the folder holding your files
+gents plugin dirs add /data/reports --home <home>   # a graph call reads only allowed folders
+gents server --home <home> --http-port 8080 &
 gql() { curl -fsS http://127.0.0.1:8080/api/v0/graphql -H 'content-type: application/json' -d "$(jq -cn --arg q "$1" '{query: $q}')"; }
-gql 'mutation { create_DataJob(input: {run_id: "r1", path: "reports", sql: "SELECT region, sum(units) AS units FROM sales GROUP BY region"}) { _docID } }'
+gql 'mutation { create_DataJob(input: {run_id: "r1", path: "/data/reports", sql: "SELECT region, sum(units) AS units FROM sales GROUP BY region"}) { _docID } }'
 gql '{ DataRow(filter: {run_id: {_eq: "r1"}}) { row values } }'
 ```
 
-`path` names a folder or one file; a relative path starts at the server's working folder, which is readable
-without asking, and a path elsewhere must be in the allowed folders (`gents plugin dirs add <folder>`). A request
-is recognized as a node's by the `run_id` every such document carries. The node never writes (it binds read-only).
+`path` is the absolute path of a folder or one file inside an allowed folder (`gents plugin dirs add <folder>`):
+a graph call has no working folder and nobody to ask, so a relative path, or one outside the allowed folders,
+fails the job with a sentence. A request is recognized as a node's by the `run_id`
+every such document carries. The node never writes: a `DataJob` has no `output`, so every node call reads.
 
 | `DataJob` field | Meaning |
 | --- | --- |
@@ -111,7 +113,7 @@ while :; do
 done
 ```
 
-To write a result, run `gents plugin run gents/data_tables_export --bind-dir ./reports --input
+To write a result, add `output`: `gents plugin run gents/data_tables --bind-dir ./reports --input
 '{"sql": "SELECT * FROM sales", "output": "copy.parquet"}'`.
 
 ## Combine it
@@ -145,15 +147,18 @@ misses every sampled block is not seen, and the clock is left out so the same fi
 and is refused with the reason when any changed. A table whose types came from a sample is read once in full when
 its result has a next page, so every page has the same column types. The query is run again
 for each page and the rows before the page are dropped as they stream, so memory stays flat and the cost of a page
-grows with its offset; narrow the query, or export the result, for a very long one.
+grows with its offset; narrow the query, or save the result with `output`, for a very long one.
 
-## Bounded memory, any size
+## Memory, any size
 
 Scans stream: a multi-GiB CSV, JSON or Parquet file is read with flat memory for a scan, a filter, an aggregate or
 a LIMIT. Parquet reads only the columns a query names, one row group at a time (a row group over 256 MiB in the
 columns read is refused with a sentence). The engine's operators (sort, join, hash aggregate) share a 1 GiB pool
-and never spill to disk, so a query that cannot fit fails with a sentence naming what to narrow instead of being
-killed. CSV and JSON types come from the first 100000 rows; a later value that disagrees makes the call read the
+and never spill to disk, so a query whose operators cannot fit fails with a sentence naming what to narrow. That
+pool counts only the operators: reading (a Parquet row group being decoded, a CSV table read again in full to
+settle its types, a workbook's strings, the result being built) is not counted there, and what bounds the whole
+call is the plugin's 3072 MiB memory limit, past which the call is stopped by the host rather than answered with
+a sentence. CSV and JSON types come from the first 100000 rows; a later value that disagrees makes the call read the
 table once in full to settle the type, and it still returns the right answer. SQL is limited to 64 KiB and 256
 levels of nesting, a row to 16 MiB, a text value in a result to 64 KiB (said in `warnings`), and a result page to
 3 MB of rows. The whole result (rows, Markdown, columns and warnings) is held under 3.5 MB: a page that would
@@ -167,12 +172,13 @@ text or 20 million elements are refused before they run. The plugin's declared l
 
 ## Authority
 
-A call reads only what it names. The `data_tables` plugin declares `bind_dir` (input field `path`, access `read`):
-the file it names is the only file the call can see (a private folder holding one hard link, nothing copied), and
-a folder it names is that folder. The plugin has no network, environment or write access. `data_tables_export`
-declares the same binding with access `read_write` and is the only tool that can write: it writes one named file
-in the folder, under a hidden temporary name that replaces the target only when the whole result was written, and
-never replaces an existing file unless `overwrite` is true. SQL cannot reach other files: only `SELECT` is
+A call reads only what it names. The plugin declares `bind_dir` (input field `path`, access `read_write`, write
+field `output`): a call without `output` is bound read-only, so the file it names is the only file the call can see
+(a private folder holding one hard link, nothing copied), and a folder it names is that folder. Only a call that
+sets `output` asks for write access to the folder, and it writes one named file there: it streams the result into
+a hidden temporary file of its own, which becomes the target only when the whole result was written, and an
+existing file, even one that appeared during the call, is never replaced unless `overwrite` is true. The plugin
+has no network or environment access. SQL cannot reach other files: only `SELECT` is
 accepted (CREATE EXTERNAL TABLE, COPY, DDL and DML are refused), and the sandbox shows the plugin nothing else. A
 symbolic link that leads outside the folder is not followed, and `files` entries with `..` or a leading `/` are
 refused.

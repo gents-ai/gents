@@ -81,16 +81,16 @@ fn within(name: &str, v: Option<u64>, lo: u64, hi: u64, default: u64) -> Res<u64
 }
 
 impl Input {
-    /// The mode: the one given, else `export` when there is an output name, `query` when there
-    /// is SQL, and `tables` otherwise.
+    /// The mode: `export` when there is an output name (the field that makes the host grant
+    /// writing) unless another mode is given, else the one given, `query` when there is SQL,
+    /// and `tables` otherwise.
     pub fn mode(&self) -> Mode {
-        self.mode.unwrap_or(if self.output.is_some() {
-            Mode::Export
-        } else if self.sql.is_some() {
-            Mode::Query
-        } else {
-            Mode::Tables
-        })
+        match self.mode {
+            None | Some(Mode::Query) if self.output.is_some() => Mode::Export,
+            Some(mode) => mode,
+            None if self.sql.is_some() => Mode::Query,
+            None => Mode::Tables,
+        }
     }
 
     /// Rows per page.
@@ -181,6 +181,12 @@ mod tests {
         assert_eq!(parse(serde_json::json!({})).unwrap().mode(), Mode::Tables);
         assert_eq!(
             parse(serde_json::json!({"sql": "select 1", "output": "o.csv"}))
+                .unwrap()
+                .mode(),
+            Mode::Export
+        );
+        assert_eq!(
+            parse(serde_json::json!({"sql": "select 1", "output": "o.csv", "mode": "query"}))
                 .unwrap()
                 .mode(),
             Mode::Export

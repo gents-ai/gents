@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use arrow::array::{
     ArrayRef, BooleanBuilder, Date32Builder, Float64Builder, Int64Builder, StringBuilder,
-    TimestampMicrosecondBuilder,
+    TimestampMicrosecondBuilder, UInt64Builder,
 };
 use arrow::datatypes::{DataType, TimeUnit};
 use chrono::{Datelike, NaiveDate};
@@ -42,6 +42,8 @@ pub enum ColType {
     Bool,
     /// A 64-bit integer.
     Int,
+    /// An unsigned 64-bit integer: only declared, never inferred.
+    UInt,
     /// A 64-bit float.
     Float,
     /// A calendar date.
@@ -60,6 +62,7 @@ impl ColType {
         match self {
             Self::Bool => DataType::Boolean,
             Self::Int => DataType::Int64,
+            Self::UInt => DataType::UInt64,
             Self::Float => DataType::Float64,
             Self::Date => DataType::Date32,
             Self::Timestamp => DataType::Timestamp(TimeUnit::Microsecond, None),
@@ -96,6 +99,14 @@ fn num(b: &[u8]) -> u32 {
 pub fn parse_int(tok: &[u8]) -> Option<i64> {
     let body = tok.strip_prefix(b"-").unwrap_or(tok);
     if !digits(body) || (body.len() > 1 && body[0] == b'0') || body.len() > 19 {
+        return None;
+    }
+    std::str::from_utf8(tok).ok()?.parse().ok()
+}
+
+/// Parses an unsigned integer token by the same rules, up to `u64::MAX`.
+pub fn parse_uint(tok: &[u8]) -> Option<u64> {
+    if !digits(tok) || (tok.len() > 1 && tok[0] == b'0') || tok.len() > 20 {
         return None;
     }
     std::str::from_utf8(tok).ok()?.parse().ok()
@@ -310,6 +321,8 @@ pub enum Builder {
     Bool(BooleanBuilder),
     /// Integers.
     Int(Int64Builder),
+    /// Unsigned integers.
+    UInt(UInt64Builder),
     /// Floats.
     Float(Float64Builder),
     /// Dates.
@@ -328,6 +341,7 @@ impl Builder {
         match t {
             ColType::Bool => Self::Bool(BooleanBuilder::with_capacity(rows)),
             ColType::Int => Self::Int(Int64Builder::with_capacity(rows)),
+            ColType::UInt => Self::UInt(UInt64Builder::with_capacity(rows)),
             ColType::Float => Self::Float(Float64Builder::with_capacity(rows)),
             ColType::Date => Self::Date(Date32Builder::with_capacity(rows)),
             ColType::Timestamp => Self::Timestamp(TimestampMicrosecondBuilder::with_capacity(rows)),
@@ -343,6 +357,7 @@ impl Builder {
         match self {
             Self::Bool(b) => b.append_null(),
             Self::Int(b) => b.append_null(),
+            Self::UInt(b) => b.append_null(),
             Self::Float(b) => b.append_null(),
             Self::Date(b) => b.append_null(),
             Self::Timestamp(b) | Self::TimestampUtc(b) => b.append_null(),
@@ -355,6 +370,7 @@ impl Builder {
         match self {
             Self::Bool(b) => b.append_value(parse_bool(tok).ok_or(Mismatch)?),
             Self::Int(b) => b.append_value(parse_int(tok).ok_or(Mismatch)?),
+            Self::UInt(b) => b.append_value(parse_uint(tok).ok_or(Mismatch)?),
             Self::Float(b) => {
                 let v = parse_int(tok)
                     .map(|i| i as f64)
@@ -386,6 +402,15 @@ impl Builder {
             Self::Int(b) => b.append_value(v),
             Self::Float(b) if v.unsigned_abs() < (1 << 53) => b.append_value(v as f64),
             Self::Text(b) => b.append_value(v.to_string()),
+            _ => return Err(Mismatch),
+        }
+        Ok(())
+    }
+
+    /// Appends an unsigned integer cell.
+    pub fn uint(&mut self, v: u64) -> Result<(), Mismatch> {
+        match self {
+            Self::UInt(b) => b.append_value(v),
             _ => return Err(Mismatch),
         }
         Ok(())
@@ -425,6 +450,7 @@ impl Builder {
         match self {
             Self::Bool(b) => Arc::new(b.finish()),
             Self::Int(b) => Arc::new(b.finish()),
+            Self::UInt(b) => Arc::new(b.finish()),
             Self::Float(b) => Arc::new(b.finish()),
             Self::Date(b) => Arc::new(b.finish()),
             Self::Timestamp(b) | Self::TimestampUtc(b) => Arc::new(b.finish()),

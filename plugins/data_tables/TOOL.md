@@ -14,7 +14,7 @@ One JSON object. Name the data in one or both ways:
 - `tables`: rows sent inline, in the shape this tool's own results have:
   `{"name": "t", "columns": [{"name": "a", "type": "int64"}], "rows": [[1], [2]]}`. A list of such tables, one
   table, or an object of `name: rows` is accepted. Rows are lists (by position) or objects (by key). Types are
-  inferred unless a column declares one; a declared `int64` accepts exact integers sent as strings, and a
+  inferred unless a column declares one; a declared `int64` or `uint64` accepts exact integers sent as strings, and a
   declared `decimal(p,s)` is held as text (use `CAST(col AS DECIMAL(p,s))` to calculate with it).
 
 `mode` is `tables` (the default without `sql`), `describe`, or `query` (the default with `sql`).
@@ -34,7 +34,7 @@ of rows; `markdown_rows` (0 to 1000, default 50) bounds the Markdown table (it s
 it shows); `cursor` continues a result;
 `delimiter` (one character or `tab`) and `header` (true or false) override CSV detection.
 
-To save a result as a file, use the `data_tables_export` tool.
+To save a result as a file, add `output` (see Saving a result).
 
 ## SQL
 
@@ -94,11 +94,22 @@ and you may change `max_rows`. Repeat until `next` is absent. A cursor is refuse
 SQL, the options or the files changed. The query runs again for each page, so a very deep page of a large
 sorted result costs a full run: narrow the query instead when you can.
 
+## Saving a result
+
+`output` (a plain file name such as `result.csv`: no folders, not starting with a dot) writes the whole result of
+`sql` into the folder `path` instead of returning rows; `path` must be a folder. Only a call with `output` writes,
+and the user is asked to allow writing to that folder. `format` is `csv` or `parquet`, taken from the name when it
+ends in `.csv` or `.parquet`; an existing file is replaced only with `overwrite: true`. The result is
+`{"written": "result.csv", "format": "csv", "rows": 1250, "bytes": 48213, "warnings": []}`, and the file appears
+only when it is complete. CSV keeps NULL (an empty field) apart from the empty string (`""`) and floats exact, so
+reading it back gives the same rows; Parquet keeps every type. The new file is a table of the folder.
+
 ## Limits and errors
 
-Memory is bounded (1 GiB for the engine's operators): a query that cannot fit, such as sorting or joining
-more than that, fails with a sentence saying to narrow it with WHERE or LIMIT, select fewer columns, or
-aggregate first. A plain scan, filter or aggregate runs in flat memory whatever the file size. SQL is limited
+The engine's operators (sort, join, grouping) share 1 GiB: a query that needs more fails with a sentence saying
+to narrow it with WHERE or LIMIT, select fewer columns, or aggregate first. Reading files is not counted there; it
+streams, so a plain scan, filter or aggregate runs in flat memory whatever the file size, and the plugin as a
+whole is stopped at its 3 GiB limit. SQL is limited
 to 64 KiB and 256 levels of nesting; a row is limited to 16 MiB. A call that fails exits with one sentence.
 Files that are not data are skipped and listed in the `warnings` of `tables`; Arrow files are not supported.
 A workbook's strings are read only when one of its sheets is named, and a workbook whose strings pass 512 MiB is
