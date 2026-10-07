@@ -10,6 +10,7 @@ import {
   groupTranscript,
   liveGroupLabel,
 } from "@/screens/transcript-groups";
+import { assistantMessage, liveAssistant, userMessage } from "./timeline-fixture";
 
 let seq = 0;
 const tool = (
@@ -67,27 +68,30 @@ const said = (
   n: number,
   content: string | null,
   reasoning: string | null = null,
-): RenderedTimelineItem => ({
-  kind: "assistantMessage",
-  itemKey: `a${n}`,
-  sequence: n,
-  content,
-  reasoning,
-  timestamp: null,
-});
-const person = (n: number): RenderedTimelineItem => ({
-  kind: "userMessage",
-  itemKey: `u${n}`,
-  sequence: n,
-  content: "go on",
-  timestamp: null,
-});
-const live = (content: string | null): RenderedTimelineItem => ({
-  kind: "liveAssistant",
-  itemKey: "live",
-  content,
-  reasoning: null,
-});
+): RenderedTimelineItem =>
+  assistantMessage({
+    kind: "assistantMessage",
+    itemKey: `a${n}`,
+    sequence: n,
+    content,
+    reasoning,
+    timestamp: null,
+  });
+const person = (n: number): RenderedTimelineItem =>
+  userMessage({
+    kind: "userMessage",
+    itemKey: `u${n}`,
+    sequence: n,
+    content: "go on",
+    timestamp: null,
+  });
+const live = (content: string | null): RenderedTimelineItem =>
+  liveAssistant({
+    kind: "liveAssistant",
+    itemKey: "live",
+    content,
+    reasoning: null,
+  });
 
 /* a turn the way the runtime sends it: narration, then one call per group */
 const turn: RenderedTimelineItem[] = [

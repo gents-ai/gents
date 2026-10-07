@@ -1,12 +1,11 @@
 /* First-run Engineer behavior: a stable configurator that creates the user's
    working behavior through the canonical persona request owner. */
-import type {
-  ConfigComponentPatch,
-  DeploymentView,
-} from "@source-inc/gents-desktop-client";
+import type { NodeView } from "../../hooks/fleetStore";
+import type { ConfigComponentPatch } from "@source-inc/gents-desktop-client";
 
 import sharedSetupPrompt from "../../../../../crates/gents-protocol/prompts/setup.md?raw";
 import setupSelfConfig from "../../../../../crates/gents-protocol/presets/setup-self-config.json";
+import { defaultAgentOf } from "./agents";
 
 export const SETUP_STEWARD_PROMPT = sharedSetupPrompt;
 
@@ -14,12 +13,10 @@ export const SETUP_STEWARD_DESCRIPTION =
   "Walks you through configuring Gents for the work you want to do.";
 export const SETUP_STEWARD_BEHAVIOR_TAG = "gents:setup-steward";
 
-export function setupStewardPatches(
-  deployment: DeploymentView,
-): ConfigComponentPatch[] {
+export function setupStewardPatches(deployment: NodeView): ConfigComponentPatch[] {
   const behavior =
     deployment.behaviors.find((row) => row.tags.includes(SETUP_STEWARD_BEHAVIOR_TAG)) ??
-    deployment.behaviors.find((row) => row.isDefault) ??
+    defaultAgentOf(deployment) ??
     deployment.behaviors[0];
   if (!behavior) return [];
   const context = deployment.contexts.find(

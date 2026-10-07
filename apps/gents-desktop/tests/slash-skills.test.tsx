@@ -19,8 +19,10 @@ const skills: SkillView[] = [
     instructions: null,
     toolRefs: [],
     displayName: null,
+    interfaceJson: null,
     enabled: true,
     createdAt: null,
+    tags: [],
   },
   {
     skillId: "deploy-skill",
@@ -31,8 +33,10 @@ const skills: SkillView[] = [
     instructions: null,
     toolRefs: [],
     displayName: null,
+    interfaceJson: null,
     enabled: true,
     createdAt: null,
+    tags: [],
   },
   {
     skillId: "off-skill",
@@ -43,8 +47,10 @@ const skills: SkillView[] = [
     instructions: null,
     toolRefs: [],
     displayName: null,
+    interfaceJson: null,
     enabled: false,
     createdAt: null,
+    tags: [],
   },
 ];
 

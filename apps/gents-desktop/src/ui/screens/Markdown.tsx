@@ -2,11 +2,12 @@
    markdown, a header on every code block with its language and a copy
    button. Styling comes from the kit's prose-app utility; the block
    header is the one thing added here. */
-import { isValidElement, memo, useRef, useState, type ReactNode } from "react";
+import { isValidElement, memo, useRef, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Check, Copy } from "lucide-react";
 import { Button } from "@gents/ui/components/button";
+import { useCopied } from "@/lib/clipboard";
 
 function language(children: ReactNode) {
   if (!isValidElement<{ className?: string }>(children)) return null;
@@ -20,20 +21,16 @@ export function CopyButton({
   getText: () => string;
   className?: string;
 }) {
-  const [done, setDone] = useState(false);
+  const { copied, copy } = useCopied();
   return (
     <Button
       variant="quiet"
       size="icon-xs"
       className={className}
       aria-label="Copy"
-      onClick={() => {
-        void navigator.clipboard?.writeText(getText());
-        setDone(true);
-        setTimeout(() => setDone(false), 1200);
-      }}
+      onClick={() => copy(getText())}
     >
-      {done ? <Check /> : <Copy />}
+      {copied ? <Check /> : <Copy />}
     </Button>
   );
 }

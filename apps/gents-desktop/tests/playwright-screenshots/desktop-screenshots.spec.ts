@@ -8,7 +8,6 @@ import {
   openConfig,
   openConfigSection,
   test,
-  type TestInfo,
 } from "../playwright/desktopTest";
 
 type ScreenshotReviewEntry = {

@@ -52,11 +52,10 @@ import {
   SETUP_COMPLETE_DWELL_MS,
   SetupProgress,
 } from "./SetupProgress";
-import type { Shell } from "@/hooks/useShell";
 import { setupStewardPatches } from "@/lib/setupSteward";
 import { supportsLocalManagedServer } from "../../../lib/shellPlatform";
 import { AgentAvatar } from "@/screens/AgentAvatar";
-import { applyTheme, themePreference } from "@/theme";
+import { preferences, useTheme } from "@/preferences";
 import { Mark } from "@/app/Mark";
 import { openExternalUrl } from "../../../lib/externalLinks";
 import {
@@ -85,6 +84,10 @@ import {
   validateInferenceSettings,
   type InferenceSettingsDraft,
 } from "../inference/InferenceModelControls";
+import { useApp } from "@/app/AppContext";
+import { useBootstrap, useSelectedNode, useStartup } from "@/hooks/useClient";
+import { useFleet } from "@/hooks/useFleet";
+import { nodeOf } from "../../../hooks/fleetStore";
 
 type Step = "welcome" | "starting" | "inference";
 
@@ -137,12 +140,8 @@ function Frame({
   embedded?: boolean;
   onBack?: () => void;
 }) {
-  const [theme, setTheme] = useState(themePreference);
-  const flip = () => {
-    const next = theme === "dark" ? "light" : "dark";
-    applyTheme(next);
-    setTheme(next);
-  };
+  const theme = useTheme();
+  const flip = () => preferences.setTheme(theme === "dark" ? "light" : "dark");
   if (embedded)
     return (
       <div className="w-full min-w-0" data-testid="inference-setup-panel">
@@ -357,7 +356,6 @@ const notAdded = (label: string) =>
   `This sign-in refreshed the account stored as ${label}. No account was added.`;
 
 export function SetupScreen({
-  shell,
   onDone,
   initialStep = "welcome",
   purpose = "onboarding",
@@ -365,7 +363,6 @@ export function SetupScreen({
   onCancel,
   provider: fixedProvider,
 }: {
-  shell: Shell;
   onDone: (snapshot: DesktopClientSnapshot) => void;
   initialStep?: Step;
   purpose?: "onboarding" | "add-backend";
@@ -374,37 +371,42 @@ export function SetupScreen({
   /* a catalog row was chosen, so the form is that provider's inputs only */
   provider?: ProviderId;
 }) {
+  const bootstrap = useBootstrap();
+  const {
+    api,
+    actions: { initLocalRuntime, refreshSnapshot, changeConfig },
+  } = useApp();
+  const { diagnosticsHint } = useStartup();
+  const { incompatibleHome } = useStartup();
+  const selectedNode = useSelectedNode();
   const [step, setStep] = useState<Step>(initialStep);
   const allowLocal = supportsLocalManagedServer();
-  const api = shell.api;
   const [where, setWhere] = useState<"local" | "remote">(
     allowLocal ? "local" : "remote",
   );
   const [address, setAddress] = useState("");
   const existingHome = Boolean(
-    shell.snapshot?.bootstrap.agentHomeExists &&
-    shell.snapshot?.bootstrap.initAgentDid?.trim(),
+    bootstrap?.agentHomeExists && bootstrap?.initAgentDid?.trim(),
   );
-  const [name, setName] = useState(
-    shell.snapshot?.bootstrap.initAgentName?.trim() || "Forge",
-  );
+  const [name, setName] = useState(bootstrap?.initAgentName?.trim() || "Forge");
   /* An initialized home keeps its identity: provisioning never renames it,
      so its name is shown, not asked for. */
-  const existingName = existingHome
-    ? shell.snapshot?.bootstrap.initAgentName?.trim() || null
-    : null;
+  const existingName = existingHome ? bootstrap?.initAgentName?.trim() || null : null;
   const agentName = existingName ?? name;
   const [homeRoot, setHomeRoot] = useState<string | null>(
-    api.managedServerStatus ? null : (shell.snapshot?.bootstrap.initToolRoot ?? null),
+    api.managedServerStatus ? null : (bootstrap?.initToolRoot ?? null),
   );
   const [toolCeiling, setToolCeiling] = useState<
     ManagedServerAuthorityInput["toolCeiling"]
-  >(() => ceilingFromInit(shell.snapshot?.bootstrap.initToolCeiling));
+  >(() => ceilingFromInit(bootstrap?.initToolCeiling));
   const [selectedDirectory, setSelectedDirectory] = useState<string | null | undefined>(
-    shell.snapshot?.bootstrap.initToolRoot ?? undefined,
+    bootstrap?.initToolRoot ?? undefined,
   );
   const [authorityError, setAuthorityError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /* which account operation holds busy, so its controls say what is running
+     and Cancel only ever cancels a sign-in */
+  const [accountOp, setAccountOp] = useState<"signIn" | "retrySave" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [phase, setPhase] = useState<Exclude<DesktopStartupPhase, "ready">>(
     "checking-managed-server",
@@ -423,6 +425,9 @@ export function SetupScreen({
     return () => window.clearTimeout(timer);
   }, [provisionedAt]);
   const [catalog, setCatalog] = useState<InferenceSetupCatalog | null>(null);
+  /* a failed catalog read, kept apart from the form's error; clearing it
+     reads the catalog again */
+  const [catalogFailure, setCatalogFailure] = useState<string | null>(null);
   const [provider, setProvider] = useState<ProviderId>(fixedProvider ?? "openai");
   const [connections, setConnections] = useState<
     Partial<Record<ProviderId, ConnectionDraft>>
@@ -432,30 +437,24 @@ export function SetupScreen({
   const [accountLabel, setAccountLabel] = useState("");
   const [signInHint, setSignInHint] = useState<string | null>(null);
   const accountRevision = useRef(0);
-  const setupAgentDid =
-    agentDid ??
-    shell.selectedDeployment?.agentDid ??
-    shell.snapshot?.client?.deployments[0]?.agentDid;
+  const setupAgentDid = agentDid ?? selectedNode?.agentDid;
   const setupAgentDidRef = useRef(setupAgentDid);
   setupAgentDidRef.current = setupAgentDid;
   /* Setup re-entry opens at the provider step without first run's
      provisioning, so a local agent's managed runtime may not be serving.
      Provider sign-in and the final save both write through it. */
-  const setupDeployment = (shell.deployments ?? []).find(
-    (deployment) => deployment.agentDid === setupAgentDid,
-  );
+  const setupDeployment = useFleet((s) => nodeOf(s, setupAgentDid));
   const requiresManagedRuntime = Boolean(
     initialStep === "inference" &&
     allowLocal &&
     api.managedServerStatus &&
     setupDeployment &&
-    isLocalAgent(setupDeployment, shell.snapshot?.bootstrap.initAgentDid),
+    isLocalAgent(setupDeployment, bootstrap?.initAgentDid),
   );
   const [runtimeGate, setRuntimeGate] = useState<
     "idle" | "checking" | "ready" | "unavailable"
   >("idle");
-  const runtimeFallbackName =
-    shell.snapshot?.bootstrap.initAgentName?.trim() || "Local Agent";
+  const runtimeFallbackName = bootstrap?.initAgentName?.trim() || "Local Agent";
   const checkManagedRuntime = async () => {
     setRuntimeGate("checking");
     setError(null);
@@ -520,7 +519,7 @@ export function SetupScreen({
   /* The provider the user just chose, whose sign-in starts without a click. */
   const autoSignIn = useRef<ProviderId | null>(fixedProvider ?? null);
   const [autoSignInRequest, setAutoSignInRequest] = useState(0);
-  const root = shell.snapshot?.bootstrap.defaultAgentHome ?? "~/.gents";
+  const root = bootstrap?.defaultAgentHome ?? "~/.gents";
   const toolRoot = selectedDirectory === undefined ? homeRoot : selectedDirectory;
   const authority = authorityForSelection(toolCeiling, toolRoot);
 
@@ -557,14 +556,12 @@ export function SetupScreen({
     const nextDeployment = next.client?.deployments[0];
     const steward = nextDeployment ? setupStewardPatches(nextDeployment) : [];
     if (steward.length && nextDeployment) {
-      await shell.applyConfig((configApi) =>
-        configApi.patchConfigComponents({
-          agentDid: nextDeployment.agentDid,
-          patches: steward,
-        }),
-      );
+      await changeConfig("patchConfigComponents", {
+        agentDid: nextDeployment.agentDid,
+        patches: steward,
+      });
     } else {
-      await shell.refreshSnapshot();
+      await refreshSnapshot();
     }
     setStartupDetails((current) => ({
       ...current,
@@ -576,7 +573,7 @@ export function SetupScreen({
   };
 
   useEffect(() => {
-    if (step !== "inference" || catalog) return;
+    if (step !== "inference" || catalog || catalogFailure) return;
     void api
       .getInferenceSetupCatalog()
       .then((next) => {
@@ -594,8 +591,8 @@ export function SetupScreen({
         });
         if (next.providers[0] && !fixedProvider) setProvider(next.providers[0].id);
       })
-      .catch((cause) => setError(setupErrorMessage(cause)));
-  }, [api, catalog, step]);
+      .catch((cause) => setCatalogFailure(setupErrorMessage(cause)));
+  }, [api, catalog, catalogFailure, step]);
 
   const createAgent = async () => {
     const requestedName = agentName.trim();
@@ -626,7 +623,7 @@ export function SetupScreen({
         );
         if (status.agentName && status.agentName !== requestedName) {
           /* Welcome then shows the existing agent's name. */
-          void shell.refreshSnapshot();
+          void refreshSnapshot();
           throw new Error(
             `This computer already has a local agent named ${status.agentName}, so ${requestedName} was not created. Go back to continue with ${status.agentName}.`,
           );
@@ -649,7 +646,7 @@ export function SetupScreen({
       }
       setPhase("loading-configuration");
       failedPhase = "configuration-error";
-      await shell.onInitLocalRuntime(requestedName);
+      await initLocalRuntime(requestedName);
       setStartupDetails((current) => ({
         ...current,
         configuration: `Saved the local connection to ${requestedName}`,
@@ -664,7 +661,7 @@ export function SetupScreen({
     } catch (e) {
       setPhase(failedPhase);
       setError(setupErrorMessage(e));
-      await shell.incompatibleHome?.adopt(e);
+      await incompatibleHome?.adopt(e);
     } finally {
       setBusy(false);
     }
@@ -704,6 +701,7 @@ export function SetupScreen({
       return;
     }
     setBusy(true);
+    setAccountOp("signIn");
     setError(null);
     setAuthUrl(null);
     setSignInHint(null);
@@ -753,6 +751,7 @@ export function SetupScreen({
     } finally {
       unlisten();
       setBusy(false);
+      setAccountOp(null);
     }
   };
 
@@ -765,6 +764,7 @@ export function SetupScreen({
        retry returning no reference refreshed the original account */
     const hadStored = accountsOf(oauthProvider).length > 0;
     setBusy(true);
+    setAccountOp("retrySave");
     setError(null);
     try {
       if (requiresManagedRuntime) {
@@ -796,6 +796,7 @@ export function SetupScreen({
       setError(setupErrorMessage(cause));
     } finally {
       setBusy(false);
+      setAccountOp(null);
     }
   };
 
@@ -923,9 +924,7 @@ export function SetupScreen({
       recommendation: selectedRecommendation,
       settings,
     });
-    await shell.applyConfig((configApi) =>
-      configApi.applyConfigComponents({ document: plan.document }),
-    );
+    await changeConfig("applyConfigComponents", { document: plan.document });
     // Discovery ran before the backend existed. Running it again publishes the
     // advertised catalog onto the persisted backend. It stays off the save path;
     // the runtime prober publishes subscription catalogs if it fails.
@@ -1127,11 +1126,8 @@ export function SetupScreen({
               {existingHome ? (
                 <p className="text-xs text-muted-foreground">
                   Found an existing Gents home
-                  {shell.snapshot?.bootstrap.initAgentName
-                    ? ` for ${shell.snapshot.bootstrap.initAgentName}`
-                    : ""}
-                  . Next keeps that identity, native service, and reviewed host
-                  authority.
+                  {bootstrap?.initAgentName ? ` for ${bootstrap?.initAgentName}` : ""}.
+                  Next keeps that identity, native service, and reviewed host authority.
                 </p>
               ) : null}
               <p className="text-xs text-muted-foreground">
@@ -1224,9 +1220,7 @@ export function SetupScreen({
             setStep("inference");
           }}
           onOpenLoginItems={api.openManagedServerLoginItems}
-          diagnosticsHint={
-            shell.diagnosticsHint ?? shell.snapshot?.bootstrap.diagnosticsHint
-          }
+          diagnosticsHint={diagnosticsHint ?? bootstrap?.diagnosticsHint}
         />
       </Frame>
     );
@@ -1356,23 +1350,30 @@ export function SetupScreen({
                     {authLabel(connection!.authMethod)}
                   </p>
                   <span className="flex gap-2">
-                    {busy ? (
+                    {accountOp === "signIn" && (
                       <Button variant="outline" onClick={cancelSignIn}>
                         Cancel
                       </Button>
-                    ) : null}
-                    {!busy && pendingSave[provider] && api.retrySaveProviderAccount ? (
-                      <Button variant="brand" onClick={retrySaveSignIn}>
-                        Retry save
-                      </Button>
-                    ) : null}
+                    )}
+                    {accountOp !== "signIn" &&
+                      pendingSave[provider] &&
+                      api.retrySaveProviderAccount && (
+                        <Button
+                          variant="brand"
+                          disabled={busy}
+                          onClick={retrySaveSignIn}
+                        >
+                          {accountOp === "retrySave" && <Spinner />}
+                          {accountOp === "retrySave" ? "Saving…" : "Retry save"}
+                        </Button>
+                      )}
                     <Button
                       variant={pendingSave[provider] && !busy ? "outline" : "brand"}
                       disabled={busy}
                       onClick={signIn}
                     >
-                      {busy ? <Spinner /> : null}
-                      {busy ? "Waiting…" : "Sign in"}
+                      {accountOp === "signIn" && <Spinner />}
+                      {accountOp === "signIn" ? "Waiting…" : "Sign in"}
                     </Button>
                   </span>
                 </div>
@@ -1652,14 +1653,24 @@ export function SetupScreen({
         </div>
       ) : (
         <div className="grid gap-3">
-          <p className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Spinner /> Loading provider options…
-          </p>
-          {error ? (
-            <p role="alert" className="text-sm text-destructive">
-              {error}
+          {catalogFailure ? (
+            <>
+              <p role="alert" className="text-sm text-destructive">
+                {catalogFailure}
+              </p>
+              <Button
+                variant="outline"
+                className="justify-self-start"
+                onClick={() => setCatalogFailure(null)}
+              >
+                Try again
+              </Button>
+            </>
+          ) : (
+            <p className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Spinner /> Loading provider options…
             </p>
-          ) : null}
+          )}
         </div>
       )}
       {!fixedProvider && (

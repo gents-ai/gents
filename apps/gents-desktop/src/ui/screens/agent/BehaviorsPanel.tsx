@@ -3,6 +3,8 @@
    visible block on the behavior: pick one, see who else uses it, duplicate
    it or start empty, and edit its instructions and capabilities in place.
    Everything waits for one Save. */
+import type { NodeView } from "../../../hooks/fleetStore";
+import { setEnabled } from "./enabled";
 import { useExclusivePopover } from "@/hooks/useExclusivePopover";
 import { dependentsWarning } from "./dependents";
 import { Fragment, useEffect, useRef, useState } from "react";
@@ -14,11 +16,7 @@ import {
   MoreHorizontal,
   Plus,
 } from "lucide-react";
-import type {
-  AgentContext,
-  BehaviorView,
-  DeploymentView,
-} from "@source-inc/gents-desktop-client";
+import type { AgentContext, BehaviorView } from "@source-inc/gents-desktop-client";
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -48,11 +46,10 @@ import {
   ComboboxTrigger,
 } from "@gents/ui/components/combobox";
 import { toast } from "sonner";
-import type { Shell } from "@/hooks/useShell";
 import { href, navigate } from "@/lib/router";
 import { behaviorReadiness } from "@/lib/behavior-readiness";
-import { bashAccess, fileAccess, network } from "../behavior";
-import { BehaviorAvatar } from "../parts";
+import { shortAccess } from "../behavior";
+import { AccessSentence, BehaviorAvatar } from "../parts";
 import {
   AreaRow,
   ChipsRow,
@@ -74,13 +71,11 @@ import { newId, useDraft } from "./draft";
 import { ConfirmDelete, DeleteButton, ListDetail } from "./ListDetail";
 import { Group } from "./rows";
 import { rememberContextOrigin } from "./contextOrigin";
-import { clearPromptFocus, promptFocusRequested } from "./promptFocus";
-
-/* the access modes at a glance, short enough for one line */
-const short = (mode: string | null | undefined) =>
-  ({ "read / write": "rw", "read-only": "ro", unrestricted: "any", off: "off" })[
-    mode ?? "off"
-  ] ?? mode;
+import { toastFailure } from "@/lib/failure";
+import { defaultAgentOf } from "@/lib/agents";
+import { agentOf } from "@/lib/agents";
+import { useApp } from "@/app/AppContext";
+import type { ShellActions } from "@/../hooks/shellActions";
 
 /* picker values for a context that does not exist until Save */
 const DUPLICATE = "new:duplicate";
@@ -116,21 +111,21 @@ const contextFields = (c: AgentContext | null) => ({
 const nameOf = (c: AgentContext) => c.display_name ?? c.context_id;
 
 /* the behaviors that point at a context, as saved */
-const usersOf = (deployment: DeploymentView, contextId: string) =>
+const usersOf = (deployment: NodeView, contextId: string) =>
   deployment.behaviors.filter((b) => b.contextId === contextId);
 
 const listNames = (names: string[]) =>
   names.length <= 2 ? names.join(" and ") : `${names[0]} and ${names.length - 1} more`;
 
 /* a context name no other context has */
-function freshName(deployment: DeploymentView, base: string) {
+function freshName(deployment: NodeView, base: string) {
   const taken = new Set(deployment.contexts.map((c) => c.display_name));
   if (!taken.has(base)) return base;
   for (let n = 2; ; n++) if (!taken.has(`${base} ${n}`)) return `${base} ${n}`;
 }
 
 /* what stops a save, keyed by the field that shows it */
-function problems(deployment: DeploymentView, next: Draft, draft = false) {
+function problems(deployment: NodeView, next: Draft, draft = false) {
   const out: Partial<Record<keyof Draft, string>> = {};
   if (!next.displayName.trim()) out.displayName = "Give the behavior a name.";
   if (!next.contextChoice)
@@ -195,7 +190,7 @@ function ContextPicker({
   autoOpen = false,
 }: {
   id: string;
-  deployment: DeploymentView;
+  deployment: NodeView;
   value: string;
   invalid: boolean;
   labelFor: (value: string) => string;
@@ -273,34 +268,18 @@ function ContextPicker({
 }
 
 /* one-click changes that a behavior's row and its header share */
-/* the switch changes only `enabled`: a patch, so a behavior with no profile
-   yet is never rewritten with an empty profile reference */
-async function saveEnabled(
-  shell: Shell,
-  deployment: DeploymentView,
-  b: BehaviorView,
-  next: boolean,
-) {
-  await shell.applyConfig((api) =>
-    api.patchConfigComponents({
-      agentDid: deployment.agentDid,
-      patches: [
-        { collection: "AgentBehavior", id: b.behaviorId, changes: { enabled: next } },
-      ],
-    }),
-  );
-}
 
 /* One apply enables the behavior and names it the default: publication
    rejects a disabled default, and it decides whether the behavior can run. */
 export async function saveDefault(
-  shell: Shell,
-  deployment: DeploymentView,
+  changeConfig: ShellActions["changeConfig"],
+  deployment: NodeView,
   behaviorId: string,
 ) {
-  await shell.applyConfig((api) =>
-    api.setDefaultBehavior({ agentDid: deployment.agentDid, behaviorId }),
-  );
+  await changeConfig("setDefaultBehavior", {
+    agentDid: deployment.agentDid,
+    behaviorId,
+  });
 }
 
 export const DEFAULT_STAYS_ENABLED =
@@ -308,45 +287,46 @@ export const DEFAULT_STAYS_ENABLED =
 
 /* the end of a behavior's row: its enable switch and a menu */
 function RowControls({
-  shell,
   deployment,
   behavior,
   inEditor = false,
 }: {
-  shell: Shell;
-  deployment: DeploymentView;
+  deployment: NodeView;
   behavior: BehaviorView;
   /* at the top of the behavior's page: the switch says its state, and there is no Edit */
   inEditor?: boolean;
 }) {
+  const { changeConfig } = useApp().actions;
   const [busy, setBusy] = useState(false);
   /* the current default is never turned off in place */
   const keptOn = behavior.enabled && behavior.isDefault;
   const toggle = async (next: boolean) => {
     setBusy(true);
     try {
-      await saveEnabled(shell, deployment, behavior, next);
+      await setEnabled(
+        changeConfig,
+        deployment.agentDid,
+        "AgentBehavior",
+        behavior.behaviorId,
+        next,
+      );
       toast(`${behavior.displayName} is ${next ? "enabled" : "disabled"}`);
     } catch (e) {
-      toast(
-        `Couldn’t turn it ${next ? "on" : "off"}: ${e instanceof Error ? e.message : String(e)}`,
-      );
+      toastFailure(`turn it ${next ? "on" : "off"}`, e);
     } finally {
       setBusy(false);
     }
   };
   const makeDefault = async () => {
     try {
-      await saveDefault(shell, deployment, behavior.behaviorId);
+      await saveDefault(changeConfig, deployment, behavior.behaviorId);
       toast(
         behavior.enabled
           ? "Default behavior set"
           : `${behavior.displayName} is enabled and is now the default`,
       );
     } catch (e) {
-      toast(
-        `Default behavior set failed: ${e instanceof Error ? e.message : String(e)}`,
-      );
+      toastFailure("set the default behavior", e);
     }
   };
   return (
@@ -424,7 +404,7 @@ function RowControls({
 }
 
 /* the behavior a draft starts from: nothing saved, the default model */
-export function newBehaviorView(deployment: DeploymentView): BehaviorView {
+export function newBehaviorView(deployment: NodeView): BehaviorView {
   return {
     behaviorId: newId("behavior"),
     agentDid: deployment.agentDid,
@@ -432,7 +412,7 @@ export function newBehaviorView(deployment: DeploymentView): BehaviorView {
     description: null,
     contextId: null,
     inferenceProfileId:
-      deployment.behaviors.find((b) => b.isDefault)?.inferenceProfileId ??
+      defaultAgentOf(deployment)?.inferenceProfileId ??
       deployment.inferenceProfiles[0]?.profile_id ??
       null,
     enabled: false,
@@ -451,20 +431,19 @@ export type DraftMode = {
 };
 
 export function BehaviorEditor({
-  shell,
   deployment,
   behavior,
   draft: draftMode,
   embedded = false,
 }: {
-  shell: Shell;
-  deployment: DeploymentView;
+  deployment: NodeView;
   behavior: BehaviorView;
   /* a new behavior that exists only on this page until Save */
   draft?: DraftMode;
   /* in a sheet beside another page: no Danger zone */
   embedded?: boolean;
 }) {
+  const { changeConfig } = useApp().actions;
   const base = {
     name: "agent" as const,
     agentDid: deployment.agentDid,
@@ -555,67 +534,64 @@ export function BehaviorEditor({
         if (JSON.stringify(before.skillIds) !== JSON.stringify(next.skillIds))
           changedFields.skill_ids = fields.skill_ids;
       }
-      await shell.applyConfig((api) => {
-        /* a new context and the behavior that points at it land together or
+      /* a new context and the behavior that points at it land together or
            not at all: one component apply is one transaction */
-        if (creating)
-          return api.applyConfigComponents({
-            document: {
-              agent_principal: { agent_did: deployment.agentDid },
-              contexts: [
-                {
-                  context_id: contextId,
-                  agent_did: deployment.agentDid,
-                  display_name: newName,
-                  description: null,
-                  ...fields,
-                  tags: null,
-                },
-              ],
-              agent_behaviors: [behaviorDocument],
-            },
-          });
-        if (target && edited && !draftMode)
-          /* an existing behavior and its existing context: one patch call, one
-             transaction, changed fields only */
-          return api.patchConfigComponents({
-            agentDid: deployment.agentDid,
-            patches: [
+      if (creating)
+        await changeConfig("applyConfigComponents", {
+          document: {
+            agent_principal: { agent_did: deployment.agentDid },
+            contexts: [
               {
-                collection: "AgentContext",
-                id: target.context_id,
-                changes: changedFields,
-              },
-              {
-                collection: "AgentBehavior",
-                id: behavior.behaviorId,
-                changes: {
-                  display_name: behaviorDocument.display_name,
-                  description: behaviorDocument.description,
-                  context_id: behaviorDocument.context_id,
-                  inference_profile_id: behaviorDocument.inference_profile_id,
-                  tags: behaviorDocument.tags,
-                },
+                context_id: contextId,
+                agent_did: deployment.agentDid,
+                display_name: newName,
+                description: null,
+                ...fields,
+                tags: null,
               },
             ],
-          });
-        if (target && edited)
-          /* a new behavior on an edited existing context: the behavior has no
+            agent_behaviors: [behaviorDocument],
+          },
+        });
+      else if (target && edited && !draftMode)
+        /* an existing behavior and its existing context: one patch call, one
+             transaction, changed fields only */
+        await changeConfig("patchConfigComponents", {
+          agentDid: deployment.agentDid,
+          patches: [
+            {
+              collection: "AgentContext",
+              id: target.context_id,
+              changes: changedFields,
+            },
+            {
+              collection: "AgentBehavior",
+              id: behavior.behaviorId,
+              changes: {
+                display_name: behaviorDocument.display_name,
+                description: behaviorDocument.description,
+                context_id: behaviorDocument.context_id,
+                inference_profile_id: behaviorDocument.inference_profile_id,
+                tags: behaviorDocument.tags,
+              },
+            },
+          ],
+        });
+      else if (target && edited) {
+        /* a new behavior on an edited existing context: the behavior has no
              document to patch yet, so the context is patched with it applied */
-          return api
-            .patchConfigComponents({
-              agentDid: deployment.agentDid,
-              patches: [
-                {
-                  collection: "AgentContext",
-                  id: target.context_id,
-                  changes: changedFields,
-                },
-              ],
-            })
-            .then(() => api.saveBehaviorConfig({ document: behaviorDocument }));
-        return api.saveBehaviorConfig({ document: behaviorDocument });
-      });
+        await changeConfig("patchConfigComponents", {
+          agentDid: deployment.agentDid,
+          patches: [
+            {
+              collection: "AgentContext",
+              id: target.context_id,
+              changes: changedFields,
+            },
+          ],
+        });
+        await changeConfig("saveBehaviorConfig", { document: behaviorDocument });
+      } else await changeConfig("saveBehaviorConfig", { document: behaviorDocument });
       if (creating) pendingContextId.current = null;
       /* say what happened to the contexts; offer to clear one left unused */
       const said: string[] = [];
@@ -682,15 +658,6 @@ export function BehaviorEditor({
   const [confirmShared, setConfirmShared] = useState(false);
   /* what the save waiting on that question should also do */
   const [pendingIntent, setPendingIntent] = useState<SaveIntent>({});
-  /* just created: open on the prompt, expanded and focused */
-  const [focusPrompt] = useState(() => promptFocusRequested(behavior.behaviorId));
-  useEffect(() => {
-    if (!focusPrompt) return;
-    clearPromptFocus();
-    const el = document.getElementById(`${behavior.behaviorId}-prompt`);
-    el?.scrollIntoView({ block: "center" });
-    el?.focus();
-  }, [focusPrompt, behavior.behaviorId]);
   /* switching to another behavior's instructions opens the picker inline */
   const [switching, setSwitching] = useState(false);
   const shared = others.length > 0;
@@ -845,7 +812,6 @@ export function BehaviorEditor({
             name={
               draftMode ? d.draft.displayName.trim() || "New" : behavior.displayName
             }
-            behaviorId={behavior.behaviorId}
             className="size-10 shrink-0 text-sm"
           />
           <div className="min-w-0">
@@ -864,14 +830,7 @@ export function BehaviorEditor({
                   data-testid="behavior-summary"
                   className="mt-0.5 text-sm text-muted-foreground"
                 >
-                  {behavior.displayName}{" "}
-                  <strong className="font-medium text-foreground">can</strong>{" "}
-                  {env
-                    ? `${fileAccess(env.fileAccess)} files and ${bashAccess(env.bashAccess)} commands`
-                    : "…"}
-                  , and{" "}
-                  <strong className="font-medium text-foreground">has access</strong> to{" "}
-                  {network(env?.networkAccess)}.
+                  <AccessSentence name={behavior.displayName} env={env} />
                 </p>
                 {attention && (
                   <p
@@ -899,8 +858,6 @@ export function BehaviorEditor({
           label="Display name"
           value={d.draft.displayName}
           onChange={(v) => d.set("displayName", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
           error={errors.displayName}
         />
         <AreaRow
@@ -909,7 +866,6 @@ export function BehaviorEditor({
           description="One or two sentences, shown in the behavior picker."
           value={d.draft.description}
           onChange={(v) => d.set("description", v)}
-          onCommit={d.commit}
           rows={2}
         />
         <TagsRow
@@ -1056,10 +1012,8 @@ export function BehaviorEditor({
                 description="What the agent is told at the start of every session."
                 value={d.draft.systemPrompt}
                 onChange={(v) => d.set("systemPrompt", v)}
-                onCommit={d.commit}
                 rows={6}
                 stacked
-                expandedByDefault={focusPrompt}
               />
             </Group>
             <Group title="Capabilities">
@@ -1068,7 +1022,7 @@ export function BehaviorEditor({
                 label="Tools"
                 description={toolsNote}
                 value={d.draft.toolsId}
-                onChange={(v) => d.choose("toolsId", v)}
+                onChange={(v) => d.set("toolsId", v)}
                 none="None"
                 error={errors.toolsId}
                 items={deployment.tools.map((t) => ({
@@ -1108,7 +1062,7 @@ export function BehaviorEditor({
                 label="Compaction"
                 description="How a long session is summarized."
                 value={d.draft.compactionId}
-                onChange={(v) => d.choose("compactionId", v)}
+                onChange={(v) => d.set("compactionId", v)}
                 none="Runtime default"
                 error={errors.compactionId}
                 items={deployment.compactions.map((c) => ({
@@ -1127,7 +1081,7 @@ export function BehaviorEditor({
           label="Inference profile"
           description="The backend, model and sampling this behavior runs on."
           value={d.draft.inferenceProfileId}
-          onChange={(v) => d.choose("inferenceProfileId", v)}
+          onChange={(v) => d.set("inferenceProfileId", v)}
           none="None"
           error={errors.inferenceProfileId}
           items={deployment.inferenceProfiles.map((p) => ({
@@ -1144,7 +1098,6 @@ export function BehaviorEditor({
         />
       </Group>
       <ProfileSheet
-        shell={shell}
         deployment={deployment}
         open={newProfile !== null}
         onClose={(profileId) => {
@@ -1153,7 +1106,6 @@ export function BehaviorEditor({
         }}
       />
       <ToolsSheet
-        shell={shell}
         deployment={deployment}
         open={newTools !== null}
         onClose={(toolsId) => {
@@ -1198,7 +1150,7 @@ export function BehaviorEditor({
           (() => {
             const t = deployment.tools.find((x) => x.tools_id === configure.id);
             return t ? (
-              <ToolsEditor shell={shell} deployment={deployment} tools={t} embedded />
+              <ToolsEditor deployment={deployment} tools={t} embedded />
             ) : null;
           })()}
         {configure?.kind === "profile" &&
@@ -1207,17 +1159,11 @@ export function BehaviorEditor({
               (x) => x.profile_id === configure.id,
             );
             return p ? (
-              <ProfileEditor
-                shell={shell}
-                deployment={deployment}
-                profile={p}
-                embedded
-              />
+              <ProfileEditor deployment={deployment} profile={p} embedded />
             ) : null;
           })()}
       </EditorSheet>
       <NewSkillSheet
-        shell={shell}
         deployment={deployment}
         open={newSkill !== null}
         onClose={(skillId) => {
@@ -1271,19 +1217,15 @@ export function BehaviorEditor({
           }}
           warning={dependentsWarning(deployment, "context", confirmUnused.context_id)}
           onDelete={() =>
-            shell.applyConfig((api) =>
-              api.deleteContextConfig({
-                contextId: confirmUnused.context_id,
-                agentDid: deployment.agentDid,
-              }),
-            )
+            changeConfig("deleteContextConfig", {
+              contextId: confirmUnused.context_id,
+              agentDid: deployment.agentDid,
+            })
           }
         />
       )}
       <DraftActions
-        dirty={d.dirty}
-        saving={d.saving}
-        error={d.error}
+        draft={d}
         saveLabel={draftMode ? "Create" : undefined}
         onSave={() => save()}
         onCancel={() => {
@@ -1305,22 +1247,18 @@ export function BehaviorEditor({
               ? {
                   label: `Also delete its instructions and tools (${nameOf(soleContext)})`,
                   onDelete: () =>
-                    shell.applyConfig((api) =>
-                      api.deleteContextConfig({
-                        contextId: soleContext.context_id,
-                        agentDid: deployment.agentDid,
-                      }),
-                    ),
+                    changeConfig("deleteContextConfig", {
+                      contextId: soleContext.context_id,
+                      agentDid: deployment.agentDid,
+                    }),
                 }
               : undefined
           }
           onDelete={() =>
-            shell.applyConfig((api) =>
-              api.deleteBehaviorConfig({
-                behaviorId: behavior.behaviorId,
-                agentDid: deployment.agentDid,
-              }),
-            )
+            changeConfig("deleteBehaviorConfig", {
+              behaviorId: behavior.behaviorId,
+              agentDid: deployment.agentDid,
+            })
           }
         />
       )}
@@ -1329,12 +1267,10 @@ export function BehaviorEditor({
 }
 
 export function BehaviorsPanel({
-  shell,
   deployment,
   behaviorId,
 }: {
-  shell: Shell;
-  deployment: DeploymentView;
+  deployment: NodeView;
   behaviorId?: string;
 }) {
   const base = {
@@ -1368,8 +1304,8 @@ export function BehaviorsPanel({
     );
     return [
       e?.modelName ?? "no backend",
-      `files ${short(e?.fileAccess)}`,
-      `bash ${short(e?.bashAccess)}`,
+      `files ${shortAccess(e?.fileAccess)}`,
+      `bash ${shortAccess(e?.bashAccess)}`,
       ...(!b.contextId || !contextIds.has(b.contextId) ? ["no instructions"] : []),
       ...(sharing.length
         ? [`shared with ${listNames(sharing.map((x) => x.displayName))}`]
@@ -1390,7 +1326,6 @@ export function BehaviorsPanel({
         </div>
         <BehaviorEditor
           key={draft.behaviorId}
-          shell={shell}
           deployment={deployment}
           behavior={draft}
           draft={{
@@ -1409,9 +1344,9 @@ export function BehaviorsPanel({
         base={base}
         item={behaviorId}
         toolbar={(id) => {
-          const b = deployment.behaviors.find((x) => x.behaviorId === id);
+          const b = agentOf(deployment, id);
           return b ? (
-            <RowControls shell={shell} deployment={deployment} behavior={b} inEditor />
+            <RowControls deployment={deployment} behavior={b} inEditor />
           ) : null;
         }}
         /* the default is pinned first and named beside its title */
@@ -1424,13 +1359,10 @@ export function BehaviorsPanel({
             titleNote: b.isDefault ? "Default" : undefined,
             meta: line(b),
             metaMono: true,
-            trailing: (
-              <RowControls shell={shell} deployment={deployment} behavior={b} />
-            ),
+            trailing: <RowControls deployment={deployment} behavior={b} />,
             icon: (
               <BehaviorAvatar
                 name={b.displayName}
-                behaviorId={b.behaviorId}
                 className="size-6 border-0 bg-transparent text-[10px]"
               />
             ),
@@ -1439,11 +1371,10 @@ export function BehaviorsPanel({
         empty="No behaviors yet. A behavior is what an agent is told, what it may use, and what runs it."
         onCreate={() => setDraft(newBehaviorView(deployment))}
         detail={(id) => {
-          const behavior = deployment.behaviors.find((b) => b.behaviorId === id)!;
+          const behavior = agentOf(deployment, id)!;
           return (
             <BehaviorEditor
               key={behavior.behaviorId}
-              shell={shell}
               deployment={deployment}
               behavior={behavior}
             />

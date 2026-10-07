@@ -1,12 +1,12 @@
-import { render, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { renderIn, testApp } from "./app-fixture";
 import type { DeploymentView } from "@source-inc/gents-desktop-client";
 
 vi.mock("@/lib/router", () => ({ href: () => "#", navigate: vi.fn() }));
 
 import { triggerReadiness } from "../src/ui/screens/agent/automation";
 import { TriggersPanel } from "../src/ui/screens/agent/TriggersPanel";
-import type { Shell } from "../src/ui/hooks/useShell";
 import { deployment } from "./config-panel-wiring/fixtures";
 
 const withReadiness = (
@@ -40,13 +40,7 @@ describe("trigger readiness", () => {
     const ready = withReadiness([
       { state: "ready", behaviorId: "default" },
     ] as DeploymentView["behaviorReadiness"]["behaviors"]);
-    render(
-      <TriggersPanel
-        shell={{ applyConfig: vi.fn() } as unknown as Shell}
-        deployment={ready}
-        item="trigger-a"
-      />,
-    );
+    renderIn(testApp(), <TriggersPanel deployment={ready} item="trigger-a" />);
     expect(screen.queryByText("Ready")).toBeNull();
     /* nothing to say is said with nothing, not an empty line */
     const header = screen.getByRole("heading", { name: "Trigger A" }).parentElement!;

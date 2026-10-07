@@ -5,31 +5,23 @@
    filters by name and description. Disabled behaviors are left out. */
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown, Plus, Search, X } from "lucide-react";
-import type { DeploymentView } from "@source-inc/gents-desktop-client";
+import type { NodeView } from "../../hooks/fleetStore";
 import { Button } from "@gents/ui/components/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@gents/ui/components/popover";
 import { cn } from "@gents/ui/lib/utils";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
-import type { Shell } from "@/hooks/useShell";
 import { BehaviorSheet } from "./agent/BehaviorSheet";
+import { shortAccess } from "./behavior";
 import { BehaviorAvatar } from "./parts";
 import { behaviorReadiness } from "@/lib/behavior-readiness";
 import { useExclusivePopover } from "@/hooks/useExclusivePopover";
 
-/* the access modes at a glance, short enough for one line */
-const short = (mode: string | null | undefined) =>
-  ({ "read / write": "rw", "read-only": "ro", unrestricted: "any", off: "off" })[
-    mode ?? "off"
-  ] ?? mode;
-
 export function BehaviorPicker({
-  shell,
   deployment,
   behaviorId,
   onChange,
 }: {
-  shell: Shell;
-  deployment: DeploymentView | null;
+  deployment: NodeView | null;
   behaviorId: string | null;
   onChange: (behaviorId: string) => void;
 }) {
@@ -39,7 +31,6 @@ export function BehaviorPicker({
   if (!chosen) return null;
   return (
     <MountedBehaviorPicker
-      shell={shell}
       deployment={deployment}
       behaviors={behaviors}
       chosen={chosen}
@@ -49,16 +40,14 @@ export function BehaviorPicker({
 }
 
 function MountedBehaviorPicker({
-  shell,
   deployment,
   behaviors,
   chosen,
   onChange,
 }: {
-  shell: Shell;
-  deployment: DeploymentView;
-  behaviors: DeploymentView["behaviors"];
-  chosen: DeploymentView["behaviors"][number];
+  deployment: NodeView;
+  behaviors: NodeView["behaviors"];
+  chosen: NodeView["behaviors"][number];
   onChange: (behaviorId: string) => void;
 }) {
   const [query, setQuery] = useState("");
@@ -75,7 +64,9 @@ function MountedBehaviorPicker({
   useEffect(() => {
     if (searching) input.current?.focus();
   }, [searching]);
-  const describe = (id: string) => shell.behaviorDescriptions[id] ?? "";
+  /* described by the node whose behaviors are listed */
+  const describe = (id: string) =>
+    deployment.behaviors.find((b) => b.behaviorId === id)?.description ?? "";
   const readiness = (id: string) => behaviorReadiness(deployment, id);
   const env = (id: string) =>
     deployment.behaviorEnvironments.find((e) => e.behaviorId === id);
@@ -109,11 +100,7 @@ function MountedBehaviorPicker({
           }
           aria-label="Behavior"
         >
-          <BehaviorAvatar
-            name={chosen.displayName}
-            behaviorId={chosen.behaviorId}
-            className="size-6 text-[10px]"
-          />
+          <BehaviorAvatar name={chosen.displayName} className="size-6 text-[10px]" />
           <span>{chosen.displayName}</span>
           <ChevronDown className="ml-6 size-3.5 text-muted-foreground" />
         </PopoverTrigger>
@@ -190,7 +177,6 @@ function MountedBehaviorPicker({
                     >
                       <BehaviorAvatar
                         name={b.displayName}
-                        behaviorId={b.behaviorId}
                         className="row-span-3 mt-0.5"
                       />
                       <span className="text-sm font-medium">
@@ -208,8 +194,9 @@ function MountedBehaviorPicker({
                       )}
                       {readiness(b.behaviorId).ready ? (
                         <span className="truncate font-mono text-[11px] text-muted-foreground">
-                          {e?.modelName ?? "no backend"} · files {short(e?.fileAccess)}{" "}
-                          · bash {short(e?.bashAccess)} · net{" "}
+                          {e?.modelName ?? "no backend"} · files{" "}
+                          {shortAccess(e?.fileAccess)} · bash{" "}
+                          {shortAccess(e?.bashAccess)} · net{" "}
                           {e?.networkAccess ?? "disabled"}
                         </span>
                       ) : (
@@ -258,7 +245,6 @@ function MountedBehaviorPicker({
       </Popover>
       {deployment && (
         <BehaviorSheet
-          shell={shell}
           deployment={deployment}
           open={creating}
           enabled

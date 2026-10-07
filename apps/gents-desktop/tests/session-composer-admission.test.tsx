@@ -2,15 +2,18 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import type { Shell } from "../src/ui/hooks/useShell";
 import { SessionScreen } from "../src/ui/screens/SessionScreen";
 import {
+  type DesktopSessionSnapshot,
   projectDeploymentOperationalState,
   type DeploymentView,
 } from "@source-inc/gents-desktop-client";
 import { projectChatShell } from "@source-inc/gents-desktop-chat";
-import { useDesktopChatProjectionState } from "../src/hooks/useDesktopChatProjectionState";
+import type { DesktopApp } from "../src/hooks/desktopApp";
+import { node, testApp, withApp } from "./app-fixture";
+import { deployment } from "./config-panel-wiring/fixtures";
 import { MemoryNavProvider } from "@gents/shell";
+import { writeSession } from "../src/hooks/sessionStore";
 
 const navigate = vi.hoisted(() => vi.fn());
 const markdownRender = vi.hoisted(() => vi.fn());
@@ -38,119 +41,97 @@ vi.mock("../src/ui/screens/BehaviorPicker", () => ({
   BehaviorPicker: () => null,
 }));
 
-function newSessionShell(
-  status: Shell["nonEmptyContentSendStatus"],
-  sendMessage = vi.fn().mockResolvedValue(null),
-): Shell {
-  let intentGeneration = 0;
+const AGENT = deployment.agentDid;
+
+/* a session held for the screen: interrupted (so a message may follow)
+   unless a test says otherwise */
+function heldSession(over: Partial<DesktopSessionSnapshot> = {}) {
   return {
-    selectedSession: null,
-    selectedSessionId: null,
-    selectedBehaviorId: "behavior",
-    selectedAgentDid: "did:key:agent",
-    deployments: [],
-    selectedDeployment: {
-      agentDid: "did:key:agent",
-      agentPrincipal: { displayName: "Agent" },
-      behaviors: [{ behaviorId: "behavior", isDefault: true }],
-      behaviorReadiness: {
-        source: { state: "current" },
-        activeGeneration: 1,
-        routerGeneration: 1,
-        updatedAt: null,
-        behaviors: [{ state: "ready", behaviorId: "behavior" }],
-      },
-      behaviorEnvironments: [],
-      contexts: [],
-      skills: [],
-      sessions: [],
-    },
-    mailboxCause: null,
-    sending: false,
-    error: null,
-    activityStatus: null,
-    nonEmptyContentSendStatus: status,
-    sendMessage,
-    captureComposeIntent: () => intentGeneration,
-    acceptsComposeIntent: (captured: number) => captured === intentGeneration,
-    advanceComposeIntentForTest: () => {
-      intentGeneration += 1;
-    },
-    selectBehavior: vi.fn(),
-  } as unknown as Shell;
+    sessionId: "session",
+    agentDid: AGENT,
+    behaviorId: "default",
+    title: "Session",
+    turnState: "interrupted",
+    timelineItems: [],
+    timelinePage: { hasOlder: false },
+    latestRequestId: "request",
+    latestRequestOutcome: null,
+    goal: null,
+    context: null,
+    ...over,
+  } as unknown as DesktopSessionSnapshot;
 }
 
-function existingSessionShell(status: Shell["nonEmptyContentSendStatus"]): Shell {
-  return {
-    ...newSessionShell(status),
-    selectedSessionId: "session",
-    selectedSession: {
-      sessionId: "session",
-      agentDid: "did:key:agent",
-      behaviorId: "behavior",
-      title: "Session",
-      turnState: status.kind === "ready" ? "interrupted" : "running",
-      timelineItems: [],
-      timelinePage: { hasOlder: false },
-      latestRequestId: "request",
-      latestRequestOutcome: null,
-      goal: null,
-      context: null,
-    },
-    holds: [],
-    interruptVisible: false,
-    selectedTrackedRequestId: null,
-    activeRequestId: null,
-    sessionLoad: { phase: "ready" },
-    loadOlderSessionTimeline: vi.fn(),
-    retryMessage: vi.fn(),
-    forkSession: vi.fn(),
-    refreshSnapshot: vi.fn(),
+/* the screen's app: the fixture node, ready to chat unless a test gives
+   another, and the session it holds (none for the new-session screen) */
+function screenApp({
+  session = null,
+  nodeOverrides = {},
+  sendChatMessage = vi
+    .fn()
+    .mockResolvedValue({ sessionId: "session", requestId: "accepted" }),
+  api = {},
+}: {
+  session?: DesktopSessionSnapshot | null;
+  nodeOverrides?: Record<string, unknown>;
+  sendChatMessage?: ReturnType<typeof vi.fn>;
+  /** more of the bridge, for what a test asks of it */
+  api?: Record<string, unknown>;
+} = {}) {
+  const app = testApp({
     api: {
+      sendChatMessage,
       sessionProvenance: vi.fn().mockResolvedValue(null),
       fetchOperationsSnapshot: vi.fn().mockResolvedValue(null),
+      ...api,
     },
-  } as unknown as Shell;
+    deployments: [node(nodeOverrides)],
+    session,
+    selection: { agentDid: AGENT, sessionId: session?.sessionId ?? null },
+  });
+  return { app, sendChatMessage };
 }
 
-// Exercise the real context-keyed draft owner as well as the real kit Composer.
-function OwnedSessionScreen({ shell }: { shell: Shell }) {
-  const { draft, setDraft } = useDesktopChatProjectionState({
-    clientAvailable: true,
-    selectedAgentDid: shell.selectedAgentDid,
-    selectedBehaviorId: shell.selectedBehaviorId,
-    selectedSessionId: shell.selectedSessionId,
-    selectedSessionSummary: null,
-    deployments: [],
-    selectedDeployment: null,
-    sending: false,
-    session: null,
-    syncHealth: null,
-  });
-  return (
+function renderScreen(app: DesktopApp) {
+  return render(
     <MemoryNavProvider
-      initial={{ name: "session", sessionId: shell.selectedSessionId }}
+      initial={{
+        name: "session",
+        sessionId: app.stores.selection.getState().sessionId,
+      }}
     >
-      <SessionScreen shell={{ ...shell, draft, setDraft }} />
-    </MemoryNavProvider>
+      <SessionScreen />
+    </MemoryNavProvider>,
+    { wrapper: withApp(app) },
   );
+}
+
+/* another session selected and held, as the projection would */
+function hold(app: DesktopApp, session: DesktopSessionSnapshot) {
+  act(() => {
+    app.stores.selection.setState({ sessionId: session.sessionId });
+    writeSession(app.stores.session, session);
+  });
 }
 
 describe("SessionScreen canonical composer admission", () => {
   it("keeps transcript markdown out of real context-owned draft updates", async () => {
-    const shell = existingSessionShell({ kind: "ready" });
-    shell.selectedSession!.timelineItems = [
-      {
-        kind: "assistantMessage",
-        itemKey: "assistant-stable",
-        sequence: 1,
-        content: "Stable transcript",
-        reasoning: null,
-        timestamp: null,
-      },
-    ];
+    const { app } = screenApp({
+      session: heldSession({
+        timelineItems: [
+          {
+            kind: "assistantMessage",
+            itemKey: "assistant-stable",
+            sequence: 1,
+            content: "Stable transcript",
+            reasoning: null,
+            timestamp: null,
+          },
+        ] as DesktopSessionSnapshot["timelineItems"],
+      }),
+    });
     markdownRender.mockClear();
-    render(<OwnedSessionScreen shell={shell} />);
+    renderScreen(app);
     expect(markdownRender).toHaveBeenCalledTimes(1);
     await userEvent.type(screen.getByLabelText("Message"), "a real draft");
     expect(screen.getByLabelText("Message")).toHaveValue("a real draft");
@@ -162,11 +143,11 @@ describe("SessionScreen canonical composer admission", () => {
     const pending = new Promise<{ sessionId: string; requestId: string }>((done) => {
       resolve = done;
     });
-    const shell = {
-      ...existingSessionShell({ kind: "ready" }),
-      sendMessage: vi.fn(() => pending),
-    } as Shell;
-    render(<OwnedSessionScreen shell={shell} />);
+    const { app } = screenApp({
+      session: heldSession(),
+      sendChatMessage: vi.fn(() => pending),
+    });
+    renderScreen(app);
     fireEvent.change(screen.getByLabelText("Message"), {
       target: { value: "send this" },
     });
@@ -180,25 +161,23 @@ describe("SessionScreen canonical composer admission", () => {
     });
     expect(screen.getByLabelText("Message")).toHaveValue("keep this next message");
   });
+
   it("restores each session draft without carrying text into another session", () => {
-    const first = existingSessionShell({ kind: "ready" });
-    const second = { ...first, selectedSessionId: "second" };
-    const { rerender } = render(<OwnedSessionScreen shell={first} />);
+    const first = heldSession();
+    const second = heldSession({ sessionId: "second" });
+    const { app } = screenApp({ session: first });
+    renderScreen(app);
     fireEvent.change(screen.getByLabelText("Message"), {
       target: { value: "first draft" },
     });
-    rerender(<OwnedSessionScreen shell={second} />);
+    hold(app, second);
     expect(screen.getByLabelText("Message")).toHaveValue("");
     fireEvent.change(screen.getByLabelText("Message"), {
       target: { value: "second draft" },
     });
-    rerender(<OwnedSessionScreen shell={first} />);
+    hold(app, first);
     expect(screen.getByLabelText("Message")).toHaveValue("first draft");
-    rerender(
-      <OwnedSessionScreen shell={{ ...first, selectedAgentDid: "other-agent" }} />,
-    );
-    expect(screen.getByLabelText("Message")).toHaveValue("");
-    rerender(<OwnedSessionScreen shell={second} />);
+    hold(app, second);
     expect(screen.getByLabelText("Message")).toHaveValue("second draft");
   });
   it("uses the selected non-default behavior decision, never the default or retry path", () => {
@@ -245,12 +224,11 @@ describe("SessionScreen canonical composer admission", () => {
           ],
         },
         sessions: [],
-      } as DeploymentView;
+      } as unknown as DeploymentView;
       return projectChatShell({
         clientAvailable: true,
         selectedAgentDid: deployment.agentDid,
         selectedSessionId: null,
-        draft: "",
         sending: false,
         session: null,
         selectedSessionSummary: null,
@@ -272,10 +250,8 @@ describe("SessionScreen canonical composer admission", () => {
 
   it("keeps an empty composer editable, then submits when canonical admission is ready", async () => {
     const user = userEvent.setup();
-    const sendMessage = vi.fn().mockResolvedValue(null);
-    render(
-      <OwnedSessionScreen shell={newSessionShell({ kind: "ready" }, sendMessage)} />,
-    );
+    const { app, sendChatMessage } = screenApp();
+    renderScreen(app);
 
     const message = screen.getByRole("textbox", { name: "Message" });
     const send = screen.getByRole("button", { name: "Send" });
@@ -284,29 +260,32 @@ describe("SessionScreen canonical composer admission", () => {
     await user.type(message, "hello");
     expect(send).toBeEnabled();
     await user.click(send);
-    expect(sendMessage).toHaveBeenCalledWith("hello", "behavior");
+    expect(sendChatMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "hello",
+        behaviorId: "default",
+        sessionId: null,
+      }),
+    );
   });
 
   it("clears accepted text only in its origin after navigating away", async () => {
     navigate.mockClear();
     let resolve!: (value: { sessionId: string; requestId: string }) => void;
-    const sendMessage = vi.fn(
+    const sendChatMessage = vi.fn(
       () =>
         new Promise<{ sessionId: string; requestId: string }>((next) => {
           resolve = next;
         }),
     );
-    const origin = newSessionShell({ kind: "ready" }, sendMessage) as Shell & {
-      advanceComposeIntentForTest: () => void;
-    };
-    const other = { ...origin, selectedAgentDid: "other-agent" };
-    const { rerender } = render(<OwnedSessionScreen shell={origin} />);
+    const { app } = screenApp({ sendChatMessage });
+    renderScreen(app);
     fireEvent.change(screen.getByLabelText("Message"), {
       target: { value: "keep this draft" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
-    origin.advanceComposeIntentForTest();
-    rerender(<OwnedSessionScreen shell={other} />);
+    /* the person moves to another node while the send is in flight */
+    act(() => app.actions.selectAgent("did:key:other-agent"));
     fireEvent.change(screen.getByLabelText("Message"), {
       target: { value: "unrelated draft" },
     });
@@ -315,27 +294,19 @@ describe("SessionScreen canonical composer admission", () => {
       await Promise.resolve();
     });
 
-    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(sendChatMessage).toHaveBeenCalledOnce();
     expect(screen.getByLabelText("Message")).toHaveValue("unrelated draft");
     expect(navigate).not.toHaveBeenCalled();
-    rerender(<OwnedSessionScreen shell={origin} />);
+    act(() => app.actions.selectAgent(AGENT));
     expect(screen.getByLabelText("Message")).toHaveValue("");
   });
 
   it("preserves a canonical blocker for a non-empty local draft", () => {
-    const sendMessage = vi.fn().mockResolvedValue(null);
-    render(
-      <OwnedSessionScreen
-        shell={newSessionShell(
-          {
-            kind: "disabled",
-            reason: "routeNotReady",
-            hint: "Secure route to the agent is not ready",
-          },
-          sendMessage,
-        )}
-      />,
-    );
+    /* a node whose route is not safe to chat over */
+    const { app, sendChatMessage } = screenApp({ nodeOverrides: { chatSafe: false } });
+    renderScreen(app);
+    const status = app.view.getState().shellProjection.nonEmptyContentSendStatus;
+    expect(status.kind).toBe("disabled");
 
     fireEvent.change(screen.getByLabelText("Message"), { target: { value: "hello" } });
     const send = screen.getByRole("button", { name: "Send" });
@@ -343,28 +314,24 @@ describe("SessionScreen canonical composer admission", () => {
     expect(send).toBeDisabled();
     expect(screen.getByLabelText("Message")).toHaveAttribute(
       "placeholder",
-      "Secure route to the agent is not ready",
+      status.kind === "disabled" ? status.hint : "",
     );
     fireEvent.click(send);
-    expect(sendMessage).not.toHaveBeenCalled();
+    expect(sendChatMessage).not.toHaveBeenCalled();
   });
 
   it("re-enables the rendered existing-session composer after terminal interruption", () => {
-    const blocked = {
-      kind: "disabled",
-      reason: "awaitingTurnTerminality",
-      hint: "Turn still running",
-    } as const;
-    const { rerender } = render(
-      <OwnedSessionScreen shell={existingSessionShell(blocked)} />,
-    );
+    const { app } = screenApp({ session: heldSession({ turnState: "running" }) });
+    renderScreen(app);
     fireEvent.change(screen.getByLabelText("Message"), {
       target: { value: "follow up" },
     });
-    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+    /* while the turn runs the composer offers Stop, not Send */
+    expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
 
-    rerender(<OwnedSessionScreen shell={existingSessionShell({ kind: "ready" })} />);
+    hold(app, heldSession({ turnState: "interrupted" }));
     expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
+    expect(screen.getByLabelText("Message")).toHaveValue("follow up");
   });
 });
 
@@ -386,17 +353,88 @@ describe("SessionScreen goal label", () => {
   });
 
   it("does not report a wrapped-up budget-limited goal as met", () => {
-    const shell = existingSessionShell({ kind: "ready" });
-    shell.selectedSession!.goal = goal("budget_limited", true);
-    render(<OwnedSessionScreen shell={shell} />);
+    const { app } = screenApp({
+      session: heldSession({ goal: goal("budget_limited", true) } as never),
+    });
+    renderScreen(app);
     expect(screen.queryByText("Goal met")).not.toBeInTheDocument();
     expect(screen.getByText("Goal · budget reached")).toBeInTheDocument();
   });
 
   it("reports a complete goal as met", () => {
-    const shell = existingSessionShell({ kind: "ready" });
-    shell.selectedSession!.goal = goal("complete", true);
-    render(<OwnedSessionScreen shell={shell} />);
+    const { app } = screenApp({
+      session: heldSession({ goal: goal("complete", true) } as never),
+    });
+    renderScreen(app);
     expect(screen.getByText("Goal met")).toBeInTheDocument();
+  });
+});
+
+describe("renaming a session", () => {
+  it("asks the node holding it while a read does not list that node", async () => {
+    const renameSession = vi.fn().mockResolvedValue(undefined);
+    const app = testApp({
+      api: {
+        renameSession,
+        fetchSessionSnapshot: vi.fn().mockResolvedValue(null),
+        fetchDesktopSnapshot: vi
+          .fn()
+          .mockResolvedValue({ bootstrap: {}, client: null }),
+      },
+      deployments: [],
+      session: heldSession(),
+    });
+    await app.actions.renameSession("session", "Renamed");
+    expect(renameSession).toHaveBeenCalledWith({
+      agentDid: AGENT,
+      sessionId: "session",
+      title: "Renamed",
+    });
+  });
+
+  it("fails, and says so, when no node holds the session", async () => {
+    const renameSession = vi.fn();
+    const reportFailure = vi.fn();
+    const app = testApp({ api: { renameSession }, deployments: [], reportFailure });
+    await expect(app.actions.renameSession("session", "Renamed")).rejects.toBeDefined();
+    expect(renameSession).not.toHaveBeenCalled();
+    expect(reportFailure).toHaveBeenCalledOnce();
+  });
+
+  it("renames through its action, then reads the session again", async () => {
+    const renameSession = vi.fn().mockResolvedValue(undefined);
+    const fetchSessionSnapshot = vi.fn().mockResolvedValue(null);
+    const { app } = screenApp({
+      session: heldSession(),
+      api: {
+        renameSession,
+        fetchSessionSnapshot,
+        fetchDesktopSnapshot: vi
+          .fn()
+          .mockResolvedValue({ bootstrap: {}, client: null }),
+      },
+    });
+    renderScreen(app);
+    const user = userEvent.setup();
+    await user.click(screen.getAllByRole("button", { name: "Rename Session" })[0]!);
+    const input = screen.getByRole("textbox", { name: "Rename Session" });
+    await user.clear(input);
+    await user.type(input, "Renamed session{Enter}");
+    await vi.waitFor(() =>
+      expect(renameSession).toHaveBeenCalledWith({
+        agentDid: AGENT,
+        sessionId: "session",
+        title: "Renamed session",
+      }),
+    );
+    /* the title shown is the held session's, so it is read again */
+    await vi.waitFor(() =>
+      expect(fetchSessionSnapshot).toHaveBeenCalledWith(
+        "session",
+        AGENT,
+        null,
+        expect.objectContaining({ limit: expect.any(Number) }),
+      ),
+    );
   });
 });

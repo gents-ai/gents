@@ -1,9 +1,9 @@
+import type { NodeView } from "../../../hooks/fleetStore";
 import { useState } from "react";
 import { dependentsWarning } from "./dependents";
 import { toast } from "sonner";
-import type { DeploymentView, Schedule } from "@source-inc/gents-desktop-client";
+import type { Schedule } from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
-import type { Shell } from "@/hooks/useShell";
 import { navigate } from "@/lib/router";
 import {
   ChoiceRow,
@@ -17,6 +17,8 @@ import { newId, optionalInteger, str, useDraft, validateCronSchedule } from "./d
 import { DeleteButton, ListDetail } from "./ListDetail";
 import { Group } from "./rows";
 import { RowMenu } from "./RowMenu";
+import { toastFailure } from "@/lib/failure";
+import { useApp } from "@/app/AppContext";
 
 function cadenceLabel(s: Schedule) {
   return s.cadence.kind === "cron"
@@ -25,17 +27,18 @@ function cadenceLabel(s: Schedule) {
 }
 
 export function ScheduleEditor({
-  shell,
   deployment,
   schedule,
   embedded = false,
 }: {
-  shell: Shell;
-  deployment: DeploymentView;
+  deployment: NodeView;
   schedule: Schedule;
   /* in a sheet beside another page: no Danger zone */
   embedded?: boolean;
 }) {
+  const {
+    actions: { acceptsComposeIntent, captureComposeIntent, runSchedule, changeConfig },
+  } = useApp();
   const base = {
     name: "agent" as const,
     agentDid: deployment.agentDid,
@@ -66,37 +69,33 @@ export function ScheduleEditor({
             ...validateCronSchedule(next.expression, next.timezone),
             missed_run_policy: "latest_only" as const,
           };
-    await shell.applyConfig((api) =>
-      api.saveScheduleConfig({
-        document: {
-          ...schedule,
-          display_name: next.displayName.trim() || null,
-          cadence,
-          tags: next.tags.length ? next.tags : null,
-        },
-      }),
-    );
+    await changeConfig("saveScheduleConfig", {
+      document: {
+        ...schedule,
+        display_name: next.displayName.trim() || null,
+        cadence,
+        tags: next.tags.length ? next.tags : null,
+      },
+    });
   });
   const [lastRun, setLastRun] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const id = (f: string) => `${schedule.schedule_id}-${f}`;
   const run = async () => {
     setRunning(true);
-    const pending = shell.runSchedule({
+    const pending = runSchedule({
       scheduleId: schedule.schedule_id,
       agentDid: schedule.agent_did,
     });
-    const intentGeneration = shell.captureComposeIntent();
+    const intentGeneration = captureComposeIntent();
     try {
       const result = await pending;
-      if (!shell.acceptsComposeIntent(intentGeneration)) return;
+      if (!acceptsComposeIntent(intentGeneration)) return;
       setLastRun(result.requestId);
       toast(`Schedule started · ${result.requestId}`);
     } catch (error) {
-      if (!shell.acceptsComposeIntent(intentGeneration)) return;
-      toast(
-        `Schedule failed to start: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      if (!acceptsComposeIntent(intentGeneration)) return;
+      toastFailure("start the schedule", error);
     } finally {
       setRunning(false);
     }
@@ -114,14 +113,12 @@ export function ScheduleEditor({
           label="Display name"
           value={d.draft.displayName}
           onChange={(v) => d.set("displayName", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <ChoiceRow
           id={id("cadence")}
           label="Cadence"
           value={d.draft.cadenceKind}
-          onChange={(v) => d.choose("cadenceKind", v as "interval" | "cron")}
+          onChange={(v) => d.set("cadenceKind", v as "interval" | "cron")}
           items={[
             { value: "interval", label: "Interval" },
             { value: "cron", label: "Cron" },
@@ -134,8 +131,6 @@ export function ScheduleEditor({
             description="Positive whole number."
             value={d.draft.intervalSecs}
             onChange={(v) => d.set("intervalSecs", v)}
-            onCommit={d.commit}
-            onEnter={d.onEnter}
           />
         ) : (
           <>
@@ -144,16 +139,12 @@ export function ScheduleEditor({
               label="Cron"
               value={d.draft.expression}
               onChange={(v) => d.set("expression", v)}
-              onCommit={d.commit}
-              onEnter={d.onEnter}
             />
             <TextRow
               id={id("tz")}
               label="Timezone"
               value={d.draft.timezone}
               onChange={(v) => d.set("timezone", v)}
-              onCommit={d.commit}
-              onEnter={d.onEnter}
             />
           </>
         )}
@@ -164,13 +155,7 @@ export function ScheduleEditor({
           onChange={(v) => d.set("tags", v)}
         />
       </Group>
-      <DraftActions
-        dirty={d.dirty}
-        saving={d.saving}
-        error={d.error}
-        onSave={d.save}
-        onCancel={d.reset}
-      />
+      <DraftActions draft={d} />
       <Group
         title="Manual run"
         action={
@@ -194,12 +179,10 @@ export function ScheduleEditor({
           warning={dependentsWarning(deployment, "schedule", schedule.schedule_id)}
           base={base}
           onDelete={() =>
-            shell.applyConfig((api) =>
-              api.deleteScheduleConfig({
-                scheduleId: schedule.schedule_id,
-                agentDid: deployment.agentDid,
-              }),
-            )
+            changeConfig("deleteScheduleConfig", {
+              scheduleId: schedule.schedule_id,
+              agentDid: deployment.agentDid,
+            })
           }
         />
       )}
@@ -208,14 +191,13 @@ export function ScheduleEditor({
 }
 
 export function SchedulesPanel({
-  shell,
   deployment,
   item,
 }: {
-  shell: Shell;
-  deployment: DeploymentView;
+  deployment: NodeView;
   item?: string;
 }) {
+  const { changeConfig } = useApp().actions;
   const base = {
     name: "agent" as const,
     agentDid: deployment.agentDid,
@@ -237,26 +219,22 @@ export function SchedulesPanel({
             id={s.schedule_id}
             onDuplicate={async () => {
               const schedule_id = newId("sched");
-              await shell.applyConfig((api) =>
-                api.saveScheduleConfig({
-                  document: {
-                    ...s,
-                    schedule_id,
-                    display_name: `${s.display_name ?? s.schedule_id} copy`,
-                    created_at: null,
-                    updated_at: null,
-                  },
-                }),
-              );
+              await changeConfig("saveScheduleConfig", {
+                document: {
+                  ...s,
+                  schedule_id,
+                  display_name: `${s.display_name ?? s.schedule_id} copy`,
+                  created_at: null,
+                  updated_at: null,
+                },
+              });
               return schedule_id;
             }}
             onDelete={() =>
-              shell.applyConfig((api) =>
-                api.deleteScheduleConfig({
-                  scheduleId: s.schedule_id,
-                  agentDid: deployment.agentDid,
-                }),
-              )
+              changeConfig("deleteScheduleConfig", {
+                scheduleId: s.schedule_id,
+                agentDid: deployment.agentDid,
+              })
             }
             warning={dependentsWarning(deployment, "schedule", s.schedule_id)}
           />
@@ -266,16 +244,14 @@ export function SchedulesPanel({
       empty="No schedules. A trigger binds a task to a schedule."
       onCreate={async () => {
         const schedule_id = newId("sched");
-        await shell.applyConfig((api) =>
-          api.saveScheduleConfig({
-            document: {
-              agent_did: deployment.agentDid,
-              schedule_id,
-              display_name: "New schedule",
-              cadence: { kind: "cron", expression: "0 * * * *", timezone: "UTC" },
-            },
-          }),
-        );
+        await changeConfig("saveScheduleConfig", {
+          document: {
+            agent_did: deployment.agentDid,
+            schedule_id,
+            display_name: "New schedule",
+            cadence: { kind: "cron", expression: "0 * * * *", timezone: "UTC" },
+          },
+        });
         navigate({
           name: "agent",
           agentDid: deployment.agentDid,
@@ -288,7 +264,7 @@ export function SchedulesPanel({
         return (
           <ScheduleEditor
             key={schedule.schedule_id}
-            shell={shell}
+
             deployment={deployment}
             schedule={schedule}
           />

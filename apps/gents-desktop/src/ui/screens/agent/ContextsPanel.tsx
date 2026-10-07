@@ -1,8 +1,8 @@
+import type { NodeView } from "../../../hooks/fleetStore";
 import { useEffect, useState } from "react";
 import { dependentsWarning } from "./dependents";
 import { ArrowLeft } from "lucide-react";
-import type { AgentContext, DeploymentView } from "@source-inc/gents-desktop-client";
-import type { Shell } from "@/hooks/useShell";
+import type { AgentContext } from "@source-inc/gents-desktop-client";
 import { href, type Route } from "@/lib/router";
 import {
   AreaRow,
@@ -23,21 +23,22 @@ import { DeleteButton, ListDetail } from "./ListDetail";
 import { Group } from "./rows";
 import { contextOrigin, forgetContextOrigins } from "./contextOrigin";
 import { RowMenu } from "./RowMenu";
+import { agentOf } from "@/lib/agents";
+import { useApp } from "@/app/AppContext";
 
 /* a context's detail names this many of its behaviors, then counts the rest */
 const USERS_SHOWN = 8;
 
 function Editor({
-  shell,
   deployment,
   context,
   after,
 }: {
-  shell: Shell;
-  deployment: DeploymentView;
+  deployment: NodeView;
   context: AgentContext;
   after?: Route;
 }) {
+  const { changeConfig } = useApp().actions;
   const base = {
     name: "agent" as const,
     agentDid: deployment.agentDid,
@@ -65,26 +66,24 @@ function Editor({
       (skillId) => !deployment.skills.some((row) => row.skillId === skillId),
     );
     if (missingSkill) throw new Error(`Unknown skill ID: ${missingSkill}`);
-    await shell.applyConfig((api) =>
-      api.patchConfigComponents({
-        agentDid: deployment.agentDid,
-        patches: [
-          {
-            collection: "AgentContext",
-            id: context.context_id,
-            changes: {
-              display_name: next.displayName || null,
-              description: next.description || null,
-              system_prompt: next.systemPrompt || null,
-              tools_id: next.toolsId || null,
-              compaction_id: next.compactionId || null,
-              skill_ids: skillIds.length ? skillIds : null,
-              tags: next.tags.length ? next.tags : null,
-            },
+    await changeConfig("patchConfigComponents", {
+      agentDid: deployment.agentDid,
+      patches: [
+        {
+          collection: "AgentContext",
+          id: context.context_id,
+          changes: {
+            display_name: next.displayName || null,
+            description: next.description || null,
+            system_prompt: next.systemPrompt || null,
+            tools_id: next.toolsId || null,
+            compaction_id: next.compactionId || null,
+            skill_ids: skillIds.length ? skillIds : null,
+            tags: next.tags.length ? next.tags : null,
           },
-        ],
-      }),
-    );
+        },
+      ],
+    });
   });
   const id = (f: string) => `${context.context_id}-${f}`;
   const users = deployment.behaviors.filter((b) => b.contextId === context.context_id);
@@ -95,7 +94,6 @@ function Editor({
   return (
     <>
       <ToolsSheet
-        shell={shell}
         deployment={deployment}
         open={newTools !== null}
         onClose={(toolsId) => {
@@ -117,7 +115,7 @@ function Editor({
         {besideDoc && (
           <ToolsEditor
             key={besideDoc.tools_id}
-            shell={shell}
+
             deployment={deployment}
             tools={besideDoc}
             embedded
@@ -160,15 +158,12 @@ function Editor({
           label="Display name"
           value={d.draft.displayName}
           onChange={(v) => d.set("displayName", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <AreaRow
           id={id("description")}
           label="Description"
           value={d.draft.description}
           onChange={(v) => d.set("description", v)}
-          onCommit={d.commit}
           rows={2}
         />
         <AreaRow
@@ -176,7 +171,6 @@ function Editor({
           label="System prompt"
           value={d.draft.systemPrompt}
           onChange={(v) => d.set("systemPrompt", v)}
-          onCommit={d.commit}
           rows={6}
           stacked
         />
@@ -185,7 +179,7 @@ function Editor({
           label="Tools"
           description="What every behavior on this context may touch."
           value={d.draft.toolsId}
-          onChange={(v) => d.choose("toolsId", v)}
+          onChange={(v) => d.set("toolsId", v)}
           none="None"
           items={deployment.tools.map((t) => ({
             value: t.tools_id,
@@ -203,7 +197,7 @@ function Editor({
           id={id("compact")}
           label="Compaction"
           value={d.draft.compactionId}
-          onChange={(v) => d.choose("compactionId", v)}
+          onChange={(v) => d.set("compactionId", v)}
           items={[
             { value: "", label: "Runtime default" },
             ...deployment.compactions.map((c) => ({
@@ -232,13 +226,7 @@ function Editor({
           onChange={(v) => d.set("tags", v)}
         />
       </Group>
-      <DraftActions
-        dirty={d.dirty}
-        saving={d.saving}
-        error={d.error}
-        onSave={d.save}
-        onCancel={d.reset}
-      />
+      <DraftActions draft={d} />
       <DeleteButton
         label={context.display_name ?? context.context_id}
         base={base}
@@ -251,12 +239,10 @@ function Editor({
               : `${users.length} behaviors use it and will be left without a context.`
         }
         onDelete={() =>
-          shell.applyConfig((api) =>
-            api.deleteContextConfig({
-              contextId: context.context_id,
-              agentDid: deployment.agentDid,
-            }),
-          )
+          changeConfig("deleteContextConfig", {
+            contextId: context.context_id,
+            agentDid: deployment.agentDid,
+          })
         }
       />
     </>
@@ -264,14 +250,13 @@ function Editor({
 }
 
 export function ContextsPanel({
-  shell,
   deployment,
   item,
 }: {
-  shell: Shell;
-  deployment: DeploymentView;
+  deployment: NodeView;
   item?: string;
 }) {
+  const { changeConfig } = useApp().actions;
   const base = {
     name: "agent" as const,
     agentDid: deployment.agentDid,
@@ -279,7 +264,7 @@ export function ContextsPanel({
   };
   /* a context opened from its behavior goes back to that behavior */
   const originId = item ? contextOrigin(item) : null;
-  const origin = deployment.behaviors.find((b) => b.behaviorId === originId);
+  const origin = agentOf(deployment, originId);
   const back = origin
     ? {
         route: { ...base, section: "behaviors", item: origin.behaviorId },
@@ -334,12 +319,10 @@ export function ContextsPanel({
               base={base}
               id={c.context_id}
               onDelete={() =>
-                shell.applyConfig((api) =>
-                  api.deleteContextConfig({
-                    contextId: c.context_id,
-                    agentDid: deployment.agentDid,
-                  }),
-                )
+                changeConfig("deleteContextConfig", {
+                  contextId: c.context_id,
+                  agentDid: deployment.agentDid,
+                })
               }
               warning={dependentsWarning(deployment, "context", c.context_id)}
             />
@@ -352,7 +335,7 @@ export function ContextsPanel({
           return (
             <Editor
               key={context.context_id}
-              shell={shell}
+
               deployment={deployment}
               context={context}
               after={back?.route}

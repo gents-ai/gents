@@ -4822,6 +4822,7 @@ name = "gents-desktop-bridge"
 version = "0.20.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "blake3",
  "chrono",
  "dirs 5.0.1",
@@ -4975,6 +4976,7 @@ dependencies = [
  "anyhow",
  "async-stream",
  "async-trait",
+ "base64 0.22.1",
  "bytes",
  "chrono",
  "futures",

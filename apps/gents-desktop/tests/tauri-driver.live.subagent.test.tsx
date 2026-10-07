@@ -79,36 +79,33 @@ describeLive("Tauri app live subagent sessions", () => {
             sessionId: submitted.sessionId,
             agentDid: runner.agentDid,
           });
-          const caused = provenance.sent.filter(
-            (request) => request.causedByRequestId === submitted.requestId,
-          );
-          expect(caused.length).toBeGreaterThan(0);
-          expect(caused.every((request) => request.hop === 1)).toBe(true);
-          const started = caused.filter(
-            (request) => request.behaviorId === subagentBehaviorId,
-          );
-          expect(
-            started.some((request) => request.lifecycleState === "completed"),
-            `expected the started session's request to complete; caused=${JSON.stringify(caused)}`,
-          ).toBe(true);
-          const child = started[0]!;
+          /* the request started another session: its subagent */
+          expect(provenance.started.length).toBeGreaterThan(0);
+          const child = provenance.started[0]!;
           expect(child.sessionId).not.toBe(submitted.sessionId);
 
-          const received = await runner.adapter.sessionProvenance({
-            sessionId: child.sessionId!,
+          /* the started session runs the subagent's behavior, and finished */
+          const fleet = await runner.adapter.fetchDesktopSnapshot();
+          const childSummary = fleet.client?.deployments
+            .flatMap((node) => node.sessions)
+            .find((session) => session.sessionId === child.sessionId);
+          expect(childSummary?.behaviorId).toBe(subagentBehaviorId);
+          expect(
+            childSummary?.turnState,
+            `expected the started session to complete; started=${JSON.stringify(provenance.started)}`,
+          ).toBe("completed");
+
+          const childProvenance = await runner.adapter.sessionProvenance({
+            sessionId: child.sessionId,
             agentDid: runner.agentDid,
           });
-          expect(
-            received.received.some(
-              (request) => request.causedBySessionId === submitted.sessionId,
-            ),
-          ).toBe(true);
+          expect(childProvenance.startedBy?.sessionId).toBe(submitted.sessionId);
 
           const childProfile = deployment.inferenceProfiles.find(
             (profile) =>
               profile.profile_id ===
               deployment.behaviors.find(
-                (behavior) => behavior.behaviorId === child.behaviorId,
+                (behavior) => behavior.behaviorId === childSummary?.behaviorId,
               )?.inferenceProfileId,
           );
           expect(
@@ -144,7 +141,6 @@ describeLive("Tauri app live subagent sessions", () => {
         )}`,
       ).toBe(true);
       expect(followUpSession.pendingTurn).toBeNull();
-      expect(followUpSession.activeResponseOverlay).toBeNull();
 
       const followUpToolGroupsAfterParent = followUpSession.timelineItems.filter(
         (item) => item.kind === "toolGroup",

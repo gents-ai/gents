@@ -1,0 +1,40 @@
+# One content-defined block of a rendered-request capture body (#2333).
+# Captures stopped re-signing the whole conversation: a v3 RenderedRequest
+# stores its canonical bytes as an ordered manifest of these blocks, and a
+# later capture re-references every block it shares with an earlier one. This
+# collection and RenderedRequest are one sync unit — a manifest without its
+# blocks is undecodable and a block without a referencing manifest is inert, so
+# neither is delivered, backed up or pruned without the other.
+#
+# `@branchable` is deliberate and irreversible: DefraDB rejects every patch
+# that flips `is_branchable` and a populated collection cannot be dropped and
+# recreated, so the property is chosen here or never. It is not the content
+# address — per-field and composite commit blocks are written unconditionally —
+# and it is taken for the same reasons RenderedRequest takes it: a newly paired
+# peer's only bulk backfill path rejects non-branchable collections outright.
+#
+# `content_key` is the application-level dedupe and lookup key, sha256 over the
+# payload bytes. It is deliberately NOT integrity evidence: the same writer
+# chooses the bytes and the digest over them, so a stored key proves nothing an
+# auditor could not have been lied to about. Integrity rides on the DefraDB
+# field commit CID of `payload`, pinned in the referencing manifest at write
+# time and re-checked against the block document at read time. A reference
+# never broadens access either: reading a capture's body means reading every
+# block it names, so ACP applies to the whole referenced set and no manifest
+# may be delivered where its blocks may not. Blocks dedupe by `content_key`
+# across every agent, session and DID; once per-DID ACP applies to captures,
+# that dedupe scope must become per-principal, or a writer that cannot read
+# another principal's block fails its capture and with it the send.
+#
+# Indexes are deliberately few: every index adds per-commit keys, and blocks
+# are the highest-volume collection in the capture stack (one row per ~4 KiB of
+# canonical body). The writer dedupes through `content_key` and readers reach
+# blocks by the exact `_docID` their manifest pins, which needs no index.
+type RenderedRequestBlock @branchable {
+    content_key: String @index(unique: true) @immutable
+    # Canonical body bytes for this block, exactly as chunked from one capture
+    # payload. Raw UTF-8 stored as a GraphQL String; not parsed, never rewritten.
+    payload: String @immutable
+    byte_len: Int @immutable
+    created_at: String @immutable
+}

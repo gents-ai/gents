@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { useDraft } from "../src/ui/screens/agent/draft";
-import { DraftActions } from "../src/ui/screens/agent/editors";
+import { DraftActions, TextRow } from "../src/ui/screens/agent/editors";
 
 function Harness({
   persist,
@@ -18,15 +18,14 @@ function Harness({
       <output data-testid="name">{draft.draft.name}</output>
       <output data-testid="enabled">{String(draft.draft.enabled)}</output>
       <button onClick={() => draft.set("name", "Draft")}>Edit text</button>
-      <button onClick={() => draft.choose("enabled", false)}>Edit choice</button>
-      <button onClick={draft.commit}>Blur field</button>
-      <DraftActions
-        dirty={draft.dirty}
-        saving={draft.saving}
-        error={draft.error}
-        onSave={draft.save}
-        onCancel={draft.reset}
+      <button onClick={() => draft.set("enabled", false)}>Edit choice</button>
+      <TextRow
+        id="name"
+        label="Name"
+        value={draft.draft.name}
+        onChange={(v) => draft.set("name", v)}
       />
+      <DraftActions draft={draft} />
     </>
   );
 }
@@ -39,7 +38,9 @@ describe("configuration drafts", () => {
 
     await user.click(screen.getByRole("button", { name: "Edit text" }));
     await user.click(screen.getByRole("button", { name: "Edit choice" }));
-    await user.click(screen.getByRole("button", { name: "Blur field" }));
+    /* leaving a field, by Enter or by focus, saves nothing */
+    await user.type(screen.getByLabelText("Name"), "{Enter}");
+    await user.tab();
 
     expect(persist).not.toHaveBeenCalled();
     expect(screen.getByTestId("name")).toHaveTextContent("Draft");

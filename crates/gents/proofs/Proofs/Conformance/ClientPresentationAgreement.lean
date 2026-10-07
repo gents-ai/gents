@@ -15,7 +15,6 @@ structure PresentationCase where
 def blockers : List (String × SendBlockedReason) :=
   [ ("clientOffline", .clientOffline)
   , ("agentNotSelected", .agentNotSelected)
-  , ("composerEmpty", .composerEmpty)
   , ("submittingRequest", .mutationInFlight)
   , ("waitingForRequestObservation", .awaitingObservation)
   , ("awaitingTurnTerminality", .awaitingTurnTerminality .running)

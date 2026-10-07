@@ -28,7 +28,6 @@ import type {
 import type {
   AgentPrincipal,
   AgentBehavior,
-  AgentContext,
   BehaviorView,
   SessionSummary,
   SessionProvenance,
@@ -37,7 +36,6 @@ import type {
 import type { RequestOutcomeView } from "@source-inc/gents-desktop-client/generated/RequestOutcomeView";
 import type { MessageReconstructionView } from "@source-inc/gents-desktop-client/generated/MessageReconstructionView";
 import type { SessionContextView } from "@source-inc/gents-desktop-client/generated/SessionContextView";
-import type { ConcurrencyMode } from "@source-inc/gents-desktop-client/generated/ConcurrencyMode";
 import type { Task } from "@source-inc/gents-desktop-client/generated/Task";
 import type { Trigger } from "@source-inc/gents-desktop-client/generated/Trigger";
 import type { RenderedTimelineItem } from "@source-inc/gents-desktop-client/generated/RenderedTimelineItem";
@@ -285,6 +283,8 @@ export function createDesktopUiHarness(
     effectiveToolRoot: null,
     suggestedToolRoot: "/tmp/gents-bombadil/workspace",
     pairingReady: false,
+    approvalRequired: false,
+    runtimeBooting: false,
     error: null,
   };
   let p2pStatus: "healthy" | "degraded" | "wedged" =
@@ -398,9 +398,15 @@ export function createDesktopUiHarness(
                     created: false,
                     replacementsApplied: 1,
                     diff: [
-                      { kind: "context", text: "impl Parser {" },
-                      { kind: "removed", text: "fn parse() -> Ast { todo!() }" },
-                      { kind: "added", text: "fn parse() -> Ast { Ast::default() }" },
+                      { kind: "context" as const, text: "impl Parser {" },
+                      {
+                        kind: "removed" as const,
+                        text: "fn parse() -> Ast { todo!() }",
+                      },
+                      {
+                        kind: "added" as const,
+                        text: "fn parse() -> Ast { Ast::default() }",
+                      },
                     ],
                     fallbackOutput: null,
                   },
@@ -562,7 +568,6 @@ export function createDesktopUiHarness(
           reason,
           storeVersion,
           reconcileVersion,
-          responseOnly,
         });
       }
     }, 0);
@@ -581,7 +586,6 @@ export function createDesktopUiHarness(
             reason,
             storeVersion,
             reconcileVersion,
-            responseOnly,
           });
         }
       }
@@ -1350,6 +1354,7 @@ export function createDesktopUiHarness(
             enabled: document.enabled ?? true,
             createdAt: document.created_at ?? null,
             tags: document.tags ?? [],
+            sourceDirectory: null,
           })),
         ],
         inferenceProfiles: [
@@ -1387,6 +1392,7 @@ export function createDesktopUiHarness(
             models: [],
             advertisedModels: [],
             probeStatus: "healthy",
+            accountRef: null,
           })),
         ],
         inferenceSampling: [
@@ -1602,6 +1608,7 @@ export function createDesktopUiHarness(
           enabled: document.enabled ?? true,
           createdAt: document.created_at ?? STARTED_AT,
           tags: document.tags ?? [],
+          sourceDirectory: null,
         }),
       };
       return snapshot();
@@ -1647,6 +1654,22 @@ export function createDesktopUiHarness(
         ...deployment,
         triggers: deployment.triggers.filter(
           (trigger) => trigger.config.trigger_id !== request.triggerId,
+        ),
+      };
+      notify("config");
+      return snapshot();
+    },
+    async deleteContextConfig(request) {
+      if (
+        !deployment.contexts.some((context) => context.context_id === request.contextId)
+      )
+        throw new Error(
+          `no AgentContext document with context_id "${request.contextId}"`,
+        );
+      deployment = {
+        ...deployment,
+        contexts: deployment.contexts.filter(
+          (context) => context.context_id !== request.contextId,
         ),
       };
       notify("config");
@@ -1800,6 +1823,7 @@ export function createDesktopUiHarness(
             models: [],
             advertisedModels: [],
             probeStatus: "healthy",
+            accountRef: null,
           },
         ),
       };
@@ -2806,6 +2830,7 @@ function createDeployment(): DeploymentView {
         models: ["gpt-4.1-mini"],
         advertisedModels: [],
         probeStatus: "healthy",
+        accountRef: null,
       },
     ],
     inferenceProfiles: [
@@ -2874,6 +2899,7 @@ function createDeployment(): DeploymentView {
         enabled: true,
         createdAt: STARTED_AT,
         tags: [],
+        sourceDirectory: null,
       },
       {
         skillId: "fleet-summary",
@@ -2888,6 +2914,7 @@ function createDeployment(): DeploymentView {
         enabled: true,
         createdAt: STARTED_AT,
         tags: [],
+        sourceDirectory: null,
       },
     ],
     tasks: [
@@ -2899,6 +2926,7 @@ function createDeployment(): DeploymentView {
         promptTemplate: "Inspect this host and report health.",
         goalObjectiveTemplate: null,
         goalTokenBudget: null,
+        emitOutcome: false,
         enabled: true,
         outputSchemaRef: null,
         hooks: [],

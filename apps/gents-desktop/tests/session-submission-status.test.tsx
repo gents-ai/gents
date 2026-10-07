@@ -6,7 +6,6 @@ describe("kit session submission status", () => {
   it("announces accepted queued work from the canonical workflow projection", () => {
     render(
       <SessionSubmissionStatus
-        error={null}
         activityStatus={{
           kind: "waiting",
           label: "Waiting for the agent…",
@@ -21,16 +20,5 @@ describe("kit session submission status", () => {
       expect.stringContaining("Your message is queued"),
     );
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-  });
-  it("shows submission errors instead of silently swallowing them", () => {
-    render(
-      <SessionSubmissionStatus
-        error="Request rejected: agent unavailable"
-        activityStatus={null}
-      />,
-    );
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      "Request rejected: agent unavailable",
-    );
   });
 });
