@@ -144,6 +144,14 @@ export type MobilePerformanceHarnessController = {
   finishStreaming(): void;
   streamUpdate(): number;
   streamBurst(count: number): number;
+  /** appends `text` to the live reply, as one update */
+  streamText(text: string): void;
+  /**
+   * One snapshot of a turn ending the way the bridge can deliver it: the
+   * live tail kept or dropped, the saved reply present (under its own key,
+   * as the bridge renders it) or not yet, the turn running or completed.
+   */
+  endReply(step: { live: "keep" | "drop"; saved: boolean; completed: boolean }): void;
 };
 
 export type SessionSyncHarnessController = {
@@ -592,6 +600,8 @@ export function createDesktopUiHarness(
     }, 0);
   }
 
+  /* the live reply as it last stood, for the saved message that replaces it */
+  let liveReply = "";
   function appendStreamChunk() {
     streamSequence += 1;
     const session = sessions.get("session-large");
@@ -2443,6 +2453,63 @@ export function createDesktopUiHarness(
             syncSessions();
             notify("store", true);
             return sequence;
+          },
+          streamText(text) {
+            const session = sessions.get("session-large");
+            if (!session) {
+              throw new Error("mobile performance fixture lost session-large");
+            }
+            sessions.set("session-large", {
+              ...session,
+              timelineItems: session.timelineItems.map((item) =>
+                item.kind === "liveAssistant"
+                  ? { ...item, content: `${item.content ?? ""}${text}` }
+                  : item,
+              ),
+            });
+            syncSessions();
+            notify("store", true);
+          },
+          endReply({ live, saved, completed }) {
+            const session = sessions.get("session-large");
+            if (!session) {
+              throw new Error("mobile performance fixture lost session-large");
+            }
+            const tail = session.timelineItems.find(
+              (item) => item.kind === "liveAssistant",
+            );
+            if (tail?.kind === "liveAssistant" && tail.content) {
+              liveReply = tail.content;
+            }
+            const without = session.timelineItems.filter(
+              (item) =>
+                item.itemKey !== "large-reply" &&
+                (live === "keep" || item.kind !== "liveAssistant"),
+            );
+            const reply = {
+              kind: "assistantMessage" as const,
+              itemKey: "large-reply",
+              sequence: session.timelineItems.length,
+              content: liveReply,
+              reasoning: null,
+              timestamp: STARTED_AT,
+              reconstruction: HARNESS_READY_RECONSTRUCTION,
+            };
+            /* the bridge places a saved reply before the live tail's slot */
+            const tailAt = without.findIndex((item) => item.kind === "liveAssistant");
+            const timelineItems = !saved
+              ? without
+              : tailAt < 0
+                ? [...without, reply]
+                : [...without.slice(0, tailAt), reply, ...without.slice(tailAt)];
+            sessions.set("session-large", {
+              ...session,
+              status: "active",
+              turnState: completed ? "completed" : "running",
+              timelineItems,
+            });
+            syncSessions();
+            notify("store");
           },
           streamBurst(count) {
             let sequence = streamSequence;
