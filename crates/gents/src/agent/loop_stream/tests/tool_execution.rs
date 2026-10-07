@@ -686,12 +686,17 @@ async fn plugin_image_parts_reach_the_provider_whole() {
 }
 
 /// A later request replays the call from the persisted session, where the
-/// result is text: it carries no more than the loop's tool-result text bound,
-/// not the image's base64.
+/// result is text: the bounded text parts and a note per image, never the
+/// image's base64, whether or not the raw output fits the text bound.
 #[tokio::test]
-async fn persisted_plugin_image_result_replays_within_the_text_bound() {
-    const IMAGE_BYTES: usize = 400_000;
-    let (_home, tool) = plugin_image_tool(IMAGE_BYTES);
+async fn persisted_plugin_image_result_replays_text_parts_and_a_note() {
+    for image_bytes in [64, 400_000] {
+        persisted_plugin_image_result_replay(image_bytes).await;
+    }
+}
+
+async fn persisted_plugin_image_result_replay(image_bytes: usize) {
+    let (_home, tool) = plugin_image_tool(image_bytes);
     let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
     let stream = run_loop_stream(
         ScriptedModel::new_turns(plugin_call_then_text_turns()),
@@ -716,7 +721,7 @@ async fn persisted_plugin_image_result_replays_within_the_text_bound() {
     let history = crate::session::load_history(&node, &session_id, "did:test:test", None)
         .await
         .unwrap();
-    let replayed: usize = history
+    let replayed: Vec<String> = history
         .iter()
         .flat_map(|message| match message {
             Message::User { content } => content.as_slice(),
@@ -727,12 +732,16 @@ async fn persisted_plugin_image_result_replays_within_the_text_bound() {
             _ => None,
         })
         .flatten()
-        .map(|part| tool_result_text(part).len())
-        .sum();
-    let limit = crate::truncation::TruncationLimits::default().max_bytes;
-    assert!(
-        replayed > 0 && replayed <= limit + 512,
-        "replayed {replayed} bytes of tool result; bound {limit}"
+        .map(|part| tool_result_text(part).to_string())
+        .collect();
+    assert_eq!(
+        replayed,
+        vec![format!(
+            "{}\n{}",
+            r#"{"height":2,"width":2}"#,
+            gents_loop::loop_stream::TOOL_RESULT_IMAGE_NOT_REPLAYED
+        )],
+        "image of {image_bytes} bytes"
     );
     node.shutdown().await;
 }

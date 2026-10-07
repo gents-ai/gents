@@ -24,6 +24,7 @@ ts-rs = { version = "10.1", optional = true, default-features = false, features 
 anyhow = { workspace = true }
 async-stream = "0.3"
 async-trait = "0.1"
+base64 = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 futures = "0.3"
