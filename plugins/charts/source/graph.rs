@@ -16,9 +16,13 @@ pub fn is_node(raw: &str) -> bool {
         && matches!(serde_json::from_str::<Value>(raw), Ok(Value::Object(m)) if m.get("run_id").is_some_and(|v| !v.is_null()))
 }
 
+/// Drops unset fields. An empty axis label is kept: it means "no label".
 fn clean(mut fields: Map<String, Value>) -> Map<String, Value> {
-    fields.retain(|_, v| {
-        !(v.is_null() || v.as_str() == Some("") || v.as_array().is_some_and(Vec::is_empty))
+    fields.retain(|k, v| {
+        let label = matches!(k.as_str(), "x_label" | "y_label" | "y2_label");
+        !(v.is_null()
+            || (v.as_str() == Some("") && !label)
+            || v.as_array().is_some_and(Vec::is_empty))
     });
     fields
 }
@@ -100,6 +104,18 @@ mod tests {
         );
         assert!(v.get("error").is_none(), "{v}");
         assert_eq!(v["chart"], "line");
+    }
+
+    #[test]
+    fn an_empty_axis_label_still_removes_the_label() {
+        let v = record(
+            r#"{"run_id":"r","chart":"bar","x_label":"","y_label":"","data":"month,revenue\na,1\n"}"#,
+        );
+        let svg = v["svg"].as_str().unwrap();
+        assert!(
+            !svg.contains(">month</text>") && !svg.contains(">revenue</text>"),
+            "{svg}"
+        );
     }
 
     #[test]

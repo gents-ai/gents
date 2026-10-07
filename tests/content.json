@@ -2,12 +2,12 @@
   "defs": "def doc_text($p): .assets[$p]; def schema($n): (.manifest.plugins[] | select(.name == $n) | .input_schema); def plug($n): (.manifest.plugins[] | select(.name == $n)); def row($coll; $key; $id): .config[$coll][] | select(.[$key] == $id);",
   "jq": [
     {
-      "name": "the pack ships exactly the charts and charts_save plugins, both rust",
-      "expr": "([.manifest.plugins[].name] | sort) == [\"charts\", \"charts_save\"] and all(.manifest.plugins[]; .language == \"rust\" and .artifact == (\"plugins/\" + .name + \".afb\") and .instructions == (\"plugins/\" + .name + \"/TOOL.md\"))"
+      "name": "the pack ships exactly the charts plugin, in rust",
+      "expr": "[.manifest.plugins[] | {name, language, artifact, instructions}] == [{\"name\": \"charts\", \"language\": \"rust\", \"artifact\": \"plugins/charts.afb\", \"instructions\": \"plugins/charts/TOOL.md\"}]"
     },
     {
-      "name": "charts reads and charts_save writes: the declared bind access is the only difference in authority",
-      "expr": "plug(\"charts\").bind_dir.access == \"read\" and plug(\"charts_save\").bind_dir.access == \"read_write\" and plug(\"charts\").bind_dir.input_field == \"path\" and plug(\"charts_save\").bind_dir.input_field == \"path\" and plug(\"charts\").bind_dir.original_field == \"path_original\" and plug(\"charts\").manifold == null and plug(\"charts_save\").manifold == null"
+      "name": "charts writes only on a call that sets save, and asks for nothing else",
+      "expr": "plug(\"charts\").bind_dir == {\"access\": \"read_write\", \"description\": plug(\"charts\").bind_dir.description, \"input_field\": \"path\", \"original_field\": \"path_original\", \"write_fields\": [\"save\"]} and plug(\"charts\").manifold == null"
     },
     {
       "name": "limits stay inside the host ceilings and the output limit is the host's 4 MiB",
@@ -18,10 +18,6 @@
       "expr": "schema(\"charts\") as $s | $s.additionalProperties == false and $s.required == [\"chart\"] and ($s.properties.chart.enum | sort) == [\"area\", \"bar\", \"box\", \"bubble\", \"combo\", \"donut\", \"heatmap\", \"histogram\", \"horizontal_bar\", \"line\", \"pie\", \"scatter\", \"stacked_area\", \"stacked_bar\"]"
     },
     {
-      "name": "charts_save has the charts fields and save, nothing else",
-      "expr": "(schema(\"charts_save\").properties | keys) == ((schema(\"charts\").properties | keys) + [\"save\"] | sort) and ((schema(\"charts\").properties | has(\"save\")) | not)"
-    },
-    {
       "name": "every field the schema names is explained in the tool instructions",
       "expr": "doc_text(\"plugins/charts/TOOL.md\") as $t | [schema(\"charts\").properties | keys[] | select(. != \"path_original\") | . as $k | select(($t | contains(\"`\" + $k + \"`\")) | not)] == []"
     },
@@ -30,24 +26,24 @@
       "expr": "schema(\"charts\").properties as $p | $p.width.minimum == 200 and $p.width.maximum == 4096 and $p.height.minimum == 150 and $p.height.maximum == 4096 and $p.scale.minimum == 0.5 and $p.scale.maximum == 4 and $p.y.maxItems == 24"
     },
     {
-      "name": "the Chart maker's Tools document grants exactly the two plugins",
-      "expr": "row(\"tools\"; \"tools_id\"; \"chart-maker-tools\").integrations.plugins == [{\"plugin\": \"gents/charts\"}, {\"plugin\": \"gents/charts_save\"}]"
+      "name": "the Chart maker's Tools document grants exactly the charts plugin",
+      "expr": "row(\"tools\"; \"tools_id\"; \"chart-maker-tools\").integrations.plugins == [{\"plugin\": \"gents/charts\"}]"
     },
     {
-      "name": "the behavior uses the declared inference slot and a prompt that names both tools",
-      "expr": "row(\"agent_behaviors\"; \"behavior_id\"; \"chart-maker\").inference_profile_id == \"gents:inference-slot:chart_maker\" and (.manifest.inference_slots | map(.name)) == [\"chart_maker\"] and (doc_text(\"agent_behaviors/chart_maker/system_prompt.md\") | contains(\"`charts`\") and contains(\"`charts_save`\"))"
+      "name": "the behavior uses the declared inference slot and a prompt that names the tool",
+      "expr": "row(\"agent_behaviors\"; \"behavior_id\"; \"chart-maker\").inference_profile_id == \"gents:inference-slot:chart_maker\" and (.manifest.inference_slots | map(.name)) == [\"chart_maker\"] and (doc_text(\"agent_behaviors/chart_maker/system_prompt.md\") | contains(\"`charts`\"))"
     },
     {
-      "name": "the two graph nodes split on save and write one ChartResult each",
-      "expr": "row(\"event_sources\"; \"event_source_id\"; \"chart-render\").source_collection == \"ChartRequest\" and row(\"event_sources\"; \"event_source_id\"; \"chart-save\").source_collection == \"ChartRequest\" and (row(\"event_sources\"; \"event_source_id\"; \"chart-render\").filter | contains(\"save\")) and (row(\"event_sources\"; \"event_source_id\"; \"chart-save\").filter | contains(\"save\")) and (row(\"callbacks\"; \"callback_id\"; \"chart-render\").handler.plugin == \"gents/charts\") and (row(\"callbacks\"; \"callback_id\"; \"chart-save\").handler.plugin == \"gents/charts_save\") and all(.config.callbacks[]; .handler.outputs | length == 1 and .[0].collection == \"ChartResult\" and .[0].required == true)"
+      "name": "one graph node turns every ChartRequest into one ChartResult",
+      "expr": "(.config.event_sources | length) == 1 and row(\"event_sources\"; \"event_source_id\"; \"chart-render\").source_collection == \"ChartRequest\" and (row(\"event_sources\"; \"event_source_id\"; \"chart-render\") | has(\"filter\") | not) and [.config.callbacks[].handler.plugin] == [\"gents/charts\"] and all(.config.callbacks[]; .handler.outputs | length == 1 and .[0].collection == \"ChartResult\" and .[0].required == true)"
     },
     {
-      "name": "only the save node's binding passes save, and every passed field is a ChartRequest field",
-      "expr": "doc_text(\"schemas/chart_request.graphql\") as $g | (row(\"callback_bindings\"; \"binding_id\"; \"chart-render\").input_fields | index(\"save\")) == null and (row(\"callback_bindings\"; \"binding_id\"; \"chart-save\").input_fields | index(\"save\")) != null and all(.config.callback_bindings[].input_fields[]; . as $f | $g | contains(\"  \" + $f + \":\"))"
+      "name": "the node's binding passes every ChartRequest field, save included",
+      "expr": "doc_text(\"schemas/chart_request.graphql\") as $g | (row(\"callback_bindings\"; \"binding_id\"; \"chart-render\").input_fields | index(\"save\")) != null and all(.config.callback_bindings[].input_fields[]; . as $f | $g | contains(\"  \" + $f + \":\"))"
     },
     {
       "name": "the request fields of the schema are exactly the tool fields plus run_id",
-      "expr": "doc_text(\"schemas/chart_request.graphql\") as $g | ([$g | scan(\"\\\\n  ([a-z_0-9]+):\") | .[0]] | sort) == (([\"run_id\"] + (schema(\"charts_save\").properties | keys)) | sort)"
+      "expr": "doc_text(\"schemas/chart_request.graphql\") as $g | ([$g | scan(\"\\\\n  ([a-z_0-9]+):\") | .[0]] | sort) == (([\"run_id\"] + (schema(\"charts\").properties | keys)) | sort)"
     },
     {
       "name": "the result schema carries the documented fields",

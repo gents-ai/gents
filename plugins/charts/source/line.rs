@@ -47,6 +47,39 @@ fn union_x(series: &[Vec<(f64, f64)>]) -> Vec<f64> {
     xs
 }
 
+/// The x positions a stack is drawn at when `xs` has more than
+/// [`MAX_LINE_POINTS`]: the largest-triangle picks of the stack's top (the
+/// positive total) and bottom (the negative total), computed in one merge
+/// pass so no full series-by-position matrix is ever allocated.
+fn reduce_positions(xs: &[f64], data: &[Vec<(f64, f64)>]) -> Vec<f64> {
+    let mut top = vec![0.0; xs.len()];
+    let mut bottom = vec![0.0; xs.len()];
+    for d in data {
+        let mut i = 0;
+        for &(x, y) in d {
+            while xs[i] < x {
+                i += 1;
+            }
+            if y > 0.0 {
+                top[i] += y;
+            } else if y < 0.0 {
+                bottom[i] += y;
+            }
+        }
+    }
+    let pts = |v: &[f64]| {
+        xs.iter()
+            .copied()
+            .zip(v.iter().copied())
+            .collect::<Vec<_>>()
+    };
+    let mut keep = lttb(&pts(&top), MAX_LINE_POINTS / 2);
+    keep.extend(lttb(&pts(&bottom), MAX_LINE_POINTS / 2));
+    keep.sort_unstable();
+    keep.dedup();
+    keep.into_iter().map(|i| xs[i]).collect()
+}
+
 /// Draws the chart.
 pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
     let spec = ctx.spec;
@@ -102,6 +135,20 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
         } else {
             union_x(&data)
         };
+        let positions = aligned_x.len();
+        for (name, d) in names.iter().zip(&data) {
+            let missing = positions - d.iter().filter(|p| !p.1.is_nan()).count();
+            if missing > 0 {
+                ctx.notes.add(format!("series {name} has no value at {missing} of {positions} positions; it counts as zero there in the stack", name = crate::text::quote(name)));
+            }
+        }
+        if positions > MAX_LINE_POINTS {
+            aligned_x = reduce_positions(&aligned_x, &data);
+            ctx.notes.add(format!(
+                "the stack has {positions} x positions; {} are drawn, chosen by largest-triangle reduction of the stack's top and bottom, which keeps the first, last, lowest and highest",
+                aligned_x.len()
+            ));
+        }
         let matrix: Vec<Vec<f64>> = data
             .iter()
             .map(|d| {
@@ -114,12 +161,6 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
                     .collect()
             })
             .collect();
-        for (name, row) in names.iter().zip(&matrix) {
-            let missing = row.iter().filter(|v| v.is_nan()).count();
-            if missing > 0 {
-                ctx.notes.add(format!("series {name} has no value at {missing} of {} positions; it counts as zero there in the stack", row.len(), name = crate::text::quote(name)));
-            }
-        }
         layers = stack(&matrix);
     }
 

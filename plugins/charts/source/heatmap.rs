@@ -127,6 +127,8 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
     let yl = cols::labels(t, yc);
     let (xn, xi) = cols::distinct(&xl);
     let (yn, yi) = cols::distinct(&yl);
+    cols::report_unlabelled(&mut ctx.notes, &t.names[xc], &xi, &nums.v);
+    cols::report_unlabelled(&mut ctx.notes, &t.names[yc], &yi, &nums.v);
     let (mut xt, mut yt) = (vec![0.0; xn.len()], vec![0.0; yn.len()]);
     for row in 0..t.rows {
         if let (Some(a), Some(b), v) = (xi[row], yi[row], nums.v[row])

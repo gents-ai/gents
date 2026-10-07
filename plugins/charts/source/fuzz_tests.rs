@@ -384,7 +384,12 @@ fn constant_and_single_row_data_draws_every_chart_type() {
                 "pie" => r#""x":"k","y":["a"]"#,
                 _ => r#""x":"k""#,
             };
-            let req = with_rows(chart, extra, &["k", "a", "b"], &rows);
+            let req = with_rows(
+                chart,
+                &format!(r#"{extra},"output":"svg""#),
+                &["k", "a", "b"],
+                &rows,
+            );
             match crate::run(&req) {
                 Ok(out) => {
                     let v: Value = serde_json::from_str(&out).unwrap();
@@ -442,7 +447,7 @@ fn the_largest_allowed_image_renders_within_the_memory_and_output_limits() {
     let out = crate::run(&req).unwrap();
     assert!(out.len() <= crate::output::BUDGET, "{} bytes", out.len());
     let v: Value = serde_json::from_str(&out).unwrap();
-    assert_eq!(v["response"]["png"]["width"], 4000);
+    assert_eq!(v["response"]["png"]["width"], crate::output::IMAGE_SIDE);
     assert!(
         started.elapsed() < Duration::from_secs(30),
         "{:?}",

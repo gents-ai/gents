@@ -12,6 +12,14 @@ use crate::spec::Output;
 
 /// Bytes of JSON a tool result may take: the host caps output at 4 MiB.
 pub const BUDGET: usize = 3_700_000;
+/// Bytes of compact JSON a tool result's `response` may take. The agent loop
+/// keeps only the first 50 KiB of a tool reply's text, so a longer one would
+/// reach the model cut off and no longer valid JSON.
+pub const RESPONSE_BUDGET: usize = 45 * 1024;
+/// Longest side in pixels of the PNG a tool result shows the model. Claude
+/// resizes any larger image down to this, and refuses one over 8000 pixels;
+/// saved files and graph records keep the full size.
+pub const IMAGE_SIDE: u32 = 1568;
 /// Bytes of JSON a graph record may take. The record is stored as one
 /// document, so it is held well below the output cap.
 pub const RECORD_BUDGET: usize = 2_000_000;
@@ -97,7 +105,7 @@ fn assemble(
         Value::Array(r.series.iter().map(series_json).collect()),
     );
     resp.insert("warnings".into(), json!(warnings));
-    if with_svg && output != Output::Png {
+    if with_svg && output == Output::Svg {
         resp.insert("svg".into(), json!(r.svg));
     }
     if let Some(p) = &r.png {
@@ -203,12 +211,27 @@ pub fn deliver_as(mut r: Rendered, output: Output, files: &[Written], shape: Sha
     let mut warnings = std::mem::take(&mut r.warnings);
     let mut with_svg = true;
     let mut scale = r.scale;
+    let long = f64::from(r.width.max(r.height));
+    if shape == Shape::Tool && r.png.is_some() && long * scale > f64::from(IMAGE_SIDE) {
+        scale = f64::from(IMAGE_SIDE) / long;
+        r.png = Some(raster::render(&r.svg, scale)?);
+    }
     let mut tries = 0;
     loop {
         let doc = match shape {
             Shape::Tool => assemble(&r, output, with_svg, files, &warnings),
             Shape::Record => record(&r, output, with_svg, files, &warnings),
         };
+        if shape == Shape::Tool && doc["response"].to_string().len() > RESPONSE_BUDGET {
+            if with_svg && output == Output::Svg {
+                with_svg = false;
+                warnings.push("the SVG is too long for a tool reply and is left out; use save to write it to a file".into());
+                continue;
+            }
+            return fail(
+                "the chart's description is too long for a tool reply; draw fewer series, bins or categories",
+            );
+        }
         let text = serde_json::to_string(&doc)
             .map_err(|e| format!("the result could not be written: {e}"))?;
         let budget = match shape {
@@ -242,9 +265,9 @@ pub fn deliver_as(mut r: Rendered, output: Output, files: &[Written], shape: Sha
 mod tests {
     use super::*;
 
-    fn rendered(svg_len: usize) -> Rendered {
+    fn sized(w: u32, h: u32, svg_len: usize) -> Rendered {
         let svg = format!(
-            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"200\" height=\"150\"><rect width=\"200\" height=\"150\" fill=\"#fff\"/><!--{}--></svg>",
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{w}\" height=\"{h}\"><rect width=\"{w}\" height=\"{h}\" fill=\"#fff\"/><!--{}--></svg>",
             "x".repeat(svg_len)
         );
         let png = raster::render(&svg, 1.0).unwrap();
@@ -253,8 +276,8 @@ mod tests {
             svg,
             png: Some(png),
             scale: 1.0,
-            width: 200,
-            height: 150,
+            width: w,
+            height: h,
             alt: "a chart".into(),
             series: vec![SeriesInfo {
                 name: "a".into(),
@@ -276,12 +299,30 @@ mod tests {
         }
     }
 
+    fn rendered(svg_len: usize) -> Rendered {
+        sized(200, 150, svg_len)
+    }
+
+    fn svg_only(svg_len: usize) -> Rendered {
+        let mut r = rendered(svg_len);
+        r.png = None;
+        r
+    }
+
     fn parse(s: &str) -> Value {
         serde_json::from_str(s).unwrap()
     }
 
+    fn warned(v: &Value, text: &str) -> bool {
+        v["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w.as_str().unwrap().contains(text))
+    }
+
     #[test]
-    fn a_result_carries_the_svg_the_series_the_warnings_and_one_image_part() {
+    fn a_result_carries_the_series_the_warnings_and_one_image_part_but_no_svg_text() {
         let v = parse(&deliver(rendered(10), Output::Both, &[]).unwrap());
         assert_eq!(v["response"]["chart"], "line");
         assert_eq!(
@@ -291,7 +332,7 @@ mod tests {
             ),
             (Some(200), Some(150))
         );
-        assert!(v["response"]["svg"].as_str().unwrap().starts_with("<svg"));
+        assert!(v["response"].get("svg").is_none());
         assert_eq!(v["response"]["warnings"], json!(["w"]));
         assert_eq!(v["response"]["png"]["width"], 200);
         let parts = v["parts"].as_array().unwrap();
@@ -316,19 +357,8 @@ mod tests {
     }
 
     #[test]
-    fn svg_only_has_no_image_part_and_png_only_has_no_svg_text() {
-        let v = parse(
-            &deliver(
-                {
-                    let mut r = rendered(1);
-                    r.png = None;
-                    r
-                },
-                Output::Svg,
-                &[],
-            )
-            .unwrap(),
-        );
+    fn svg_output_has_the_svg_text_and_no_image_part() {
+        let v = parse(&deliver(svg_only(1), Output::Svg, &[]).unwrap());
         assert!(
             v.get("parts").is_none()
                 && v["response"]["svg"].is_string()
@@ -338,7 +368,7 @@ mod tests {
         assert!(v["response"].get("svg").is_none() && v["parts"].is_array());
         assert!(
             v["response"]["warnings"].as_array().unwrap().len() == 1,
-            "dropping the svg on request is not a warning"
+            "leaving out the svg is not a warning"
         );
     }
 
@@ -356,25 +386,50 @@ mod tests {
     }
 
     #[test]
-    fn an_svg_over_the_budget_is_left_out_with_a_warning_and_the_png_stays() {
-        let v = parse(&deliver(rendered(BUDGET + 1000), Output::Both, &[]).unwrap());
-        assert!(v["response"].get("svg").is_none());
-        assert!(
-            v["response"]["warnings"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|w| w.as_str().unwrap().contains("SVG is left out"))
-        );
-        assert!(v["parts"].is_array());
+    fn a_large_svg_never_pushes_the_warnings_past_the_reply_bound() {
+        let v = parse(&deliver(rendered(RESPONSE_BUDGET * 4), Output::Both, &[]).unwrap());
+        assert!(v["response"].to_string().len() <= RESPONSE_BUDGET);
+        assert_eq!(v["response"]["warnings"], json!(["w"]));
+        assert_eq!(v["response"]["series"][0]["name"], "a");
     }
 
     #[test]
-    fn a_result_that_cannot_fit_even_without_the_svg_is_an_error() {
+    fn an_svg_too_long_for_a_reply_is_left_out_with_a_warning_naming_save() {
+        let v = parse(&deliver(svg_only(RESPONSE_BUDGET), Output::Svg, &[]).unwrap());
+        assert!(v["response"].get("svg").is_none());
+        assert!(v["response"].to_string().len() <= RESPONSE_BUDGET);
+        assert!(warned(&v["response"], "use save"), "{v}");
+    }
+
+    #[test]
+    fn a_description_too_long_for_a_reply_is_an_error() {
         let mut r = rendered(1);
-        r.alt = "y".repeat(BUDGET + 10);
+        r.alt = "y".repeat(RESPONSE_BUDGET);
         let e = deliver(r, Output::Both, &[]).unwrap_err().0;
-        assert!(e.contains("too detailed for the output limit"), "{e}");
+        assert!(e.contains("too long for a tool reply"), "{e}");
+    }
+
+    #[test]
+    fn the_image_shown_is_at_most_the_claude_side_and_records_keep_the_full_size() {
+        let mut r = sized(4000, 1000, 1);
+        r.png = Some(raster::render(&r.svg, 2.0).unwrap());
+        r.scale = 2.0;
+        let v = parse(&deliver(r, Output::Both, &[]).unwrap());
+        assert_eq!(
+            (
+                v["response"]["png"]["width"].as_u64(),
+                v["response"]["png"]["height"].as_u64()
+            ),
+            (Some(u64::from(IMAGE_SIDE)), Some(392))
+        );
+        let png = base64::engine::general_purpose::STANDARD
+            .decode(v["parts"][0]["data"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(raster::decode(&png).unwrap().0, IMAGE_SIDE);
+        let mut r = sized(4000, 1000, 1);
+        r.png = Some(raster::render(&r.svg, 2.0).unwrap());
+        let v = parse(&deliver_as(r, Output::Both, &[], Shape::Record).unwrap());
+        assert_eq!(v["png_width"], 8000);
     }
 
     #[test]
@@ -398,19 +453,7 @@ mod tests {
         let text = deliver(r, Output::Both, &[]).unwrap();
         assert!(text.len() <= BUDGET);
         let v = parse(&text);
-        let w = v["response"]["warnings"].as_array().unwrap();
-        assert!(
-            w.iter().any(|w| w
-                .as_str()
-                .unwrap()
-                .starts_with("the PNG was drawn at 0.70x")),
-            "{w:?}"
-        );
-        assert!(
-            w.iter()
-                .any(|w| w.as_str().unwrap().contains("SVG is left out")),
-            "the SVG goes first"
-        );
+        assert!(warned(&v["response"], "the PNG was drawn at 0.70x"), "{v}");
         let png = base64::engine::general_purpose::STANDARD
             .decode(v["parts"][0]["data"].as_str().unwrap())
             .unwrap();
@@ -441,36 +484,18 @@ mod tests {
     }
 
     #[test]
-    fn a_result_of_exactly_the_budget_is_kept_and_one_byte_more_loses_the_svg() {
-        let base = deliver(rendered(0), Output::Both, &[]).unwrap().len();
-        let exact = deliver(rendered(BUDGET - base), Output::Both, &[]).unwrap();
-        assert_eq!(exact.len(), BUDGET);
-        assert!(parse(&exact)["response"]["svg"].is_string());
-        let over = deliver(rendered(BUDGET - base + 1), Output::Both, &[]).unwrap();
-        assert!(over.len() < BUDGET);
+    fn a_record_of_exactly_the_budget_is_kept_and_one_byte_more_loses_the_svg() {
+        let record = |n| deliver_as(rendered(n), Output::Both, &[], Shape::Record).unwrap();
+        let base = record(0).len();
+        let exact = record(RECORD_BUDGET - base);
+        assert_eq!(exact.len(), RECORD_BUDGET);
+        assert!(parse(&exact)["svg"].is_string());
+        let over = record(RECORD_BUDGET - base + 1);
+        assert!(over.len() < RECORD_BUDGET);
         let v = parse(&over);
-        assert!(v["response"].get("svg").is_none());
-        assert!(
-            v["response"]["warnings"]
-                .to_string()
-                .contains("SVG is left out")
-        );
-    }
-
-    #[test]
-    fn a_graph_record_is_held_to_the_smaller_budget_with_the_same_fallbacks() {
-        let r = rendered(RECORD_BUDGET + 10);
-        let text = deliver_as(r, Output::Both, &[], Shape::Record).unwrap();
-        assert!(text.len() <= RECORD_BUDGET, "{} bytes", text.len());
-        let v = parse(&text);
-        assert!(v.get("svg").is_none(), "the SVG text is left out first");
+        assert!(v.get("svg").is_none());
+        assert!(warned(&v, "SVG is left out"));
         assert!(v["png_base64"].is_string());
-        assert!(v["warnings"].to_string().contains("SVG is left out"));
-        let same = rendered(RECORD_BUDGET + 10);
-        assert!(
-            deliver(same, Output::Both, &[]).is_ok_and(|t| t.contains("\"svg\"")),
-            "a tool result of that size keeps its SVG"
-        );
     }
 
     #[test]

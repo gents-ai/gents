@@ -3,13 +3,12 @@
 Turns data into charts a model and a person can both read: line, area,
 stacked area, bar (grouped, stacked, horizontal), scatter, bubble, histogram,
 box plot, pie, donut, heatmap and bar-plus-line combinations with a second
-axis. A chart comes back as a PNG image the model (and the desktop) sees, the
-SVG it was drawn from, and a text description with the numbers that matter, so
-a model without vision can still say what the chart shows. The pack ships two
-plugins, `charts` (draws and returns) and `charts_save` (also writes the files
-into a folder), both WebAssembly modules that draw byte-identical pictures on
-every operating system gents runs on, and a ready-made **Chart maker** agent
-that uses them.
+axis. A chart comes back as a PNG image the model (and the desktop) sees and a text
+description with the numbers that matter, so a model without vision can still
+say what the chart shows; it can also be saved as SVG and PNG files. The pack
+ships one plugin, `charts`, a WebAssembly module that draws byte-identical
+pictures on every operating system gents runs on, and a ready-made **Chart
+maker** agent that uses it.
 
 Data comes inline (the `{"columns": [...], "rows": [[...]]}` shape the
 data_tables pack returns, a list of objects, or CSV text) or from a CSV, TSV,
@@ -29,9 +28,8 @@ No configuration.
 Files in the working folder of the chat are readable at once (the folder you
 gave the agent as its tool root; never `/` or your home folder, which a
 launcher may use as a current directory). A file elsewhere raises "Allow
-charts to read `<path>`?". Writing files is a separate tool, `charts_save`, and
-asks for write access to the folder the first time (see Authority). The same
-agent runs from a terminal:
+charts to read `<path>`?". Saving files asks for write access to the folder the
+first time (see Authority). The same agent runs from a terminal:
 
 ```sh
 gents pack install gents/charts --inference-slot chart_maker=<profile>
@@ -40,10 +38,9 @@ gents chat --behavior-id chart-maker "Chart sales.csv: revenue by month, one lin
 
 ## Use it as a model tool
 
-The `chart-maker` behavior's Tools document grants both plugins
-(`integrations.plugins: [{"plugin": "gents/charts"}, {"plugin":
-"gents/charts_save"}]`). To give the tool to another behavior, add the entry to
-that behavior's Tools:
+The `chart-maker` behavior's Tools document grants the plugin
+(`integrations.plugins: [{"plugin": "gents/charts"}]`). To give the tool to
+another behavior, add the entry to that behavior's Tools:
 
 ```json
 {"tools_id": "my-tools", "integrations": {"plugins": [{"plugin": "gents/charts"}]}}
@@ -56,13 +53,13 @@ The model calls `charts`:
  "series": "region", "title": "Revenue by region", "format": ",.0f"}
 ```
 
-and gets back the picture as an image part, the SVG, `alt` (a description with
-each series' highest and lowest point), `series` (the numbers behind the
-marks) and `warnings`. `plugins/charts/TOOL.md` is what the model reads.
+and gets back the picture as an image part, `alt` (a description with each
+series' highest and lowest point), `series` (the numbers behind the marks) and
+`warnings`. `plugins/charts/TOOL.md` is what the model reads.
 
 ## Use it as a graph node
 
-Installing the pack also installs two plugin nodes as plain callbacks, so no
+Installing the pack also installs the plugin as a node, a plain callback, so no
 model and no graph pack is needed: create a `ChartRequest` document and a
 `ChartResult` appears.
 
@@ -79,8 +76,7 @@ data_tables node can be passed straight in.
 
 | Node | Reads | Writes |
 | --- | --- | --- |
-| `chart-render` (plugin `charts`) | a `ChartRequest` with no `save` | one `ChartResult` |
-| `chart-save` (plugin `charts_save`) | a `ChartRequest` with `save` set | one `ChartResult` whose `svg_file` and `png_file` name the files written |
+| `chart-render` (plugin `charts`) | every `ChartRequest` | one `ChartResult`; with `save` set, also the files its `svg_file` and `png_file` name |
 
 `ChartRequest` has the fields of the tool (`chart`, `data`, `path`, `file`,
 `x`, `y`, `line`, `series`, `size`, `value`, `agg`, `sort`, `stack`,
@@ -96,15 +92,17 @@ data_tables node can be passed straight in.
 | `alt` | the text description |
 | `svg` | the SVG document (left out, with a warning, when the record would pass 2 MB; a `png`-only request has none) |
 | `png_base64`, `png_width`, `png_height` | the PNG |
-| `svg_file`, `png_file` | files written by `chart-save` |
+| `svg_file`, `png_file` | files written for `save` |
 | `series_json` | the `series` list as JSON text |
 | `warnings` | what was reduced, left out or drawn as gaps |
 | `error` | the one-sentence reason when nothing could be drawn; the record still exists, so a run never stalls on a bad chart |
 
 A path in a graph request must be inside the server's working folder or an
-allowed folder (`gents plugin dirs add <folder>`; `--access read_write` for
-`chart-save`): a graph node asks nobody and is refused with that command
-otherwise.
+allowed folder (`gents plugin dirs add <folder>`; `--access read_write` for a
+request that sets `save`): a graph node asks nobody and is refused with that
+command otherwise. Unset fields are ignored; an empty `x_label`, `y_label` or
+`y2_label` still removes that label. The record carries the full-size PNG,
+not the 1568-pixel image a tool call shows.
 
 ## Use it from the CLI
 
@@ -113,17 +111,15 @@ gents pack install gents/charts --home <home> --inference-slot chart_maker=<prof
 gents plugin run charts --home <home> --bind-dir ./reports \
   --input '{"chart": "bar", "file": "sales.csv", "x": "month", "y": ["revenue"], "title": "Revenue"}' \
   > chart.json
-jq -r '.response.svg' chart.json > chart.svg
 jq -r '.parts[0].data' chart.json | base64 -d > chart.png
 jq -r '.response.alt' chart.json
 ```
 
-`--bind-dir` names the folder (or one file) the call may use. With `charts` it
-is read-only. To get the files written, run `charts_save` the same way, which
-gets the folder read and write:
+`--bind-dir` names the folder (or one file) the call may use. A call writes
+only when it sets `save`, which writes the full-size files into that folder:
 
 ```sh
-gents plugin run charts_save --home <home> --bind-dir ./reports \
+gents plugin run charts --home <home> --bind-dir ./reports \
   --input '{"chart": "bar", "file": "sales.csv", "x": "month", "y": ["revenue"], "save": "revenue"}'
 ls reports   # revenue.svg  revenue.png  sales.csv
 ```
@@ -131,7 +127,7 @@ ls reports   # revenue.svg  revenue.png  sales.csv
 ## Installation
 
 `gents pack install gents/charts` installs the Chart maker behavior, its Tools
-document and the two plugins, and binds the `chart_maker` inference slot to a
+document, the graph node and the plugin, and binds the `chart_maker` inference slot to a
 profile (any capable one; a profile that accepts images also checks the
 picture). Nothing else needs configuring: there is no network, key or model
 download.
@@ -139,7 +135,8 @@ download.
 ## Authority
 
 A call reads only what it names. `charts` declares `bind_dir` (input field
-`path`, access `read`): a file it names is the only file the call can see (a
+`path`, access `read_write`, `write_fields: ["save"]`): a call without `save`
+asks for read access only, and a file it names is the only file the call can see (a
 private folder holding one hard link, nothing copied), and a folder it names is
 that folder. Inline data needs no path at all and runs fully sealed. Allowed
 without asking: the session's working folder (read-only), but only a specific
@@ -147,17 +144,15 @@ folder, never `/`, your home folder or a folder holding either. Anything else
 asks first in a chat or is refused with the command that allows it in a
 headless run (see the OCR pack's Authority section for the full model).
 
-`charts_save` declares `access: read_write` and needs a folder (not a file)
+A call that sets `save` asks for write access and needs a folder (not a file)
 the operator allowed to be written: the working folder is read-only by
 default, so the first save asks, and a headless run is refused with
-`gents plugin dirs add <folder> --access read_write`. Files are named inside
-that folder only: `..`, absolute paths, backslashes and symbolic links are
-refused before anything is written, and each file is written whole under a
-temporary name and renamed. A call of the read-only `charts` plugin that asks
-to save fails with a sentence saying the folder is read-only; the sandbox, not
-the plugin, enforces that.
+`gents plugin dirs add <folder> --access read_write`. The host, not the plugin,
+decides the access from `save`. Files are named inside that folder only: `..`,
+absolute paths, backslashes and symbolic links are refused before anything is
+written, and each file is written whole under a temporary name and renamed.
 
-Both plugins have no network, environment or host-tool access. Their `limits`
+The plugin has no network, environment or host-tool access. Its `limits`
 are 1024 MiB of memory, a 300 s wall clock and 4 MiB of output (the host's
 ceiling).
 
@@ -170,8 +165,8 @@ the chart types. In short:
   (file or folder) with `file`.
 - A tool call returns `{"response": {...}, "parts": [{"type": "image", ...}]}`:
   gents turns `parts` into an image the model and the desktop show.
-  `response` has `chart`, `width`, `height`, `alt`, `series`, `warnings`, `svg`,
-  `png` (size) and, for `charts_save`, `files`.
+  `response` has `chart`, `width`, `height`, `alt`, `series`, `warnings`, `png`
+  (size), `svg` only for `output: "svg"`, and `files` when `save` is set.
 - A graph node returns one flat `ChartResult` (see above).
 - `output` picks `both`, `svg` or `png`; `scale` sets the PNG density; the
   picture is at most 16 million pixels.
@@ -195,8 +190,12 @@ Every cap is stated in `warnings` when it applies: 2 000 000 rows or 192 MiB
 per table, 512 columns, a cell of at most 65 536 bytes (a larger one means the
 file is not a table), 24 series, 100 categories per axis, 80 heatmap rows or
 columns, 12 pie slices, 40 boxes, 1500 drawn points per line, 10 000 drawn
-scatter marks, 2000 bubbles, 200 histogram bins, 16 million pixels, and a
-reply under 4 MiB, or a graph record under 2 MB (the SVG text is left out first, then the PNG is drawn
+scatter marks, 2000 bubbles, 200 histogram bins, 16 million pixels, a tool
+reply whose text stays under 45 KiB (the agent loop keeps only 50 KiB, so a
+longer SVG is left out with a warning) and whose image is at most 1568 pixels
+on its long side (Claude resizes larger ones to that and refuses any side over
+8000), the whole reply under 4 MiB (the PNG is drawn smaller past that), and a
+graph record under 2 MB (the SVG text is left out first, then the PNG is drawn
 smaller). A table is read in one streaming pass and only the columns the chart
 names are kept, so memory follows the chart, not the file.
 
@@ -302,19 +301,18 @@ tar xzf lib.tgz && shasum -a 256 liberation-fonts-ttf-2.1.5/LiberationSans-{Regu
   reduction keeps the first, last, lowest and highest points; rendering is
   deterministic; CSV and JSON round trips), and a mutation fuzzer that corrupts
   every fixture and every request with a fixed seed.
-- `plugins/charts/tests/*.json` and `plugins/charts_save/tests/*.json` are
-  plugin cases with exact expected output (every chart type, every input
+- `plugins/charts/tests/*.json` are plugin cases with exact expected output (every chart type, every input
   format, inline and bound modes, graph records, and the failures that come
   back as records), run through the real WebAssembly host by `gents pack test`
   and natively by `cargo test`. The case format cannot expect a failed call, so
-  failures of the tool itself are pinned by `cargo test`. `host-only-*` cases
-  depend on the sandbox and run only in the host.
+  failures of the tool itself are pinned by `cargo test`.
 - `tests/install.json` (install, reinstall, remove), `tests/content.json`
-  (what the manifest and configuration promise) and `tests/graph_render.json`
-  (a `ChartRequest` created in a served pack becomes a `ChartResult`).
+  (what the manifest and configuration promise) and the `tests/graph_*.json`
+  runtime cases (a `ChartRequest` created in a served pack becomes a
+  `ChartResult`; `graph_save.json` writes its files into a read-write folder).
 - Fixtures are committed and reproducible: `cargo run --example gen_fixtures`
   (from `plugins/charts`) rewrites them byte for byte, which a test checks.
-  `cargo run --release --example bless_cases -- tests ../charts_save/tests`
+  `cargo run --release --example bless_cases -- tests`
   records the expected output of new cases; review the pictures before
   committing, then let the host reproduce them.
 

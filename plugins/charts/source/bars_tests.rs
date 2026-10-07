@@ -500,6 +500,25 @@ fn the_lines_can_use_the_left_axis() {
 }
 
 #[test]
+fn lines_on_the_left_axis_widen_it_and_leave_no_right_axis() {
+    let rows = [json!(["a", 1, 50]), json!(["b", 2, -5])];
+    let r = ok(&with_rows(
+        "combo",
+        r#""y":["v"],"line":["w"],"line_axis":"left""#,
+        &["k", "v", "w"],
+        &rows,
+    ));
+    let doc = parse(&r.svg);
+    let fy = y_fit(&doc, &r.plot);
+    let line = &stroked_paths(&doc, "#e69f00")[0];
+    for (p, v) in line.iter().zip([50.0, -5.0]) {
+        assert!((p.1 - fy.px(v)).abs() < 0.02, "{} vs {}", p.1, fy.px(v));
+        assert!(p.1 >= r.plot.y - 0.01 && p.1 <= r.plot.bottom() + 0.01);
+    }
+    assert!(!r.alt.contains("Right axis"), "{}", r.alt);
+}
+
+#[test]
 fn a_combo_needs_line_columns_and_no_series_column() {
     let e = err(&with_rows("combo", "", &["k", "v"], &[json!(["a", 1])]));
     assert!(e.contains("needs line columns"), "{e}");

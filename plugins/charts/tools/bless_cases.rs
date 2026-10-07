@@ -11,13 +11,6 @@ use std::path::Path;
 use serde_json::Value;
 
 fn bless(path: &Path, all: bool) -> Result<bool, String> {
-    // Cases that depend on the sandbox cannot be recorded natively.
-    if path
-        .file_name()
-        .is_some_and(|n| n.to_string_lossy().starts_with("host-only-"))
-    {
-        return Ok(false);
-    }
     let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
     let mut case: Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
     if case.get("expect").is_some() && !all {

@@ -41,6 +41,7 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
             cols::report_numeric(&mut ctx.notes, &t.names[yc], &n);
             let labels = cols::labels(t, xc);
             let (names, idx) = cols::distinct(&labels);
+            cols::report_unlabelled(&mut ctx.notes, &t.names[xc], &idx, &n.v);
             let mut per: Vec<Vec<f64>> = vec![Vec::new(); names.len()];
             for (row, g) in idx.iter().enumerate() {
                 if let Some(g) = g

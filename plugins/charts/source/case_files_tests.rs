@@ -1,7 +1,6 @@
 //! Runs every plugin case file natively and compares it with its recorded
 //! output. The same files run through the WebAssembly host under
 //! `gents pack test`, so a difference between the two is a bug in one of them.
-//! Cases named `host-only-*` depend on the sandbox and are left to the host.
 
 use std::path::{Path, PathBuf};
 
@@ -21,9 +20,6 @@ fn run_case(path: &Path) -> Result<(), String> {
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    if name.starts_with("host-only-") {
-        return Ok(());
-    }
     let case: Value = serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
     let mut input = case["input"].clone();
@@ -63,11 +59,6 @@ fn every_charts_case_reproduces_its_recorded_output() {
 }
 
 #[test]
-fn every_charts_save_case_reproduces_its_recorded_output() {
-    check_dir("../charts_save/tests");
-}
-
-#[test]
 fn every_case_covers_what_its_name_says() {
     // The names are the documentation: one chart type or behaviour each, and a recorded output.
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
@@ -75,12 +66,10 @@ fn every_case_covers_what_its_name_says() {
         let name = f.file_name().unwrap().to_string_lossy().into_owned();
         let case: Value = serde_json::from_slice(&std::fs::read(&f).unwrap()).unwrap();
         assert!(case.get("input").is_some_and(Value::is_object), "{name}");
-        if !name.starts_with("host-only-") {
-            assert!(
-                case.get("expect").is_some_and(|e| !e.is_null()),
-                "{name} needs a recorded output"
-            );
-        }
+        assert!(
+            case.get("expect").is_some_and(|e| !e.is_null()),
+            "{name} needs a recorded output"
+        );
         assert!(
             name.chars()
                 .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '.'),

@@ -364,3 +364,44 @@ fn the_box_description_gives_medians_quartiles_and_outlier_counts() {
         r.alt
     );
 }
+
+#[test]
+fn rows_without_a_group_label_are_counted_in_warnings() {
+    let rows = [
+        json!(["a", 1]),
+        json!([null, 2]),
+        json!([null, 3]),
+        json!(["b", 4]),
+    ];
+    for (chart, extra) in [
+        ("histogram", r#""x":"v","series":"g""#),
+        ("box", r#""x":"g","y":["v"]"#),
+    ] {
+        let r = ok(&with_rows(chart, extra, &["g", "v"], &rows));
+        assert!(
+            r.warnings
+                .iter()
+                .any(|w| w == "2 rows with a value have no \"g\" label and are left out"),
+            "{chart}: {:?}",
+            r.warnings
+        );
+    }
+    let rows = [
+        json!(["a", "x", 1]),
+        json!([null, "y", 2]),
+        json!(["b", "y", 3]),
+    ];
+    let r = ok(&with_rows(
+        "heatmap",
+        r#""x":"c","y":["r"],"value":"v""#,
+        &["c", "r", "v"],
+        &rows,
+    ));
+    assert!(
+        r.warnings
+            .iter()
+            .any(|w| w == "1 rows with a value have no \"c\" label and are left out"),
+        "{:?}",
+        r.warnings
+    );
+}

@@ -184,6 +184,27 @@ pub fn report_numeric(notes: &mut Notes, name: &str, n: &Numeric) {
     }
 }
 
+/// Warns about rows that hold a number but no `column` label to group them
+/// by, so they are left out of the chart.
+pub fn report_unlabelled(
+    notes: &mut Notes,
+    column: &str,
+    groups: &[Option<usize>],
+    values: &[f64],
+) {
+    let n = groups
+        .iter()
+        .zip(values)
+        .filter(|(g, v)| g.is_none() && !v.is_nan())
+        .count();
+    if n > 0 {
+        notes.add(format!(
+            "{n} rows with a value have no {column} label and are left out",
+            column = crate::text::quote(column)
+        ));
+    }
+}
+
 /// Dates of column `c` as epoch seconds, `NaN` for empty cells; `None` when
 /// the column has no dates or holds anything that is not a date.
 pub fn times(t: &Table, c: usize) -> Option<Vec<f64>> {

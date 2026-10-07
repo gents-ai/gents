@@ -40,7 +40,7 @@ fn the_result_has_the_documented_shape() {
     assert_eq!(
         keys,
         [
-            "alt", "chart", "height", "png", "series", "svg", "warnings", "width"
+            "alt", "chart", "height", "png", "series", "warnings", "width"
         ]
     );
     assert_eq!(resp["chart"], "bar");
@@ -101,8 +101,6 @@ fn the_image_part_is_a_png_of_the_stated_size() {
         (Some(500), Some(300)),
         "the logical size does not change with the scale"
     );
-    let svg = v["response"]["svg"].as_str().unwrap();
-    assert!(svg.contains("width=\"500\" height=\"300\" viewBox=\"0 0 500 300\""));
 }
 
 #[test]
@@ -462,7 +460,7 @@ fn the_pixel_cap_applies_to_the_scaled_size() {
     );
     one_line(&e);
     let v = run(r#"{"chart":"bar","width":2000,"height":2000,"data":"a,b\nx,1\n"}"#);
-    assert_eq!(v["response"]["png"]["width"], 2000);
+    assert_eq!(v["response"]["png"]["width"], crate::output::IMAGE_SIDE);
 }
 
 #[test]
@@ -483,7 +481,8 @@ fn saving_writes_the_svg_and_png_that_the_result_describes() {
         ["out/sales.svg", "out/sales.png"]
     );
     let svg = std::fs::read_to_string(d.path().join("out/sales.svg")).unwrap();
-    assert_eq!(svg, v["response"]["svg"].as_str().unwrap());
+    let svg_only = run(&req.replace(r#""save""#, r#""output":"svg","save""#));
+    assert_eq!(svg, svg_only["response"]["svg"].as_str().unwrap());
     let png = std::fs::read(d.path().join("out/sales.png")).unwrap();
     assert_eq!(
         png,
@@ -598,7 +597,10 @@ z,3,5
         "pie",
         "donut",
     ] {
-        let req = format!(r#"{{"chart":"{chart}","data":{}}}"#, json!(data));
+        let req = format!(
+            r#"{{"chart":"{chart}","output":"svg","data":{}}}"#,
+            json!(data)
+        );
         let v = run(&req);
         assert!(
             v["response"]["svg"].as_str().unwrap().starts_with("<svg"),

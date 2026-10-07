@@ -109,11 +109,25 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
     };
     let line_grid = &grid[n_bars..];
     let line_extent = extents(line_grid.iter().flatten().copied());
-    if combo && spec.y2_log {
+    let lines_left = combo && !spec.line_right;
+    let line_log = if lines_left { spec.y_log } else { spec.y2_log };
+    if combo && line_log {
+        let axis = if lines_left { "y" } else { "right y" };
         for (g, row) in r.groups[n_bars..].iter().zip(line_grid) {
-            common::check_log("right y", &g.name, row)?;
+            common::check_log(axis, &g.name, row)?;
         }
     }
+    // Lines on the left axis share it with the bars, so it spans both.
+    let bar_extent = if lines_left {
+        extents(
+            bar_extent
+                .into_iter()
+                .chain(line_extent)
+                .flat_map(|(lo, hi)| [lo, hi]),
+        )
+    } else {
+        bar_extent
+    };
     let bar_extent = bar_extent.unwrap_or((0.0, 1.0));
 
     let legend: Vec<LegendItem> = r
@@ -201,7 +215,7 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
     let fs = FrameSpec {
         x: &xf,
         y: &yf,
-        y2: if combo && line_extent.is_some() {
+        y2: if combo && !lines_left && line_extent.is_some() {
             Some(&y2f)
         } else {
             None

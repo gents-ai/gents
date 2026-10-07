@@ -1,7 +1,7 @@
 # charts
 
-Draws a chart from data and returns it as a picture you can look at, a vector
-SVG and a text description. Use it whenever a question is better answered with
+Draws a chart from data and returns it as a picture you can look at and a text
+description, or saves it as SVG and PNG files. Use it whenever a question is better answered with
 a chart than with a table: trends, comparisons, shares, spreads, relations.
 Never invent numbers: chart the data you were given or read from a file.
 
@@ -61,8 +61,8 @@ names; an empty string removes one); `x_scale` (`auto`, `linear`, `log`,
 `x_max`, `y_min`, `y_max` to fix the visible range (values outside it are cut
 off and counted in `warnings`); `legend` (`auto`, `right`,
 `bottom`, `top`, `left`, `none`); `theme` (`light`, `dark`); `colors` (hex
-list); `width` and `height` (200 to 4096, default 800 by 480), `scale` (PNG
-pixel density, 0.5 to 4); `output` (`both`, `svg`, `png`).
+list); `width` (200 to 4096) and `height` (150 to 4096), default 800 by 480;
+`scale` (PNG pixel density, 0.5 to 4); `output` (`both`, `svg`, `png`).
 
 - A date column (`2024-01-31`, `2024-01-31T10:00:00Z`, with offsets) becomes a
   time axis with calendar ticks. Years like 2019 stay plain numbers, written
@@ -91,14 +91,15 @@ pixel density, 0.5 to 4); `output` (`both`, `svg`, `png`).
    "series": [{"name": "q1", "mark": "bar", "color": "#0072b2", "axis": "left",
                "points": 4, "gaps": 0, "min": 8, "max": 18, "sum": 52}],
    "warnings": [],
-   "svg": "<svg ...>", "png": {"width": 800, "height": 480, "bytes": 21345}},
+   "png": {"width": 800, "height": 480, "bytes": 21345}},
  "parts": [{"type": "image", "data": "<base64>", "mimeType": "image/png"}]}
 ```
 
-The PNG arrives as an image you can look at; the same picture is the SVG in
-`response.svg`. Answer from what you see and from `alt` and `series`, which
-carry the exact values: `alt` says the type, axes and ranges, and each
-series' highest and lowest point. Per type, `series` also holds: `drawn`
+The PNG arrives as an image you can look at, at most 1568 pixels on its long
+side. `output: "svg"` returns the SVG text in `response.svg` instead, unless it
+is longer than a reply can carry (then use `save`). Answer from what you see
+and from `alt` and `series`, which carry the exact values: `alt` says the type,
+axes and ranges, and each series' highest and lowest point. Per type, `series` also holds: `drawn`
 (marks actually drawn when a series was reduced), box statistics (`q1`,
 `median`, `q3`, whiskers, outliers), pie `value` and `share`, histogram
 `edges` and `counts`, scatter `correlation`, `x_min` and `x_max`, heatmap
@@ -119,30 +120,23 @@ Fix that and call again; do not retry the same call.
 
 ## Saving files
 
-This tool only returns the picture. To write `chart.svg` and `chart.png` into
-a folder, use `charts_save`, which takes the same fields plus `save`.
+`save` writes the chart into the folder named in `path` (a folder, not a file;
+the data is `file` inside it, or inline in `data`). A base name like
+`"revenue"` writes `revenue.svg` and `revenue.png` at full size;
+`{"svg": "a.svg", "png": "a.png"}` names them (either may be left out); a
+subfolder like `"out/revenue"` is created. Names stay inside the folder and an
+existing file is replaced. `response.files` lists what was written.
 
-## Graph mode
-
-A graph node sends a `ChartRequest` record (every field above, plus `run_id`)
-and gets one `ChartResult` back: `chart`, `width`, `height`, `alt`, `svg`,
-`png_base64`, `png_width`, `png_height`, `series_json` (the `series` list as
-JSON text), `warnings` and `error` (the sentence, when nothing could be
-drawn). `data` may be a JSON string holding rows or CSV text. A record stays
-under 2 MB: past that the SVG text is left out, then the PNG is drawn smaller,
-each with a warning. See the pack's README for the installable `chart-render`
-callback.
+Writing needs the operator's permission for that folder: the first save may
+ask, and a refusal is one sentence naming the folder. Tell the user that
+sentence; do not retry.
 
 ## Behaviour to know
 
 - A single data file or a folder named in `path` is the only thing the call can
   read. A `file` that leaves the folder, is absolute or goes through a
   symbolic link is refused.
-- The picture is deterministic: the same request gives the same bytes on every
-  machine. The font is embedded (Liberation Sans); no system font is used.
-- Result limits: the whole reply stays under 4 MiB. If a detailed picture would
-  not fit, the SVG text is left out first (the PNG and any saved files stay
-  complete), then the PNG is drawn at a smaller scale, each time with a
-  warning.
+- If a detailed picture would not fit the reply, the PNG is drawn at a
+  smaller scale, with a warning; saved files stay complete.
 - One image is at most 16 million pixels (`width` x `height` x `scale`
   squared); a larger request is refused with that number.
