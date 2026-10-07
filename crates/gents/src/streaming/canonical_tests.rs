@@ -186,6 +186,7 @@ async fn owned_input_handoff_publishes_context_and_prompt_once_before_provider_o
                 .process_item(Ok(LoopStreamItem::AuthoredInputReady {
                     context: Some(context.clone()),
                     prompt: prompt.clone(),
+                    folded: Vec::new(),
                 }))
                 .await
                 .unwrap();

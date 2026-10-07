@@ -1148,3 +1148,106 @@ fn generated_repair_cases_drive_tool_argument_repair() {
         }
     }
 }
+
+/// Lean `SessionQueue.TurnInput.providerInput_eq_authored`: a folded turn
+/// publishes the prompt and each folded message under its own authored key
+/// before the first inference, and sends them in that order as distinct user
+/// messages.
+#[tokio::test]
+async fn folded_prompts_publish_and_send_in_queue_order() {
+    let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let doc_id = lifecycle.request().doc_id.clone();
+    let agent_did = lifecycle.request().agent_did.clone();
+    let requester_did = lifecycle.request().requester_did.clone();
+    let model = ScriptedModel::new(vec![
+        RawStreamingChoice::Message("answered all three".to_string()),
+        RawStreamingChoice::FinalResponse(()),
+    ]);
+    let folded = [("folded-a", "second"), ("folded-b", "third")];
+    let mut config = owned_config(0);
+    config.folded_prompts = folded
+        .iter()
+        .map(|(doc, text)| crate::agent::loop_stream::FoldedPrompt {
+            key: crate::lifecycle::queue::folded_input_key(doc),
+            message: Message::user(*text),
+        })
+        .collect();
+    let collected = collect_owned_scripted_stream(
+        run_loop_stream(
+            model.clone(),
+            Some(hook.clone()),
+            TaggedMessage::unassociated(Message::user("first")),
+            Vec::new(),
+            Arc::new(Vec::new()),
+            config,
+        ),
+        &hook,
+        &writer,
+        &mut lifecycle,
+        gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
+    )
+    .await;
+    assert_eq!(collected.error, None);
+
+    let histories = model.seen_histories().await;
+    assert_eq!(histories.len(), 1, "one inference answers every message");
+    let sent = &histories[0];
+    assert!(sent.len() >= 3);
+    assert_eq!(
+        &sent[sent.len() - 3..],
+        [
+            Message::user("first"),
+            Message::user("second"),
+            Message::user("third")
+        ]
+        .as_slice()
+    );
+
+    let scoped_doc_id = crate::graphql::escape_graphql_string(&doc_id);
+    let observed = node
+        .execute(&format!(
+            r#"{{ AgentMessage(filter: {{ request_doc_id: {{ _eq: "{scoped_doc_id}" }}, role: {{ _eq: "user" }} }}, order: {{ sequence: ASC }}) {{ _docID message_key }} }}"#
+        ))
+        .await;
+    assert!(!observed.has_errors(), "{:?}", observed.errors);
+    let observed = observed.data.unwrap();
+    let headers = observed["AgentMessage"].as_array().unwrap();
+    let expected = std::iter::once(("prompt".to_owned(), "first"))
+        .chain(
+            folded
+                .iter()
+                .map(|(doc, text)| (crate::lifecycle::queue::folded_input_key(doc), *text)),
+        )
+        .collect::<Vec<_>>();
+    assert_eq!(headers.len(), expected.len());
+    for (header, (key, text)) in headers.iter().zip(expected) {
+        assert_eq!(
+            header["message_key"],
+            crate::session::canonical_rows::authored_message_key(&doc_id, &key)
+        );
+        let (_, native) = crate::session::load_canonical_message_from_node(
+            &node,
+            header["_docID"].as_str().unwrap(),
+            &agent_did,
+            requester_did.as_deref(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(native, Message::user(text));
+    }
+
+    // A redrive of the same request rebuilds its input: every authored
+    // input of the request leaves its provider history.
+    let history = crate::session::load_sequenced_history_for_request(
+        &node,
+        lifecycle.request(),
+        None,
+        None,
+        gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
+    )
+    .await
+    .unwrap();
+    assert!(history
+        .iter()
+        .all(|row| !matches!(&row.message, Message::User { .. })));
+}

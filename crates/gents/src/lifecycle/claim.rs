@@ -53,6 +53,7 @@ async fn claim_request_with_projection<F>(
     capture_background_snapshot: bool,
     request: &AgentRequest,
     claimed_at: &str,
+    fold_admitted: &[String],
     build_mutation: F,
 ) -> Result<Option<(defra_node::QueryResponse, BackgroundCompletionClaimSnapshot)>>
 where
@@ -144,6 +145,8 @@ where
                     crate::goal::apply_claimed_task_goal_in_txn(&txn, request, claimed_at).await?;
                     crate::mailbox::claim_reply_in_txn(&txn, request, claimed_at).await?;
                     super::materialize::apply_request_session_projection(&txn, request, claimed_at)
+                        .await?;
+                    super::queue::fold_in_claim_txn(&txn, request, fold_admitted, claimed_at)
                         .await?;
                 }
                 Ok::<_, anyhow::Error>(Some((claimed, snapshot)))
@@ -743,6 +746,7 @@ impl RequestLifecycle {
             is_background_completion,
             &self.request,
             &claimed_at,
+            &self.fold_admitted,
             &build_mutation,
         )
         .await?

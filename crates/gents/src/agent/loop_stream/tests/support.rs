@@ -471,6 +471,7 @@ pub(super) fn config(max_turns: usize) -> LoopConfig {
         deadline: None,
         max_turns,
         output_obligation_gate: None,
+        folded_prompts: Vec::new(),
     }
 }
 

@@ -24,6 +24,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
         history: &[TaggedMessage],
         skill_reminders: &[crate::llm::message::Message],
         request_context_message: Option<&crate::llm::message::Message>,
+        folded_prompts: &[crate::agent::loop_stream::FoldedPrompt],
         aggregate_token_budget: Option<crate::agent::loop_stream::AggregateTokenBudget>,
         replay: &gents_loop::loop_stream::LoopReplayInput,
         resume_from_history: bool,
@@ -54,6 +55,11 @@ impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
                 request_context_message.cloned()
             },
             prompt,
+        );
+        new_messages.extend(
+            folded_prompts
+                .iter()
+                .map(|folded| TaggedMessage::unassociated(folded.message.clone())),
         );
         let provider_request = gents_loop::loop_stream::assemble_provider_request(
             self.model.as_ref(),
@@ -196,6 +202,14 @@ impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
                 &request,
                 frozen_instruction_manifest.as_deref(),
             )?;
+            let folded_prompts = crate::lifecycle::queue::load_folded_inputs(&self.node, &request)
+                .await?
+                .into_iter()
+                .map(|folded| crate::agent::loop_stream::FoldedPrompt {
+                    key: folded.key(),
+                    message: crate::llm::message::Message::user(folded.content),
+                })
+                .collect::<Vec<_>>();
             let workspace = match overlay {
                 Some(overlay) => crate::tool_call_lifecycle::runtime::ToolWorkspaceScope {
                     workspace_cwd: Some(overlay.cwd),
@@ -319,6 +333,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
                             &built.messages,
                             &skill_reminders,
                             request_context_message.as_ref(),
+                            &folded_prompts,
                             aggregate_token_budget.clone(),
                             &replay,
                             resume_from_history,
@@ -548,6 +563,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
                     workspace,
                     request_context_message,
                     resume_from_history,
+                    folded_prompts,
                 )
                 .instrument(tracing::info_span!(
                     "request.run_inference",

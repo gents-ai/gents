@@ -59,9 +59,9 @@ mod tool_dispatch;
 mod turn_threading;
 
 pub use contract::{
-    LoopConfig, LoopReplayInput, LoopStreamItem, RenderedRequestSink, ReplayEvidenceResolver,
-    ReplayEvidenceRow, ReplayEvidenceViolation, StructuredOutputConfig, TaggedMessage,
-    TurnCompactionOutcome, TurnCompactionRequest,
+    FoldedPrompt, LoopConfig, LoopReplayInput, LoopStreamItem, RenderedRequestSink,
+    ReplayEvidenceResolver, ReplayEvidenceRow, ReplayEvidenceViolation, StructuredOutputConfig,
+    TaggedMessage, TurnCompactionOutcome, TurnCompactionRequest,
 };
 pub use one_shot::{
     run_loop_to_text, run_loop_to_typed, AuxiliaryPersistenceFailure, OneShotNoVisibleOutput,
@@ -188,6 +188,12 @@ where
         // prompt (mirrors Lean `PromptAssembly.Template.assembleWithContext`).
         let mut new_messages: Vec<TaggedMessage> =
             assemble_new_messages(config.context_message.clone(), prompt);
+        new_messages.extend(
+            config
+                .folded_prompts
+                .iter()
+                .map(|folded| TaggedMessage::unassociated(folded.message.clone())),
+        );
         // Request-local and cumulative across turns, retries, and compaction.
         let mut invalid_tool_progress = invalid_tool_progress::InvalidToolProgress::default();
         let mut repeated_tool_failure = repeated_tool_failure::RepeatedToolFailure::default();
@@ -288,9 +294,28 @@ where
             // input. New executions publish under their live request owner,
             // before dispatch, not when the request is merely queued.
             if current_turn == 1 && hook.is_some() && turn_index == 0 && !config.resume_from_history {
+                let folded_count = config.folded_prompts.len();
+                let first_prompt = new_messages
+                    .len()
+                    .checked_sub(folded_count + 1)
+                    .ok_or_else(|| {
+                        StreamingError::Completion(CompletionError::RequestError(Box::new(
+                            std::io::Error::new(
+                                std::io::ErrorKind::InvalidInput,
+                                "provider-bound loop entry lost its folded prompts",
+                            ),
+                        )))
+                    })?;
+                let prompts = &new_messages[first_prompt..];
                 yield LoopStreamItem::AuthoredInputReady {
                     context: config.context_message.clone(),
-                    prompt: current_prompt.clone(),
+                    prompt: prompts[0].message.clone(),
+                    folded: config
+                        .folded_prompts
+                        .iter()
+                        .zip(&prompts[1..])
+                        .map(|(folded, row)| (folded.key.clone(), row.message.clone()))
+                        .collect(),
                 };
             }
 

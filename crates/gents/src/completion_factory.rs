@@ -129,6 +129,7 @@ pub(crate) fn loop_config(
         deadline: None,
         max_turns: behavior.max_turns,
         output_obligation_gate: None,
+        folded_prompts: Vec::new(),
     }
 }
 

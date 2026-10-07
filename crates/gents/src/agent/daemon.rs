@@ -464,6 +464,40 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
         }
     }
 
+    /// Verify, through the head's own admission owner, each pending message
+    /// that may fold into `request`'s claim. An unverified message is not
+    /// folded: it keeps its own claim, where its admission is decided.
+    async fn verified_fold_admissions(&self, request: &AgentRequest) -> Vec<String> {
+        let candidates = match crate::lifecycle::queue::fold_candidates(&self.node, request).await {
+            Ok(candidates) => candidates,
+            Err(error) => {
+                tracing::warn!(
+                    request_id = %request.request_id,
+                    error = %format!("{error:#}"),
+                    "could not read queued messages to fold; claiming the request alone"
+                );
+                return Vec::new();
+            }
+        };
+        let mut admitted = Vec::new();
+        for candidate in candidates {
+            match self
+                .request_admission
+                .verify_fresh(&candidate, &self.behavior.behavior_id)
+                .await
+            {
+                Ok(verified) => admitted.push(verified.doc_id),
+                Err(error) => tracing::debug!(
+                    request_id = %request.request_id,
+                    candidate_request_id = %candidate.request_id,
+                    error = %error,
+                    "queued message admission not verified; it keeps its own turn"
+                ),
+            }
+        }
+        admitted
+    }
+
     pub(in crate::agent) async fn process_request(
         &mut self,
         request: AgentRequest,
@@ -501,6 +535,7 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
         );
         lifecycle.set_execution_lease_duration(self.behavior.stream_liveness_timeout);
         lifecycle.set_configured_max_total_tokens(self.behavior.max_total_tokens);
+        lifecycle.set_fold_admitted(self.verified_fold_admissions(&request).await);
 
         let claim_result = lifecycle
             .claim_with_identity()

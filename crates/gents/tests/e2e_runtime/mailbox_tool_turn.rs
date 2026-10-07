@@ -141,7 +141,7 @@ async fn filing_a_mailbox_item_returns_a_receipt_and_the_turn_continues() {
     runtime.shutdown().await;
 }
 
-async fn configure_engineer_mailbox(db: &crate::support::TestDb, did: &str) {
+pub(super) async fn configure_engineer_mailbox(db: &crate::support::TestDb, did: &str) {
     configure_behavior_tools(
         db.node.as_ref(),
         did,
@@ -305,7 +305,10 @@ async fn a_filed_question_is_answered_through_the_reply_request() {
     runtime.shutdown().await;
 }
 
-async fn request_state(node: &gents::defra_node::EmbeddedNode, request_id: &str) -> Option<String> {
+pub(super) async fn request_state(
+    node: &gents::defra_node::EmbeddedNode,
+    request_id: &str,
+) -> Option<String> {
     let response = node
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ lifecycle_state }} }}"#

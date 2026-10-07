@@ -217,6 +217,8 @@ pub enum LoopStreamItem {
     AuthoredInputReady {
         context: Option<Message>,
         prompt: Message,
+        /// Folded messages after the prompt, each with its authored key.
+        folded: Vec<(String, Message)>,
     },
 }
 
@@ -263,4 +265,14 @@ pub struct LoopConfig {
     pub deadline: Option<DateTime<Utc>>,
     pub max_turns: usize,
     pub output_obligation_gate: Option<Arc<dyn OutputObligationCheck>>,
+    /// Admitted messages folded into this request's turn, in queue order
+    /// (Lean `SessionQueue.TurnInput`). Each is a distinct user message sent
+    /// after the prompt and published under its own authored key.
+    pub folded_prompts: Vec<FoldedPrompt>,
+}
+
+#[derive(Clone, Debug)]
+pub struct FoldedPrompt {
+    pub key: String,
+    pub message: Message,
 }

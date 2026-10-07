@@ -1348,6 +1348,7 @@ async fn multiple_streamed_tool_results_share_one_accumulated_assistant_turn() {
         .process_item(Ok(LoopStreamItem::AuthoredInputReady {
             context: None,
             prompt: user_text_message("read several files"),
+            folded: Vec::new(),
         }))
         .await
         .unwrap();

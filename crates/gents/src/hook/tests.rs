@@ -1252,7 +1252,11 @@ async fn publish_claimed_authored_input(
         ProviderInputProfile::OpenAiChatCompletions,
     );
     processor
-        .process_item(Ok(LoopStreamItem::AuthoredInputReady { context, prompt }))
+        .process_item(Ok(LoopStreamItem::AuthoredInputReady {
+            context,
+            prompt,
+            folded: Vec::new(),
+        }))
         .await
         .expect("publish claimed authored input");
 }
