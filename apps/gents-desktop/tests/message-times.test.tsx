@@ -3,19 +3,20 @@ import { describe, expect, it } from "vitest";
 
 import { MessageList } from "@source-inc/gents-desktop-chat";
 import type { RenderedTimelineItem } from "@source-inc/gents-desktop-client";
+import { assistantMessage, userMessage } from "./timeline-fixture";
 
 describe("transcript message times", () => {
   it("renders a dated time label with the raw timestamp on hover", () => {
     const items: RenderedTimelineItem[] = [
-      {
+      userMessage({
         kind: "userMessage",
         reconstruction: { state: "ready" },
         itemKey: "m1",
         sequence: 1,
         content: "hello",
         timestamp: "2026-06-03T14:05:00Z",
-      },
-      {
+      }),
+      assistantMessage({
         kind: "assistantMessage",
         reconstruction: { state: "ready" },
         itemKey: "m2",
@@ -23,7 +24,7 @@ describe("transcript message times", () => {
         content: "hi",
         reasoning: null,
         timestamp: "2026-06-03T14:06:00Z",
-      },
+      }),
     ];
     render(<MessageList timelineItems={items} />);
 
@@ -35,14 +36,14 @@ describe("transcript message times", () => {
 
   it("omits the label when the timestamp is missing or unparsable", () => {
     const items: RenderedTimelineItem[] = [
-      {
+      userMessage({
         kind: "userMessage",
         reconstruction: { state: "ready" },
         itemKey: "m1",
         sequence: 1,
         content: "hello",
-      },
-      {
+      }),
+      assistantMessage({
         kind: "assistantMessage",
         reconstruction: { state: "ready" },
         itemKey: "m2",
@@ -50,7 +51,7 @@ describe("transcript message times", () => {
         content: "hi",
         reasoning: null,
         timestamp: "not-a-date",
-      },
+      }),
     ];
     const { container } = render(<MessageList timelineItems={items} />);
     expect(container.querySelector("time")).toBeNull();

@@ -7,7 +7,7 @@ vi.mock("@tauri-apps/api/window", () => ({
 vi.mock("../src/lib/shellPlatform", () => ({
   isMacTauriShell: () => native.mac,
 }));
-import { applyTheme, initTheme } from "../src/ui/theme";
+import { applyTheme } from "../src/ui/theme";
 
 beforeEach(() => {
   native.mac = true;
@@ -20,11 +20,16 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-it("applies the saved theme to native macOS chrome on each view's startup", () => {
-  localStorage.setItem("gents-theme", "dark");
-  initTheme();
+it("applies the saved theme to native macOS chrome on each view's startup", async () => {
+  localStorage.setItem(
+    "gents-preferences",
+    JSON.stringify({ state: { theme: "dark" }, version: 1 }),
+  );
+  vi.resetModules();
+  const { applyChosenTheme, preferences } = await import("../src/ui/preferences");
+  applyChosenTheme();
   expect(native.setTheme).toHaveBeenCalledWith("dark");
-  applyTheme("light");
+  preferences.setTheme("light");
   expect(native.setTheme).toHaveBeenLastCalledWith("light");
   expect(document.documentElement.dataset.theme).toBeUndefined();
 });

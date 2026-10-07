@@ -1,6 +1,7 @@
-import { render, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { renderIn, testApp } from "./app-fixture";
 import {
   BridgeInvokeError,
   type DesktopApiAdapter,
@@ -22,7 +23,6 @@ import {
   MANAGED_SERVER_TRAY_START_EVENT,
 } from "../src/lib/managedServerTray";
 import { LocalServer } from "../src/ui/screens/agent/LocalServer";
-import type { Shell } from "../src/ui/hooks/useShell";
 
 const base: ManagedServerStatus = {
   state: "running",
@@ -160,8 +160,7 @@ describe("runtimeStillBooting is a wait, not a failure", () => {
       }),
       stopManagedServer: vi.fn(),
     } as unknown as DesktopApiAdapter;
-    const shell = { api, snapshot: {}, refreshSnapshot: vi.fn() } as unknown as Shell;
-    render(<LocalServer shell={shell} />);
+    renderIn(testApp({ api }), <LocalServer />);
     await user.click(await screen.findByRole("button", { name: "Start agent" }));
     expect(await screen.findByText("Updating data…")).toBeInTheDocument();
     await vi.waitFor(() => expect(toast).toHaveBeenCalledWith("Agent started"), {
@@ -175,8 +174,7 @@ describe("runtimeStillBooting is a wait, not a failure", () => {
       managedServerStatus: vi.fn(async () => updating),
       startManagedServer: vi.fn(),
     } as unknown as DesktopApiAdapter;
-    const shell = { api, snapshot: {}, refreshSnapshot: vi.fn() } as unknown as Shell;
-    render(<LocalServer shell={shell} />);
+    renderIn(testApp({ api }), <LocalServer />);
     expect(await screen.findByText("updating data")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Change access…" })).toBeNull();
   });

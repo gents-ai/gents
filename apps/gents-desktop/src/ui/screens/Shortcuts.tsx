@@ -9,9 +9,9 @@ import {
   DialogTitle,
 } from "@gents/ui/components/dialog";
 import { Kbd } from "@gents/ui/components/kbd";
-import type { Shell } from "@/hooks/useShell";
 import { navigate } from "@/lib/router";
 import { isMacTauriShell } from "../../lib/shellPlatform";
+import { useSelectedAgentDid } from "@/hooks/useClient";
 
 const IS_MAC = navigator.platform.toUpperCase().includes("MAC");
 const MOD = IS_MAC ? "⌘" : "Ctrl+";
@@ -26,9 +26,9 @@ const ROWS: [string, string][] = [
   [`${MOD}/`, "Show this reference"],
 ];
 
-export function Shortcuts({ shell }: { shell: Shell }) {
+export function Shortcuts() {
+  const agentDid = useSelectedAgentDid();
   const [open, setOpen] = useState(false);
-  const agentDid = shell.selectedAgentDid;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return;

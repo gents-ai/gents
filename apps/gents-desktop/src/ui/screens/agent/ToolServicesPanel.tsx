@@ -1,9 +1,6 @@
-import type {
-  DeploymentView,
-  ToolServiceRegistry,
-} from "@source-inc/gents-desktop-client";
+import type { NodeView } from "../../../hooks/fleetStore";
+import type { ToolServiceRegistry } from "@source-inc/gents-desktop-client";
 import { dependentsWarning } from "./dependents";
-import type { Shell } from "@/hooks/useShell";
 import { Button } from "@gents/ui/components/button";
 import { toast } from "sonner";
 import { navigate } from "@/lib/router";
@@ -20,16 +17,19 @@ import { newId, optionalInteger, useDraft } from "./draft";
 import { DeleteButton, ListDetail } from "./ListDetail";
 import { Group } from "./rows";
 import { RowMenu } from "./RowMenu";
+import { useApp } from "@/app/AppContext";
 
 function Editor({
-  shell,
   deployment,
   service,
 }: {
-  shell: Shell;
-  deployment: DeploymentView;
+  deployment: NodeView;
   service: ToolServiceRegistry;
 }) {
+  const {
+    api,
+    actions: { changeConfig },
+  } = useApp();
   const base = {
     name: "agent" as const,
     agentDid: deployment.agentDid,
@@ -67,28 +67,26 @@ function Editor({
   };
   const d = useDraft(saved, async (next) => {
     const endpoint = validatedEndpoint(next);
-    await shell.applyConfig((api) =>
-      api.saveToolServiceConfig({
-        document: {
-          ...service,
-          display_name: next.displayName.trim() || null,
-          description: next.description.trim() || null,
-          hostname: endpoint.hostname,
-          tailscale_ip: endpoint.tailscaleIp,
-          lan_ip: endpoint.lanIp,
-          mcp_port: endpoint.mcpPort,
-          mcp_path: endpoint.mcpPath,
-          send_agent_did: next.sendAgentDid,
-          enabled: next.enabled,
-          tags: next.tags.length ? next.tags : null,
-        },
-      }),
-    );
+    await changeConfig("saveToolServiceConfig", {
+      document: {
+        ...service,
+        display_name: next.displayName.trim() || null,
+        description: next.description.trim() || null,
+        hostname: endpoint.hostname,
+        tailscale_ip: endpoint.tailscaleIp,
+        lan_ip: endpoint.lanIp,
+        mcp_port: endpoint.mcpPort,
+        mcp_path: endpoint.mcpPath,
+        send_agent_did: next.sendAgentDid,
+        enabled: next.enabled,
+        tags: next.tags.length ? next.tags : null,
+      },
+    });
   });
   const test = async () => {
     try {
       const endpoint = validatedEndpoint(d.draft);
-      const result = await shell.api.testToolService({
+      const result = await api.testToolService({
         serviceId: service.service_id,
         ...endpoint,
       });
@@ -113,15 +111,12 @@ function Editor({
           label="Display name"
           value={d.draft.displayName}
           onChange={(v) => d.set("displayName", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <AreaRow
           id={id("description")}
           label="Description"
           value={d.draft.description}
           onChange={(v) => d.set("description", v)}
-          onCommit={d.commit}
           rows={2}
         />
         <TextRow
@@ -129,16 +124,12 @@ function Editor({
           label="Hostname"
           value={d.draft.hostname}
           onChange={(v) => d.set("hostname", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <TextRow
           id={id("tailscale")}
           label="Tailscale IP"
           value={d.draft.tailscaleIp}
           onChange={(v) => d.set("tailscaleIp", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
           mono
         />
         <TextRow
@@ -146,8 +137,6 @@ function Editor({
           label="LAN IP"
           value={d.draft.lanIp}
           onChange={(v) => d.set("lanIp", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
           mono
         />
         <NumberRow
@@ -155,8 +144,6 @@ function Editor({
           label="MCP port"
           value={d.draft.mcpPort}
           onChange={(v) => d.set("mcpPort", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <TextRow
           id={id("path")}
@@ -164,21 +151,19 @@ function Editor({
           description="Empty uses the endpoint root; otherwise start with /."
           value={d.draft.mcpPath}
           onChange={(v) => d.set("mcpPath", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
           mono
         />
         <SwitchRow
           id={id("send-agent")}
           label="Send agent DID"
           checked={d.draft.sendAgentDid}
-          onChange={(v) => d.choose("sendAgentDid", v)}
+          onChange={(v) => d.set("sendAgentDid", v)}
         />
         <SwitchRow
           id={id("enabled")}
           label="Enabled"
           checked={d.draft.enabled}
-          onChange={(v) => d.choose("enabled", v)}
+          onChange={(v) => d.set("enabled", v)}
         />
         <TagsRow
           id={id("tags")}
@@ -192,24 +177,16 @@ function Editor({
           Test connection
         </Button>
       </div>
-      <DraftActions
-        dirty={d.dirty}
-        saving={d.saving}
-        error={d.error}
-        onSave={d.save}
-        onCancel={d.reset}
-      />
+      <DraftActions draft={d} />
       <DeleteButton
         label={service.display_name ?? service.service_id}
         warning={dependentsWarning(deployment, "tool-service", service.service_id)}
         base={base}
         onDelete={() =>
-          shell.applyConfig((api) =>
-            api.deleteToolServiceConfig({
-              serviceId: service.service_id,
-              agentDid: deployment.agentDid,
-            }),
-          )
+          changeConfig("deleteToolServiceConfig", {
+            serviceId: service.service_id,
+            agentDid: deployment.agentDid,
+          })
         }
       />
     </>
@@ -217,14 +194,13 @@ function Editor({
 }
 
 export function ToolServicesPanel({
-  shell,
   deployment,
   item,
 }: {
-  shell: Shell;
-  deployment: DeploymentView;
+  deployment: NodeView;
   item?: string;
 }) {
+  const { changeConfig } = useApp().actions;
   const base = {
     name: "agent" as const,
     agentDid: deployment.agentDid,
@@ -244,12 +220,10 @@ export function ToolServicesPanel({
             base={base}
             id={s.service_id}
             onDelete={() =>
-              shell.applyConfig((api) =>
-                api.deleteToolServiceConfig({
-                  serviceId: s.service_id,
-                  agentDid: deployment.agentDid,
-                }),
-              )
+              changeConfig("deleteToolServiceConfig", {
+                serviceId: s.service_id,
+                agentDid: deployment.agentDid,
+              })
             }
           />
         ),
@@ -258,18 +232,16 @@ export function ToolServicesPanel({
       empty="No remote tools. Add an MCP connection, then select its tools in a Tools document."
       onCreate={async () => {
         const service_id = newId("mcp");
-        await shell.applyConfig((api) =>
-          api.saveToolServiceConfig({
-            document: {
-              service_id,
-              agent_did: deployment.agentDid,
-              display_name: "New service",
-              hostname: "127.0.0.1",
-              mcp_port: 3333,
-              enabled: false,
-            },
-          }),
-        );
+        await changeConfig("saveToolServiceConfig", {
+          document: {
+            service_id,
+            agent_did: deployment.agentDid,
+            display_name: "New service",
+            hostname: "127.0.0.1",
+            mcp_port: 3333,
+            enabled: false,
+          },
+        });
         navigate({
           name: "agent",
           agentDid: deployment.agentDid,
@@ -284,7 +256,7 @@ export function ToolServicesPanel({
         return (
           <Editor
             key={service.service_id}
-            shell={shell}
+
             deployment={deployment}
             service={service}
           />

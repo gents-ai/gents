@@ -1,15 +1,14 @@
+import type { NodeView } from "../../../hooks/fleetStore";
 import { useEffect, useRef, useState } from "react";
 import { dependentsWarning } from "./dependents";
 import type {
   BackendProviderKind,
-  DeploymentView,
   ProviderAccountView,
   InferenceExecution,
   InferenceModelRecommendation,
   InferenceProfile,
   InferenceSampling,
 } from "@source-inc/gents-desktop-client";
-import type { Shell } from "@/hooks/useShell";
 import { href, navigate } from "@/lib/router";
 import {
   AreaRow,
@@ -38,6 +37,7 @@ import {
   validateInferenceSettings,
   type InferenceSettingsDraft,
 } from "../inference/InferenceModelControls";
+import { useApp } from "@/app/AppContext";
 
 /* behaviors named in Used by before the rest are counted */
 const USERS_SHOWN = 3;
@@ -80,7 +80,7 @@ function settingsForDraft(
    moved to its provider's default account (the first enabled one in the
    resolver order the list keeps), and its first model */
 export function newProfileDocument(
-  deployment: DeploymentView,
+  deployment: NodeView,
   backendId?: string,
   accounts: ProviderAccountView[] = [],
 ): InferenceProfile {
@@ -110,20 +110,22 @@ export function newProfileDocument(
 }
 
 export function ProfileEditor({
-  shell,
   deployment,
   profile,
   embedded = false,
   draft: draftMode,
 }: {
-  shell: Shell;
-  deployment: DeploymentView;
+  deployment: NodeView;
   /* in a sheet beside another page: no Danger zone */
   embedded?: boolean;
   profile: InferenceProfile;
   /* a new profile that exists only here until Create */
   draft?: { onSaved: (profileId: string) => void; onCancel: () => void };
 }) {
+  const {
+    api,
+    actions: { changeConfig },
+  } = useApp();
   const base = {
     name: "agent" as const,
     agentDid: deployment.agentDid,
@@ -229,7 +231,7 @@ export function ProfileEditor({
       .find((backend) => backend.backendId === backendId)
       ?.advertisedModels?.find((model) => model.model_name === modelName.trim())
       ?.max_context_window ?? undefined;
-  const { accounts } = useAccounts(shell, deployment.agentDid);
+  const { accounts } = useAccounts(deployment.agentDid);
   const d = useDraft(
     saved,
     async (next) => {
@@ -392,16 +394,14 @@ export function ProfileEditor({
             retry_policy_id: next.retryPolicyId.trim() || null,
           }
         : null;
-      await shell.applyConfig((api) =>
-        api.applyConfigComponents({
-          document: {
-            agent_principal: { agent_did: deployment.agentDid },
-            inference_profiles: [nextProfile],
-            ...(nextSampling ? { inference_sampling: [nextSampling] } : {}),
-            ...(nextExecution ? { inference_execution: [nextExecution] } : {}),
-          },
-        }),
-      );
+      await changeConfig("applyConfigComponents", {
+        document: {
+          agent_principal: { agent_did: deployment.agentDid },
+          inference_profiles: [nextProfile],
+          ...(nextSampling ? { inference_sampling: [nextSampling] } : {}),
+          ...(nextExecution ? { inference_execution: [nextExecution] } : {}),
+        },
+      });
     },
     { isNew: draftMode !== undefined },
   );
@@ -413,8 +413,8 @@ export function ProfileEditor({
   );
   useEffect(() => {
     let canceled = false;
-    if (shell.api.getInferenceSetupCatalog)
-      void shell.api.getInferenceSetupCatalog().then(
+    if (api.getInferenceSetupCatalog)
+      void api.getInferenceSetupCatalog().then(
         (catalog) => {
           if (!canceled) {
             setExecutionDefaults(catalog.executionDefaults ?? {});
@@ -429,7 +429,7 @@ export function ProfileEditor({
     return () => {
       canceled = true;
     };
-  }, [shell.api]);
+  }, [api]);
   const executionDefault = (key: string) =>
     executionDefaults[key] == null ? "Unlimited" : String(executionDefaults[key]);
   const [editedExecution, setEditedExecution] = useState<Set<string>>(new Set());
@@ -481,7 +481,7 @@ export function ProfileEditor({
     setRecommendationError(null);
     let canceled = false;
     const timeout = window.setTimeout(() => {
-      void shell.api
+      void api
         .getInferenceBackendRecommendation({
           providerKind: backend.providerKind as BackendProviderKind,
           endpoint: backend.endpoint!,
@@ -532,9 +532,8 @@ export function ProfileEditor({
     d.draft.modelName,
     selectedBackend?.providerKind,
     selectedBackend?.endpoint,
-    selectedBackend?.maxConcurrent,
     advertisedModelKey,
-    shell.api,
+    api,
   ]);
   const updateGuided = (next: InferenceSettingsDraft) => {
     if (guided) {
@@ -580,7 +579,6 @@ export function ProfileEditor({
     const before = new Set(deployment.inferenceBackends.map((b) => b.backendId));
     return (
       <SetupScreen
-        shell={shell}
         initialStep="inference"
         purpose="add-backend"
         agentDid={deployment.agentDid}
@@ -604,7 +602,6 @@ export function ProfileEditor({
   return (
     <>
       <BackendSheet
-        shell={shell}
         deployment={deployment}
         backendId={besideBackend}
         onClose={() => setBesideBackend(null)}
@@ -630,8 +627,6 @@ export function ProfileEditor({
           label="Display name"
           value={d.draft.displayName}
           onChange={(v) => d.set("displayName", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <details>
           <summary className="cursor-pointer px-4 py-3 text-sm text-muted-foreground">
@@ -642,7 +637,6 @@ export function ProfileEditor({
             label="Description"
             value={d.draft.description}
             onChange={(v) => d.set("description", v)}
-            onCommit={d.commit}
             rows={2}
           />
         </details>
@@ -683,7 +677,7 @@ export function ProfileEditor({
           value={d.draft.modelName}
           onChange={(v) => {
             beginModelSelection(d.draft.backendId, v);
-            d.choose("modelName", v);
+            d.set("modelName", v);
           }}
           items={[
             ...new Set([
@@ -743,8 +737,6 @@ export function ProfileEditor({
               }
               value={d.draft.contextWindow}
               onChange={(v) => d.set("contextWindow", v)}
-              onCommit={d.commit}
-              onEnter={d.onEnter}
             />
           )}
           {!recommendation.maxOutputTokens && (
@@ -754,8 +746,6 @@ export function ProfileEditor({
               description="Empty uses the runtime default."
               value={d.draft.maxOutputTokens}
               onChange={(v) => d.set("maxOutputTokens", v)}
-              onCommit={d.commit}
-              onEnter={d.onEnter}
             />
           )}
         </Group>
@@ -778,8 +768,6 @@ export function ProfileEditor({
           value={d.draft.executionId}
           placeholder="Created when limits are customized"
           onChange={(v) => d.set("executionId", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
           mono
         />
         <NumberRow
@@ -794,8 +782,6 @@ export function ProfileEditor({
                   : String(executionDefaults.maxTurns))
           }
           onChange={(v) => setExecution("maxTurns", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <NumberRow
           id={id("max-total")}
@@ -803,8 +789,6 @@ export function ProfileEditor({
           value={d.draft.maxTotalTokens}
           placeholder={executionDefault("maxTotalTokens")}
           onChange={(v) => setExecution("maxTotalTokens", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <NumberRow
           id={id("batch")}
@@ -818,8 +802,6 @@ export function ProfileEditor({
                   : String(executionDefaults.streamBatchMs))
           }
           onChange={(v) => setExecution("streamBatchMs", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <NumberRow
           id={id("liveness")}
@@ -833,8 +815,6 @@ export function ProfileEditor({
                   : String(executionDefaults.streamLivenessSecs))
           }
           onChange={(v) => setExecution("streamLivenessSecs", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <NumberRow
           id={id("provider-idle")}
@@ -848,8 +828,6 @@ export function ProfileEditor({
                   : String(executionDefaults.providerIdleSecs))
           }
           onChange={(v) => setExecution("providerIdleSecs", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <NumberRow
           id={id("deadline")}
@@ -863,8 +841,6 @@ export function ProfileEditor({
                   : String(executionDefaults.deadlineSecs))
           }
           onChange={(v) => setExecution("deadlineSecs", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <TextRow
           id={id("retry")}
@@ -872,8 +848,6 @@ export function ProfileEditor({
           value={d.draft.retryPolicyId}
           placeholder="Runtime default"
           onChange={(v) => d.set("retryPolicyId", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
           mono
         />
       </Group>
@@ -886,9 +860,7 @@ export function ProfileEditor({
         />
       </Group>
       <DraftActions
-        dirty={d.dirty}
-        saving={d.saving}
-        error={d.error}
+        draft={d}
         saveLabel={draftMode ? "Create" : undefined}
         onSave={() =>
           draftMode
@@ -911,12 +883,10 @@ export function ProfileEditor({
           warning={dependentsWarning(deployment, "profile", profile.profile_id)}
           base={base}
           onDelete={() =>
-            shell.applyConfig((api) =>
-              api.deleteInferenceProfileConfig({
-                profileId: profile.profile_id,
-                agentDid: deployment.agentDid,
-              }),
-            )
+            changeConfig("deleteInferenceProfileConfig", {
+              profileId: profile.profile_id,
+              agentDid: deployment.agentDid,
+            })
           }
         />
       )}
@@ -925,7 +895,7 @@ export function ProfileEditor({
 }
 
 /* "claude-sonnet-5 · via Anthropic · 2 behaviors" */
-export function modelSentence(deployment: DeploymentView, p: InferenceProfile) {
+export function modelSentence(deployment: NodeView, p: InferenceProfile) {
   const backend = deployment.inferenceBackends.find(
     (b) => b.backendId === p.backend_id,
   );
@@ -942,7 +912,7 @@ export function modelSentence(deployment: DeploymentView, p: InferenceProfile) {
 }
 
 /* why a model cannot serve right now */
-function modelProblem(deployment: DeploymentView, p: InferenceProfile): string | null {
+function modelProblem(deployment: NodeView, p: InferenceProfile): string | null {
   const backend = deployment.inferenceBackends.find(
     (b) => b.backendId === p.backend_id,
   );
@@ -954,14 +924,13 @@ function modelProblem(deployment: DeploymentView, p: InferenceProfile): string |
 }
 
 export function ProfilesPanel({
-  shell,
   deployment,
   item,
 }: {
-  shell: Shell;
-  deployment: DeploymentView;
+  deployment: NodeView;
   item?: string;
 }) {
+  const { changeConfig } = useApp().actions;
   const base = {
     name: "agent" as const,
     agentDid: deployment.agentDid,
@@ -991,24 +960,20 @@ export function ProfilesPanel({
           id={p.profile_id}
           onDuplicate={async () => {
             const profile_id = newId("profile");
-            await shell.applyConfig((api) =>
-              api.saveInferenceProfileConfig({
-                document: {
-                  ...p,
-                  profile_id,
-                  display_name: `${p.display_name ?? p.profile_id} copy`,
-                },
-              }),
-            );
+            await changeConfig("saveInferenceProfileConfig", {
+              document: {
+                ...p,
+                profile_id,
+                display_name: `${p.display_name ?? p.profile_id} copy`,
+              },
+            });
             return profile_id;
           }}
           onDelete={() =>
-            shell.applyConfig((api) =>
-              api.deleteInferenceProfileConfig({
-                profileId: p.profile_id,
-                agentDid: deployment.agentDid,
-              }),
-            )
+            changeConfig("deleteInferenceProfileConfig", {
+              profileId: p.profile_id,
+              agentDid: deployment.agentDid,
+            })
           }
           warning={dependentsWarning(deployment, "profile", p.profile_id)}
         />
@@ -1047,7 +1012,6 @@ export function ProfilesPanel({
           detail={() => (
             <ProfileEditor
               key={profile.profile_id}
-              shell={shell}
               deployment={deployment}
               profile={profile}
             />
@@ -1058,7 +1022,6 @@ export function ProfilesPanel({
   return (
     <>
       <ProfileSheet
-        shell={shell}
         deployment={deployment}
         open={creating !== null}
         backendId={creating ?? undefined}
@@ -1068,7 +1031,6 @@ export function ProfilesPanel({
         }}
       />
       <InferencePanel
-        shell={shell}
         deployment={deployment}
         under={modelRows}
         /* a profile whose backend is gone has no row to sit under; it stays

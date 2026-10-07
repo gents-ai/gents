@@ -53,6 +53,7 @@ function svc(
     status,
     displayState: overrides.displayState ?? displayStateFor(status),
     failureCount: overrides.failureCount ?? 0,
+    toolCount: overrides.toolCount ?? null,
     kMax: overrides.kMax ?? 3,
     backoffUntil: overrides.backoffUntil ?? null,
     lastProbeAt: overrides.lastProbeAt ?? new Date().toISOString(),

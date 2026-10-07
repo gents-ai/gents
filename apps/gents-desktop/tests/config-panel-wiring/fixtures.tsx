@@ -1,32 +1,7 @@
-import { vi } from "vitest";
-
 import type {
-  AgentConfigSaveRequest,
-  BackendSaveRequest,
-  BehaviorSaveRequest,
   BootstrapSummary,
   DeploymentView,
-  EventSourceSaveRequest,
-  InferenceProfileSaveRequest,
-  ScheduleSaveRequest,
-  TaskRunResult,
-  TaskSaveRequest,
-  ToolsSaveRequest,
-  ToolServiceSaveRequest,
-  ToolServiceTestRequest,
-  ToolServiceTestResult,
-  TriggerSaveRequest,
 } from "@source-inc/gents-desktop-client";
-
-export const runResult: TaskRunResult = {
-  requestDocId: "bae-run",
-  requestId: "run-1",
-  sessionId: "session-1",
-  agentDid: "did:key:z6MkAgent",
-  behaviorId: "default",
-  status: "submitted",
-  lifecycleState: "queued",
-};
 
 export const deployment: DeploymentView = {
   peerId: "peer-1",
@@ -159,7 +134,9 @@ export const deployment: DeploymentView = {
       enabled: true,
       tags: [],
       models: ["model-a"],
+      advertisedModels: [],
       probeStatus: null,
+      accountRef: null,
     },
     {
       backendId: "backend-b",
@@ -177,7 +154,9 @@ export const deployment: DeploymentView = {
       enabled: true,
       tags: [],
       models: ["model-b"],
+      advertisedModels: [],
       probeStatus: null,
+      accountRef: null,
     },
   ],
   inferenceProfiles: [
@@ -404,56 +383,3 @@ export const bootstrap: BootstrapSummary = {
   clientStateExists: false,
   savedPeers: [],
 };
-
-export function workspaceHandlers() {
-  return {
-    onBack: vi.fn(),
-    onSaveAgentConfig: vi.fn<[(request: AgentConfigSaveRequest) => Promise<unknown>]>(
-      () => Promise.resolve(),
-    ),
-    onSaveBackendConfig: vi.fn<[(request: BackendSaveRequest) => Promise<unknown>]>(
-      () => Promise.resolve(),
-    ),
-    onSaveInferenceProfileConfig: vi.fn<
-      [(request: InferenceProfileSaveRequest) => Promise<unknown>]
-    >(() => Promise.resolve()),
-    onSaveToolsConfig: vi.fn<[(request: ToolsSaveRequest) => Promise<unknown>]>(() =>
-      Promise.resolve(),
-    ),
-    onSaveToolServiceConfig: vi.fn<
-      [(request: ToolServiceSaveRequest) => Promise<unknown>]
-    >(() => Promise.resolve()),
-    onTestToolService: vi.fn<
-      [(request: ToolServiceTestRequest) => Promise<ToolServiceTestResult>]
-    >(() =>
-      Promise.resolve({
-        serviceId: "service-a",
-        endpoint: "http://localhost:7331/mcp",
-        status: "ok",
-        toolCount: 0,
-        tools: [],
-      }),
-    ),
-    onSaveBehaviorConfig: vi.fn<[(request: BehaviorSaveRequest) => Promise<unknown>]>(
-      () => Promise.resolve(),
-    ),
-    onSaveTaskConfig: vi.fn<[(request: TaskSaveRequest) => Promise<unknown>]>(() =>
-      Promise.resolve(),
-    ),
-    onSaveScheduleConfig: vi.fn<[(request: ScheduleSaveRequest) => Promise<unknown>]>(
-      () => Promise.resolve(),
-    ),
-    onRunSchedule: vi.fn<[(request: { scheduleId: string }) => Promise<TaskRunResult>]>(
-      () => Promise.resolve(runResult),
-    ),
-    onSaveEventSourceConfig: vi.fn<
-      [(request: EventSourceSaveRequest) => Promise<unknown>]
-    >(() => Promise.resolve()),
-    onSaveTriggerConfig: vi.fn<[(request: TriggerSaveRequest) => Promise<unknown>]>(
-      () => Promise.resolve(),
-    ),
-    onRunTask: vi.fn<
-      [(request: { taskId: string; args?: unknown }) => Promise<TaskRunResult>]
-    >(() => Promise.resolve(runResult)),
-  };
-}

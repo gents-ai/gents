@@ -89,7 +89,6 @@ type LeanClientShellCase = {
   frontend_client_available: boolean;
   frontend_selected_agent_did: number | null;
   frontend_selected_session_id: number | null;
-  frontend_composer_non_empty: boolean;
   frontend_sending: boolean;
   frontend_session_present: boolean;
   frontend_session_id: number | null;
@@ -378,12 +377,11 @@ function compactWorkflow(workflow: ChatWorkflowState) {
 }
 
 describe("projectChatShell", () => {
-  it("blocks empty-draft and retry sends from a typed unavailable verdict", () => {
+  it("blocks sends from a typed unavailable verdict", () => {
     const projection = projectChatShellWithReadiness({
       clientAvailable: true,
       selectedAgentDid: "did:key:agent",
       selectedSessionId: null,
-      draft: "",
       sending: false,
       session: null,
       selectedSessionSummary: null,
@@ -396,12 +394,11 @@ describe("projectChatShell", () => {
       }),
     });
 
-    expect(projection.sendStatus).toEqual({
+    expect(projection.nonEmptyContentSendStatus).toEqual({
       kind: "disabled",
       reason: "behaviorUnavailable",
       hint: "Inference backend for “General” is temporarily unavailable",
     });
-    expect(projection.nonEmptyContentSendStatus).toEqual(projection.sendStatus);
   });
 
   it("keeps route admission separate from runtime readiness", () => {
@@ -410,7 +407,6 @@ describe("projectChatShell", () => {
       clientAvailable: true,
       selectedAgentDid: "did:key:agent",
       selectedSessionId: null,
-      draft: "hello",
       sending: false,
       session: null,
       selectedSessionSummary: null,
@@ -418,7 +414,7 @@ describe("projectChatShell", () => {
       operationalState,
     });
 
-    expect(projection.sendStatus).toEqual({
+    expect(projection.nonEmptyContentSendStatus).toEqual({
       kind: "disabled",
       reason: "routeNotReady",
       hint: "The pairing request was sent and is waiting for the agent to accept it.",
@@ -429,7 +425,7 @@ describe("projectChatShell", () => {
     "matches generated Lean ClientShell projection contracts",
     async () => {
       const contractCases = await loadLeanClientShellCases();
-      expect(contractCases).toHaveLength(26);
+      expect(contractCases).toHaveLength(25);
 
       for (const contractCase of contractCases) {
         const projection = projectChatShell({
@@ -438,7 +434,6 @@ describe("projectChatShell", () => {
           selectedSessionId: sessionId(
             contractCase.frontend_selected_session_id,
           ),
-          draft: contractCase.frontend_composer_non_empty ? "follow up" : "",
           sending: contractCase.frontend_sending,
           selectedSessionSummary: null,
           session: sessionFromContract(contractCase),
@@ -462,11 +457,11 @@ describe("projectChatShell", () => {
         );
 
         if (contractCase.frontend_expected_send_status === "ready") {
-          expect(projection.sendStatus).toEqual({ kind: "ready" });
+          expect(projection.nonEmptyContentSendStatus).toEqual({ kind: "ready" });
         } else {
-          expect(projection.sendStatus.kind).toBe("disabled");
-          if (projection.sendStatus.kind === "disabled") {
-            expect(projection.sendStatus.reason).toBe(
+          expect(projection.nonEmptyContentSendStatus.kind).toBe("disabled");
+          if (projection.nonEmptyContentSendStatus.kind === "disabled") {
+            expect(projection.nonEmptyContentSendStatus.reason).toBe(
               contractCase.frontend_expected_send_blocked_reason,
             );
           }
@@ -481,7 +476,6 @@ describe("projectChatShell", () => {
       clientAvailable: true,
       selectedAgentDid: "did:test:amy",
       selectedSessionId: "session-1",
-      draft: "follow up",
       sending: false,
       selectedSessionSummary: null,
       session: session({ turnState: "running", latestRequestId: "req-1" }),
@@ -489,7 +483,7 @@ describe("projectChatShell", () => {
     });
 
     expect(projection.workflow.kind).toBe("turnInProgress");
-    expect(projection.sendStatus).toEqual({
+    expect(projection.nonEmptyContentSendStatus).toEqual({
       kind: "disabled",
       reason: "awaitingTurnTerminality",
       hint: "Turn still running",
@@ -502,12 +496,11 @@ describe("projectChatShell", () => {
     });
   });
 
-  test("does not let an empty draft mask an active turn", () => {
+  test("an active turn blocks sends and shows why", () => {
     const projection = projectChatShell({
       clientAvailable: true,
       selectedAgentDid: "did:test:amy",
       selectedSessionId: "session-1",
-      draft: "",
       sending: false,
       selectedSessionSummary: null,
       session: session({
@@ -517,11 +510,6 @@ describe("projectChatShell", () => {
       localWorkflow: { kind: "ready" },
     });
 
-    expect(projection.sendStatus).toEqual({
-      kind: "disabled",
-      reason: "composerEmpty",
-      hint: "Type a message to send",
-    });
     expect(projection.nonEmptyContentSendStatus).toEqual({
       kind: "disabled",
       reason: "awaitingTurnTerminality",
@@ -540,7 +528,6 @@ describe("projectChatShell", () => {
       clientAvailable: true,
       selectedAgentDid: "did:test:amy",
       selectedSessionId: "session-1",
-      draft: "follow up",
       sending: false,
       selectedSessionSummary: null,
       session: session({
@@ -563,7 +550,7 @@ describe("projectChatShell", () => {
 
     expect(projection.activeRequestId).toBe("req-new");
     expect(projection.workflow.kind).toBe("turnInProgress");
-    expect(projection.sendStatus.kind).toBe("disabled");
+    expect(projection.nonEmptyContentSendStatus.kind).toBe("disabled");
   });
 
   test("commits terminal projection before observing an automated follow-up", () => {
@@ -578,7 +565,6 @@ describe("projectChatShell", () => {
       clientAvailable: true,
       selectedAgentDid: "did:test:amy",
       selectedSessionId: "session-1",
-      draft: "",
       sending: false,
       selectedSessionSummary: null,
       session: session({
@@ -599,7 +585,6 @@ describe("projectChatShell", () => {
       clientAvailable: true,
       selectedAgentDid: "did:test:amy",
       selectedSessionId: "session-1",
-      draft: "",
       sending: false,
       selectedSessionSummary: null,
       session: session({
@@ -624,7 +609,6 @@ describe("projectChatShell", () => {
       clientAvailable: true,
       selectedAgentDid: "did:test:amy",
       selectedSessionId: "session-1",
-      draft: "follow up",
       sending: false,
       selectedSessionSummary: null,
       session: session({ latestRequestId: "req-old", turnState: "completed" }),
@@ -642,7 +626,7 @@ describe("projectChatShell", () => {
       sessionId: "session-1",
       requestId: "req-new",
     });
-    expect(projection.sendStatus).toEqual({
+    expect(projection.nonEmptyContentSendStatus).toEqual({
       kind: "disabled",
       reason: "waitingForRequestObservation",
       hint: "Waiting for request observation",
@@ -661,7 +645,6 @@ describe("projectChatShell", () => {
       clientAvailable: true,
       selectedAgentDid: "did:test:amy",
       selectedSessionId: "session-2",
-      draft: "new session follow up",
       sending: false,
       selectedSessionSummary: null,
       session: session({
@@ -680,7 +663,7 @@ describe("projectChatShell", () => {
 
     expect(projection.workflow).toEqual({ kind: "ready" });
     expect(projection.activeRequestId).toBe("req-2");
-    expect(projection.sendStatus).toEqual({ kind: "ready" });
+    expect(projection.nonEmptyContentSendStatus).toEqual({ kind: "ready" });
   });
 
   test("blocks inconsistent observation when latest request is missing", () => {
@@ -688,7 +671,6 @@ describe("projectChatShell", () => {
       clientAvailable: true,
       selectedAgentDid: "did:test:amy",
       selectedSessionId: "session-1",
-      draft: "follow up",
       sending: false,
       selectedSessionSummary: null,
       session: session({
@@ -703,7 +685,7 @@ describe("projectChatShell", () => {
       reason: "inconsistentTurnObservation",
       turnState: undefined,
     });
-    expect(projection.sendStatus).toEqual({
+    expect(projection.nonEmptyContentSendStatus).toEqual({
       kind: "disabled",
       reason: "inconsistentTurnObservation",
       hint: "Waiting for consistent turn observation",
@@ -715,7 +697,6 @@ describe("projectChatShell", () => {
       clientAvailable: true,
       selectedAgentDid: "did:test:amy",
       selectedSessionId: "session-1",
-      draft: "follow up",
       sending: false,
       selectedSessionSummary: null,
       session: session({ turnState: "completed", latestRequestId: "req-1" }),
@@ -723,7 +704,7 @@ describe("projectChatShell", () => {
     });
 
     expect(projection.workflow).toEqual({ kind: "ready" });
-    expect(projection.sendStatus).toEqual({ kind: "ready" });
+    expect(projection.nonEmptyContentSendStatus).toEqual({ kind: "ready" });
   });
 
   test("allows follow up after interrupted turn", () => {
@@ -731,7 +712,6 @@ describe("projectChatShell", () => {
       clientAvailable: true,
       selectedAgentDid: "did:test:amy",
       selectedSessionId: "session-1",
-      draft: "follow up",
       sending: false,
       selectedSessionSummary: null,
       session: session({ turnState: "interrupted", latestRequestId: "req-1" }),
@@ -739,7 +719,7 @@ describe("projectChatShell", () => {
     });
 
     expect(projection.workflow).toEqual({ kind: "ready" });
-    expect(projection.sendStatus).toEqual({ kind: "ready" });
+    expect(projection.nonEmptyContentSendStatus).toEqual({ kind: "ready" });
   });
 
   test("allows follow up with an untitled terminal session", () => {
@@ -747,7 +727,6 @@ describe("projectChatShell", () => {
       clientAvailable: true,
       selectedAgentDid: "did:test:amy",
       selectedSessionId: "session-1",
-      draft: "follow up",
       sending: false,
       selectedSessionSummary: null,
       session: session({
@@ -760,7 +739,7 @@ describe("projectChatShell", () => {
     });
 
     expect(projection.workflow).toEqual({ kind: "ready" });
-    expect(projection.sendStatus).toEqual({ kind: "ready" });
+    expect(projection.nonEmptyContentSendStatus).toEqual({ kind: "ready" });
   });
 });
 

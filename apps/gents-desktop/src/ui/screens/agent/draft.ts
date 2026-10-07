@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { toastFailure } from "@/lib/failure";
 
 /* A reviewable draft. Nothing crosses the bridge until the user explicitly
    saves; reset restores the last bridge-confirmed value.
@@ -59,7 +60,7 @@ export function useDraft<T extends object>(
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       setError(message);
-      toast(`Save failed: ${message}`);
+      toastFailure("save", e);
       return false;
     } finally {
       setSaving(false);
@@ -69,25 +70,13 @@ export function useDraft<T extends object>(
     setError(null);
     setDraft((d) => ({ ...d, [k]: v }));
   };
-  const choose = <K extends keyof T>(k: K, v: T[K]) => {
-    set(k, v);
-  };
-  // Kept as the field blur callback so existing editors do not accidentally
-  // submit. Save is intentionally owned by the explicit action below.
-  const commit = () => undefined;
   const reset = () => {
     setDraft(baseline);
     setError(null);
   };
-  const onEnter = (e: React.KeyboardEvent<HTMLElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) (e.target as HTMLElement).blur();
-  };
   return {
     draft,
     set,
-    choose,
-    commit,
-    onEnter,
     dirty,
     saving,
     error,
@@ -96,23 +85,12 @@ export function useDraft<T extends object>(
   };
 }
 
-/* one item per line; the desktop app splits on newline or comma */
-export const toLines = (items: string[]) => items.join("\n");
+/* one item per line, split on newline or comma */
 export const fromLines = (text: string) =>
   text
     .split(/[\n,]/)
     .map((s) => s.trim())
     .filter(Boolean);
-export const fromLinesOrNull = (text: string) => {
-  const items = fromLines(text);
-  return items.length ? items : null;
-};
-
-/* the desktop app's number hints */
-export const intOrNull = (s: string) =>
-  s.trim() === "" ? null : Number.parseInt(s, 10);
-export const floatOrNull = (s: string) =>
-  s.trim() === "" ? null : Number.parseFloat(s);
 export const str = (n: number | null | undefined) => (n == null ? "" : String(n));
 
 export function optionalInteger(

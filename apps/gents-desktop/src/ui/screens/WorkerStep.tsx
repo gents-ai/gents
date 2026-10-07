@@ -9,7 +9,6 @@ import type { RenderedToolCallView } from "@source-inc/gents-desktop-client";
 import { Spinner } from "@gents/ui/components/spinner";
 import { BehaviorAvatar } from "./parts";
 import { behaviorName } from "./behavior";
-import { useDeployment } from "./deployment-context";
 import { useExclusiveStep } from "@gents/ui/conversation";
 import {
   Collapsible,
@@ -18,9 +17,10 @@ import {
 } from "@gents/ui/components/collapsible";
 import { cn } from "@gents/ui/lib/utils";
 import { href } from "@/lib/router";
+import { useSelectedNode } from "@/hooks/useClient";
 import { ToolBody } from "./tool-views";
 import { duration } from "./tool-summary";
-import { when } from "./time";
+import { useMinute, when } from "./time";
 import { isLive } from "@/lib/live";
 import { scopeKey, type Reached, type Subagent, type Workers } from "./workers";
 import { RequestStop } from "./WorkerActions";
@@ -40,6 +40,7 @@ const WAITING = new Set(["waitingforclaim", "pending", "claimed"]);
 export function workerNow(
   tool: RenderedToolCallView,
   reached: Reached | null,
+  now: number,
 ): { tone: Tone; text: string; detail?: string | null } {
   const failure = firstLine(
     tool.presentation.kind === "subagent" ? tool.presentation.output : null,
@@ -63,7 +64,7 @@ export function workerNow(
   if (WAITING.has(state.toLowerCase()))
     return { tone: "running", text: "waiting for the agent to pick it up" };
   if (isLive(state)) {
-    const s = when(reached?.summary?.updatedAt ?? null);
+    const s = when(reached?.summary?.updatedAt ?? null, now);
     return {
       tone: "running",
       text: s && s !== "now" ? `working · last change ${s}` : "working",
@@ -223,7 +224,8 @@ export function WorkerStep({
   tool: RenderedToolCallView;
   workers: Workers;
 }) {
-  const deployment = useDeployment();
+  const deployment = useSelectedNode();
+  const minute = useMinute();
   const p = tool.presentation;
   if (p.kind === "process") {
     const bg = workers.background(tool);
@@ -265,7 +267,6 @@ export function WorkerStep({
   const mark = behaviorId ? (
     <BehaviorAvatar
       name={behaviorName(behaviorId, deployment)}
-      behaviorId={behaviorId}
       className="size-4 text-[8px]"
     />
   ) : undefined;
@@ -291,7 +292,7 @@ export function WorkerStep({
       </Row>
     );
   }
-  const now = workerNow(tool, reached);
+  const now = workerNow(tool, reached, minute);
   return (
     <Row
       tone={now.tone}
@@ -317,13 +318,13 @@ export function WorkerStep({
   );
 }
 
-export const subagentName = (subagent: Subagent | null, target?: string | null) =>
-  subagent?.summary?.title ?? target ?? "a subagent";
+const subagentName = (subagent: Subagent | null) =>
+  subagent?.summary?.title ?? "a subagent";
 
 /* The sessions this one started, each as the session it is: where it got
    to and a way in. Stopping is a row's business: it names the call. */
 export function SubagentList({ workers }: { workers: Workers }) {
-  const deployment = useDeployment();
+  const deployment = useSelectedNode();
   if (workers.all.length === 0) return null;
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
@@ -344,7 +345,6 @@ export function SubagentList({ workers }: { workers: Workers }) {
               {behaviorId && (
                 <BehaviorAvatar
                   name={behaviorName(behaviorId, deployment)}
-                  behaviorId={behaviorId}
                   className="size-4 text-[8px]"
                 />
               )}

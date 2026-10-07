@@ -136,13 +136,14 @@ export function useDivider({
   }, [spring, set]);
 
   /* the window changed size: keep the far end at the far end, and a resting
-     width inside the range */
-  useEffect(() => {
-    if (dragging || spring.running() || posRef.current === 0) return;
+     width inside the range. A resize during a drag or a settle is applied
+     when it ends, and before paint, so no frame shows the stale width. */
+  useLayoutEffect(() => {
+    if (dragging || settling || posRef.current === 0) return;
     if (atEnd.current) set(end);
     else if (posRef.current > max || posRef.current < min)
       set(clampOpen(posRef.current));
-  }, [end, max, min, dragging, spring, set, clampOpen]);
+  }, [end, max, min, dragging, settling, set, clampOpen]);
 
   const drag = useRef<{
     startX: number;

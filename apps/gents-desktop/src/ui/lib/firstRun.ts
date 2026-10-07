@@ -1,14 +1,15 @@
 /* First-run is unfinished until a local agent can actually run inference.
    gents init writes a placeholder backend, so a non-empty backends list is
    not enough; a key, OAuth, env var, or a healthy probe is. */
+import type { NodeView } from "../../hooks/fleetStore";
 import type {
-  DeploymentView,
   DesktopClientSnapshot,
   InferenceBackendView,
 } from "@source-inc/gents-desktop-client";
+import { agentOf } from "./agents";
 
 export function isLocalAgent(
-  deployment: DeploymentView,
+  deployment: Pick<NodeView, "agentDid" | "source">,
   initAgentDid?: string | null,
 ): boolean {
   const source = deployment.source ?? "";
@@ -20,7 +21,7 @@ export function isLocalAgent(
   );
 }
 
-export function inferenceIsConfigured(deployment: DeploymentView): boolean {
+export function inferenceIsConfigured(deployment: NodeView): boolean {
   const behavior = deployment.behaviorConfigs.find(
     (row) => row.behavior_id === deployment.agentPrincipal.defaultBehaviorId,
   );
@@ -46,17 +47,31 @@ export function backendIsConfigured(backend: InferenceBackendView): boolean {
 }
 
 export function shouldRebindSetupDefault(
-  deployment: DeploymentView,
+  deployment: NodeView,
   addingExtra: boolean,
 ): boolean {
   if (!addingExtra) return true;
-  const defaultBehavior = deployment.behaviors.find(
-    (behavior) => behavior.behaviorId === deployment.agentPrincipal.defaultBehaviorId,
+  const defaultBehavior = agentOf(
+    deployment,
+    deployment.agentPrincipal.defaultBehaviorId,
   );
   const defaultProfile = deployment.inferenceProfiles.find(
     (profile) => profile.profile_id === defaultBehavior?.inferenceProfileId,
   );
   return defaultProfile?.backend_id === `${deployment.agentDid}:backend`;
+}
+
+/** The node first-run setup configured: the one this machine runs, else the
+    first listed. Setup also runs when remote nodes are already paired and
+    only this machine's agent lacks inference, so the first listed node may
+    be a remote one. */
+export function nodeSetUp(snapshot: DesktopClientSnapshot) {
+  const nodes = snapshot.client?.deployments ?? [];
+  return (
+    nodes.find((node) => isLocalAgent(node, snapshot.bootstrap.initAgentDid)) ??
+    nodes[0] ??
+    null
+  );
 }
 
 export function needsFirstRunSetup(snapshot: DesktopClientSnapshot): boolean {

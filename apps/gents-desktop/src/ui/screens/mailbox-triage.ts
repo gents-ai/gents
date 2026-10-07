@@ -21,11 +21,17 @@ export const TRIAGE: { key: Triage; label: string; kinds: string[] }[] = [
 export const triageOf = (kind: string): Triage =>
   TRIAGE.find((t) => t.kinds.includes(kind))?.key ?? "look";
 
+/** An item's deadline in milliseconds; null without one, or with one that
+    does not parse. */
 export const deadlineOf = (item: MailboxItemView): number | null => {
   if (!item.deadlineAt) return null;
   const t = Date.parse(item.deadlineAt);
   return Number.isNaN(t) ? null : t;
 };
+
+/** Whether a deadline falls within the hour, when it turns the warm colour. */
+export const dueSoon = (deadline: number | null, now: number) =>
+  deadline !== null && deadline - now < 60 * 60_000;
 
 /* the soonest deadline first, then whatever has a deadline before whatever
    does not, then newest first: the order a person would work through them */
@@ -64,15 +70,5 @@ export function groupItems(items: MailboxItemView[]): TriageGroup[] {
   })).filter((g) => g.items.length > 0);
 }
 
-/* how many of each kind there are, in a fixed order, for the filter */
+/* the kinds, in the order a person works through them */
 export const KIND_ORDER = ["ask", "gate", "failed", "flag", "finished"];
-
-export function countKinds(
-  items: MailboxItemView[],
-): { kind: string; count: number }[] {
-  const counts = new Map<string, number>();
-  for (const m of items) counts.set(m.kind, (counts.get(m.kind) ?? 0) + 1);
-  const known = KIND_ORDER.filter((k) => counts.has(k));
-  const unknown = [...counts.keys()].filter((k) => !KIND_ORDER.includes(k)).sort();
-  return [...known, ...unknown].map((kind) => ({ kind, count: counts.get(kind)! }));
-}

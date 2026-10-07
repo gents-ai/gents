@@ -1,12 +1,9 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import { renderIn, testApp } from "./app-fixture";
 
-import type {
-  DesktopApiAdapter,
-  InferenceModelRecommendation,
-} from "@source-inc/gents-desktop-client";
-import type { Shell } from "../src/ui/hooks/useShell";
+import type { InferenceModelRecommendation } from "@source-inc/gents-desktop-client";
 import { ProfilesPanel } from "../src/ui/screens/agent/ProfilesPanel";
 import { deployment as fixture } from "./config-panel-wiring/fixtures";
 
@@ -33,14 +30,6 @@ function recommendation(context: number): InferenceModelRecommendation {
   };
 }
 
-function shellWith(api: Record<string, ReturnType<typeof vi.fn>>) {
-  return {
-    api: api as unknown as DesktopApiAdapter,
-    applyConfig: (operation: (adapter: DesktopApiAdapter) => Promise<unknown>) =>
-      operation(api as unknown as DesktopApiAdapter),
-  } as unknown as Shell;
-}
-
 const settleLookup = () =>
   act(() => new Promise((resolve) => setTimeout(resolve, 180)));
 
@@ -55,7 +44,6 @@ describe("profile model recommendation ownership", () => {
         .mockReturnValueOnce(second.promise),
       getInferenceSetupCatalog: vi.fn().mockResolvedValue({ executionDefaults: {} }),
     };
-    const shell = shellWith(api);
     const deploymentA = { ...fixture };
     const deploymentB = {
       ...fixture,
@@ -70,19 +58,44 @@ describe("profile model recommendation ownership", () => {
           : profile,
       ),
     };
-    const view = render(
-      <ProfilesPanel shell={shell} deployment={deploymentA} item="profile-a" />,
+    const view = renderIn(
+      testApp({ api }),
+      <ProfilesPanel deployment={deploymentA} item="profile-a" />,
     );
     await settleLookup();
-    view.rerender(
-      <ProfilesPanel shell={shell} deployment={deploymentB} item="profile-a" />,
-    );
+    view.rerender(<ProfilesPanel deployment={deploymentB} item="profile-a" />);
     await settleLookup();
     await act(async () => second.resolve(recommendation(222)));
     expect(await screen.findByLabelText("Context window")).toHaveValue(222);
 
     await act(async () => first.resolve(recommendation(111)));
     expect(screen.getByLabelText("Context window")).toHaveValue(222);
+  });
+
+  it("keeps the recommendation when only the backend's concurrency changes", async () => {
+    const api = {
+      getInferenceBackendRecommendation: vi.fn().mockResolvedValue(recommendation(111)),
+      getInferenceSetupCatalog: vi.fn().mockResolvedValue({ executionDefaults: {} }),
+    };
+    const view = renderIn(
+      testApp({ api }),
+      <ProfilesPanel deployment={fixture} item="profile-a" />,
+    );
+    expect(await screen.findByLabelText("Context window")).toBeVisible();
+    /* the lookup asks about the model, not how many requests the backend
+       runs at once */
+    const changed = {
+      ...fixture,
+      inferenceBackends: fixture.inferenceBackends.map((backend) => ({
+        ...backend,
+        maxConcurrent: 4,
+      })),
+    };
+    view.rerender(<ProfilesPanel deployment={changed} item="profile-a" />);
+    await settleLookup();
+
+    expect(api.getInferenceBackendRecommendation).toHaveBeenCalledOnce();
+    expect(screen.getByLabelText("Context window")).toBeVisible();
   });
 
   it("clears stale controls and reports a failed replacement lookup", async () => {
@@ -93,9 +106,9 @@ describe("profile model recommendation ownership", () => {
         .mockRejectedValueOnce(new Error("catalog unavailable")),
       getInferenceSetupCatalog: vi.fn().mockResolvedValue({ executionDefaults: {} }),
     };
-    const shell = shellWith(api);
-    const view = render(
-      <ProfilesPanel shell={shell} deployment={fixture} item="profile-a" />,
+    const view = renderIn(
+      testApp({ api }),
+      <ProfilesPanel deployment={fixture} item="profile-a" />,
     );
     expect(await screen.findByLabelText("Context window")).toBeVisible();
     const changed = {
@@ -106,9 +119,7 @@ describe("profile model recommendation ownership", () => {
           : profile,
       ),
     };
-    view.rerender(
-      <ProfilesPanel shell={shell} deployment={changed} item="profile-a" />,
-    );
+    view.rerender(<ProfilesPanel deployment={changed} item="profile-a" />);
     await settleLookup();
 
     expect(screen.queryByLabelText("Context window")).not.toBeInTheDocument();
@@ -121,9 +132,7 @@ describe("profile model recommendation ownership", () => {
       getInferenceBackendRecommendation: vi.fn().mockResolvedValue(recommendation(100)),
       getInferenceSetupCatalog: vi.fn().mockResolvedValue({ executionDefaults: {} }),
     };
-    render(
-      <ProfilesPanel shell={shellWith(api)} deployment={fixture} item="profile-a" />,
-    );
+    renderIn(testApp({ api }), <ProfilesPanel deployment={fixture} item="profile-a" />);
     await waitFor(() =>
       expect(api.getInferenceBackendRecommendation).toHaveBeenCalled(),
     );
@@ -148,9 +157,7 @@ describe("profile model recommendation ownership", () => {
         .mockResolvedValue(recommendation(200_000)),
       getInferenceSetupCatalog: vi.fn().mockResolvedValue({ executionDefaults: {} }),
     };
-    render(
-      <ProfilesPanel shell={shellWith(api)} deployment={fixture} item="profile-a" />,
-    );
+    renderIn(testApp({ api }), <ProfilesPanel deployment={fixture} item="profile-a" />);
     const context = await screen.findByLabelText("Context window");
     const user = userEvent.setup();
     fireEvent.change(context, { target: { value: "777" } });
@@ -185,15 +192,14 @@ describe("profile model recommendation ownership", () => {
         .mockReturnValueOnce(pending.promise),
       getInferenceSetupCatalog: vi.fn().mockResolvedValue({ executionDefaults: {} }),
     };
-    const shell = shellWith(api);
-    const view = render(
-      <ProfilesPanel shell={shell} deployment={fixture} item="profile-a" />,
+    const view = renderIn(
+      testApp({ api }),
+      <ProfilesPanel deployment={fixture} item="profile-a" />,
     );
     const context = await screen.findByLabelText("Context window");
     fireEvent.change(context, { target: { value: "777" } });
     view.rerender(
       <ProfilesPanel
-        shell={shell}
         deployment={{
           ...fixture,
           inferenceBackends: fixture.inferenceBackends.map((backend) =>
@@ -218,9 +224,9 @@ describe("profile model recommendation ownership", () => {
         .mockResolvedValue(recommendation(300_000)),
       getInferenceSetupCatalog: vi.fn().mockResolvedValue({ executionDefaults: {} }),
     };
-    const shell = shellWith(api);
-    const view = render(
-      <ProfilesPanel shell={shell} deployment={fixture} item="profile-a" />,
+    const view = renderIn(
+      testApp({ api }),
+      <ProfilesPanel deployment={fixture} item="profile-a" />,
     );
     expect(await screen.findByLabelText("Context window")).toHaveValue(131072);
     expect(screen.getByLabelText("Max output tokens")).toHaveValue(1000);
@@ -228,7 +234,6 @@ describe("profile model recommendation ownership", () => {
 
     view.rerender(
       <ProfilesPanel
-        shell={shell}
         deployment={{
           ...fixture,
           inferenceProfiles: fixture.inferenceProfiles.map((profile) =>
@@ -262,12 +267,9 @@ describe("profile model recommendation ownership", () => {
         } as never,
       ],
     };
-    render(
-      <ProfilesPanel
-        shell={shellWith(api)}
-        deployment={advancedOnly}
-        item="profile-a"
-      />,
+    renderIn(
+      testApp({ api }),
+      <ProfilesPanel deployment={advancedOnly} item="profile-a" />,
     );
     await screen.findByLabelText("Context window");
     const user = userEvent.setup();
@@ -306,9 +308,7 @@ describe("profile model recommendation ownership", () => {
       getInferenceBackendRecommendation: vi.fn().mockResolvedValue(unadvertised),
       getInferenceSetupCatalog: vi.fn().mockResolvedValue({ executionDefaults: {} }),
     };
-    render(
-      <ProfilesPanel shell={shellWith(api)} deployment={fixture} item="profile-a" />,
-    );
+    renderIn(testApp({ api }), <ProfilesPanel deployment={fixture} item="profile-a" />);
     const context = await screen.findByLabelText("Context window");
     expect(api.getInferenceBackendRecommendation).toHaveBeenCalledWith(
       expect.objectContaining({ contextWindow: null, maxOutputTokens: null }),
@@ -361,9 +361,7 @@ describe("profile model recommendation ownership", () => {
       }),
       getInferenceSetupCatalog: vi.fn().mockResolvedValue({ executionDefaults: {} }),
     };
-    render(
-      <ProfilesPanel shell={shellWith(api)} deployment={maxOnly} item="profile-a" />,
-    );
+    renderIn(testApp({ api }), <ProfilesPanel deployment={maxOnly} item="profile-a" />);
     const context = await screen.findByLabelText("Context window");
     expect(screen.getByText(/up to 200,000/)).toBeVisible();
     const user = userEvent.setup();

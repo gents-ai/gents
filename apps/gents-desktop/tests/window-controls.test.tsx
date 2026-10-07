@@ -3,6 +3,7 @@ import { TooltipProvider } from "@gents/ui/components/tooltip";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AppShell } from "../src/ui/app/AppShell";
+import { renderIn, testApp } from "./app-fixture";
 import { WindowControls } from "../src/ui/app/WindowControls";
 
 const controls = vi.hoisted(() => ({
@@ -50,16 +51,10 @@ describe("Windows caption controls", () => {
 
   it("keeps interactive controls inside the draggable application header", () => {
     controls.onMaximizedChange.mockImplementation(() => vi.fn());
-    const { container } = render(
+    const { container } = renderIn(
+      testApp(),
       <TooltipProvider>
-        <AppShell
-          route={{ name: "agents" }}
-          agentName={null}
-          agentDid={null}
-          deployment={null}
-          online
-          mailboxCount={0}
-        >
+        <AppShell route={{ name: "agents" }}>
           <p>Content</p>
         </AppShell>
       </TooltipProvider>,

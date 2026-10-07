@@ -1,4 +1,5 @@
-import { useRef, useState } from "react";
+import { useMemo } from "react";
+import { useStore } from "zustand";
 
 import {
   BridgeInvokeError,
@@ -7,9 +8,12 @@ import {
 } from "@source-inc/gents-desktop-client";
 
 import { ManagedServerStartupError } from "../lib/managedServerStartup";
+import type { ClientState, ClientStore } from "./clientStore";
 
 type IncompatibleHomeOptions = {
   api: DesktopApiAdapter;
+  /** where the report lives, read by an action when it runs */
+  client: ClientStore;
   setError: (error: string | null) => void;
   /** Runs startup again once the old home is out of the way. */
   startFresh: () => Promise<void>;
@@ -43,22 +47,27 @@ export function isIncompatibleHomeError(error: unknown): boolean {
   return false;
 }
 
-/** Owns the one decision flow for a local home this version cannot open. */
-export function useIncompatibleHome({
+/** What the person can do about a home this version cannot open. Made
+    once; each reads the report from the client store when it runs. */
+export function createIncompatibleHomeOps({
   api,
+  client,
   setError,
   startFresh,
-}: IncompatibleHomeOptions): IncompatibleHome {
-  const [report, setReport] = useState<ManagedServerResetResult | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [generation, setGeneration] = useState(0);
-  const previewing = useRef<Promise<boolean> | null>(null);
+}: IncompatibleHomeOptions) {
+  let previewing: Promise<boolean> | null = null;
+  const home = () => client.getState().home;
+  const setHome = (patch: Partial<ClientState["home"]>) =>
+    client.setState((state) => ({ home: { ...state.home, ...patch } }));
+  const setReport = (next: ManagedServerResetResult | null) =>
+    setHome({ report: next });
+  const setBusy = (next: boolean) => setHome({ busy: next });
 
   function adopt(error: unknown): Promise<boolean> {
     if (!isIncompatibleHomeError(error) || !api.resetManagedServer) {
       return Promise.resolve(false);
     }
-    if (previewing.current) return previewing.current;
+    if (previewing) return previewing;
     const resetManagedServer = api.resetManagedServer;
     const pending = (async () => {
       try {
@@ -70,14 +79,15 @@ export function useIncompatibleHome({
         );
         return false;
       } finally {
-        previewing.current = null;
+        previewing = null;
       }
     })();
-    previewing.current = pending;
+    previewing = pending;
     return pending;
   }
 
   async function retire(disposition: "archive" | "delete") {
+    const report = home().report;
     if (!report || report.completed || !api.resetManagedServer) return;
     const confirmation =
       disposition === "archive" ? report.confirmation : report.deleteConfirmation;
@@ -120,18 +130,24 @@ export function useIncompatibleHome({
   async function continueFresh() {
     setReport(null);
     setError(null);
-    setGeneration((current) => current + 1);
+    setHome({ generation: home().generation + 1 });
     await startFresh();
   }
 
   return {
-    report,
-    busy,
-    generation,
     adopt,
     backUp: () => retire("archive"),
     remove: () => retire("delete"),
     keep,
     continueFresh,
   };
+}
+
+/** The incompatible home as screens read it: its state and its actions. */
+export function useIncompatibleHome(
+  client: ClientStore,
+  ops: ReturnType<typeof createIncompatibleHomeOps>,
+): IncompatibleHome {
+  const state = useStore(client, (s) => s.home);
+  return useMemo(() => ({ ...state, ...ops }), [state, ops]);
 }

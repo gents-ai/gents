@@ -12,6 +12,7 @@ import {
   revealedText,
   stepReveal,
 } from "@/screens/stream-reveal";
+import { assistantMessage, liveAssistant, userMessage } from "./timeline-fixture";
 
 const FRAME = 16;
 
@@ -144,27 +145,29 @@ describe("the handoff from live tail to message", () => {
   });
 });
 
-const live = (content: string | null): RenderedTimelineItem => ({
-  kind: "liveAssistant",
-  itemKey: "live-r1",
-  content,
-  reasoning: null,
-});
-const message = (content: string): RenderedTimelineItem => ({
-  kind: "assistantMessage",
-  itemKey: "a-r1",
-  sequence: 2,
-  content,
-  reasoning: null,
-  timestamp: null,
-});
-const person: RenderedTimelineItem = {
+const live = (content: string | null): RenderedTimelineItem =>
+  liveAssistant({
+    kind: "liveAssistant",
+    itemKey: "live-r1",
+    content,
+    reasoning: null,
+  });
+const message = (content: string): RenderedTimelineItem =>
+  assistantMessage({
+    kind: "assistantMessage",
+    itemKey: "a-r1",
+    sequence: 2,
+    content,
+    reasoning: null,
+    timestamp: null,
+  });
+const person: RenderedTimelineItem = userMessage({
   kind: "userMessage",
   itemKey: "u1",
   sequence: 1,
   content: "Explain the export route.",
   timestamp: null,
-};
+});
 
 describe("holding the live text through the gap", () => {
   it("records the live text while it streams", () => {
@@ -175,11 +178,13 @@ describe("holding the live text through the gap", () => {
   it("puts it back under the same key when the tail is dropped first", () => {
     const held = holdLive([person, live("The export route")], null).held;
     const out = holdLive([person], held);
-    expect(out.items.at(-1)).toMatchObject({
-      kind: "liveAssistant",
-      itemKey: "live-r1",
-      content: "The export route",
-    });
+    expect(out.items.at(-1)).toMatchObject(
+      liveAssistant({
+        kind: "liveAssistant",
+        itemKey: "live-r1",
+        content: "The export route",
+      }),
+    );
   });
 
   it("refills a tail whose text was cleared, keeping its key", () => {

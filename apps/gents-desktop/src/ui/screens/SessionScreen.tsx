@@ -1,6 +1,6 @@
 /* One session: start a new one, or read and continue an existing one.
-   Built from the kit's conversation patterns over the desktop app's
-   session projection: the timeline items are the bridge's own
+   Built from the kit's conversation patterns over the bridge's session
+   projection: the timeline items are its own
    RenderedTimelineItem, rendered as they arrive. */
 import { placeholderFor } from "@/lib/send-status";
 import {
@@ -14,7 +14,7 @@ import {
   useMemo,
   useRef,
   useState,
-  type RefObject,
+  type ComponentProps,
 } from "react";
 import {
   Check,
@@ -23,7 +23,6 @@ import {
   Copy,
   Pencil,
   Play,
-  Split,
   Target,
   Timer,
   X,
@@ -31,7 +30,6 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import type {
-  DeploymentView,
   DerivedCancelCauseView,
   RenderedToolCallView,
   DesktopSessionSnapshot,
@@ -52,7 +50,7 @@ import {
   ToolSteps,
   UserMessage,
 } from "@gents/ui/conversation";
-import type { Shell } from "@/hooks/useShell";
+import type { ShellView } from "@/../hooks/shellView";
 import { ChatFolderPicker } from "./ChatFolderPicker";
 import { anchor, useFollowTail, useOlderPages, useScroller } from "@/lib/scroll";
 import { href, navigate } from "@/lib/router";
@@ -74,40 +72,27 @@ import { Hint } from "./Hint";
 import { ToolIcon } from "./tool-icon";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { Spinner } from "@gents/ui/components/spinner";
-import { bashAccess, behaviorName, fileAccess, network } from "./behavior";
+import { behaviorName } from "./behavior";
 import { AgentAvatar } from "./AgentAvatar";
 import { PanelMenu } from "@/app/PanelMenu";
-import { DropdownMenuItem } from "@gents/ui/components/dropdown-menu";
 import { PaneBar } from "@/app/PaneBar";
 import { BehaviorPicker } from "./BehaviorPicker";
-import { HoldCard } from "./HoldCard";
 import { LoadingStatus } from "./LoadingStatus";
 import { SlashSkillMenu } from "./SlashSkillMenu";
 import { useSlashSkills } from "./useSlashSkills";
 import { Thinking } from "./Thinking";
 import { activityStatus, isStopping } from "./activity-status";
-import { BehaviorAvatar } from "./parts";
+import { AccessSentence, BehaviorAvatar } from "./parts";
 import { NodeBehaviorStack } from "./NodeBehaviorStack";
-import { isWorkingNode, nodeDidOf, workersBySession } from "@/lib/nodes";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@gents/ui/components/alert-dialog";
+import { isWorkingNode } from "@/lib/nodes";
 import { Markdown } from "./Markdown";
 import { SessionLoading } from "./SessionLoading";
 import { StreamContext, StreamText } from "./StreamText";
 import { createHandoff, holdLive, type HeldLive } from "./stream-reveal";
 import { ToolBody } from "./tool-views";
-import { foldWorkers, workerStory } from "./tool-runs";
-import { DeploymentContext, useDeployment } from "./deployment-context";
+import { gatherWorkers, workerStory, type GatheredWorker } from "./worker-gathering";
 import { SubagentList, WorkerStep, isWorkerStep } from "./WorkerStep";
-import { NO_WORKERS, useSessionProvenance, useWorkers, type Workers } from "./workers";
+import { useSessionProvenance, useWorkers, type Workers } from "./workers";
 import { useParentWork, type ParentWork } from "./parentWork";
 import { WorkerActionsContext, type WorkerActions } from "./WorkerActions";
 import { ArrowUpRight } from "lucide-react";
@@ -131,6 +116,30 @@ import { Popover, PopoverContent, PopoverTrigger } from "@gents/ui/components/po
 import { ReplyingTo } from "./ReplyingTo";
 import { useExclusivePopover } from "@/hooks/useExclusivePopover";
 import { workspace } from "@/app/workspace";
+import { useCopied } from "@/lib/clipboard";
+import { toastFailure } from "@/lib/failure";
+import {
+  useSelectedSession,
+  useSelectedSessionFields,
+} from "../hooks/useSelectedSession";
+import { useDraft } from "../../hooks/draftStore";
+import { useShallow } from "zustand/react/shallow";
+import { useFleet, workersOfId } from "../hooks/useFleet";
+import { listedSession, nodeOf } from "../../hooks/fleetStore";
+import { fleetNodes } from "@/lib/scope";
+import { agentOf } from "@/lib/agents";
+import { useApp, useView } from "@/app/AppContext";
+import {
+  useChatFolder,
+  useHomeDid,
+  useInterruptVisible,
+  useMailboxCause,
+  useSelectedAgentDid,
+  useNodeCount,
+  useSelectedBehaviorId,
+  useSelectedNode,
+  useSessionLoad,
+} from "@/hooks/useClient";
 
 function formatTokens(value: number) {
   if (value < 1_000) return String(value);
@@ -327,13 +336,72 @@ export function SessionContext({
   );
 }
 
-export function useBehaviorChoice(shell: Shell) {
+export function useBehaviorChoice() {
+  const selectedBehaviorId = useSelectedBehaviorId();
+  const { selectBehavior } = useApp().actions;
   return {
     // Read the same effective selection that owns composer admission. Defaults,
-    // mailbox routing, and agent changes are resolved by the shell, not here.
-    behaviorId: shell.selectedBehaviorId,
-    setPicked: shell.selectBehavior,
+    // mailbox routing, and agent changes are resolved by the selection, not here.
+    behaviorId: selectedBehaviorId,
+    setPicked: selectBehavior,
   };
+}
+
+/* the node a new chat starts on, where there is a choice: the name is the
+   button's own text, so the heading still reads as one sentence */
+function NodeChoice({
+  name,
+  selectedAgentDid,
+  onSelect,
+}: {
+  name: string;
+  selectedAgentDid: string | null;
+  onSelect: (agentDid: string) => void;
+}) {
+  const nodes = useFleet(useShallow(fleetNodes));
+  const homeDid = useHomeDid();
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <button
+            type="button"
+            title="Choose a node"
+            className="inline-flex items-center gap-1 underline decoration-border underline-offset-4 hover:decoration-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-sm"
+          />
+        }
+      >
+        {name}
+        <ChevronDown className="size-4 opacity-50" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-56">
+        <DropdownMenuRadioGroup value={selectedAgentDid ?? ""} onValueChange={onSelect}>
+          {nodes.map((n, i, all) => (
+            <Fragment key={n.agentDid}>
+              {/* a faint line between the local node and the paired ones */}
+              {i > 0 &&
+                isWorkingNode(all[i - 1]!, homeDid) &&
+                !isWorkingNode(n, homeDid) && (
+                  <DropdownMenuSeparator className="opacity-60" />
+                )}
+              <DropdownMenuRadioItem value={n.agentDid} disabled={!n.dialSucceeded}>
+                <AgentAvatar
+                  name={n.agentPrincipal.displayName ?? n.label}
+                  className="size-5 text-[9px]"
+                />
+                <span className="min-w-0 flex-1 truncate">
+                  {n.agentPrincipal.displayName ?? n.label}
+                </span>
+                {isWorkingNode(n, homeDid) && (
+                  <span className="text-xs text-muted-foreground">local</span>
+                )}
+              </DropdownMenuRadioItem>
+            </Fragment>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
 }
 
 /** Display the existing workflow owner's observation, never infer queue health. */
@@ -342,19 +410,19 @@ export function useBehaviorChoice(shell: Shell) {
    and down, and a person's eye with it. One line of the small size is
    always reserved; an error, being rarer and longer, may still grow it. */
 export function SessionSubmissionStatus({
-  error,
   activityStatus,
   hint,
   reserve = true,
-}: Pick<Shell, "error" | "activityStatus"> & {
+}: {
+  activityStatus: ShellView["shellProjection"]["activityStatus"];
   hint?: string | null;
   /** a new chat has no transcript above to hold still, so its line may
       take no room until it has something to say */
   reserve?: boolean;
 }) {
-  const status = activityStatus && !error ? activityStatus : null;
-  const quiet = !status && !error && hint;
-  const empty = !status && !error && !quiet;
+  const status = activityStatus;
+  const quiet = !status && hint;
+  const empty = !status && !quiet;
   return (
     <div
       className={cn("px-1", reserve ? "mt-2 min-h-4" : !empty && "mt-2")}
@@ -368,11 +436,6 @@ export function SessionSubmissionStatus({
         >
           <span>{status.label}</span>
         </div>
-      )}
-      {error && (
-        <p role="alert" className="text-sm leading-4 text-destructive">
-          {error}
-        </p>
       )}
       {quiet && <p className="text-xs leading-4 text-muted-foreground">{hint}</p>}
     </div>
@@ -480,10 +543,6 @@ function copyActions(text: string | null | undefined) {
   ];
 }
 
-/* the sessions this one reached; memoised items read it from context so a
-   lineage refresh re-renders only the subagent rows */
-const WorkersContext = createContext<Workers>(NO_WORKERS);
-
 /* the sessions that sent work into this one; a turn another session sent is
    labeled with its sender */
 const ParentContext = createContext<ParentWork | null>(null);
@@ -569,7 +628,7 @@ function WorkerRunStep({
   tools: RenderedToolCallView[];
   workers: Workers;
 }) {
-  const deployment = useDeployment();
+  const deployment = useSelectedNode();
   const first = tools[0]!;
   const p = first.presentation;
   const reached = workers.byToolCall(first);
@@ -591,7 +650,6 @@ function WorkerRunStep({
         behaviorId ? (
           <BehaviorAvatar
             name={behaviorName(behaviorId, deployment)}
-            behaviorId={behaviorId}
             className="size-4 text-[8px]"
           />
         ) : (
@@ -610,29 +668,22 @@ function WorkerRunStep({
   );
 }
 
-/* A worker's scattered steps gathered as one row inside its group: the
-   fold the transcript made before groups (tool-runs.ts, foldWorkers), kept
-   because a dozen rows about five workers read as nothing. A run of
-   similar calls is the group itself now, so runs are not folded again. */
-type PlacedMember =
-  GroupMember | { kind: "worker"; key: string; tools: RenderedToolCallView[] };
+/* A worker's scattered steps as one row inside its group, at its first step. */
+type PlacedMember = GroupMember | ({ kind: "worker" } & GatheredWorker);
 
 function placeWorkers(members: GroupMember[]): PlacedMember[] {
-  const workersByTool = new Map<string, Extract<PlacedMember, { kind: "worker" }>>();
-  for (const run of foldWorkers(groupTools(members)))
-    if (run.kind === "worker")
-      for (const tool of run.tools) workersByTool.set(tool.itemKey, run);
+  const gathered = gatherWorkers(groupTools(members));
   const placed = new Set<string>();
   const out: PlacedMember[] = [];
   for (const m of members) {
-    const worker = m.kind === "tool" ? workersByTool.get(m.key) : undefined;
+    const worker = m.kind === "tool" ? gathered.get(m.key) : undefined;
     if (!worker) {
       out.push(m);
       continue;
     }
     if (placed.has(worker.key)) continue;
     placed.add(worker.key);
-    out.push(worker);
+    out.push({ kind: "worker", ...worker });
   }
   return out;
 }
@@ -866,7 +917,6 @@ const TranscriptItem = memo(function TranscriptItem({
         <div className={cn("relative", state && "mb-2")}>
           <BehaviorAvatar
             name={sender.behaviorName ?? senderName}
-            behaviorId={sender.summary?.behaviorId ?? null}
             /* in the gutter where there is one; seated on the bubble's
                top corner when the screen is too narrow to spare it */
             className="absolute -top-1 right-2 size-6 text-[10px] ring-2 ring-background sm:top-3.5 sm:-right-8 sm:ring-0"
@@ -986,8 +1036,6 @@ function StoppedNotice({ cause }: { cause: DerivedCancelCauseView | null }) {
   );
 }
 
-type TranscriptActions = Pick<Shell, "loadOlderSessionTimeline" | "retryMessage">;
-
 /* The live tail's text, revealed at a steady pace, reporting what is on
    screen so the message that replaces it can start from there. */
 function LiveContent({ content }: { content: string }) {
@@ -1013,20 +1061,7 @@ function AssistantContent({ itemKey, content }: { itemKey: string; content: stri
 /* Under a finished response the actions sit on the line below the answer
    and stay there, rather than floating over it on hover. Copy takes the response as written — its markdown — and says so. */
 function ResponseActions({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => () => void (timer.current && clearTimeout(timer.current)), []);
-  const copy = () => {
-    navigator.clipboard
-      ?.writeText(text)
-      .then(() => {
-        setCopied(true);
-        if (timer.current) clearTimeout(timer.current);
-        timer.current = setTimeout(() => setCopied(false), 1200);
-      })
-      /* the clipboard may refuse; the check only claims a copy that happened */
-      .catch(() => {});
-  };
+  const { copied, copy } = useCopied();
   return (
     /* on a desktop they wait for the pointer, like a step's caret: an
        answer reads as the end of the turn, not as a row of controls. The
@@ -1045,7 +1080,7 @@ function ResponseActions({ text }: { text: string }) {
           variant="quiet"
           size="icon-xs"
           aria-label="Copy response"
-          onClick={copy}
+          onClick={() => copy(text)}
         >
           {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
         </Button>
@@ -1055,8 +1090,6 @@ function ResponseActions({ text }: { text: string }) {
 }
 
 export const TranscriptPanel = memo(function TranscriptPanel({
-  actionsRef,
-  holdsCount,
   inFlight,
   stopping = false,
   scroller,
@@ -1064,10 +1097,7 @@ export const TranscriptPanel = memo(function TranscriptPanel({
   workers,
   parentWork,
   workerActions,
-  deployment,
 }: {
-  actionsRef: RefObject<TranscriptActions>;
-  holdsCount: number;
   inFlight: boolean;
   stopping?: boolean;
   /** the transcript's scroller, once mounted */
@@ -1076,13 +1106,13 @@ export const TranscriptPanel = memo(function TranscriptPanel({
   workers: Workers;
   parentWork: ParentWork;
   workerActions: WorkerActions;
-  deployment: DeploymentView | null;
 }) {
+  const { actions } = useApp();
   const loadingOlder = useOlderPages(
     scroller,
     session?.sessionId ?? null,
     session?.timelinePage?.hasOlder ?? false,
-    () => actionsRef.current.loadOlderSessionTimeline(),
+    () => actions.loadOlderSessionTimeline(),
     session?.timelineItems[0]?.itemKey ?? null,
   );
   const [retrying, setRetrying] = useState(false);
@@ -1188,9 +1218,9 @@ export const TranscriptPanel = memo(function TranscriptPanel({
     if (!requestId) return;
     setRetrying(true);
     try {
-      await actionsRef.current.retryMessage(requestId);
+      await actions.retryMessage(requestId);
     } catch (error) {
-      toast(`Couldn't retry: ${String(error)}`);
+      toastFailure("retry the message", error);
     } finally {
       setRetrying(false);
     }
@@ -1218,42 +1248,38 @@ export const TranscriptPanel = memo(function TranscriptPanel({
         </div>
       )}
       <StreamContext.Provider value={stream}>
-        <DeploymentContext.Provider value={deployment}>
-          <WorkersContext.Provider value={workers}>
-            <WorkerActionsContext.Provider value={workerActions}>
-              <ParentContext.Provider value={parentWork}>
-                <GroupStateContext.Provider value={groupState}>
-                  {entries.map((entry) =>
-                    entry.kind === "item" ? (
-                      /* keyed for the pager, which holds the reader's place
+        <WorkerActionsContext.Provider value={workerActions}>
+          <ParentContext.Provider value={parentWork}>
+            <GroupStateContext.Provider value={groupState}>
+              {entries.map((entry) =>
+                entry.kind === "item" ? (
+                  /* keyed for the pager, which holds the reader's place
                          by the row under their eye while older pages land */
-                      <div
-                        key={entry.key}
-                        data-timeline-key={entry.key}
-                        className="group/response"
-                      >
-                        <TranscriptItem
-                          item={entry.item}
-                          status={entry.item.kind === "liveAssistant" ? status : null}
-                          final={finalKeys.has(entry.key)}
-                        />
-                      </div>
-                    ) : (
-                      <ActivityGroup key={entry.key} entry={entry} workers={workers} />
-                    ),
-                  )}
-                </GroupStateContext.Provider>
-                {continuing && showError && <FailedEarlier message={responseError} />}
-                {continuing &&
-                  session?.timelineItems
-                    .filter((item) => item.kind === "liveAssistant")
-                    .map((item) => (
-                      <TranscriptItem key={item.itemKey} item={item} status={status} />
-                    ))}
-              </ParentContext.Provider>
-            </WorkerActionsContext.Provider>
-          </WorkersContext.Provider>
-        </DeploymentContext.Provider>
+                  <div
+                    key={entry.key}
+                    data-timeline-key={entry.key}
+                    className="group/response"
+                  >
+                    <TranscriptItem
+                      item={entry.item}
+                      status={entry.item.kind === "liveAssistant" ? status : null}
+                      final={finalKeys.has(entry.key)}
+                    />
+                  </div>
+                ) : (
+                  <ActivityGroup key={entry.key} entry={entry} workers={workers} />
+                ),
+              )}
+            </GroupStateContext.Provider>
+            {continuing && showError && <FailedEarlier message={responseError} />}
+            {continuing &&
+              session?.timelineItems
+                .filter((item) => item.kind === "liveAssistant")
+                .map((item) => (
+                  <TranscriptItem key={item.itemKey} item={item} status={status} />
+                ))}
+          </ParentContext.Provider>
+        </WorkerActionsContext.Provider>
       </StreamContext.Provider>
       {wasInterrupted && !inFlight && (
         <StoppedNotice cause={session?.latestRequestOutcome?.cancelCause ?? null} />
@@ -1279,7 +1305,7 @@ export const TranscriptPanel = memo(function TranscriptPanel({
           )}
         </div>
       )}
-      {status && !live && holdsCount === 0 && (
+      {status && !live && (
         <AssistantMessage>
           <Thinking label={status} />
         </AssistantMessage>
@@ -1288,17 +1314,38 @@ export const TranscriptPanel = memo(function TranscriptPanel({
   );
 });
 
-export function SessionScreen({ shell }: { shell: Shell }) {
-  const session = shell.selectedSession;
-  const homeDid = shell.snapshot?.bootstrap.initAgentDid;
-  const { draft, setDraft } = shell;
+export function SessionScreen() {
+  const activeRequestId = useView((view) => view.shellProjection.activeRequestId);
+  const activityStatus = useView((view) => view.shellProjection.activityStatus);
+  const {
+    drafts,
+    stores,
+    actions: {
+      acceptsComposeIntent,
+      captureComposeIntent,
+      interruptRequest,
+      renameSession,
+      selectAgent,
+      sendMessage,
+      setChatFolder,
+    },
+  } = useApp();
+  const chatFolder = useChatFolder();
+  const nodeCount = useNodeCount();
+  const draftKey = useView((view) => view.draftKey);
+  const inFlight = useInterruptVisible();
+  const mailboxCause = useMailboxCause();
+  const sendStatus = useView((view) => view.shellProjection.nonEmptyContentSendStatus);
+  const selectedAgentDid = useSelectedAgentDid();
+  const deployment = useSelectedNode();
+  const selectedSessionId = stores.selection.use.sessionId();
+  const sending = stores.chat.use.sending();
+  const sessionLoad = useSessionLoad();
+  const session = useSelectedSessionFields(selectScreenFacts);
+  const homeDid = useHomeDid();
+  const sessionWorkers = useFleet((s) => workersOfId(s, session?.sessionId));
+  const [draft, setDraft] = useDraft(drafts, draftKey);
   const [requestedStop, setRequestedStop] = useState<string | null>(null);
-  /* the fork notice keeps its session through its exit; the shell owner decides when it shows */
-  const [forked, setForked] = useState<{
-    sessionId: string;
-    title: string;
-  } | null>(null);
-  const forkNotice = useExclusivePopover();
   /* the transcript column follows new content while the reader is near
      the bottom; a reader who has scrolled up is left where they are */
   const column = useRef<HTMLDivElement | null>(null);
@@ -1310,25 +1357,14 @@ export function SessionScreen({ shell }: { shell: Shell }) {
     },
     [ownScroller],
   );
-  const viewport = () => scroller;
-  const transcriptActions = useRef<TranscriptActions>({
-    loadOlderSessionTimeline: shell.loadOlderSessionTimeline,
-    retryMessage: shell.retryMessage,
-  });
-  useLayoutEffect(() => {
-    transcriptActions.current = {
-      loadOlderSessionTimeline: shell.loadOlderSessionTimeline,
-      retryMessage: shell.retryMessage,
-    };
-  }, [shell.loadOlderSessionTimeline, shell.retryMessage]);
   /* away from the bottom, a button offers the way back; scrolling is the cue */
-  const { atBottom, toBottom } = useFollowTail(scroller, shell.selectedSessionId);
+  const { atBottom, toBottom } = useFollowTail(scroller, selectedSessionId);
   /* once the full header scrolls out, a condensed one sticks to the top */
   const headerEnd = useRef<HTMLDivElement>(null);
   const [condensed, setCondensed] = useState(false);
   useEffect(() => {
     const el = headerEnd.current;
-    const root = viewport();
+    const root = scroller;
     if (!el || !root) return;
     const io = new IntersectionObserver(([e]) => setCondensed(!e!.isIntersecting), {
       root,
@@ -1337,12 +1373,11 @@ export function SessionScreen({ shell }: { shell: Shell }) {
     return () => io.disconnect();
     /* the loader shows first and the marker mounts with the session, after
        this effect has already run once and found nothing: run again then */
-  }, [shell.selectedSessionId, session, scroller]);
-  const choice = useBehaviorChoice(shell);
-  const deployment = shell.selectedDeployment;
-  const provenance = useSessionProvenance(shell);
-  const workers = useWorkers(shell, provenance);
-  const parentWork = useParentWork(shell, provenance);
+  }, [selectedSessionId, session, scroller]);
+  const choice = useBehaviorChoice();
+  const provenance = useSessionProvenance();
+  const workers = useWorkers(provenance);
+  const parentWork = useParentWork(provenance);
   /* the composer mounts with the session, not with the screen, so this
      measures from a callback ref rather than an effect that would run once
      while it was still absent. The height goes on the column, not the
@@ -1391,18 +1426,13 @@ export function SessionScreen({ shell }: { shell: Shell }) {
   const workerActions = useMemo<WorkerActions>(
     () => ({
       interrupt: (request) => {
-        void shell.api
-          .interruptRequest({
-            requestId: request.requestId,
-            agentDid: request.agentDid,
-            cause: "userCancelled",
-          })
-          .catch((e: unknown) =>
-            toast(`Couldn't stop: ${e instanceof Error ? e.message : String(e)}`),
-          );
+        interruptRequest({
+          requestId: request.requestId,
+          agentDid: request.agentDid,
+        }).catch((e: unknown) => toastFailure("stop", e));
       },
     }),
-    [shell.api],
+    [interruptRequest],
   );
   /* the principal name, or the pairing label while a paired node has not
      replicated its principal yet */
@@ -1410,23 +1440,25 @@ export function SessionScreen({ shell }: { shell: Shell }) {
     deployment?.agentPrincipal.displayName ?? deployment?.label ?? "the agent";
   /* the snapshot says what happened in a session; the summary says where it
      came from, which is the list's own view of it */
-  const summary =
-    deployment?.sessions.find((x) => x.sessionId === session?.sessionId) ?? null;
+  const summary = useFleet((s) =>
+    listedSession(s, deployment?.agentDid, session?.sessionId),
+  );
+  const sessionNode = useFleet((s) => nodeOf(s, session?.agentDid));
 
   const send = async (text: string) => {
-    const pending = shell.sendMessage(text, session?.behaviorId ?? choice.behaviorId);
-    const intentGeneration = shell.captureComposeIntent();
+    const pending = sendMessage(text, session?.behaviorId ?? choice.behaviorId);
+    const intentGeneration = captureComposeIntent();
     const result = await pending;
     if (result) setDraft((current) => (current === text ? "" : current));
-    if (!shell.acceptsComposeIntent(intentGeneration)) return;
-    if (result && result.sessionId !== shell.selectedSessionId) {
-      if (!shell.selectedSessionId) workspace.adoptNewSessionDock(result.sessionId);
+    if (!acceptsComposeIntent(intentGeneration)) return;
+    if (result && result.sessionId !== selectedSessionId) {
+      if (!selectedSessionId) workspace.adoptNewSessionDock(result.sessionId);
       navigate({ name: "session", sessionId: result.sessionId });
     }
   };
 
   const contextFor = (behaviorId?: string | null) => {
-    const b = deployment?.behaviors.find((x) => x.behaviorId === behaviorId);
+    const b = agentOf(deployment, behaviorId);
     return deployment?.contexts.find((c) => c.context_id === b?.contextId);
   };
   const startSlash = useSlashSkills(
@@ -1443,18 +1475,15 @@ export function SessionScreen({ shell }: { shell: Shell }) {
   );
 
   /* ---- start a new session ---- */
-  if (!shell.selectedSessionId) {
+  if (!selectedSessionId) {
     const env = deployment?.behaviorEnvironments.find(
       (e) => e.behaviorId === choice.behaviorId,
     );
     const chosenName = behaviorName(choice.behaviorId, deployment);
-    const startStatus = presentedComposerSendStatus(
-      draft,
-      shell.nonEmptyContentSendStatus,
-    );
+    const startStatus = presentedComposerSendStatus(draft, sendStatus);
     return (
       <div
-        key={shell.selectedAgentDid ?? "new"}
+        key={selectedAgentDid ?? "new"}
         data-testid="session-screen"
         className="mx-auto grid min-h-full max-w-2xl content-center gap-6 px-6 py-16 animate-in fade-in-0 slide-in-from-bottom-2 duration-300 ease-out fill-mode-both motion-reduce:animate-none"
       >
@@ -1463,64 +1492,18 @@ export function SessionScreen({ shell }: { shell: Shell }) {
           <div>
             <h1 className="font-heading text-lg font-medium text-heading">
               Start a new chat with{" "}
-              {shell.deployments.length > 1 ? (
-                /* the node the chat starts on, where there is a choice: the
-                   name is the button's own text, so the heading still reads
-                   as one sentence */
-                <DropdownMenu>
-                  <DropdownMenuTrigger
-                    render={
-                      <button
-                        type="button"
-                        title="Choose a node"
-                        className="inline-flex items-center gap-1 underline decoration-border underline-offset-4 hover:decoration-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-sm"
-                      />
-                    }
-                  >
-                    {agentName}
-                    <ChevronDown className="size-4 opacity-50" />
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start" className="w-56">
-                    <DropdownMenuRadioGroup
-                      value={shell.selectedAgentDid ?? ""}
-                      onValueChange={(did) => shell.selectAgent(did)}
-                    >
-                      {shell.deployments.map((n, i, all) => (
-                        <Fragment key={n.agentDid}>
-                          {/* a faint line between the local node and the paired ones */}
-                          {i > 0 &&
-                            isWorkingNode(all[i - 1]!, homeDid) &&
-                            !isWorkingNode(n, homeDid) && (
-                              <DropdownMenuSeparator className="opacity-60" />
-                            )}
-                          <DropdownMenuRadioItem
-                            value={n.agentDid}
-                            disabled={!n.dialSucceeded}
-                          >
-                            <AgentAvatar
-                              name={n.agentPrincipal.displayName ?? n.label}
-                              className="size-5 text-[9px]"
-                            />
-                            <span className="min-w-0 flex-1 truncate">
-                              {n.agentPrincipal.displayName ?? n.label}
-                            </span>
-                            {isWorkingNode(n, homeDid) && (
-                              <span className="text-xs text-muted-foreground">
-                                local
-                              </span>
-                            )}
-                          </DropdownMenuRadioItem>
-                        </Fragment>
-                      ))}
-                    </DropdownMenuRadioGroup>
-                  </DropdownMenuContent>
-                </DropdownMenu>
+              {nodeCount > 1 ? (
+                <NodeChoice
+                  name={agentName}
+                  selectedAgentDid={selectedAgentDid}
+                  onSelect={selectAgent}
+                />
               ) : (
                 agentName
               )}
             </h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              {shell.mailboxCause
+              {mailboxCause
                 ? "Answering a mailbox item; the first message starts its request"
                 : "The first message creates the session automatically"}
             </p>
@@ -1532,10 +1515,10 @@ export function SessionScreen({ shell }: { shell: Shell }) {
             onChange={setDraft}
             onSend={send}
             models={[]}
-            disabled={shell.nonEmptyContentSendStatus.kind === "disabled"}
+            disabled={sendStatus.kind === "disabled"}
             above={
               <>
-                <ReplyingTo shell={shell} />
+                <ReplyingTo />
                 <SlashSkillMenu
                   items={startSlash.items}
                   active={startSlash.active}
@@ -1547,35 +1530,22 @@ export function SessionScreen({ shell }: { shell: Shell }) {
             leading={
               <>
                 <BehaviorPicker
-                  shell={shell}
                   deployment={deployment}
                   behaviorId={choice.behaviorId}
                   onChange={choice.setPicked}
                 />
-                <ChatFolderPicker
-                  folder={shell.chatFolder}
-                  onChange={shell.setChatFolder}
-                />
+                <ChatFolderPicker folder={chatFolder} onChange={setChatFolder} />
               </>
             }
-            sending={shell.sending}
+            sending={sending}
             placeholder={placeholderFor(startStatus, "Ask anything")}
           />
           {/* inside the composer's row, so the grid's gap is not paid twice
               around a line that is usually empty */}
-          <SessionSubmissionStatus
-            error={null}
-            activityStatus={shell.activityStatus}
-            reserve={false}
-          />
+          <SessionSubmissionStatus activityStatus={activityStatus} reserve={false} />
         </div>
         <p className="text-xs text-muted-foreground">
-          {chosenName} <strong className="font-medium text-foreground">can</strong>{" "}
-          {env
-            ? `${fileAccess(env.fileAccess)} files and ${bashAccess(env.bashAccess)} commands`
-            : "…"}
-          , and <strong className="font-medium text-foreground">has access</strong> to{" "}
-          {network(env?.networkAccess)}.
+          <AccessSentence name={chosenName} env={env} />
           {deployment && choice.behaviorId && (
             <>
               {" "}
@@ -1598,12 +1568,10 @@ export function SessionScreen({ shell }: { shell: Shell }) {
   }
 
   /* ---- an existing session ---- */
-  const holdsHere = shell.holds.filter((h) => h.sessionId === session?.sessionId);
-  const inFlight = shell.interruptVisible ?? Boolean(shell.selectedTrackedRequestId);
 
   /* stop: the interrupt reaches this request only; sessions it started keep
      their own work, each stoppable from its row or its own screen */
-  const stoppableRequestId = shell.activeRequestId ?? session?.latestRequestId ?? null;
+  const stoppableRequestId = activeRequestId ?? session?.latestRequestId ?? null;
   const stopping = isStopping({
     inFlight,
     requestId: stoppableRequestId,
@@ -1619,32 +1587,15 @@ export function SessionScreen({ shell }: { shell: Shell }) {
     const release = () =>
       setRequestedStop((current) => (current === requestId ? null : current));
     try {
-      await shell.api.interruptRequest({
-        requestId,
-        agentDid: shell.selectedAgentDid,
-        cause: "userCancelled",
-      });
+      await interruptRequest({ requestId, agentDid: selectedAgentDid });
     } catch (e) {
       release();
-      toast(`Couldn't stop: ${e instanceof Error ? e.message : String(e)}`);
+      toastFailure("stop", e);
     }
   };
 
   /* Local text plus the canonical shell admission decision. */
-  const status = presentedComposerSendStatus(draft, shell.nonEmptyContentSendStatus);
-
-  /* PROTOTYPE ONLY: fork this session and open the copy */
-  const fork = async () => {
-    if (!session) return;
-    try {
-      const sessionId = await shell.forkSession(session.sessionId);
-      /* the copy exists; moving to it is the person's call */
-      setForked({ sessionId, title: `${session.title ?? "Session"} (fork)` });
-      forkNotice.onOpenChange(true);
-    } catch (e) {
-      toast(`Couldn't fork: ${String(e)}`);
-    }
-  };
+  const status = presentedComposerSendStatus(draft, sendStatus);
 
   /* Until the session is here, nothing of its screen is. Drawn without it,
      the screen assembled under the reader's eye — chrome, then a title
@@ -1652,11 +1603,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
      part landed. One mark, centred, says it is coming. A load that failed,
      or a session the store does not have, keeps the screen: its
      LoadingStatus says what happened and offers the way on. */
-  if (
-    !session &&
-    shell.sessionLoad.phase !== "failed" &&
-    shell.sessionLoad.found !== false
-  )
+  if (!session && sessionLoad.phase !== "failed" && sessionLoad.found !== false)
     return <SessionLoading />;
 
   return (
@@ -1704,19 +1651,11 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                   )}
                 >
                   <NodeBehaviorStack
-                    nodes={shell.deployments}
-                    homeDid={homeDid}
                     nodeDid={session?.agentDid}
                     behaviorId={session?.behaviorId}
-                    deployment={deployment}
                     size="sm"
                     keyboard
-                    workers={
-                      session
-                        ? (workersBySession(shell.deployments).get(session.sessionId) ??
-                          [])
-                        : []
-                    }
+                    workers={sessionWorkers}
                   />
                   <div className="min-w-0 flex-1 [&_form]:min-w-0 [&_h1]:truncate [&_h1]:text-sm [&_input]:h-7 [&_input]:text-sm">
                     {session ? (
@@ -1724,12 +1663,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                         key={session.sessionId + (session.title ?? "")}
                         title={session.title ?? "Untitled session"}
                         onRename={async (title) => {
-                          await shell.api.renameSession({
-                            agentDid: shell.selectedAgentDid ?? session.agentDid ?? "",
-                            sessionId: session.sessionId,
-                            title,
-                          });
-                          await shell.refreshSnapshot();
+                          await renameSession(session.sessionId, title);
                           toast("Renamed");
                         }}
                       />
@@ -1756,17 +1690,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                     <SessionContext context={session.context} compact />
                   </div>
                 )}
-                <PanelMenu
-                  routeName="session"
-                  size="icon-sm"
-                  actions={
-                    session ? (
-                      <DropdownMenuItem onClick={fork}>
-                        <Split className="size-4" /> Fork session
-                      </DropdownMenuItem>
-                    ) : null
-                  }
-                />
+                <PanelMenu routeName="session" />
               </PaneBar>
               <div className="flex items-start justify-between gap-4">
                 <div>
@@ -1775,12 +1699,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                       key={session.sessionId + (session.title ?? "")}
                       title={session.title ?? "Untitled session"}
                       onRename={async (title) => {
-                        await shell.api.renameSession({
-                          agentDid: shell.selectedAgentDid ?? session.agentDid ?? "",
-                          sessionId: session.sessionId,
-                          title,
-                        });
-                        await shell.refreshSnapshot();
+                        await renameSession(session.sessionId, title);
                         toast("Renamed");
                       }}
                     />
@@ -1813,31 +1732,17 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                     )}
                   <div className="mt-3 flex flex-wrap items-center gap-2">
                     <NodeBehaviorStack
-                      nodes={shell.deployments}
-                      homeDid={homeDid}
                       nodeDid={session?.agentDid}
                       behaviorId={session?.behaviorId}
-                      deployment={deployment}
-                      workers={
-                        session
-                          ? (workersBySession(shell.deployments).get(
-                              session.sessionId,
-                            ) ?? [])
-                          : []
-                      }
+                      workers={sessionWorkers}
                     />
                     <span className="text-sm text-muted-foreground">
                       {behaviorName(session?.behaviorId ?? null, deployment)}
                       {/* the node only when it is not the local one, as the
                           marks beside it do */}
-                      {(() => {
-                        const node = shell.deployments.find(
-                          (n) => nodeDidOf(n) === session?.agentDid,
-                        );
-                        return node && !isWorkingNode(node, homeDid)
-                          ? ` on ${node.agentPrincipal.displayName ?? node.label}`
-                          : null;
-                      })()}
+                      {sessionNode && !isWorkingNode(sessionNode, homeDid)
+                        ? ` on ${sessionNode.agentPrincipal.displayName ?? sessionNode.label}`
+                        : null}
                     </span>
                     {session?.context && <SessionContext context={session.context} />}
                   </div>
@@ -1845,14 +1750,10 @@ export function SessionScreen({ shell }: { shell: Shell }) {
               </div>
 
               <div ref={headerEnd} aria-hidden="true" />
-              <TranscriptPanel
-                deployment={deployment}
-                actionsRef={transcriptActions}
-                holdsCount={holdsHere.length}
+              <SelectedTranscript
                 inFlight={inFlight}
                 stopping={stopping}
                 scroller={scroller}
-                session={session}
                 workers={workers}
                 parentWork={parentWork}
                 workerActions={workerActions}
@@ -1892,68 +1793,17 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                     <ArrowDown />
                   </Button>
                 )}
-                <LoadingStatus shell={shell} />
-                {/* a held tool call blocks the turn, so it pins above the composer as the
-                    desktop's HoldsPanel does: the first in full, any others as one row each */}
-                {holdsHere[0] && (
-                  <div className="mb-3">
-                    <HoldCard
-                      title={`${holdsHere[0].toolName} needs your approval`}
-                      detail={
-                        <code className="font-mono text-xs">{holdsHere[0].args}</code>
-                      }
-                      onApprove={() =>
-                        shell.resolveHold(holdsHere[0]!.toolCallId, true)
-                      }
-                      onDeny={() => shell.resolveHold(holdsHere[0]!.toolCallId, false)}
-                    >
-                      {holdsHere.length > 1 && (
-                        <span className="ml-auto text-xs text-muted-foreground">
-                          {holdsHere.length - 1} more waiting
-                        </span>
-                      )}
-                    </HoldCard>
-                    {holdsHere.slice(1).map((h) => (
-                      <div
-                        key={h.toolCallId}
-                        className="mt-1 flex items-center gap-2 rounded-xl border border-border/60 bg-raised px-3 py-1.5 text-sm"
-                      >
-                        <span className="min-w-0 flex-1 truncate">
-                          {h.toolName}
-                          <code className="ml-2 font-mono text-xs text-muted-foreground">
-                            {h.args}
-                          </code>
-                        </span>
-                        <Button
-                          size="sm"
-                          variant="brand"
-                          onClick={() => shell.resolveHold(h.toolCallId, true)}
-                        >
-                          Approve
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => shell.resolveHold(h.toolCallId, false)}
-                        >
-                          Deny
-                        </Button>
-                      </div>
-                    ))}
-                  </div>
-                )}
+                <LoadingStatus />
                 <div data-testid="composer">
                   <Composer
                     value={draft}
                     onChange={setDraft}
                     onSend={send}
                     models={[]}
-                    disabled={
-                      shell.nonEmptyContentSendStatus.kind === "disabled" && !inFlight
-                    }
+                    disabled={sendStatus.kind === "disabled" && !inFlight}
                     above={
                       <>
-                        <ReplyingTo shell={shell} />
+                        <ReplyingTo />
                         <SlashSkillMenu
                           items={slash.items}
                           active={slash.active}
@@ -1963,12 +1813,9 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                     }
                     onKeyDown={slash.onKeyDown}
                     leading={
-                      <ChatFolderPicker
-                        folder={shell.chatFolder}
-                        onChange={shell.setChatFolder}
-                      />
+                      <ChatFolderPicker folder={chatFolder} onChange={setChatFolder} />
                     }
-                    sending={shell.sending || inFlight}
+                    sending={sending || inFlight}
                     onStop={inFlight && !stopping ? stop : undefined}
                     placeholder={
                       inFlight ? "Ask anything" : placeholderFor(status, "Ask anything")
@@ -1978,8 +1825,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                 {/* the placeholder already says why sending is off while the
                     box is empty; the hint is only for when typed text hides it */}
                 <SessionSubmissionStatus
-                  error={null}
-                  activityStatus={shell.activityStatus}
+                  activityStatus={activityStatus}
                   hint={
                     status.kind === "disabled" && !inFlight && draft.trim() !== ""
                       ? status.hint
@@ -1991,34 +1837,6 @@ export function SessionScreen({ shell }: { shell: Shell }) {
           </ScrollArea>
         </div>
       </div>
-      <AlertDialog
-        open={forkNotice.open && forked !== null}
-        onOpenChange={forkNotice.onOpenChange}
-        onOpenChangeComplete={forkNotice.onOpenChangeComplete}
-      >
-        <AlertDialogContent ref={forkNotice.popupRef} aria-modal="true">
-          <AlertDialogHeader>
-            <AlertDialogTitle>Forked</AlertDialogTitle>
-            <AlertDialogDescription>
-              A copy of this transcript is now its own session, "{forked?.title}
-              ". This one stays as it is. Open the fork, or stay here and find it later
-              in the sessions list.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Stay here</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                const target = forked;
-                forkNotice.onOpenChange(false);
-                if (target) navigate({ name: "session", sessionId: target.sessionId });
-              }}
-            >
-              Open the fork
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </div>
   );
 }
@@ -2044,7 +1862,7 @@ function Title({
     try {
       await onRename(next);
     } catch (e) {
-      toast(`Couldn't rename: ${String(e)}`);
+      toastFailure("rename the session", e);
       setDraft(title);
     }
   };
@@ -2334,4 +2152,40 @@ function Reasoning({ text }: { text: string }) {
       </CollapsibleContent>
     </Collapsible>
   );
+}
+
+/* The transcript is the one reader of every streamed chunk: it alone selects
+   the whole session, so a chunk re-renders it and not the screen around it. */
+function SelectedTranscript(
+  props: Omit<ComponentProps<typeof TranscriptPanel>, "session">,
+) {
+  return <TranscriptPanel {...props} session={useSelectedSession()} />;
+}
+
+/* What the screen around the transcript reads from the session. A streamed
+   chunk keeps each of these, so it reaches the transcript and not the screen. */
+type ScreenFacts = Pick<
+  DesktopSessionSnapshot,
+  | "sessionId"
+  | "agentDid"
+  | "behaviorId"
+  | "title"
+  | "context"
+  | "goal"
+  | "latestRequestId"
+  | "latestRequestOutcome"
+>;
+
+function selectScreenFacts(session: DesktopSessionSnapshot | null): ScreenFacts | null {
+  if (!session) return null;
+  return {
+    sessionId: session.sessionId,
+    agentDid: session.agentDid,
+    behaviorId: session.behaviorId,
+    title: session.title,
+    context: session.context,
+    goal: session.goal,
+    latestRequestId: session.latestRequestId,
+    latestRequestOutcome: session.latestRequestOutcome,
+  };
 }

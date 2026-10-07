@@ -11,8 +11,8 @@ import { Button } from "@gents/ui/components/button";
 import { toast } from "sonner";
 import { revealInFolder, revealInFolderLabel } from "../../lib/shellPlatform";
 import { useFollowTail, useScroller } from "../lib/scroll";
-import { isLocalAgent } from "../lib/firstRun";
-import { useDeployment } from "./deployment-context";
+import { useHomeDid, useSelectedNode } from "../hooks/useClient";
+import { isWorkingNode } from "../lib/nodes";
 import { CopyButton } from "./Markdown";
 import {
   DIFF_MARK,
@@ -262,9 +262,12 @@ function LiveOutput({ subject, tail }: { subject: string; tail: string }) {
 }
 
 function RevealFile({ path }: { path: string }) {
-  const deployment = useDeployment();
+  /* the tool ran on the selected node: its paths are this machine's only
+     when that node is the one this machine runs */
+  const node = useSelectedNode();
+  const homeDid = useHomeDid();
   const label = revealInFolderLabel();
-  if (!label || !deployment || !isLocalAgent(deployment) || !isAbsolutePath(path))
+  if (!label || !node || !isWorkingNode(node, homeDid) || !isAbsolutePath(path))
     return null;
   return (
     <Button

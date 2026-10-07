@@ -28,19 +28,29 @@ export function PluginAccessPrompt() {
   const [question, setQuestion] = useState<Question | null>(null);
   const answering = useRef(false);
   const failed = useRef<string | null>(null);
+  /* one poll out at a time; an answer outdates the one out, which may have
+     read the queue before the answer reached the host */
+  const polling = useRef(false);
+  const asked = useRef(0);
 
   const refresh = useCallback(async () => {
-    if (answering.current) return;
+    if (answering.current || polling.current) return;
+    polling.current = true;
+    const ask = ++asked.current;
     try {
       const { requests } = await call<{ requests: Question[] }>(
         "desktop_plugin_approvals_pending",
       );
+      if (ask !== asked.current) return;
       failed.current = null;
       setQuestion(requests[0] ?? null);
     } catch (error) {
+      if (ask !== asked.current) return;
       const text = message(error);
       if (failed.current !== text) toast.error(text);
       failed.current = text;
+    } finally {
+      polling.current = false;
     }
   }, []);
 
@@ -53,6 +63,7 @@ export function PluginAccessPrompt() {
   async function answer(decision: Decision) {
     if (!question) return;
     answering.current = true;
+    asked.current += 1;
     try {
       await call("desktop_plugin_approval_decide", { id: question.id, decision });
       setQuestion(null);

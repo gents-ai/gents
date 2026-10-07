@@ -99,7 +99,10 @@ describe("FleetRow", () => {
       {},
       {
         ...deployment,
-        runtime: { updatedAt: new Date(Date.now() - 5_000).toISOString() },
+        /* only the heartbeat is read here */
+        runtime: {
+          updatedAt: new Date(Date.now() - 5_000).toISOString(),
+        } as DeploymentView["runtime"],
       },
     );
     expect(screen.getByTitle(/Last runtime state change/)).toHaveTextContent(/s ago/);

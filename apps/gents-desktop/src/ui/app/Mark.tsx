@@ -1,3 +1,6 @@
+import { cn } from "@gents/ui/lib/utils";
+import { href } from "@/lib/router";
+
 /* official four-block symbol, currentColor */
 export function Mark({ className }: { className?: string }) {
   return (
@@ -12,5 +15,21 @@ export function Mark({ className }: { className?: string }) {
       <path d="M346.875 115.72V231.426H0V115.706L346.875 115.72Z" />
       <path d="M694.215 0V115.706L346.875 115.72L346.89 0H694.215Z" />
     </svg>
+  );
+}
+
+/** The mark as the shell draws it: a link to the agents list. */
+export function MarkLink({ className }: { className?: string }) {
+  return (
+    <a
+      href={href({ name: "agents" })}
+      aria-label="Agents"
+      className={cn(
+        "grid size-7 shrink-0 place-items-center rounded-md bg-ink text-background",
+        className,
+      )}
+    >
+      <Mark className="h-3" />
+    </a>
   );
 }

@@ -1,16 +1,10 @@
 /* The transcript's activity, placed once.
 
-   The folding before this (transcript-runs.ts, and tool-runs.ts inside a
-   run) looked at the whole transcript on every render, so a call arriving
-   later could change how earlier ones were shown: a lone row became part
-   of an activity block, three reads became "looked through 3 files", a
-   narration line became a note on a call. Each of those tore rows down and
-   built new ones in a different place, which is what made things vanish,
-   close, and move while a turn streamed.
-
-   Here an item's place is decided by what came before it, never by what
-   comes after. Consecutive tool calls share a group; anything that says
-   something — the agent's narration or answer, the person's turn — ends
+   An item's place is decided by what came before it, never by what comes
+   after, so a call arriving later never moves, regroups or rebuilds rows
+   already drawn while a turn streams. Consecutive tool calls share a
+   group; anything that says something — the agent's narration or answer,
+   the person's turn — ends
    it; a thought with no words in it stays inside the group it interrupts.
    A later call can only be added to the end of the last group or start a
    new one, so nothing already on screen is ever moved into a different

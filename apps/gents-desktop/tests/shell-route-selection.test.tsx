@@ -1,83 +1,65 @@
-import { renderHook } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ShellBridge } from "../src/ui/hooks/useShell";
+import { describe, expect, it } from "vitest";
 
-const desktop = vi.hoisted(() => ({
-  state: {} as Record<string, unknown>,
-}));
-vi.mock("../src/hooks/useDesktopShell", () => ({
-  useDesktopShell: () => desktop.state,
-}));
+import type { DeploymentView } from "@source-inc/gents-desktop-client";
+import { createDesktopShellSelectionActions } from "../src/hooks/desktopShellSelectionActions";
+import { selection } from "../src/hooks/selectionStore";
+import { shellStores } from "./shell-fixture";
 
-import { useShell } from "../src/ui/hooks/useShell";
+const node = (agentDid: string, sessionIds: string[]) =>
+  ({
+    agentDid,
+    agentPrincipal: { defaultBehaviorId: null },
+    behaviors: [],
+    sessions: sessionIds.map((sessionId) => ({ agentDid, sessionId })),
+    mailboxItems: [],
+  }) as unknown as DeploymentView;
 
-const node = (agentDid: string, sessionIds: string[]) => ({
-  agentDid,
-  behaviors: [],
-  sessions: sessionIds.map((sessionId) => ({ sessionId })),
-});
-
-beforeEach(() => {
-  desktop.state = {
+/* the route's owner over nodes a (session a-1) and b (session b-1) */
+function routeOwner(initial = { agentDid: "a", sessionId: "a-1" as string | null }) {
+  const stores = shellStores({
     deployments: [node("a", ["a-1"]), node("b", ["b-1"])],
-    selectedAgentDid: "a",
-    selectedSessionId: "a-1",
-    pendingMailboxCauseId: null,
-    setSelectedAgentDid: vi.fn(),
-    onSelectSession: vi.fn(),
-    onStartNewSession: vi.fn(),
-    behaviorReadiness: {},
-  };
-});
+    selection: initial,
+  });
+  const route = createDesktopShellSelectionActions({ stores });
+  return { store: stores.selection, route };
+}
 
-const bridge = { api: {} } as unknown as ShellBridge;
-
-describe("useShell route selection", () => {
-  it("selects the session's node first, then the session once, against it", () => {
-    const { rerender } = renderHook(({ route }) => useShell(bridge, route), {
-      initialProps: { route: "a-1" as string | null | undefined },
-    });
-    rerender({ route: "b-1" });
-    expect(desktop.state.setSelectedAgentDid).toHaveBeenCalledWith("b");
-    expect(desktop.state.onSelectSession).not.toHaveBeenCalled();
-    desktop.state = {
-      ...desktop.state,
-      selectedAgentDid: "b",
-      selectedSessionId: null,
-    };
-    rerender({ route: "b-1" });
-    expect(desktop.state.onSelectSession).toHaveBeenCalledTimes(1);
-    expect(desktop.state.onSelectSession).toHaveBeenCalledWith("b-1");
+describe("following the route", () => {
+  it("selects a session on another node together with its node", () => {
+    const { store, route } = routeOwner();
+    route.followRoute("b-1");
+    expect(store.getState()).toMatchObject({ agentDid: "b", sessionId: "b-1" });
+    /* a snapshot landing afterwards changes nothing */
+    const intent = store.getState().intent;
+    route.followRoute("b-1", true);
+    expect(store.getState().intent).toBe(intent);
   });
 
   it("selects a session on the selected node without touching the node", () => {
-    const { rerender } = renderHook(({ route }) => useShell(bridge, route), {
-      initialProps: { route: undefined as string | null | undefined },
-    });
-    desktop.state = { ...desktop.state, selectedSessionId: null };
-    rerender({ route: "a-1" });
-    expect(desktop.state.setSelectedAgentDid).not.toHaveBeenCalled();
-    expect(desktop.state.onSelectSession).toHaveBeenCalledTimes(1);
+    const { store, route } = routeOwner({ agentDid: "a", sessionId: null });
+    route.followRoute("a-1");
+    expect(store.getState()).toMatchObject({ agentDid: "a", sessionId: "a-1" });
   });
 
   it("keeps a mailbox item's cause when it opens into a new session", () => {
-    desktop.state = {
-      ...desktop.state,
-      selectedSessionId: null,
-      pendingMailboxCauseId: "item-1",
-    };
-    const { rerender } = renderHook(({ route }) => useShell(bridge, route), {
-      initialProps: { route: undefined as string | null | undefined },
+    const { store, route } = routeOwner({ agentDid: "a", sessionId: null });
+    selection.openMailboxRoute(store, {
+      itemId: "item-1",
+      agentDid: "a",
+      behaviorId: "engineer",
+      sessionId: null,
     });
-    rerender({ route: null });
-    expect(desktop.state.onStartNewSession).not.toHaveBeenCalled();
+    route.followRoute(null);
+    expect(store.getState().mailboxRoute?.itemId).toBe("item-1");
   });
 
   it("starts a new session for an ordinary new-session route", () => {
-    const { rerender } = renderHook(({ route }) => useShell(bridge, route), {
-      initialProps: { route: undefined as string | null | undefined },
+    const { store, route } = routeOwner();
+    route.followRoute(null);
+    expect(store.getState()).toMatchObject({
+      agentDid: "a",
+      sessionId: null,
+      composingFor: "a",
     });
-    rerender({ route: null });
-    expect(desktop.state.onStartNewSession).toHaveBeenCalledTimes(1);
   });
 });

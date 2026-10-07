@@ -11,6 +11,7 @@ const context = (overrides: Partial<Context> = {}): Context => ({
   contextWindow: 500_000,
   compactionThreshold: 0.8,
   compactionThresholdTokens: 400_000,
+  compactionStrategy: "StripThenSummarize",
   durableMessageCount: 1,
   providerMessageCount: 1,
   totalCompactedMessages: 0,

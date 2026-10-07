@@ -3,15 +3,15 @@
    is a Vec<String> on the bridge, so it is always a list. Bombadil found the
    harness adding a backend with no tags, and the backend editor's Tags row
    then crashed on the Providers page. */
-import { render, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { renderIn, testApp } from "./app-fixture";
 import type { InferenceBackend } from "@source-inc/gents-desktop-client";
 
 vi.mock("@/lib/router", () => ({ href: () => "#", navigate: vi.fn() }));
 
 import { createDesktopUiHarness } from "./ui-harness/desktopHarness";
 import { InferencePanel } from "../src/ui/screens/agent/InferencePanel";
-import type { Shell } from "../src/ui/hooks/useShell";
 
 const backendDocument = (backend_id: string): InferenceBackend =>
   ({
@@ -61,12 +61,9 @@ describe("harness backends keep the bridge's contract", () => {
     const api = harness.adapter;
     await api.saveBackendConfig({ document: backendDocument("backend-saved") });
     const deployment = (await api.fetchDesktopSnapshot()).client!.deployments[0]!;
-    const shell = {
-      api,
-      applyConfig: (run: (bridge: typeof api) => Promise<unknown>) => run(api),
-    } as unknown as Shell;
-    render(
-      <InferencePanel shell={shell} deployment={deployment} item="backend-saved" />,
+    renderIn(
+      testApp({ api }),
+      <InferencePanel deployment={deployment} item="backend-saved" />,
     );
     expect(screen.getByRole("textbox", { name: "Tags" })).toBeInTheDocument();
   });
@@ -90,11 +87,7 @@ describe("harness backends keep the bridge's contract", () => {
       },
     });
     const deployment = (await api.fetchDesktopSnapshot()).client!.deployments[0]!;
-    const shell = {
-      api,
-      applyConfig: (run: (bridge: typeof api) => Promise<unknown>) => run(api),
-    } as unknown as Shell;
-    render(<InferencePanel shell={shell} deployment={deployment} />);
+    renderIn(testApp({ api }), <InferencePanel deployment={deployment} />);
     const meta = screen.getByText(/Anthropic API key · key from ANTHROPIC_API_KEY/);
     expect(meta.textContent).not.toMatch(/signed in/);
   });
