@@ -51,6 +51,7 @@ export function createSessionReads({
 }: SessionReadParams) {
   let refreshSeq = 0;
   let liveSeq = 0;
+  let runEpoch = 0;
   let reconciledAt = 0;
   const setSession = (next: Parameters<typeof writeSession>[1]) =>
     writeSession(sessionStore, next);
@@ -124,6 +125,12 @@ export function createSessionReads({
     nextSessionId: string | null,
   ): Promise<DesktopSessionSnapshot | null> {
     if (!nextSessionId) return null;
+    const capturedRun = runEpoch;
+    const selected = store.getState();
+    const stillCurrent = () =>
+      capturedRun === runEpoch &&
+      store.getState().agentDid === selected.agentDid &&
+      store.getState().sessionId === selected.sessionId;
     const projected = readSession(sessionStore);
     const agentDid =
       projected?.sessionId === nextSessionId
@@ -132,8 +139,10 @@ export function createSessionReads({
     try {
       setError(null);
       await api.retrySessionHydration(nextSessionId, agentDid);
+      if (!stillCurrent()) return null;
       return await refreshSession(nextSessionId, agentDid);
     } catch (error) {
+      if (!stillCurrent()) return null;
       setError(String(error));
       return null;
     }
@@ -177,6 +186,8 @@ export function createSessionReads({
   }
 
   async function loadOlderSessionTimeline(): Promise<boolean> {
+    const capturedRun = runEpoch;
+    const capturedAgent = store.getState().agentDid;
     try {
       for (let hop = 0; hop < MAX_HIDDEN_PAGE_HOPS; hop += 1) {
         const current = readSession(sessionStore);
@@ -188,7 +199,13 @@ export function createSessionReads({
           trackedRequestId(),
           { limit: SESSION_TIMELINE_PAGE_SIZE, beforeItemKey: cursor },
         );
-        if (!older || store.getState().sessionId !== current.sessionId) return false;
+        if (
+          capturedRun !== runEpoch ||
+          capturedAgent !== store.getState().agentDid ||
+          !older ||
+          store.getState().sessionId !== current.sessionId
+        )
+          return false;
         const previousItemCount = readSession(sessionStore)?.timelineItems.length ?? 0;
         setSession((latest) => mergeOlderSessionTimelinePage(latest, older));
         const next = readSession(sessionStore);
@@ -205,6 +222,7 @@ export function createSessionReads({
       // resumes from there without making this interaction unbounded.
       return false;
     } catch (error) {
+      if (capturedRun !== runEpoch) return false;
       setError(String(error));
       return false;
     }
@@ -213,6 +231,7 @@ export function createSessionReads({
   return {
     /** Revoke pending reads when client observation stops. */
     invalidateSessionReads() {
+      runEpoch += 1;
       refreshSeq += 1;
       liveSeq += 1;
     },
