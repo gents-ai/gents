@@ -203,7 +203,6 @@ export function useDock(): DockHandle {
   return useDockFor(dockScope(useRoute()));
 }
 
-/** The dock of `scope`, with its changes bound to it. */
 /** Records that the route's screen is shown, which keeps its dock
     remembered longest. Whose dock a screen shows is found from its route
     while rendering; this is only the bookkeeping that bounds how many are
@@ -213,6 +212,7 @@ export function useDockVisit(route: Route) {
   useEffect(() => workspace.visit(scope), [scope]);
 }
 
+/** The dock of `scope`, with its changes bound to it. */
 export function useDockFor(scope: string): DockHandle {
   const dock = useStore(store, (state) => dockIn(state, scope));
   return useMemo(
