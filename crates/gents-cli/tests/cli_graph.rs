@@ -847,6 +847,111 @@ fn graph_run_validates_input_against_the_entry_schema() -> Result<()> {
     Ok(())
 }
 
+/// `graph run --graph-id ID --digest D` starts the active revision without a
+/// package name, refuses any other digest before a run starts, and
+/// `--output ndjson` prints the receipt as one compact line.
+#[test]
+fn graph_run_by_graph_id_is_pinned_to_the_active_digest() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating graph-id run tempdir")?;
+    let home = tempdir.path().join("agent-home");
+    let home_arg = home.to_str().context("path")?;
+    let initialized = run_init_json(
+        tempdir.path(),
+        &["--agent-name", "graph-id-runner", "--home", home_arg],
+    )?;
+    let owner_did = agent_did_from_init(&initialized)?;
+    let port = allocate_port()?;
+    let (_server, readiness) =
+        spawn_server_with_ready_json(&home, port, &["--home", home_arg], &[])?;
+    anyhow::ensure!(
+        readiness.get("status").and_then(Value::as_str) == Some("serving"),
+        "server did not become ready: {readiness}"
+    );
+    let graphql = format!("http://127.0.0.1:{port}/api/v0/graphql");
+    let profile = format!("{owner_did}:default-profile");
+    let pack = fixture_pack_dir("review_graph");
+    let installed = run_cli_json(
+        tempdir.path(),
+        &[
+            "pack",
+            "install",
+            dir_arg(&pack),
+            "--home",
+            home_arg,
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &owner_did,
+            "--output",
+            "json",
+            "--inference-slot",
+            &format!("coordinator={profile}"),
+            "--inference-slot",
+            &format!("worker={profile}"),
+            "--inference-slot",
+            &format!("verifier={profile}"),
+        ],
+    )?;
+    let graph_id = required_str(&installed, &["install", "graph_id"])?;
+    let digest = required_str(&installed, &["install", "revision_digest"])?;
+    let scope = [
+        "--home",
+        home_arg,
+        "--graphql",
+        graphql.as_str(),
+        "--agent-did",
+        owner_did.as_str(),
+    ];
+
+    let stale = format!("sha256:{}", "0".repeat(64));
+    let mut args = vec![
+        "graph",
+        "run",
+        "--graph-id",
+        graph_id,
+        "--digest",
+        stale.as_str(),
+    ];
+    args.extend(scope);
+    let denial = run_cli_failure_stderr(tempdir.path(), &args)?;
+    anyhow::ensure!(
+        denial.contains(&format!("is active at revision {digest}")),
+        "a digest that is not the active revision must be refused before any run starts: {denial}"
+    );
+
+    let mut args = vec![
+        "graph",
+        "run",
+        "--graph-id",
+        graph_id,
+        "--digest",
+        digest,
+        "--output",
+        "ndjson",
+    ];
+    args.extend(scope);
+    let printed = run_cli_text(tempdir.path(), &args)?;
+    let lines: Vec<&str> = printed
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    anyhow::ensure!(
+        lines.len() == 1,
+        "ndjson prints exactly one receipt line: {printed}"
+    );
+    let receipt: Value = serde_json::from_str(lines[0]).context("the receipt line is JSON")?;
+    anyhow::ensure!(
+        required_str(&receipt, &["graph_id"])? == graph_id
+            && required_str(&receipt, &["revision_digest"])? == digest,
+        "{receipt}"
+    );
+    let run_id = required_str(&receipt, &["run_id"])?;
+    let mut args = vec!["graph", "cancel", run_id, "--reason", "graph-id acceptance"];
+    args.extend(scope);
+    run_cli_json(tempdir.path(), &args)?;
+    Ok(())
+}
+
 /// An entry's `git_diff` host step runs through the CLI and the pack's own
 /// prepare plugin: the pack is built (compiling its plugin), installed from
 /// a `.pack` file, and a run over a real two-commit repository persists the
