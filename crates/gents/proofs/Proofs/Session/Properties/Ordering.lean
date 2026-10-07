@@ -95,6 +95,18 @@ theorem createdOrdered_tail
     CreatedOrdered rest := by
   simpa [CreatedOrdered] using h_order.2
 
+theorem createdOrdered_drop
+    {entries : List QueueEntry} (count : Nat)
+    (h_order : CreatedOrdered entries) :
+    CreatedOrdered (entries.drop count) := by
+  induction entries generalizing count with
+  | nil => simpa using h_order
+  | cons head tail ih =>
+      cases count with
+      | zero => simpa using h_order
+      | succ count =>
+          simpa using ih count (createdOrdered_tail h_order)
+
 theorem pendingAfterDrain_preserves_createdOrdered
     {source : QueueSource}
     {queueKey : Option QueueKey}
@@ -152,6 +164,10 @@ theorem transition_preserves_createdOrdered
       rw [h_pending] at h_order
       rw [h_post, SessionQueueState.claimHead]
       exact createdOrdered_tail h_order
+  | claim_folding _ h_pending h_post =>
+      rw [h_pending] at h_order
+      rw [h_post, SessionQueueState.claimFolding]
+      exact createdOrdered_drop _ (createdOrdered_tail h_order)
   | finish_active _ h_post =>
       rw [h_post, SessionQueueState.finishActive]
       exact h_order

@@ -6,6 +6,7 @@ inductive Action where
   | appendPending (entry : QueueEntry)
   | coalescePending (entry : QueueEntry)
   | claimNext
+  | claimFolding (admitted : List RequestId)
   | finishActive
   | drainAutomated (source : QueueSource) (queueKey : Option QueueKey)
   | drainObservedAutomated (source : QueueSource) (queueKey : Option QueueKey)
@@ -37,6 +38,10 @@ def step? (pre : SessionQueueState) : Action → Option SessionQueueState
   | .claimNext =>
       match pre.active, pre.pending with
       | none, entry :: rest => some (pre.claimHead entry rest)
+      | _, _ => none
+  | .claimFolding admitted =>
+      match pre.active, pre.pending with
+      | none, entry :: rest => some (pre.claimFolding entry rest admitted)
       | _, _ => none
   | .finishActive =>
       match pre.active with

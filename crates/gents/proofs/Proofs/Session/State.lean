@@ -79,6 +79,13 @@ structure QueueEntry where
   queueKey : Option QueueKey
   queuedAfter : Option RequestId
   origin : ExecutionOrigin := .interactive
+  /-- The signed requester principal of the admitted request. One session queue
+  orders every requester's requests; this is that request's own authority. -/
+  requester : Option Nat := none
+  /-- Abstract identity of the request-scoped execution settings the admission
+  carries besides its content: behavior, working directory, selected skills
+  and workspace binding. Equal values run under the same configuration. -/
+  turnContext : Nat := 0
   deriving DecidableEq, Repr
 
 namespace QueueEntry
@@ -96,6 +103,33 @@ def coalesceWellFormed (entry : QueueEntry) (key : QueueKey) : Prop :=
 
 instance (entry : QueueEntry) (key : QueueKey) : Decidable (entry.coalesceWellFormed key) := by
   unfold QueueEntry.coalesceWellFormed
+  infer_instance
+
+/-- A user message admitted while its session was busy: an interactive user
+append queued behind an earlier request. Agent steering (`agent_message`),
+goal and background-completion continuations, and scheduled or
+trigger-sourced work are not user messages and never fold. -/
+def queuedUserMessage (entry : QueueEntry) : Prop :=
+  entry.source = .user ∧ entry.policy = .append ∧ entry.origin = .interactive ∧
+    entry.queuedAfter.isSome
+
+instance (entry : QueueEntry) : Decidable entry.queuedUserMessage := by
+  unfold QueueEntry.queuedUserMessage
+  infer_instance
+
+/-- `candidate` may be answered by the turn `head` claims. Each folded message
+keeps its own signed admission and transcript entry; folding changes only how
+many turns run. The candidate must carry the head's own requester authority
+and execution settings, so the folded turn runs exactly what each admission
+authorized. -/
+def foldsInto (head candidate : QueueEntry) : Prop :=
+  head.source = .user ∧ head.origin = .interactive ∧
+    candidate.queuedUserMessage ∧
+    candidate.requester = head.requester ∧
+    candidate.turnContext = head.turnContext
+
+instance (head candidate : QueueEntry) : Decidable (head.foldsInto candidate) := by
+  unfold QueueEntry.foldsInto
   infer_instance
 
 def matchesAutomatedWakeup
@@ -215,6 +249,19 @@ def drainedRequestIds (source : QueueSource) (queueKey : Option QueueKey)
       else drainedRequestIds source key rest := by
   simp [drainedRequestIds, drainedRequestIdsMatching]
 
+/-- The pending messages a claim of `head` folds: the maximal run directly
+behind it that folds into it and whose admission the claim transaction
+verified. The run stops at the first other entry, so no entry passes one that
+stays queued. Entries admitted after the claim are never part of the run. -/
+def foldRun (head : QueueEntry) (admitted : List RequestId) :
+    List QueueEntry → List QueueEntry
+  | [] => []
+  | entry :: rest =>
+      if head.foldsInto entry ∧ entry.requestId ∈ admitted then
+        entry :: foldRun head admitted rest
+      else
+        []
+
 def CreatedOrdered : List QueueEntry → Prop
   | [] => True
   | entry :: rest =>
@@ -240,6 +287,18 @@ def appendPending (s : SessionQueueState) (entry : QueueEntry) : SessionQueueSta
 def claimHead (s : SessionQueueState) (entry : QueueEntry) (rest : List QueueEntry) :
     SessionQueueState :=
   { s with active := some entry.requestId, pending := rest }
+
+/-- Claim `entry` and fold its run into the same turn. Folded requests are
+superseded by the claimed request in the claim transaction; the claim is the
+cutoff, so later messages wait for the next turn. -/
+def claimFolding (s : SessionQueueState) (entry : QueueEntry) (rest : List QueueEntry)
+    (admitted : List RequestId) : SessionQueueState :=
+  let folded := foldRun entry admitted rest
+  { s with
+    active := some entry.requestId
+    pending := rest.drop folded.length
+    terminal := s.terminal ∪ (folded.map QueueEntry.requestId).toFinset
+  }
 
 def finishActive (s : SessionQueueState) (requestId : RequestId) : SessionQueueState :=
   { s with active := none, terminal := insert requestId s.terminal }

@@ -27,6 +27,12 @@ inductive Transition : SessionQueueState → SessionQueueState → Prop where
       pre.pending = entry :: rest →
       post = pre.claimHead entry rest →
       Transition pre post
+  | claim_folding {pre post : SessionQueueState} {entry : QueueEntry}
+      {rest : List QueueEntry} {admitted : List RequestId} :
+      pre.active = none →
+      pre.pending = entry :: rest →
+      post = pre.claimFolding entry rest admitted →
+      Transition pre post
   | finish_active {pre post : SessionQueueState} {requestId : RequestId} :
       pre.active = some requestId →
       post = pre.finishActive requestId →

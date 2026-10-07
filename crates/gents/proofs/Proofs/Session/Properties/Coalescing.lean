@@ -101,6 +101,18 @@ theorem uniqueCoalescedQueueKeys_tail
     UniqueCoalescedQueueKeys rest := by
   simpa [UniqueCoalescedQueueKeys] using h_unique.2
 
+theorem uniqueCoalescedQueueKeys_drop
+    {entries : List QueueEntry} (count : Nat)
+    (h_unique : UniqueCoalescedQueueKeys entries) :
+    UniqueCoalescedQueueKeys (entries.drop count) := by
+  induction entries generalizing count with
+  | nil => simpa using h_unique
+  | cons head tail ih =>
+      cases count with
+      | zero => simpa using h_unique
+      | succ count =>
+          simpa using ih count (uniqueCoalescedQueueKeys_tail h_unique)
+
 theorem pendingAfterDrain_preserves_uniqueCoalescedQueueKeys
     {source : QueueSource}
     {queueKey : Option QueueKey}
@@ -160,6 +172,10 @@ theorem transition_preserves_uniqueCoalescedQueueKeys
       rw [h_pending] at h_unique
       rw [h_post, SessionQueueState.claimHead]
       exact uniqueCoalescedQueueKeys_tail h_unique
+  | claim_folding _ h_pending h_post =>
+      rw [h_pending] at h_unique
+      rw [h_post, SessionQueueState.claimFolding]
+      exact uniqueCoalescedQueueKeys_drop _ (uniqueCoalescedQueueKeys_tail h_unique)
   | finish_active _ h_post =>
       rw [h_post, SessionQueueState.finishActive]
       exact h_unique
@@ -184,7 +200,7 @@ theorem trace_preserves_uniqueCoalescedQueueKeys
 /-- Goal continuations share queue coalescing, but never collide with a
 background-completion key or participate in its notification drain. -/
 theorem goal_queue_is_separate_from_background :
-    let entry : QueueEntry := ⟨1, 0, .goal, .coalesce, some 7, none, .scheduled⟩
+    let entry : QueueEntry := ⟨1, 0, .goal, .coalesce, some 7, none, .scheduled, none, 0⟩
     entry.coalesceWellFormed 7 ∧
     containsCoalescedQueueKey [entry] .goal 7 = true ∧
     containsCoalescedQueueKey [entry] .backgroundCompletion 7 = false ∧

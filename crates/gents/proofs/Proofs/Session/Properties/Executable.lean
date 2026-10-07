@@ -51,6 +51,18 @@ theorem step?_sound
               exact Transition.claim_next h_active h_pending rfl
       | some requestId =>
           simp [step?, h_active] at h_step
+  | claimFolding admitted =>
+      cases h_active : pre.active with
+      | none =>
+          cases h_pending : pre.pending with
+          | nil =>
+              simp [step?, h_active, h_pending] at h_step
+          | cons entry rest =>
+              simp [step?, h_active, h_pending] at h_step
+              cases h_step
+              exact Transition.claim_folding h_active h_pending rfl
+      | some requestId =>
+          simp [step?, h_active] at h_step
   | finishActive =>
       cases h_active : pre.active with
       | none =>
@@ -90,6 +102,8 @@ theorem transition_complete
         simp [step?, h_key, h_well_formed, h_contains, h_post]⟩
   | Transition.claim_next h_active h_pending h_post =>
       exact ⟨.claimNext, by simp [step?, h_active, h_pending, h_post]⟩
+  | Transition.claim_folding (admitted := admitted) h_active h_pending h_post =>
+      exact ⟨.claimFolding admitted, by simp [step?, h_active, h_pending, h_post]⟩
   | Transition.finish_active h_active h_post =>
       exact ⟨.finishActive, by simp [step?, h_active, h_post]⟩
   | Transition.drain_automated (source := source) (queueKey := queueKey) h_source h_post =>
