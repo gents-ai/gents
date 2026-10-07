@@ -146,6 +146,8 @@ export type MobilePerformanceHarnessController = {
   streamBurst(count: number): number;
   /** appends `text` to the live reply, as one update */
   streamText(text: string): void;
+  /** how long a read of an older timeline page takes, as the bridge's do */
+  setOlderPageDelay(ms: number): void;
   /**
    * One snapshot of a turn ending the way the bridge can deliver it: the
    * live tail kept or dropped, the saved reply present (under its own key,
@@ -322,6 +324,7 @@ export function createDesktopUiHarness(
   let hydrationRetryCalls = 0;
   let updateEvents = 0;
   let storeVersion = 1;
+  let olderPageDelayMs = 0;
   let reconcileVersion = 1;
   let streamSequence = 0;
   let bridgeCalls: MobilePerformanceBridgeCall[] = [];
@@ -1130,6 +1133,8 @@ export function createDesktopUiHarness(
       const sessionId = _sessionId;
       const session = sessions.get(sessionId);
       if (!session) return null;
+      if (timelinePage?.beforeItemKey && olderPageDelayMs > 0)
+        await wait(olderPageDelayMs);
       const snapshot = clone(session);
       snapshot.projectionRevision = { storeVersion, reconcileVersion };
       if (!timelinePage) return snapshot;
@@ -2481,6 +2486,9 @@ export function createDesktopUiHarness(
             syncSessions();
             notify("store", true);
             return sequence;
+          },
+          setOlderPageDelay(ms) {
+            olderPageDelayMs = ms;
           },
           streamText(text) {
             const session = sessions.get("session-large");

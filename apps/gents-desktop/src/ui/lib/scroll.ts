@@ -365,6 +365,15 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
   return { atBottom, toBottom, settle };
 }
 
+/* An older page is asked for while the reader is this many views from the
+   top, so it lands above them before they reach it; a page read takes a
+   bridge round trip. */
+const OLDER_AHEAD_VIEWS = 3;
+/* and never less than this, for a pane only a few lines tall */
+const OLDER_AHEAD_PX = 160;
+/* moving up this recently, the next page follows the one that landed */
+const OLDER_INTENT_MS = 1000;
+
 /* the row under the reader when an older page was asked for, and where it was */
 type Hold = {
   row: HTMLElement | undefined;
@@ -412,6 +421,8 @@ export function useOlderPages(
      React batched the start and end of a quick load into one */
   const [settles, setSettles] = useState(0);
   const hold = useRef<Hold | null>(null);
+  /* asks for the next page if the reader is still moving up near the top */
+  const again = useRef<() => void>(() => {});
 
   useLayoutEffect(() => {
     const held = hold.current;
@@ -420,7 +431,13 @@ export function useOlderPages(
       restore(scroller, held);
       held.landed = true;
     }
-    if (held.settled) hold.current = null;
+    if (held.settled) {
+      hold.current = null;
+      /* only after rows landed above the reader: a load that added nothing
+         would ask again at once, for as long as their last upward move counts */
+      if (held.landed && scroller.scrollHeight > held.height)
+        queueMicrotask(() => again.current());
+    }
   }, [oldestKey, scroller, settles]);
 
   useEffect(() => {
@@ -428,6 +445,7 @@ export function useOlderPages(
     if (!viewport || !subject) return;
     let disposed = false;
     let lastTop = viewport.scrollTop;
+    let movedUpAt = -Infinity;
     hold.current = null;
     setLoading(false);
     const fetchOlder = async () => {
@@ -435,7 +453,8 @@ export function useOlderPages(
         disposed ||
         hold.current ||
         !latest.current.hasOlder ||
-        viewport.scrollTop > 160
+        viewport.scrollTop >
+          Math.max(OLDER_AHEAD_PX, OLDER_AHEAD_VIEWS * viewport.clientHeight)
       )
         return;
       const viewportTop = viewport.getBoundingClientRect().top;
@@ -463,13 +482,20 @@ export function useOlderPages(
       setLoading(false);
       setSettles((count) => count + 1);
     };
+    const up = () => {
+      movedUpAt = performance.now();
+      void fetchOlder();
+    };
+    again.current = () => {
+      if (performance.now() - movedUpAt < OLDER_INTENT_MS) void fetchOlder();
+    };
     const onScroll = () => {
       const upward = viewport.scrollTop < lastTop;
       lastTop = viewport.scrollTop;
-      if (upward) void fetchOlder();
+      if (upward) up();
     };
     const onWheel = (event: WheelEvent) => {
-      if (event.deltaY < 0) void fetchOlder();
+      if (event.deltaY < 0) up();
     };
     let touchY: number | undefined;
     const onTouchStart = (event: TouchEvent) => {
@@ -477,12 +503,11 @@ export function useOlderPages(
     };
     const onTouchMove = (event: TouchEvent) => {
       const nextY = event.touches[0]?.clientY;
-      if (touchY !== undefined && nextY !== undefined && nextY > touchY)
-        void fetchOlder();
+      if (touchY !== undefined && nextY !== undefined && nextY > touchY) up();
       touchY = nextY;
     };
     const onKeyDown = (event: KeyboardEvent) => {
-      if (["ArrowUp", "PageUp", "Home"].includes(event.key)) void fetchOlder();
+      if (["ArrowUp", "PageUp", "Home"].includes(event.key)) up();
     };
     viewport.addEventListener("scroll", onScroll, { passive: true });
     viewport.addEventListener("wheel", onWheel, { passive: true });
@@ -491,6 +516,7 @@ export function useOlderPages(
     viewport.addEventListener("keydown", onKeyDown);
     return () => {
       disposed = true;
+      again.current = () => {};
       hold.current = null;
       viewport.removeEventListener("scroll", onScroll);
       viewport.removeEventListener("wheel", onWheel);
