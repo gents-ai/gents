@@ -144,6 +144,8 @@ export type MobilePerformanceHarnessController = {
   finishStreaming(): void;
   streamUpdate(): number;
   streamBurst(count: number): number;
+  /** appends `text` to the live reply, as one update */
+  streamText(text: string): void;
 };
 
 export type SessionSyncHarnessController = {
@@ -2452,6 +2454,22 @@ export function createDesktopUiHarness(
             syncSessions();
             notifyBurst("store", count, true);
             return sequence;
+          },
+          streamText(text) {
+            const session = sessions.get("session-large");
+            if (!session) {
+              throw new Error("mobile performance fixture lost session-large");
+            }
+            sessions.set("session-large", {
+              ...session,
+              timelineItems: session.timelineItems.map((item) =>
+                item.kind === "liveAssistant"
+                  ? { ...item, content: `${item.content ?? ""}${text}` }
+                  : item,
+              ),
+            });
+            syncSessions();
+            notify("store", true);
           },
         }
       : null;
