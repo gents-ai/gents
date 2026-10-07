@@ -132,10 +132,12 @@ pub fn run_receipt_from_tool_result(result: &str) -> Option<GraphRunReceipt> {
         .map(|envelope| envelope.receipt)
 }
 
-/// Where a graph run's entry input came from: the operator (validated against
-/// the entry's `input_schema`, if it declares one) or the host's own prepare
-/// step (host facts plus a pack plugin, already admitted and already
-/// persisted as the entry's evidence documents).
+/// Where a graph run's entry input came from. `Operator` is caller-supplied
+/// input, admitted against the entry's `input_schema` (when it declares one)
+/// inside the start transaction; it conveys no trust beyond that admission,
+/// and an entry that declares `prepare` refuses it. `Prepared` is the output
+/// of the host's own prepare step (host facts plus a pack plugin), already
+/// admitted and persisted as the entry's evidence documents.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EntryInputOrigin {
     Operator,
