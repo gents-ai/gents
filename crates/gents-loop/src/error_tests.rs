@@ -1,4 +1,5 @@
 use super::*;
+use crate::rig_compat::classify_completion_error;
 
 #[test]
 fn inference_error_retryability() {
@@ -248,6 +249,47 @@ fn openai_compatible_http_400_is_permanent_bad_request() {
     assert!(
         !classified.is_retryable(),
         "bad OpenAI-compatible request bodies should fail fast instead of retrying"
+    );
+}
+
+#[test]
+fn grok_proxy_426_version_gate_is_permanent() {
+    let error =
+        rig::agent::StreamingError::Completion(rig::completion::CompletionError::HttpError(
+            rig::http_client::Error::InvalidStatusCodeWithMessage(
+                "426".parse().expect("valid status"),
+                "Your Grok CLI version (0.2.93) is outdated. Please update to version 1.0.13 or later".into(),
+            ),
+        ));
+
+    let classified = classify_completion_error(&error);
+
+    assert!(matches!(
+        classified,
+        InferenceError::PermanentFailure { .. }
+    ));
+    assert!(
+        !classified.is_retryable(),
+        "a version gate rejects the identical request, so it must fail fast instead of burning the transport retry ladder"
+    );
+}
+
+#[test]
+fn provider_error_426_upgrade_required_is_permanent() {
+    let error =
+        rig::agent::StreamingError::Completion(rig::completion::CompletionError::ProviderError(
+            "Invalid status code 426 Upgrade Required with message: outdated client".into(),
+        ));
+
+    let classified = classify_completion_error(&error);
+
+    assert!(matches!(
+        classified,
+        InferenceError::PermanentFailure { .. }
+    ));
+    assert!(
+        !classified.is_retryable(),
+        "Upgrade Required demands a newer client, so an identical retry re-fails"
     );
 }
 

@@ -17,6 +17,7 @@ pub(crate) const AGENT_REQUEST_FIELDS: &str = r#"
                     behavior_id
                     session_id
                     content
+                    retry_parent_request_doc_id
                     max_total_tokens
                     input
                     execution_origin
@@ -200,7 +201,7 @@ impl DefraWatcher {
             .iter()
             .filter_map(|row| row.doc_id.clone())
             .collect::<Vec<_>>();
-        let order = crate::config_client::ConfigAccess::transact_local(
+        let order = crate::config_client::ConfigAccess::transact_local_readonly(
             self.node.as_ref(),
             None,
             "watcher.request_arrival_order",

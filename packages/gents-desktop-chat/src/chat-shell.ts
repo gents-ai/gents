@@ -101,9 +101,12 @@ type ProjectionInput = {
   clientAvailable: boolean;
   selectedAgentDid: string | null;
   selectedSessionId: string | null;
-  draft: string;
   sending: boolean;
-  session: DesktopSessionSnapshot | null;
+  /** The workflow reads these alone; transcript content never decides it. */
+  session: Pick<
+    DesktopSessionSnapshot,
+    "sessionId" | "agentDid" | "turnState" | "latestRequestId" | "pendingTurn"
+  > | null;
   selectedSessionSummary: SessionSummary | null;
   localWorkflow: ChatWorkflowState;
   operationalState: DeploymentOperationalState | null;
@@ -111,7 +114,8 @@ type ProjectionInput = {
 
 export type ChatShellProjection = {
   workflow: ChatWorkflowState;
-  sendStatus: SendStatus;
+  /** Whether a message with content could be sent now. The composer adds
+      its own emptiness, so this does not change with each keystroke. */
   nonEmptyContentSendStatus: SendStatus;
   activityStatus: ChatActivityStatus | null;
   turnState: TurnState | null;
@@ -414,7 +418,7 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
     }
   }
 
-  function sendStatusFor(composerEmpty: boolean): SendStatus {
+  function sendStatusFor(): SendStatus {
     if (admissionStatus) {
       const reason: ChatBlockedReason =
         admissionStatus.layer === "client"
@@ -429,13 +433,6 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
         kind: "disabled",
         reason,
         hint: admissionStatus.detail,
-      };
-    }
-    if (composerEmpty) {
-      return {
-        kind: "disabled",
-        reason: "composerEmpty",
-        hint: hintFor("composerEmpty"),
       };
     }
     if (input.sending || input.localWorkflow.kind === "submittingRequest") {
@@ -477,12 +474,10 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
     return { kind: "ready" };
   }
 
-  const sendStatus = sendStatusFor(!input.draft.trim());
-  const nonEmptyContentSendStatus = sendStatusFor(false);
+  const nonEmptyContentSendStatus = sendStatusFor();
 
   return {
     workflow,
-    sendStatus,
     nonEmptyContentSendStatus,
     activityStatus: activityStatusFor(
       nonEmptyContentSendStatus,

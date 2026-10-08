@@ -1,8 +1,8 @@
+import type { NodeView } from "../../../hooks/fleetStore";
 import { useEffect, useState } from "react";
 import { dependentsWarning } from "./dependents";
 import { ArrowLeft } from "lucide-react";
-import type { AgentContext, DeploymentView } from "@source-inc/gents-desktop-client";
-import type { Shell } from "@/hooks/useShell";
+import type { AgentContext } from "@source-inc/gents-desktop-client";
 import { href, type Route } from "@/lib/router";
 import {
   AreaRow,
@@ -23,21 +23,22 @@ import { DeleteButton, ListDetail } from "./ListDetail";
 import { Group } from "./rows";
 import { contextOrigin, forgetContextOrigins } from "./contextOrigin";
 import { RowMenu } from "./RowMenu";
+import { agentOf } from "@/lib/agents";
+import { useApp } from "@/app/AppContext";
 
 /* a context's detail names this many of its behaviors, then counts the rest */
 const USERS_SHOWN = 8;
 
 function Editor({
-  shell,
   deployment,
   context,
   after,
 }: {
-  shell: Shell;
-  deployment: DeploymentView;
+  deployment: NodeView;
   context: AgentContext;
   after?: Route;
 }) {
+  const { changeConfig } = useApp().actions;
   const base = {
     name: "agent" as const,
     agentDid: deployment.agentDid,
@@ -52,21 +53,11 @@ function Editor({
     skillIds: context.skill_ids ?? [],
     tags: context.tags ?? [],
   };
-  const d = useDraft(saved, async (next) => {
-    if (next.toolsId && !deployment.tools.some((row) => row.tools_id === next.toolsId))
-      throw new Error("Choose an existing Tools document");
-    if (
-      next.compactionId &&
-      !deployment.compactions.some((row) => row.compaction_id === next.compactionId)
-    )
-      throw new Error("Choose an existing compaction document");
-    const skillIds = next.skillIds;
-    const missingSkill = skillIds.find(
-      (skillId) => !deployment.skills.some((row) => row.skillId === skillId),
-    );
-    if (missingSkill) throw new Error(`Unknown skill ID: ${missingSkill}`);
-    await shell.applyConfig((api) =>
-      api.patchConfigComponents({
+  const d = useDraft(
+    saved,
+    async (next) => {
+      const skillIds = next.skillIds;
+      await changeConfig("patchConfigComponents", {
         agentDid: deployment.agentDid,
         patches: [
           {
@@ -83,9 +74,32 @@ function Editor({
             },
           },
         ],
-      }),
-    );
-  });
+      });
+    },
+    {
+      /* each reference names a document the node still lists */
+      problems: (next) => {
+        const missingSkill = next.skillIds.find(
+          (skillId) => !deployment.skills.some((row) => row.skillId === skillId),
+        );
+        return {
+          toolsId:
+            next.toolsId &&
+            !deployment.tools.some((row) => row.tools_id === next.toolsId)
+              ? "Choose an existing Tools document"
+              : undefined,
+          compactionId:
+            next.compactionId &&
+            !deployment.compactions.some(
+              (row) => row.compaction_id === next.compactionId,
+            )
+              ? "Choose an existing compaction document"
+              : undefined,
+          skillIds: missingSkill ? `Unknown skill ID: ${missingSkill}` : undefined,
+        };
+      },
+    },
+  );
   const id = (f: string) => `${context.context_id}-${f}`;
   const users = deployment.behaviors.filter((b) => b.contextId === context.context_id);
   /* New tools… from the field, and the chosen document's editor beside the page */
@@ -95,7 +109,6 @@ function Editor({
   return (
     <>
       <ToolsSheet
-        shell={shell}
         deployment={deployment}
         open={newTools !== null}
         onClose={(toolsId) => {
@@ -117,7 +130,7 @@ function Editor({
         {besideDoc && (
           <ToolsEditor
             key={besideDoc.tools_id}
-            shell={shell}
+
             deployment={deployment}
             tools={besideDoc}
             embedded
@@ -160,15 +173,12 @@ function Editor({
           label="Display name"
           value={d.draft.displayName}
           onChange={(v) => d.set("displayName", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <AreaRow
           id={id("description")}
           label="Description"
           value={d.draft.description}
           onChange={(v) => d.set("description", v)}
-          onCommit={d.commit}
           rows={2}
         />
         <AreaRow
@@ -176,7 +186,6 @@ function Editor({
           label="System prompt"
           value={d.draft.systemPrompt}
           onChange={(v) => d.set("systemPrompt", v)}
-          onCommit={d.commit}
           rows={6}
           stacked
         />
@@ -185,7 +194,8 @@ function Editor({
           label="Tools"
           description="What every behavior on this context may touch."
           value={d.draft.toolsId}
-          onChange={(v) => d.choose("toolsId", v)}
+          error={d.problems.toolsId}
+          onChange={(v) => d.set("toolsId", v)}
           none="None"
           items={deployment.tools.map((t) => ({
             value: t.tools_id,
@@ -203,7 +213,8 @@ function Editor({
           id={id("compact")}
           label="Compaction"
           value={d.draft.compactionId}
-          onChange={(v) => d.choose("compactionId", v)}
+          error={d.problems.compactionId}
+          onChange={(v) => d.set("compactionId", v)}
           items={[
             { value: "", label: "Runtime default" },
             ...deployment.compactions.map((c) => ({
@@ -217,6 +228,7 @@ function Editor({
           label="Skills"
           description="None means the behavior runs without skills."
           value={d.draft.skillIds}
+          error={d.problems.skillIds}
           onChange={(v) => d.set("skillIds", v)}
           items={deployment.skills.map((sk) => ({
             value: sk.skillId,
@@ -233,11 +245,12 @@ function Editor({
         />
       </Group>
       <DraftActions
-        dirty={d.dirty}
-        saving={d.saving}
-        error={d.error}
-        onSave={d.save}
-        onCancel={d.reset}
+        draft={d}
+        fields={{
+          toolsId: id("tools"),
+          compactionId: id("compact"),
+          skillIds: id("skills"),
+        }}
       />
       <DeleteButton
         label={context.display_name ?? context.context_id}
@@ -251,12 +264,10 @@ function Editor({
               : `${users.length} behaviors use it and will be left without a context.`
         }
         onDelete={() =>
-          shell.applyConfig((api) =>
-            api.deleteContextConfig({
-              contextId: context.context_id,
-              agentDid: deployment.agentDid,
-            }),
-          )
+          changeConfig("deleteContextConfig", {
+            contextId: context.context_id,
+            agentDid: deployment.agentDid,
+          })
         }
       />
     </>
@@ -264,14 +275,13 @@ function Editor({
 }
 
 export function ContextsPanel({
-  shell,
   deployment,
   item,
 }: {
-  shell: Shell;
-  deployment: DeploymentView;
+  deployment: NodeView;
   item?: string;
 }) {
+  const { changeConfig } = useApp().actions;
   const base = {
     name: "agent" as const,
     agentDid: deployment.agentDid,
@@ -279,7 +289,7 @@ export function ContextsPanel({
   };
   /* a context opened from its behavior goes back to that behavior */
   const originId = item ? contextOrigin(item) : null;
-  const origin = deployment.behaviors.find((b) => b.behaviorId === originId);
+  const origin = agentOf(deployment, originId);
   const back = origin
     ? {
         route: { ...base, section: "behaviors", item: origin.behaviorId },
@@ -334,12 +344,10 @@ export function ContextsPanel({
               base={base}
               id={c.context_id}
               onDelete={() =>
-                shell.applyConfig((api) =>
-                  api.deleteContextConfig({
-                    contextId: c.context_id,
-                    agentDid: deployment.agentDid,
-                  }),
-                )
+                changeConfig("deleteContextConfig", {
+                  contextId: c.context_id,
+                  agentDid: deployment.agentDid,
+                })
               }
               warning={dependentsWarning(deployment, "context", c.context_id)}
             />
@@ -352,7 +360,7 @@ export function ContextsPanel({
           return (
             <Editor
               key={context.context_id}
-              shell={shell}
+
               deployment={deployment}
               context={context}
               after={back?.route}

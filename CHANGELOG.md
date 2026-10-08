@@ -6,6 +6,183 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- A scenario pack whose expected trigger's event source has no
+  correlation_field is now refused at load — by `gents pack check` and by
+  `gents pack scenario run`/`seed` — naming the trigger and event source
+  (#2339). A run awaits its stages by the seeded job id, which only a
+  correlation_field puts on the fired request, so such a pack previously
+  ran until its await timeout expired.
+- `gents config apply` and `gents server --apply-root` no longer refuse
+  configurations the runtime serves: the pre-flight's `{{ doc.* }}`
+  template-field check is now the publication owner's rule, so a
+  per-document `emit_outcome` delivery of `CallbackResult` or
+  `WorkspaceReceipt` accepts the `handoff_id`, `reply_session_id` and
+  `attempt` fields the trigger engine injects, and `goal_objective_template`
+  and `session_id_template` are judged by the same rule as the prompt
+  (#2341). Refusals now read the publication owner's message.
+- Per-document callback bindings no longer drop documents written before the
+  callback engine starts (#2343). Like event triggers, each binding now
+  checkpoints a receiving-node arrival cursor, seeded when its configuration
+  is applied. Any arrival after registration is delivered once, including
+  documents written while the node was down. A per-document invocation's
+  idempotency key is now its binding, source collection and document (no
+  source version), so an edit after admission is never admitted again.
+  `EventSourceCursor` now names its typed `consumer` in place of
+  `trigger_id`. Existing homes must be re-initialized.
+- A saved message's `requestId` is the request's logical id, not its
+  document id (#2342). The session snapshot joins the request row the
+  message's `request_doc_id` names, so a pending turn and the message it
+  publishes carry the same id; a message whose request row is not observed
+  reports none. The desktop transcript collapses the app's own copy, the
+  bridge's pending turn and the saved message into one row under the request
+  they share, where the saved message was a row of its own. Only the
+  request's prompt row joins that collapse: a user row it authors beside the
+  prompt — the workspace instructions it carries — reports `ownsTurn: false`
+  and stays a row of its own, the same ownership the bridge's pending turn
+  already reconciles by.
+- A runtime that cannot start because a behavior is unavailable now logs each
+  blocking behavior's diagnostic; a `--tool-root` that does not admit the
+  live `Tools.host.root` names both roots (#2296).
+- Agent-scoped OAuth backends (Claude, ChatGPT, Grok) heal an expired access
+  token on their own: the scheduled prober resolves its bearer through the
+  credential owner, refreshing and persisting when stale, so an idle runtime no
+  longer demotes a signed-in backend to unhealthy until restart (#2289).
+- One tool-result image Claude would reject no longer fails the whole
+  request. The Claude Messages body reads each image's size from its PNG,
+  GIF, WebP or JPEG header and puts a note naming the reason in place of an
+  image over 8000 px on a side, or one Claude's count limits leave out:
+  the newest 20 images are kept, older ones only while every kept image is
+  within 2000 px on a side, and at most 100 in all. A plugin
+  result with image parts now replays on later turns as its bounded text
+  parts plus a note per image, not as raw JSON with the image's base64.
+- Capture storage stops re-signing the whole conversation (#2333). New
+  `RenderedRequest` captures split the rendered provider body and the assembly
+  trace into content-defined byte blocks stored once in a new
+  `RenderedRequestBlock` collection, and the capture row carries a manifest of
+  pinned references to them. Each provider call writes only the blocks its new
+  content needs, so capture storage grows linearly with the conversation instead
+  of repeating it on every turn; reads reassemble the body and verify each block
+  against the field commit the manifest pinned. Captures already stored in the
+  earlier formats keep decoding unchanged.
+- `gents pack scenario run` can run a pack whose agent calls plugins from a
+  dependency: `--with-pack` packs are stored after the run's `gents init`
+  (which empties the home), dependencies install into the run's home before
+  its node starts and applies the scenario pack (plugins install only on the
+  node's own host, and the scenario's documents may name the dependency's),
+  and `--grant-authority` reaches those installs.
+- Removing an enrolled agent stays removed. Removal records the ended
+  authorization generation locally, so the enrollment reconciler stops
+  reinstalling and redialling the server every tick until the authorization
+  lease expires or the network owner revokes; re-enrolling needs a fresh
+  offer from the server's `/status`. The reconciler's own teardown of a peer
+  whose route receipt is briefly unobserved does not retire it. The
+  enrollment list also derives "approved" from the durable projection the
+  reconciler uses, so a locally removed or revoked request stops listing as
+  approved before its own expiry (#2295).
+
+- Plugins reach the network through the host (#2300). A plugin whose granted
+  manifold carries an `OutboundHttp` allow-list answers a call with
+  `http_calls` request batches; the host performs the admitted ones and
+  resumes it with `http_results`, for model tools and graph stages alike.
+  Entries are hosts, `*.domain`, or IP literals, with optional `http://` and
+  `:port`. Hostname entries reach public addresses only, checked on the
+  addresses each connection resolves. The host follows no redirect; a 3xx
+  goes back to the plugin, whose next request is admitted afresh. Only a
+  literal IP entry grants an internal address. Requests carry no host proxy,
+  cookies or credentials. Rounds, requests, body bytes and per-request time
+  are capped. The guest never runs with `net`, and a pack
+  declaring `OutboundFull` or a malformed entry is refused. Granting still
+  goes through `--grant-authority`.
+
+- Rig's completion-model and client traits, usage and error types no longer
+  leak into the daemon, one-shot, title, compaction or backend admission code:
+  those owners use native `ProviderModel`/`ProviderClient` handles and admission
+  errors and usage, and a structure test keeps Rig paths behind their owners
+  (#438). No behavior change.
+- The owned loop's output stream is native: `LoopStreamItem` carries native
+  text, reasoning, tool-call, tool-result and final items, and stream failures
+  are `LoopStreamError` with a `LoopFailureCause`, so error classification,
+  retry and stream processing no longer name Rig (#438). Failure messages are
+  unchanged.
+- iOS builds again: the DB Explorer window keeps its desktop-only title, size and
+  focus calls off mobile targets, and CI checks the iOS simulator build on main.
+
+- Pack scenarios can allow folders for plugins (#2303). `experiment.json`
+  takes `allowed_folders: [{"path", "access"}]`. Each path is relative to
+  `init.tool_root`, stays inside it, and is created when missing. The folders
+  are written to the run's home the way `gents plugin dirs add` writes them,
+  before the server starts. A graph stage, which binds with no working folder,
+  can then write where the scenario allows `read_write`, such as a data_tables
+  export or a charts `chart-save` node.
+- One plugin can read and write (#2301). `bind_dir.access` is now the most a
+  plugin may use, and `bind_dir.write_fields` names the inputs that make a call
+  write. A call that sets none of them asks only for `read`: it binds under a
+  read-only or working folder and runs read-only even where writing is allowed.
+  A writing call under a read-only folder is refused with the
+  `gents plugin dirs add ... --access read_write` command, or the advice to call
+  again without the write field. Packs no longer need a second `*_write`
+  plugin.
+- Plugin tools can return images (#2302). A result shaped
+  `{"response", "parts": [{"type": "image", "data", "mimeType"}]}` reaches a
+  Claude model as one text part plus whole image parts. Before this change, an
+  image past the 50 KiB tool-result text bound was cut into broken text. OpenAI,
+  Responses, Codex and xAI backends, which refuse images in tool results, get a
+  note in place of each image. Before, the whole request failed. The shape is
+  now part of the documented plugin ABI.
+- Grok subscription backends advertise client version 1.0.46, above the
+  proxy's floor (#2274). A 426 version gate now fails fast instead of burning
+  the retry ladder, and `grok-auth-probe` and model discovery name the version
+  gents sent and the `GENTS_XAI_GROK_CLIENT_VERSION` override.
+
+- Fleet snapshots resolve every session starter, across all deployments, with
+  one batched request read instead of two per started session, so the cost of
+  a client snapshot no longer grows with the number of started sessions
+  (#2291).
+
+## 0.20.0 - 2026-10-05
+
+- Trimmed tool results are recoverable: `sessions` gains an `output`
+  action that pages a tool call's full stored output by call_id, 16000 bytes
+  at a time with a hash guard, including bytes cut from the model's 50 KiB
+  view. The stub that replaces an earlier request's tool result now names
+  that exact call. The `sessions` tool is on unless a Tools document sets
+  `enable_session_history_tool` to false (#722).
+
+- Desktop shell (macOS): a two-finger swipe goes back or forward. AppKit
+  recognises the gesture, an arrow handle travels in from the pane's edge
+  and fills as it nears the commit distance, and content that can still
+  scroll sideways keeps the swipe until it reaches its edge.
+- Desktop shell: Back and Forward in the window bar replace the session
+  screen's back link, with a real forward cursor. Cmd+[ / Cmd+] on macOS,
+  Alt+Left / Alt+Right on Windows and Linux, and mouse side buttons on all
+  three.
+- Desktop shell: a window bar across the top carries each screen's title,
+  marks and actions; the side panel becomes a dock of tabbed surfaces
+  (trace, workers) beside the pane, resized by a divider that
+  settles with a spring and collapses to a tab; in a half-screen window the
+  dock is a sheet, and on a phone a bottom sheet. The rail keeps its mark
+  and settings at the foot.
+
+- Desktop lists span nodes: the sessions list and the mailbox cover every
+  node the client can see, with a node axis to narrow them, and each row
+  wears the node and behavior it belongs to; the navigation panel shows the
+  working node and recent sessions; the mailbox is grouped by urgency,
+  searchable, and dismissable in bulk with a selection bar; a failed action
+  is reported once where it happened, and the banner keeps only the
+  client's own state.
+
+- Desktop transcript: consecutive tool calls form one activity group that
+  is placed once and only grows at its end; live text is revealed at a
+  steady pace and held until its message arrives; a step opens only from
+  its caret, shows its outcome on the row, and an edit its +/− tally;
+  withheld reasoning is one line, not `[encrypted reasoning]`; a session
+  shows one loading line until it is here; an armed mailbox reply is
+  visible above the composer and can be put down.
+
+- Desktop: opening a session from a mailbox item keeps the reply it armed;
+  the route no longer re-selects a session the shell already holds. The
+  design kit is pinned to gents-design `c211d60`.
+
 - Plugins can declare bounded resource limits and read a directory explicitly
   bound for one call. Increased installed resource limits require
   `--grant-authority`; unchanged or reduced approved limits survive reinstall.
@@ -13,6 +190,12 @@ source consistency checks, not a separate runtime compatibility version.
 
 ### Breaking
 
+- A pack never selects the agent's default behavior. Loading a pack whose
+  `agent_principal` sets `default_behavior_id` (`gents pack install`, `pack
+  check`, `pack scenario`, eval runs) fails and names it; packs ship
+  `"agent_principal": {}`. The user picks the default ("Make default" in the
+  desktop Behaviors panel, or their own `gents config apply` root), and eval
+  and scenario harnesses select the behavior under test.
 - The official packs (`code_review`, `mailbox`, `pipeline`, `security_scan`,
   `lsp_rust`, `grok_tui_port`, `repo_maintenance`, `defending_code`,
   `eval_author`, `prompt_proposer`, `web_deep_research`, `graph_pipeline`,
@@ -57,6 +240,20 @@ source consistency checks, not a separate runtime compatibility version.
   whose identity backend is `macos-secure-enclave` can no longer be served;
   re-initialize it with a file or `macos-keychain` identity. Existing stores
   enable access control in place on their next start.
+
+- `OAuthCredential` gains optional account fields (account reference,
+  provider account key, label and connection time) by baseline re-pin; there
+  is deliberately no migration step. A store created by an earlier build fails
+  `ensure_migrations` with `UnknownLineage` for `OAuthCredential`: reset it
+  and sign in again (#2116).
+
+- `Goal` gains an optional `auto_resume_at_reset` field by baseline re-pin;
+  there is deliberately no migration step. A store created by an earlier build
+  fails `ensure_migrations` with `UnknownLineage` for `Goal`: reset it (#2121).
+
+- `codex-login`, `claude-login` and `grok-login` accept only their own
+  `--provider` value. Other values stored a sign-in that no backend read
+  (#2119).
 
 - `Tools.self_config.self_config_dry_run` is renamed `self_config_preview`
   (#2062). It grants the `config` preview verb; it never blocked writes. There
@@ -156,6 +353,14 @@ source consistency checks, not a separate runtime compatibility version.
 
 ### Added
 
+- The Grok pager shows graph runs the model starts with `run_graph` in its
+  Workflows panel and `/workflow runs`, as `workflow_updated` updates read
+  from the canonical run view: stages are phases and stage requests are
+  agents. A run that cannot be read is retried with backoff of at most 30
+  seconds; a missing or unauthorized run ends with one failed update saying
+  observation stopped. Runs started outside the session are not shown. A
+  `run_graph` reply that would exceed the tool result limit leaves out the
+  run's input, then the rest of its view, so the run stays visible.
 - `gents eval watch` shows each trial live while its runner holds the home
   (#2089). Every few seconds the embedded executor reads the trial's home and
   writes a snapshot into its `progress.json` entry: tokens, requests, model
@@ -203,6 +408,141 @@ source consistency checks, not a separate runtime compatibility version.
   not supported. The desktop shows such a backend as an API-key backend; the
   setup wizard does not offer it yet. Nodes on a build without the tolerant
   backend decode (under Changed) fail to list backends once a peer has one.
+
+- Several accounts per provider from the CLI (#2119). `codex-login`,
+  `claude-login` and `grok-login`, and the sign-ins in `gents init` and the
+  desktop, add the account you signed in to, or refresh it when it is already
+  stored; the result JSON gains `label` and `result` (`added` or `refreshed`),
+  and `--label` names or renames the account. A provider's second and later
+  accounts each get their own backend, from the provider's default endpoint.
+  `gents accounts list|label|disable|remove` manages them; `remove` deletes the
+  tokens on this node and removes the backend sign-in created for the account
+  unless a profile uses it. `gents diagnose` adds an `accounts` array to
+  `checks.chatgpt_auth`, `xai_auth` and `claude_auth` (the existing fields
+  still describe each provider's first account), backend rows name their
+  account, and `codex-auth-probe` and `grok-auth-probe` print one block per
+  account. A browser already signed in to an account may sign in to it again:
+  the command then reports `refreshed` and says how to pick another account.
+  Backends created for added accounts replicate to the agent's other nodes and
+  appear in `gents config export`, but accounts stay on the node that signed
+  in: elsewhere those backends fail closed, and `gents accounts list` marks
+  them "account not on this node". On the desktop, Reconnect to a different
+  account adds it instead of replacing the one shown, and each backend row
+  shows and disconnects the account it references (a backend with no account
+  reference: the provider's original account); and the desktop adds and
+  manages them from each provider's rows (#2124). After you remove a provider's
+  last account, the next sign-in becomes its original account again, and
+  backends with no account reference use it, deliberately. Any sign-in that
+  becomes a provider's original account (the first one on a node, or the first
+  after removing the last) prints the profiles that use it, and the result JSON
+  lists them in `profiles`.
+
+- A profile names the account it runs on (#2120). `gents config profile set
+  --file <profile.json> --account <account>` creates a profile on one of your
+  accounts (by label, `credential_id` or `account_ref`; `--provider` narrows
+  a label two providers share), `--provider <provider>` alone picks the
+  provider's earliest-connected enabled account and says so, and
+  `gents config profile set-account <profile> <account>` moves a profile to
+  another account of the same provider.
+  Creating a profile on, or moving it to, a disabled account or one that is
+  not on this node is refused, and the error lists the enabled accounts; other
+  edits of such a profile are allowed. `config profile list` and `show` name
+  each profile's account and whether it is enabled, disabled or not on this
+  node. When a turn is refused because its profile's (or its compaction
+  profile's) account is disabled or not on this node, `gents chat` names the
+  account and the `set-account` command; a sign-in whose refresh fails
+  (expired or revoked), or that was disabled or removed while in use, fails
+  with an error that names the account. `gents trace timeline` call rows gain
+  `account`, the label of the account that served the call; a call from
+  before the account was signed in at its backend shows none. Nothing moves a
+  profile to another account except these commands.
+
+- Provider usage is kept per node and provider account (#1525). ChatGPT and
+  Claude subscription responses and OpenAI-compatible API-key responses record
+  the usage headers the provider sends in a new local `ProviderAccountUsage`
+  collection, owned by the agent and never stored on the sign-in. Usage for
+  ChatGPT, Claude, Grok and OpenRouter accounts can also be read on demand;
+  reads within the last few minutes are skipped, and nothing polls. An
+  on-demand read renews an expired sign-in the
+  same way a request would; if renewal fails the account shows its sign-in as
+  expired.
+  Usage is stale after 15 minutes and dropped after 60 minutes or at its reset
+  time. The Codex app-server shim answers `account/rateLimits/read` from the
+  stored usage of the session's account without calling the provider. Earlier
+  builds open the store unchanged and ignore the new collection.
+- `gents accounts list` shows each account's usage (#1525): the window, the
+  percent used, the reset time with a countdown, where the number came from
+  and how old it is, or "unknown", "not reported" or "no cap on this key"
+  when there is no number. `--output json` adds `usage` and
+  `read` to every row. With a runtime running, listing asks it to read
+  ChatGPT, Claude, Grok and OpenRouter usage, skipping disabled accounts and
+  accounts read in the last five minutes; `--refresh` fails instead when no
+  runtime is running. The request is signed with the home identity and
+  accepted only from the runtime's own operator, once. The model's
+  config tool gains `backend accounts`, a read-only list of accounts and
+  account-free backends with their state, the profiles that use them and
+  their last stored usage; it shows no tokens, sign-in identities or ids,
+  contacts no provider and cannot change accounts. `gents accounts remove`
+  also deletes the removed account's stored usage. The Codex shim's
+  `account/read` reports a ChatGPT session's stored plan (with no email)
+  instead of an API key, and `account/rateLimits/read` reports only fresh
+  credits, only a ChatGPT session's plan, and answers empty when usage
+  cannot be read.
+- A turn stopped by a usage limit, or by a disabled, removed or signed-out
+  account, carries a structured blocked value (#2121): the reason, the
+  account's label and provider, the profile and the behaviors that use it,
+  the reset time when the provider reported one, and the command that moves
+  the profile. `gents request show` and `gents goal show` print it (JSON
+  `blocked`); "reset not reported" when there is no reset. A limit hit by a
+  compaction call names the compaction profile's account. The failure text is
+  unchanged. A Goal now reads the call that ended its request, so an earlier
+  failed retry no longer hides a later usage limit. A recorded reset no
+  longer moves when read later.
+- Move a profile to another account in one step (#2121). `gents config
+  profile set-account <profile>` lists the provider's other enabled accounts
+  whose backend offers the profile's model, each with its stored usage (where
+  it came from and how old it is) or "unknown", the behaviors and plugin model
+  slots that use the profile and the cost: after the move the provider's
+  prompt cache starts empty, so the next turns are slower and use more of the
+  new account's quota. With an account it moves the profile, and every
+  behavior, plugin slot and session on it uses that account from its next
+  turn; `--with-compaction` also moves the other profiles of those behaviors
+  that are on the same account. A disabled or removed account, another
+  provider's account, or one whose catalog does not offer the model is
+  refused; when no account qualifies the error says how to add one.
+  `gents goal resume-on <account> --from <request>` moves the profile that
+  hit a usage limit and resumes the Goal; retrying with the same `--from`
+  returns the same continuation.
+- A usage-limited Goal can resume by itself at the reset time the provider
+  reported (#2121). `gents goal set --auto-resume on` turns it on per Goal
+  (off by default; the model's goal tools cannot set it). The Goal resumes
+  once, on the same account, when the reset passes; not when the provider
+  reported no reset, not after its profile moved to another account, and not
+  when that account is disabled or removed. A Goal limited again resumes at
+  its new reset. A restart keeps the schedule. `gents goal show` shows
+  `auto_resume_at_reset`.
+
+- The desktop draws every signed-in account as its own backend row (#2124):
+  its label, whether it is signed in, disabled or not on this node (or "off"
+  when the backend is switched off), and a usage bar from the last stored
+  observation. Opening the row shows each usage window with its reset
+  countdown, source and age, or "unknown", "not reported" or "no cap on this
+  key", and a Refresh button; opening the Providers page asks the runtime to
+  read usage, and nothing polls. "Add another <Provider>" and "New backend"
+  sign in a
+  further account for every provider, with an optional label, and say whether
+  the sign-in added an account or refreshed one already stored. The row menu
+  renames, disconnects and removes an account. A row no longer shows a
+  subscription as expired when its access token lapses, since the runtime
+  renews it on use. The profile editor names subscription backends by provider
+  and label, skips disabled and missing accounts, and a new profile starts on
+  the provider's earliest-connected enabled account. "Refresh models" reads the
+  row's own account.
+
+- An xAI API key is a named backend option (#2123). `--backend-preset xai`
+  configures an `OpenAiCompatible` backend at `https://api.x.ai/v1` on the
+  Responses wire that reads its key from `XAI_API_KEY`; `--model-name` is
+  required. The inference setup contract gains a Grok API-key connection.
 
 - `gents pack remove` works for every pack kind, not only documents packs
   (#2067). Assets and plugins packs record their install at
@@ -303,6 +643,57 @@ source consistency checks, not a separate runtime compatibility version.
   and `gents config` export still fail, naming the kind. Update older nodes
   before adding a backend of a new kind.
 
+- Subscription (principal OAuth) backends can carry an optional account
+  reference; without one they keep using the provider's original account.
+  A backend with a reference uses that account, and never falls back to
+  another one. The model's config tool cannot set or change a backend's
+  account reference, and wherever it picks a profile or backend (profile,
+  behavior, compaction, persona and pack slot) it can keep the current
+  account, use an account-free backend, or move to another provider's default
+  account. Stored backends, profiles and config exports are unchanged (#2116).
+
+- Every reader of stored OAuth sign-ins (inference, health probes, readiness,
+  `diagnose`, `init`, the auth probes, model discovery and the desktop account
+  list) now picks the account through one resolver with a fixed order:
+  earliest-connected enabled account first, older sign-ins without a
+  connection time first, ties by credential id, never a disabled account. A
+  backend's account reference resolves that account for the running agent; a
+  backend without one uses the provider's original account. When the model
+  moves a profile to another provider, that provider's default account is the
+  resolver's first account. With one account per provider nothing changes
+  (#2117).
+
+- Sign-ins now store which provider account they belong to: the ChatGPT
+  workspace membership, the Claude organization and account ids, or the Grok
+  principal. ChatGPT and Grok sign-ins that lack it gain it on their next
+  token refresh; Claude sign-ins at the next sign-in. A sign-in whose tokens do not
+  show the account clears it: for ChatGPT and Grok the next refresh whose
+  tokens show it fills it again, for Claude only a later sign-in that shows
+  it. Nothing visible changes yet (#2117).
+
+- Existing `OpenAiCompatible` backends at `https://api.x.ai/v1` (any case,
+  trailing slash ignored; no other xAI host) are edited as Grok with an API
+  key instead of as a local server, so their recommended concurrency is 8
+  and top_p 0.95 (#2123). On the Responses wire only, requests to that
+  endpoint now send `store: false` and request encrypted reasoning, as the
+  Grok subscription transport already does, so xAI is asked not to retain
+  them and reasoning still replays on the next turn.
+  On that wire a profile's reasoning effort is sent only when the model's
+  discovered catalog lists it (xAI advertises `capabilities.reasoning_effort`
+  per model; grok-4.20 lists none and rejects any effort); otherwise it is
+  omitted, the model's default applies, and `config profile show` and
+  `diagnose` warn. Discovery at that endpoint now records each model's effort
+  list and its `context_length` as the context window, so a profile without
+  its own context window uses the advertised one after the next discovery,
+  and compaction then starts relative to that window (set `context_window`
+  on the profile to keep the old budget). Existing xAI backends send efforts
+  again only after their next discovery (daemon startup probe or
+  `gents config backend discover-models`); until then efforts are omitted.
+  Other OpenAI-compatible servers are discovered as before. Backends on Chat
+  Completions are relabelled but send the same requests as before, and
+  runtimes older than this release keep sending stored requests from the
+  same backend document.
+
 - Interrupting a thread stops only its foreground turn and in-flight
   foreground calls. Background processes and subagents, including one the
   thread was waiting on, keep running and stay attached; an awaited subagent
@@ -388,6 +779,13 @@ source consistency checks, not a separate runtime compatibility version.
   (reset time not reported)`, and Goals pause as usage-limited. An in-flight
   budget 402 retries after its `Retry-After`; without one it is unchanged
   (#2118).
+
+
+- A token refresh or a desktop Disconnect no longer re-creates a removed
+  sign-in, re-enables a disabled one, or overwrites a sign-in made while the
+  refresh was in flight (#2119). A rebuilt behavior on a re-created sign-in
+  uses it, not the removed sign-in's cached token.
+
 - A document trigger whose fire cannot be admitted no longer re-fires the same
   document without bound (#2094). A refused fire, such as an `emit_outcome`
   Task delivered a document without `handoff_id` or a template that fails to

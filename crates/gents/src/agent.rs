@@ -67,7 +67,7 @@ pub(crate) async fn process_owned_request_with_model_for_test<M>(
     request: crate::watcher::AgentRequest,
 ) -> anyhow::Result<()>
 where
-    M: rig::completion::CompletionModel + 'static,
+    M: crate::llm::rig_compat::ProviderModel,
 {
     let allowed_targets =
         crate::tool_surface::resolve_subagent_target_descriptions(tool_surface.as_ref());
@@ -338,6 +338,23 @@ impl Gents {
 
     pub fn agent_did(&self) -> &str {
         &self.principal.agent_did
+    }
+
+    /// Reads this principal's account usage from its providers now.
+    pub async fn read_usage(
+        &self,
+        trigger: crate::usage_observation::UsageTrigger,
+        provider: Option<&str>,
+    ) -> anyhow::Result<Vec<crate::usage_observation::AccountUsageRead>> {
+        crate::usage_observation::read_principal_usage(
+            self.node.clone(),
+            self.agent_did(),
+            trigger,
+            provider,
+            &Default::default(),
+            chrono::Utc::now(),
+        )
+        .await
     }
 
     pub fn default_behavior_id(&self) -> &str {

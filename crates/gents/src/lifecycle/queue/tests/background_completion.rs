@@ -463,6 +463,7 @@ fn wake_agent_request(
     hints: &RequestQueue,
 ) -> AgentRequest {
     AgentRequest {
+        retry_parent_request_doc_id: None,
         purpose: gents_protocol::request_admission::RequestPurpose::Normal,
         doc_id: doc_id.to_string(),
         request_id: request_id.to_string(),
@@ -1070,6 +1071,112 @@ async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
     assert_eq!(timeline.background_completions.len(), 2);
     assert!(timeline.background_completion_diagnostics_error.is_none());
     assert!(timeline.child_request_ids.is_empty());
+}
+
+#[tokio::test]
+async fn append_sequence_index_fetches_only_latest_header() {
+    let db = test_db("sequence-index").await;
+    let session = "sequence-index-session";
+    let query = super::super::atomic_inputs::append_sequence_query(db.agent_did(), session);
+    let access = crate::config_client::ConfigAccess::Local(db.node.clone());
+    let empty = access.execute(&query).await.unwrap();
+    assert!(empty["data"]["AgentMessage"].as_array().unwrap().is_empty());
+    for sequence in 1..=49 {
+        let response = crate::config_client::ConfigAccess::write_local(
+            &db.node,
+            "test.sequence_index",
+            &format!(
+                r#"mutation {{ create_AgentMessage(input: {{agent_did: "{}", session_id: "{}", requester_did: "reader-{sequence}", sequence: {sequence}}}) {{_docID}} }}"#,
+                escape_graphql_string(db.agent_did()),
+                escape_graphql_string(session),
+            ),
+        ).await.unwrap();
+        crate::graphql::created_doc_id(&response, "AgentMessage").unwrap();
+    }
+    for (owner, other_session) in [
+        ("did:key:foreign", session),
+        (db.agent_did(), "another-session"),
+    ] {
+        crate::config_client::ConfigAccess::write_local(
+            &db.node,
+            "test.sequence_index",
+            &format!(
+                r#"mutation {{ create_AgentMessage(input: {{agent_did: "{}", session_id: "{}", sequence: 700}}) {{_docID}} }}"#,
+                escape_graphql_string(owner),
+                escape_graphql_string(other_session),
+            ),
+        ).await.unwrap();
+    }
+    let latest = access.execute(&query).await.unwrap();
+    assert_eq!(latest["data"]["AgentMessage"][0]["sequence"], 49);
+    fn metric(value: &serde_json::Value) -> Option<u64> {
+        match value {
+            serde_json::Value::Object(object) => object
+                .get("docFetches")
+                .and_then(serde_json::Value::as_u64)
+                .or_else(|| object.values().find_map(metric)),
+            serde_json::Value::Array(array) => array.iter().find_map(metric),
+            _ => None,
+        }
+    }
+    let before = query.replace(
+        "order: [{ agent_did: DESC }, { session_id: DESC }, { sequence: DESC }]",
+        "order: { sequence: DESC }",
+    );
+    assert_ne!(before, query);
+    let mut fetched = Vec::new();
+    for query in [&before, &query] {
+        let response = access
+            .execute(&format!("query @explain(type: execute) {query}"))
+            .await
+            .unwrap();
+        let plan = &response["data"]["explain"];
+        assert_eq!(plan["executionSuccess"], true, "{response}");
+        let roots = plan["operationNode"].as_array().unwrap();
+        assert_eq!(roots.len(), 2);
+        // DefraDB emits operation roots in query selection order: message, then tool call.
+        fetched.push(metric(&roots[0]).unwrap_or_else(|| panic!("{response}")));
+    }
+    assert_eq!(fetched, vec![49, 1]);
+    for (row_session, sequence, key) in [
+        (session, "null", "null-sequence"),
+        (session, "49", "duplicate-maximum"),
+        ("only-null-sequence", "null", "only-null"),
+    ] {
+        crate::config_client::ConfigAccess::write_local(
+            &db.node,
+            "test.sequence_index",
+            &format!(
+                r#"mutation {{ create_AgentMessage(input: {{agent_did: "{}", session_id: "{}", message_key: "{}", sequence: {sequence}}}) {{_docID}} }}"#,
+                escape_graphql_string(db.agent_did()),
+                escape_graphql_string(row_session),
+                escape_graphql_string(key),
+            ),
+        ).await.unwrap();
+    }
+    for row_session in [session, "only-null-sequence"] {
+        let indexed =
+            super::super::atomic_inputs::append_sequence_query(db.agent_did(), row_session);
+        let original = indexed.replace(
+            "order: [{ agent_did: DESC }, { session_id: DESC }, { sequence: DESC }]",
+            "order: { sequence: DESC }",
+        );
+        assert_eq!(
+            access.execute(&indexed).await.unwrap()["data"]["AgentMessage"],
+            access.execute(&original).await.unwrap()["data"]["AgentMessage"],
+            "index ordering must preserve nullable sequence and duplicate-maximum results",
+        );
+    }
+    let txn = ConfigApplyTxn::begin_local(&db.node, None).await.unwrap();
+    let next = super::super::atomic_inputs::next_append_sequence_in_transaction(
+        &txn,
+        db.agent_did(),
+        session,
+    )
+    .await
+    .unwrap();
+    txn.discard().await.unwrap();
+    assert_eq!(next, 50);
 }
 
 #[tokio::test]

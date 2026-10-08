@@ -5,12 +5,9 @@
    nothing behind. A new task starts disabled, and an event source has no
    default collection (watching AgentRequest would let a task trigger
    itself). */
+import type { NodeView } from "../../../hooks/fleetStore";
 import { useState } from "react";
-import type {
-  DeploymentView,
-  EventSource,
-  Schedule,
-} from "@source-inc/gents-desktop-client";
+import type { EventSource, Schedule } from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
 import {
   Dialog,
@@ -33,6 +30,7 @@ import { Textarea } from "@gents/ui/components/textarea";
 import { cadenceInWords, eventInWords } from "./automation";
 import { newId, validateCronSchedule } from "./draft";
 import { PRESETS, TZ, type Task } from "./NewAutomationDialog";
+import { defaultAgentOf } from "@/lib/agents";
 
 export type NewReference =
   | { kind: "task"; document: Task }
@@ -50,7 +48,7 @@ export function NewReferenceDialog({
   kind,
   onClose,
 }: {
-  deployment: DeploymentView;
+  deployment: NodeView;
   /* which document to draft; null when closed */
   kind: NewReference["kind"] | null;
   /* the drafted document, or null when cancelled */
@@ -60,9 +58,7 @@ export function NewReferenceDialog({
   const [name, setName] = useState("");
   const [prompt, setPrompt] = useState("");
   const [behaviorId, setBehaviorId] = useState(
-    deployment.behaviors.find((b) => b.isDefault)?.behaviorId ??
-      deployment.behaviors[0]?.behaviorId ??
-      "",
+    defaultAgentOf(deployment)?.behaviorId ?? deployment.behaviors[0]?.behaviorId ?? "",
   );
   const [preset, setPreset] = useState<(typeof PRESETS)[number]["id"]>("daily");
   const [cron, setCron] = useState("");

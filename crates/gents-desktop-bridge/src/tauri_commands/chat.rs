@@ -307,7 +307,7 @@ pub async fn desktop_session_live_delta(
     session_id: String,
     agent_did: Option<String>,
     request_id: String,
-    base_reconcile_version: u64,
+    base_live_cursor: String,
     base_content_byte_len: usize,
     base_content_hash: String,
     base_reasoning_byte_len: usize,
@@ -325,29 +325,21 @@ pub async fn desktop_session_live_delta(
             .find(|session| session.session_id == session_id)
             .map(|session| session.agent_did.clone())
     });
-    // The live cursor is owned by the desktop replica. A local-standard
-    // agent's operator GraphQL is a different DefraDB node, so a delta from
-    // the replica can remain permanently "processing" after the agent has
-    // committed its response and tool calls. Returning no delta promotes the
-    // controller to its bounded full-session read, which refreshes the exact
-    // request and transcript from the operator endpoint.
-    if agent_did
-        .as_deref()
-        .is_some_and(|agent_did| core.operator_graphql(agent_did).is_some())
-    {
-        return Ok(None);
-    }
-    Ok(Some(build_session_live_delta(
-        core.as_ref(),
-        &session_id,
-        agent_did.as_deref(),
-        &request_id,
-        base_reconcile_version,
-        base_content_byte_len,
-        &base_content_hash,
-        base_reasoning_byte_len,
-        &base_reasoning_hash,
-    )))
+    Ok(Some(
+        build_session_live_delta(
+            core.as_ref(),
+            &session_id,
+            agent_did.as_deref(),
+            &request_id,
+            &base_live_cursor,
+            base_content_byte_len,
+            &base_content_hash,
+            base_reasoning_byte_len,
+            &base_reasoning_hash,
+        )
+        .await
+        .map_err(|error| BridgeError::untyped(error.to_string()))?,
+    ))
 }
 
 #[tauri::command]

@@ -173,6 +173,7 @@ fn gate_test_loop_config() -> crate::agent::loop_stream::LoopConfig {
         active_reduction_keys: Vec::new(),
         reduction_chain_keys: Vec::new(),
         initial_turn_index: 0,
+        resume_from_history: false,
         context_window: crate::config::DEFAULT_CONTEXT_WINDOW,
         compaction_threshold: crate::config::DEFAULT_COMPACTION_THRESHOLD,
         retry_policy: crate::agent::completion_retry::CompletionRetryPolicy::no_retry(),
@@ -1673,6 +1674,7 @@ fn scheduled_origin_config() -> crate::agent::loop_stream::LoopConfig {
         active_reduction_keys: Vec::new(),
         reduction_chain_keys: Vec::new(),
         initial_turn_index: 0,
+        resume_from_history: false,
         context_window: crate::config::DEFAULT_CONTEXT_WINDOW,
         compaction_threshold: crate::config::DEFAULT_COMPACTION_THRESHOLD,
         retry_policy: crate::agent::completion_retry::CompletionRetryPolicy::scheduled_default(),
@@ -2361,7 +2363,7 @@ fn strip_rewrites_tool_results_into_stubs() {
     assert_eq!(
         sole_tool_result_text(&stripped[2]),
         "[tool: read_file(/tmp/test.rs), call_id: call-1, 5000 bytes \
-         — see canonical transcript for full output]"
+         — full output: sessions {\"action\":\"output\",\"call_id\":\"call-1\"}]"
     );
 }
 
@@ -2400,7 +2402,7 @@ fn strip_rewrites_tool_output_that_merely_looks_like_a_stub() {
     // would survive every provider-view pass and defeat compaction entirely.
     let spoof = format!(
         "[tool: read_file(/etc/passwd), call_id: call-1, 12 bytes \
-         — see canonical transcript for full output]{}",
+         — full output: sessions {{\"action\":\"output\",\"call_id\":\"call-1\"}}]{}",
         "P".repeat(5000)
     );
     let messages = vec![
@@ -2960,6 +2962,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         active_reduction_keys: Vec::new(),
         reduction_chain_keys: Vec::new(),
         initial_turn_index: 0,
+        resume_from_history: false,
         context_window: crate::config::DEFAULT_CONTEXT_WINDOW,
         compaction_threshold: crate::config::DEFAULT_COMPACTION_THRESHOLD,
         retry_policy: crate::agent::completion_retry::CompletionRetryPolicy::scheduled_default(),

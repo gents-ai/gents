@@ -3,6 +3,7 @@ import {
   expect,
   gotoHarness,
   openConfig,
+  openConfigSection,
   sendButton,
   test,
 } from "./desktopTest";
@@ -304,5 +305,21 @@ test.describe("first-run install", () => {
     ).toBeVisible();
     await expect(page.getByRole("heading", { name: "Choose a model" })).toHaveCount(0);
     await expect(page.getByTestId("setup-save-inference")).toHaveCount(0);
+  });
+});
+
+test.describe("after first run", () => {
+  test("turning off the only backend leaves the app in place", async ({ page }) => {
+    await gotoHarness(page);
+    await openConfig(page);
+    await openConfigSection(page, /Providers/);
+    const backend = page.getByRole("switch", { name: "OpenAI Harness is on" });
+    await backend.click();
+    await expect(
+      page.getByRole("switch", { name: /OpenAI Harness is off/ }),
+    ).toBeVisible();
+    await expect(page.getByTestId("app-shell")).toBeVisible();
+    await expect(page.getByTestId("agent-screen")).toBeVisible();
+    await expect(page.getByText("Choose an inference provider")).toHaveCount(0);
   });
 });

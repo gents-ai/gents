@@ -7,6 +7,23 @@ function timelineItemIdentity(item: RenderedTimelineItem) {
   return `${item.kind}:${item.itemKey}`;
 }
 
+/* A pending turn retires only once the request's prompt row is saved
+   (`ownsTurn`, the same ownership the bridge suppresses its pending turn
+   by): a request also authors user rows — workspace instructions, tool
+   delivery — that must not retire it. */
+function removeMaterializedPendingTurns(items: RenderedTimelineItem[]) {
+  const materialized = new Set(
+    items.flatMap((item) =>
+      item.kind === "userMessage" && item.ownsTurn && item.requestId
+        ? [item.requestId]
+        : [],
+    ),
+  );
+  return items.filter(
+    (item) => item.kind !== "pendingUserTurn" || !materialized.has(item.requestId),
+  );
+}
+
 function sameOptionalStrings(left: string[] | undefined, right: string[] | undefined) {
   if (left === right) return true;
   if (!left || !right || left.length !== right.length) return false;
@@ -85,16 +102,35 @@ function reuseUnchangedTimelineItems(
  */
 export function mergeSessionTipSnapshot(
   current: DesktopSessionSnapshot | null,
-  next: DesktopSessionSnapshot,
+  tip: DesktopSessionSnapshot,
 ): DesktopSessionSnapshot {
   if (
     !current ||
-    current.sessionId !== next.sessionId ||
-    !next.timelinePage ||
-    next.timelinePage.hasNewer
+    current.sessionId !== tip.sessionId ||
+    !tip.timelinePage ||
+    tip.timelinePage.hasNewer
   ) {
-    return next;
+    return tip;
   }
+  /* The tip is the newest rows, so when a row leaves its end (a live tail
+     dropped before the message replacing it lands) it starts a row earlier.
+     Rows older than the first one shown would land above the reader and
+     move everything under them; they arrive only through paging, which
+     holds the reader's place. */
+  const firstShown = current.timelineItems[0];
+  const shownFrom = firstShown
+    ? tip.timelineItems.findIndex(
+        (item) => timelineItemIdentity(item) === timelineItemIdentity(firstShown),
+      )
+    : -1;
+  const trimmed = shownFrom > 0;
+  const next = {
+    ...tip,
+    timelineItems: trimmed ? tip.timelineItems.slice(shownFrom) : tip.timelineItems,
+    timelinePage: trimmed
+      ? { ...tip.timelinePage, hasOlder: true, oldestItemKey: firstShown!.itemKey }
+      : tip.timelinePage,
+  };
 
   const firstIncoming = next.timelineItems[0];
   const overlapIndex = firstIncoming
@@ -106,10 +142,10 @@ export function mergeSessionTipSnapshot(
     next.timelinePage.hasOlder && overlapIndex >= 0
       ? current.timelineItems.slice(0, overlapIndex)
       : [];
-  const timelineItems = reuseUnchangedTimelineItems(current.timelineItems, [
-    ...retainedPrefix,
-    ...next.timelineItems,
-  ]);
+  const timelineItems = reuseUnchangedTimelineItems(
+    current.timelineItems,
+    removeMaterializedPendingTurns([...retainedPrefix, ...next.timelineItems]),
+  );
 
   const currentPage = current.timelinePage ?? next.timelinePage;
   const currentFirstVisibleKey = current.timelineItems[0]?.itemKey ?? null;
@@ -147,7 +183,10 @@ export function mergeOlderSessionTimelinePage(
   const prefix = older.timelineItems.filter(
     (item) => !currentIdentities.has(timelineItemIdentity(item)),
   );
-  const timelineItems = [...prefix, ...current.timelineItems];
+  const timelineItems = removeMaterializedPendingTurns([
+    ...prefix,
+    ...current.timelineItems,
+  ]);
   const currentPage = current.timelinePage ?? older.timelinePage;
   const totalItemsExact =
     (currentPage.totalItemsExact ?? true) &&

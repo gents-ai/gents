@@ -60,9 +60,41 @@ pub(crate) struct LeanCostRow {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanSeedTrigger {
+    pub(crate) task_id: String,
+    pub(crate) event_source_id: Option<String>,
+    pub(crate) enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanSeedSource {
+    pub(crate) event_source_id: String,
+    pub(crate) source_collection: String,
+    pub(crate) event_kind: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanSeedCase {
+    pub(crate) split: String,
+    pub(crate) seed_collections: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanSeedCoverageRow {
+    pub(crate) name: String,
+    pub(crate) target_task: Option<String>,
+    pub(crate) task_enabled: bool,
+    pub(crate) triggers: Vec<LeanSeedTrigger>,
+    pub(crate) sources: Vec<LeanSeedSource>,
+    pub(crate) cases: Vec<LeanSeedCase>,
+    pub(crate) missing_splits: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanOptimizationCases {
     pub(crate) params: LeanOptimizationParams,
     pub(crate) decisions: Vec<LeanDecisionRow>,
     pub(crate) gates: Vec<LeanGateRow>,
     pub(crate) costs: Vec<LeanCostRow>,
+    pub(crate) seed_coverage: Vec<LeanSeedCoverageRow>,
 }

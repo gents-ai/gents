@@ -263,6 +263,214 @@ fn messages_body_threads_tool_result() {
     assert_eq!(body["messages"][1]["content"][0]["content"], "ECHOED");
 }
 
+/// A tool result's image parts (the plugin result ABI) reach the HTTP body as
+/// Anthropic image blocks inside the `tool_result` content array.
+#[test]
+fn tool_result_images_reach_the_wire_body() {
+    let image = |data: &str, mime: &str| {
+        ToolResultContent::Image(Image {
+            data: crate::llm::message::DocumentSourceKind::Base64(data.into()),
+            media_type: crate::llm::message::ImageMediaType::from_mime_type(mime),
+            detail: None,
+            additional_params: None,
+        })
+    };
+    let request = request_from_native(
+        None,
+        vec![
+            Message::user("draw it"),
+            Message::Assistant {
+                id: None,
+                content: vec![AssistantContent::ToolCall(ToolCall::new(
+                    "toolu_1".into(),
+                    ToolFunction::new("echo".into(), json!({})),
+                ))],
+            },
+            Message::User {
+                content: vec![UserContent::tool_result(
+                    "toolu_1",
+                    vec![
+                        ToolResultContent::text(r#"{"height":2,"width":2}"#),
+                        image("iVBORw0KGgo=", "image/png"),
+                        image("PHN2Zy8+", "image/svg+xml"),
+                    ],
+                )],
+            },
+        ],
+        vec![echo_tool()],
+    );
+    let bearer = crate::claude_subscription::ApiKeyBearer::new("placeholder-key");
+    let wire = captured_request(&bearer, &request);
+    let (_, body) = wire.split_once("\r\n\r\n").expect("HTTP body");
+    let body: Value = serde_json::from_str(body).expect("JSON body");
+    assert_eq!(
+        body["messages"][2]["content"][0]["content"],
+        json!([
+            {"type": "text", "text": r#"{"height":2,"width":2}"#},
+            {"type": "image", "source": {
+                "type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo=",
+            }},
+            {"type": "text", "text": gents_loop::loop_stream::TOOL_RESULT_IMAGE_OMITTED},
+        ])
+    );
+}
+
+/// A base64 PNG whose header declares `width`×`height`.
+fn png_header(width: u32, height: u32) -> String {
+    use base64::Engine as _;
+    let mut bytes = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
+    bytes.extend(width.to_be_bytes());
+    bytes.extend(height.to_be_bytes());
+    bytes.extend([8, 6, 0, 0, 0]);
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+/// One tool call per image, each result carrying that image; returns the
+/// `content` of every `tool_result` on the wire, in order.
+fn tool_result_images_on_the_wire(images: &[String]) -> Vec<Value> {
+    let mut history = vec![Message::user("draw them")];
+    for (index, data) in images.iter().enumerate() {
+        let id = format!("toolu_{index}");
+        history.push(Message::Assistant {
+            id: None,
+            content: vec![AssistantContent::ToolCall(ToolCall::new(
+                id.clone(),
+                ToolFunction::new("echo".into(), json!({})),
+            ))],
+        });
+        history.push(Message::User {
+            content: vec![UserContent::tool_result(
+                id,
+                vec![ToolResultContent::Image(Image {
+                    data: crate::llm::message::DocumentSourceKind::Base64(data.clone()),
+                    media_type: Some(crate::llm::message::ImageMediaType::PNG),
+                    detail: None,
+                    additional_params: None,
+                })],
+            )],
+        });
+    }
+    let request = request_from_native(None, history, vec![echo_tool()]);
+    let bearer = crate::claude_subscription::ApiKeyBearer::new("placeholder-key");
+    let wire = captured_request(&bearer, &request);
+    let (_, body) = wire.split_once("\r\n\r\n").expect("HTTP body");
+    let body: Value = serde_json::from_str(body).expect("JSON body");
+    body["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|message| message["content"].as_array().unwrap().clone())
+        .filter(|block| block["type"] == "tool_result")
+        .map(|block| block["content"].clone())
+        .collect()
+}
+
+fn wire_image(data: &str) -> Value {
+    json!([{"type": "image", "source": {
+        "type": "base64", "media_type": "image/png", "data": data,
+    }}])
+}
+
+fn wire_note(note: &str) -> Value {
+    json!([{"type": "text", "text": note}])
+}
+
+/// Anthropic's vision limits: an image over 8000 px on a side reaches the
+/// wire as a note naming why, and the request still carries the others.
+#[test]
+fn an_image_over_claudes_side_limit_becomes_a_note() {
+    let images = [
+        png_header(9000, 4000),
+        png_header(3000, 3000),
+        "iVBORw0KGgo=".into(),
+    ];
+    assert_eq!(
+        tool_result_images_on_the_wire(&images),
+        vec![
+            wire_note("[image omitted: 9000×4000 px exceeds Claude's 8000 px limit; ask the tool for a smaller view]"),
+            wire_image(&images[1]),
+            wire_image(&images[2]),
+        ]
+    );
+}
+
+/// Past 20 images every image is held to 2000 px on a side.
+#[test]
+fn past_twenty_images_each_is_held_to_two_thousand_px() {
+    let mut images = vec![png_header(3000, 1000)];
+    images.extend((0..20).map(|_| png_header(2000, 2000)));
+    let wire = tool_result_images_on_the_wire(&images);
+    assert_eq!(
+        wire[0],
+        wire_note("[image omitted: 3000×1000 px exceeds Claude's 2000 px limit for requests with more than 20 images; ask the tool for a smaller view]")
+    );
+    assert_eq!(
+        wire[1..],
+        images[1..]
+            .iter()
+            .map(|data| wire_image(data))
+            .collect::<Vec<_>>()[..]
+    );
+
+    let twenty = &images[..20];
+    assert_eq!(
+        tool_result_images_on_the_wire(twenty)[0],
+        wire_image(&twenty[0])
+    );
+}
+
+/// Past 20 images over 2000 px, the newest 20 are sent and older ones become
+/// notes; once a kept image is over 2000 px, no image past the 20th is sent.
+#[test]
+fn past_twenty_large_images_the_newest_twenty_are_sent() {
+    let large: Vec<String> = (0..21).map(|_| png_header(3000, 3000)).collect();
+    let wire = tool_result_images_on_the_wire(&large);
+    assert_eq!(
+        wire[0],
+        wire_note("[image omitted: 3000×3000 px exceeds Claude's 2000 px limit for requests with more than 20 images; ask the tool for a smaller view]")
+    );
+    assert_eq!(
+        wire[1..],
+        large[1..]
+            .iter()
+            .map(|data| wire_image(data))
+            .collect::<Vec<_>>()[..]
+    );
+
+    let mut mixed: Vec<String> = (0..20).map(|_| png_header(100, 100)).collect();
+    mixed.push(png_header(3000, 3000));
+    let wire = tool_result_images_on_the_wire(&mixed);
+    assert_eq!(
+        wire[0],
+        wire_note("[image omitted: a Claude request with an image over 2000 px carries at most 20 images and later ones were kept; ask the tool again to see it]")
+    );
+    assert_eq!(
+        wire[1..],
+        mixed[1..]
+            .iter()
+            .map(|data| wire_image(data))
+            .collect::<Vec<_>>()[..]
+    );
+}
+
+/// Over Claude's per-request image count the oldest images become notes.
+#[test]
+fn past_the_image_count_the_oldest_images_become_notes() {
+    let images: Vec<String> = (0..101).map(|side| png_header(side + 1, 1)).collect();
+    let wire = tool_result_images_on_the_wire(&images);
+    assert_eq!(
+        wire[0],
+        wire_note("[image omitted: a Claude request carries at most 100 images and later ones were kept; ask the tool again to see it]")
+    );
+    assert_eq!(
+        wire[1..],
+        images[1..]
+            .iter()
+            .map(|data| wire_image(data))
+            .collect::<Vec<_>>()[..]
+    );
+}
+
 /// Lean `ClaudeMap.toolsField`: the wire never carries `tools: []`.
 #[test]
 fn messages_body_omits_tools_key_when_surface_is_empty() {
@@ -844,12 +1052,14 @@ async fn transport_429_usage_cap_reports_reset_time() {
         HashSet::new(),
         &bearer,
         &ReqwestClient::new(),
+        None,
     )
     .await
     .err()
     .expect("429");
-    let classified =
-        crate::error::classify_completion_error(&rig::agent::StreamingError::Completion(err));
+    let classified = crate::llm::rig_compat::classify_completion_error(
+        &rig::agent::StreamingError::Completion(err),
+    );
     assert!(!classified.is_retryable());
     assert_eq!(
         classified.to_string(),
@@ -878,6 +1088,7 @@ async fn transport_401_invalidates_the_bearer_once() {
         HashSet::new(),
         &bearer,
         &ReqwestClient::new(),
+        None,
     )
     .await
     .err()
@@ -893,7 +1104,10 @@ async fn transport_401_invalidates_the_bearer_once() {
     );
 }
 
-fn captured_request<S: crate::oauth_credential::BearerSource>(bearer: &S) -> String {
+fn captured_request<S: crate::oauth_credential::BearerSource>(
+    bearer: &S,
+    request: &CompletionRequest,
+) -> String {
     // The fixture lock spans the request, so it is held outside the
     // runtime: a std guard must not live across an await.
     let _guard = lock_fixtures_for_test();
@@ -910,10 +1124,11 @@ fn captured_request<S: crate::oauth_credential::BearerSource>(bearer: &S) -> Str
             let _ = stream_messages_at(
                 &url,
                 "claude-sonnet-5",
-                &echo_request(),
+                request,
                 HashSet::new(),
                 bearer,
                 &ReqwestClient::new(),
+                None,
             )
             .await;
             handle.await.expect("request")
@@ -924,7 +1139,7 @@ fn captured_request<S: crate::oauth_credential::BearerSource>(bearer: &S) -> Str
 #[test]
 fn api_key_request_sends_bearer_and_version_without_oauth_beta() {
     let bearer = crate::claude_subscription::ApiKeyBearer::new("placeholder-key");
-    let request = captured_request(&bearer);
+    let request = captured_request(&bearer, &echo_request());
     let has = |expected: &str| {
         request
             .lines()
@@ -944,7 +1159,7 @@ fn api_key_request_sends_bearer_and_version_without_oauth_beta() {
 #[test]
 fn sign_in_request_keeps_the_oauth_beta() {
     let bearer = crate::claude_subscription::StaticBearer::new("access");
-    let request = captured_request(&bearer);
+    let request = captured_request(&bearer, &echo_request());
     assert!(
         request
             .lines()
@@ -966,13 +1181,15 @@ async fn unsupported_replay_body_is_a_permanent_request_error() {
         HashSet::new(),
         &bearer,
         &ReqwestClient::new(),
+        None,
     )
     .await
     .err()
     .expect("unsupported replay block");
     assert!(matches!(error, CompletionError::RequestError(_)), "{error}");
-    let classified =
-        crate::error::classify_completion_error(&rig::agent::StreamingError::Completion(error));
+    let classified = crate::llm::rig_compat::classify_completion_error(
+        &rig::agent::StreamingError::Completion(error),
+    );
     assert!(matches!(
         classified,
         crate::error::InferenceError::PermanentFailure { .. }
@@ -1010,7 +1227,58 @@ fn unsupported_replay_preflight_is_a_permanent_request_error() {
         "{error}"
     );
     assert!(matches!(
-        crate::error::classify_completion_error(&error),
+        crate::llm::rig_compat::classify_completion_error(&error),
         crate::error::InferenceError::PermanentFailure { .. }
     ));
+}
+
+/// A live Messages request records the unified usage headers for the
+/// reporter's account.
+#[test]
+fn usage_wiring_claude_live_messages_records_unified_headers() {
+    // The fixture lock spans the live request, so it is held outside the
+    // runtime: a std guard must not live across an await.
+    let _guard = lock_fixtures_for_test();
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime")
+        .block_on(async {
+            let node =
+                std::sync::Arc::new(crate::oauth_credential::test_support::test_node().await);
+            let account = crate::usage_observation::UsageAccount::Backend {
+                agent_did: "did:key:z6MkUsageWireClaudeLive".into(),
+                provider: "ClaudeCliSubscription".into(),
+                backend_id: "backend-usage-claude".into(),
+            };
+            let url = crate::provider_http::tests::one_shot_server(
+                "200 OK",
+                &[
+                    ("anthropic-ratelimit-unified-5h-utilization", "0.25"),
+                    ("anthropic-ratelimit-unified-5h-reset", "1790354400"),
+                ],
+                "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+            )
+            .await;
+            let bearer = crate::claude_subscription::StaticBearer::new("access-TEST");
+            let _ = stream_messages_at(
+                &url,
+                "claude-sonnet-5",
+                &echo_request(),
+                HashSet::new(),
+                &bearer,
+                &ReqwestClient::new(),
+                Some(crate::usage_observation::UsageReporter::new(
+                    node.clone(),
+                    account.clone(),
+                )),
+            )
+            .await;
+
+            let stored = crate::provider_http::tests::stored_usage_eventually(&node, &account)
+                .await
+                .expect("usage recorded");
+            let window = &stored.report.windows[0];
+            assert_eq!((window.label.as_str(), window.used_pct), ("5h", 25.0));
+        });
 }

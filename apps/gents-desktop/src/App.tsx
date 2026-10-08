@@ -1,47 +1,75 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import { createDesktopClient } from "@source-inc/gents-desktop-client";
 import { MemoryNavProvider, useNav, type Nav } from "@gents/shell";
 import { Toaster } from "@gents/ui/components/sonner";
 import { toast } from "sonner";
 import { TooltipProvider } from "@gents/ui/components/tooltip";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { IncompatibleHomeScreen } from "./components/IncompatibleHomeScreen";
 import { StartupScreen } from "./components/StartupScreen";
+import {
+  createDesktopApp,
+  type DesktopApp,
+  type DesktopBridge,
+} from "./hooks/desktopApp";
+import { useDesktopRuntime } from "./hooks/useDesktopRuntime";
+import { useManagedServerTrayControls } from "./hooks/useManagedServerTrayControls";
 import { useMobileBackSwipe } from "./hooks/useMobileBackSwipe";
 import { useMobileVisualViewport } from "./hooks/useMobileVisualViewport";
 import { useNativeWindowReadiness } from "./hooks/useNativeWindowReadiness";
-import { useManagedServerTrayControls } from "./hooks/useManagedServerTrayControls";
-import type { DesktopShellBridge } from "./hooks/useDesktopShell";
-import { installExternalLinkGuard } from "./lib/externalLinks";
-import { startNativeSimulatorE2e } from "./lib/nativeSimulatorE2e";
 import {
-  applyShellPlatform,
   isMobileTauriShell,
-  isMacTauriShell,
   isWindowsTauriShell,
   supportsLocalManagedServer,
 } from "./lib/shellPlatform";
+import { AppProvider, useApp } from "./ui/app/AppContext";
 import { AppShell } from "./ui/app/AppShell";
+import { usePlatformSetup, useWindowTitle } from "./ui/app/platform";
+import { useFirstRun } from "./ui/app/useFirstRun";
 import { WindowControls } from "./ui/app/WindowControls";
-import { BehaviorColorsContext } from "./ui/screens/behavior-colors";
+import { useDockVisit } from "./ui/app/workspace";
+import { useHomeDid, useStartup } from "./ui/hooks/useClient";
+import { useFleet } from "./ui/hooks/useFleet";
+import { fleetNodes } from "./ui/lib/scope";
+import { useFollowRoute } from "./ui/hooks/useFollowRoute";
+import { defaultAgentOf } from "./ui/lib/agents";
+import { isLocalAgent, nodeSetUp } from "./ui/lib/firstRun";
+import { useUxHost } from "./ui/hooks/useUxHost";
+import { useHistoryInputs } from "./ui/lib/history-inputs";
+import {
+  bindNav,
+  interceptNavClicks,
+  navigate,
+  useHistory,
+  useRoute,
+  type Route,
+} from "./ui/lib/router";
+import { useSwipeNav } from "./ui/lib/swipe-nav";
 import { AgentScreen } from "./ui/screens/agent/AgentScreen";
 import { AgentsScreen } from "./ui/screens/AgentsScreen";
 import { MailboxScreen } from "./ui/screens/MailboxScreen";
+import { PluginAccessPrompt } from "./ui/screens/PluginAccessPrompt";
 import { SessionScreen } from "./ui/screens/SessionScreen";
 import { SessionsScreen } from "./ui/screens/SessionsScreen";
-import { PluginAccessPrompt } from "./ui/screens/PluginAccessPrompt";
-import { Shortcuts } from "./ui/screens/Shortcuts";
 import { SetupScreen } from "./ui/screens/setup/SetupScreen";
-import { useShell, type ShellBridge } from "./ui/hooks/useShell";
-import { useUxHost } from "./ui/hooks/useUxHost";
-import { isLocalAgent, needsFirstRunSetup } from "./ui/lib/firstRun";
-import { bindNav, interceptNavClicks, navigate, useRoute } from "./ui/lib/router";
-import { initTheme } from "./ui/theme";
+import { Shortcuts } from "./ui/screens/Shortcuts";
+import "./ui/screens/surfaces";
 
 import "./App.css";
+
+function App({ bridge }: { bridge?: DesktopBridge } = {}) {
+  return (
+    <ErrorBoundary>
+      <MemoryNavProvider>
+        <NavBinder>
+          <AppHost bridge={bridge} />
+        </NavBinder>
+      </MemoryNavProvider>
+    </ErrorBoundary>
+  );
+}
 
 function NavBinder({ children }: { children: ReactNode }) {
   const nav = useNav();
@@ -55,75 +83,62 @@ function BackSwipe({ nav, children }: { nav: Nav; children: ReactNode }) {
   return children;
 }
 
-function App({ bridge }: { bridge?: DesktopShellBridge } = {}) {
+function defaultBridge(): DesktopBridge {
+  const client = createDesktopClient();
+  return {
+    api: client.api,
+    listenToUpdates: (handler) => client.transport.listenClientUpdated(handler),
+    supportsManagedServer: supportsLocalManagedServer(),
+  };
+}
+
+/* The app, made once for the window's life, and what it does on its own. */
+function AppHost({ bridge: given }: { bridge?: DesktopBridge }) {
+  const [bridge] = useState(() => given ?? defaultBridge());
+  /* a failed action is reported once, as a toast where the person is */
+  const [app] = useState(() => createDesktopApp({ reportFailure: toast, ...bridge }));
   return (
-    <ErrorBoundary>
-      <MemoryNavProvider>
-        <NavBinder>
-          <AppHost bridge={bridge} />
-        </NavBinder>
-      </MemoryNavProvider>
-    </ErrorBoundary>
+    <AppProvider value={app}>
+      <AppReactions app={app} bridge={bridge} />
+      <AppBody />
+    </AppProvider>
   );
 }
 
-function AppHost({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
-  useMobileVisualViewport();
-  const defaultBridge = useMemo<ShellBridge>(() => {
-    const client = createDesktopClient();
-    return {
-      api: client.api,
-      listenToUpdates: (handler) => client.transport.listenClientUpdated(handler),
-      supportsManagedServer: supportsLocalManagedServer(),
-    };
-  }, []);
-  const bridge = explicitBridge ?? defaultBridge;
+/* What the app does on its own. Its hooks follow the stores, so they live
+   in a leaf that draws nothing: their re-renders stop here instead of
+   redrawing every screen. */
+function AppReactions({ app, bridge }: { app: DesktopApp; bridge: DesktopBridge }) {
   const route = useRoute();
-  const shell = useShell(
-    bridge,
-    route.name === "session" ? route.sessionId : undefined,
-  );
-
-  useEffect(() => {
-    initTheme();
-    applyShellPlatform();
-  }, []);
-  useEffect(() => installExternalLinkGuard(document), []);
-  useEffect(() => {
-    void startNativeSimulatorE2e();
-  }, []);
+  useDesktopRuntime(app, bridge.listenToUpdates);
+  useFollowRoute(route);
+  useWindowTitle(route);
+  useDockVisit(route);
+  useMobileVisualViewport();
+  usePlatformSetup();
   useManagedServerTrayControls(bridge.api);
-  useUxHost(shell, bridge.listenToUpdates);
-  const agent = shell.selectedDeployment?.agentPrincipal.displayName ?? null;
-  useEffect(() => {
-    if (!isMacTauriShell()) return;
-    const title =
-      route.name === "session"
-        ? shell.selectedSession?.title || "New Session"
-        : route.name === "sessions"
-          ? "Sessions"
-          : route.name === "agents"
-            ? "Agents"
-            : route.name === "mailbox"
-              ? "Mailbox"
-              : "Configuration";
-    void getCurrentWindow().setTitle(
-      agent ? `${title} — ${agent}` : `${title} — Gents`,
-    );
-  }, [agent, route.name, shell.selectedSession?.title]);
-  const [setup, setSetup] = useState<"unknown" | "active" | "done">("unknown");
-  // A completed home reset starts over from first-run detection.
-  const homeGeneration = shell.incompatibleHome.generation;
-  useEffect(() => {
-    if (homeGeneration > 0) setSetup("unknown");
-  }, [homeGeneration]);
-  useNativeWindowReadiness(
-    shell.startupPhase === "ready" &&
-      (setup === "done" ||
-        (setup === "unknown" &&
-          shell.snapshot !== null &&
-          !needsFirstRunSetup(shell.snapshot))),
+  /* the UX plugin host and its doors: reads the stores, re-renders nothing */
+  useUxHost(app, bridge.listenToUpdates);
+  return null;
+}
+
+function AppBody() {
+  const { actions } = useApp();
+  const route = useRoute();
+  const history = useHistory();
+  useHistoryInputs(history);
+  useSwipeNav(history);
+
+  const startup = useStartup();
+  const firstRun = useFirstRun(
+    startup.incompatibleHome.generation,
+    startup.phase === "ready",
   );
+  const homeDid = useHomeDid();
+  const hasLocalAgent = useFleet((state) =>
+    fleetNodes(state).some((node) => isLocalAgent(node, homeDid)),
+  );
+  useNativeWindowReadiness(startup.phase === "ready" && firstRun.settled);
 
   const titlebar = (
     <div className="titlebar-drag-region" data-tauri-drag-region>
@@ -133,135 +148,86 @@ function AppHost({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
 
   /* A home this version cannot open is answered before anything else,
      whichever operation found it; the wizard restarts at welcome after. */
-  if (shell.incompatibleHome.report) {
+  if (startup.incompatibleHome.report) {
     return (
       <>
         {titlebar}
-        <IncompatibleHomeScreen error={shell.error} home={shell.incompatibleHome} />
+        <IncompatibleHomeScreen error={startup.error} home={startup.incompatibleHome} />
       </>
     );
   }
 
   /* First-run owns its own starting page. Do not swap it for the global
      startup screen or the wizard remounts at welcome after the server is up. */
-  if (setup === "active") {
-    const hasLocalAgent = shell.deployments.some((deployment) =>
-      isLocalAgent(deployment, shell.snapshot?.bootstrap.initAgentDid),
-    );
+  if (firstRun.phase === "active") {
     return (
       <>
         {titlebar}
         <TooltipProvider>
-          <BehaviorColorsContext.Provider value={shell.behaviorColors}>
-            <SetupScreen
-              shell={shell}
-              initialStep={hasLocalAgent ? "inference" : "welcome"}
-              onDone={(snapshot) => {
-                setSetup("done");
-                const deployment = snapshot.client?.deployments[0];
-                if (deployment) {
-                  shell.selectAgent(deployment.agentDid);
-                  const behavior =
-                    deployment.behaviors.find((row) => row.isDefault) ??
-                    deployment.behaviors[0];
-                  if (behavior) shell.selectBehavior(behavior.behaviorId);
-                }
-                void shell.refreshSnapshot().then(() => {
-                  navigate({ name: "session", sessionId: null });
-                });
-              }}
-            />
-          </BehaviorColorsContext.Provider>
+          <SetupScreen
+            initialStep={hasLocalAgent ? "inference" : "welcome"}
+            onDone={(done) => {
+              firstRun.finish();
+              const deployment = nodeSetUp(done);
+              if (deployment) {
+                actions.selectAgent(deployment.agentDid);
+                const behavior = defaultAgentOf(deployment) ?? deployment.behaviors[0];
+                if (behavior) actions.selectBehavior(behavior.behaviorId);
+              }
+              void actions.refreshSnapshot().then(() => {
+                navigate({ name: "session", sessionId: null });
+              });
+            }}
+          />
         </TooltipProvider>
       </>
     );
   }
 
-  if (shell.startupPhase && shell.startupPhase !== "ready") {
+  if (startup.phase !== "ready") {
     return (
       <>
         {titlebar}
-        <StartupScreen
-          error={shell.error}
-          managedServerSupported={bridge.supportsManagedServer === true}
-          onRetry={shell.retryStartup}
-          managedServerWait={shell.managedServerWait}
-          diagnosticsHint={shell.diagnosticsHint}
-          onSkipManagedServerWait={shell.skipManagedServerWait}
-          onRestartManagedServer={shell.restartManagedServer}
-          onOpenLoginItems={bridge.api.openManagedServerLoginItems}
-          phase={shell.startupPhase}
-        />
+        <StartupScreen />
       </>
     );
   }
 
-  if (
-    setup === "unknown" &&
-    shell.snapshot !== null &&
-    needsFirstRunSetup(shell.snapshot)
-  ) {
-    setSetup("active");
-    return null;
-  }
-  if (setup === "unknown" && shell.snapshot === null) {
-    return null;
-  }
-
-  const openDbExplorer = shell.api.openDbExplorer
-    ? () => {
-        void shell.api.openDbExplorer?.().catch((e: unknown) => {
-          toast(`DB explorer failed to open: ${String(e)}`);
-        });
-      }
-    : null;
+  if (!firstRun.settled) return null;
 
   return (
-    <>
-      <TooltipProvider>
-        <BehaviorColorsContext.Provider value={shell.behaviorColors}>
-          <AppShell
-            route={route}
-            agentName={agent}
-            agentDid={shell.selectedAgentDid}
-            deployment={shell.selectedDeployment}
-            root={shell.snapshot?.bootstrap.initToolRoot}
-            ceiling={shell.snapshot?.bootstrap.initToolCeiling}
-            online={Boolean(shell.snapshot?.client)}
-            mailboxCount={
-              shell.selectedDeployment?.mailboxItems.filter((m) => m.status === "open")
-                .length ?? 0
-            }
-            holds={
-              new Set(shell.holds.flatMap((h) => (h.sessionId ? [h.sessionId] : [])))
-            }
-            syncHealth={shell.snapshot?.client?.syncHealth}
-            error={shell.error}
-            onDismissError={shell.clearError}
-            onOpenDbExplorer={openDbExplorer}
-          >
-            {route.name === "sessions" && <SessionsScreen shell={shell} />}
-            {route.name === "session" && <SessionScreen shell={shell} />}
-            {route.name === "mailbox" && <MailboxScreen shell={shell} />}
-            {route.name === "agents" && <AgentsScreen shell={shell} />}
-            {route.name === "agent" && (
-              <AgentScreen
-                shell={shell}
-                agentDid={route.agentDid}
-                section={route.section}
-                item={route.item}
-              />
-            )}
-          </AppShell>
-          <Toaster />
-          {shell.deployments.some((deployment) =>
-            isLocalAgent(deployment, shell.snapshot?.bootstrap.initAgentDid),
-          ) && <PluginAccessPrompt />}
-          <Shortcuts shell={shell} />
-        </BehaviorColorsContext.Provider>
-      </TooltipProvider>
-    </>
+    <TooltipProvider>
+      <AppShell route={route} history={history}>
+        <RouteScreen route={route} />
+      </AppShell>
+      <Toaster />
+      {hasLocalAgent && <PluginAccessPrompt />}
+      <Shortcuts />
+    </TooltipProvider>
   );
+}
+
+/* The screen each route draws in the pane. */
+function RouteScreen({ route }: { route: Route }) {
+  switch (route.name) {
+    case "sessions":
+      return <SessionsScreen nodeDid={route.nodeDid} />;
+    case "session":
+      return <SessionScreen />;
+    case "mailbox":
+      return <MailboxScreen nodeDid={route.nodeDid} />;
+    case "agents":
+    case "nodes":
+      return <AgentsScreen />;
+    case "agent":
+      return (
+        <AgentScreen
+          agentDid={route.agentDid}
+          section={route.section}
+          item={route.item}
+        />
+      );
+  }
 }
 
 export default App;

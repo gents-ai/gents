@@ -32,6 +32,8 @@ GROUPS = {
     "reasoning_signature_cases": "LeanReasoningSignatureCase",
     "auxiliary_output_cases": "LeanAuxiliaryOutputCase",
     "prompt_assembly_claude_wire_start_cases": "LeanPromptAssemblyClaudeWireStartCase",
+    "prompt_assembly_responses_storage_cases": "LeanPromptAssemblyResponsesStorageCase",
+    "prompt_assembly_responses_effort_cases": "LeanPromptAssemblyResponsesEffortCase",
     "prompt_assembly_claude_thinking_stream_cases": "LeanPromptAssemblyClaudeThinkingStreamCase",
     "prompt_assembly_reasoning_suffix_cases": "LeanPromptAssemblyReasoningSuffixCase",
     "prompt_assembly_replay_shape_cases": "LeanPromptAssemblyReplayShapeCase",

@@ -1,9 +1,10 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
-import type { Shell } from "@/hooks/useShell";
 import { SessionsScreen } from "../src/ui/screens/SessionsScreen";
-import { emptyFilter, filterSessions } from "../src/ui/screens/SessionFilters";
+import { emptyFilter } from "../src/ui/lib/session-filter";
+import { filterSessions } from "../src/ui/screens/SessionFilters";
+import { node, publish, testApp, withApp } from "./app-fixture";
 
 const session = (overrides: Partial<SessionSummary>): SessionSummary => ({
   sessionId: "parent",
@@ -49,17 +50,14 @@ const child = session({
     causeRequestDocId: "physical-parent-1",
   },
 });
-const shell = (sessions: SessionSummary[]) =>
-  ({
-    holds: [],
-    behaviorDescriptions: {},
-    selectedDeployment: {
-      sessions,
-      behaviors: [],
-      behaviorConfigs: [],
-      behaviorEnvironments: [],
-    },
-  }) as unknown as Shell;
+const deploymentWith = (sessions: SessionSummary[]) =>
+  node({
+    agentDid: "did:key:node",
+    sessions,
+    behaviors: [],
+    behaviorConfigs: [],
+    behaviorEnvironments: [],
+  });
 
 beforeEach(() =>
   vi.stubGlobal("localStorage", {
@@ -75,21 +73,22 @@ afterEach(() => {
 
 describe("sessions started by another session", () => {
   it("nests by session identity when physical and logical request IDs differ, including after the parent advances", () => {
-    const { rerender } = render(<SessionsScreen shell={shell([child, parent])} />);
+    const app = testApp({ deployments: [deploymentWith([child, parent])] });
+    const { rerender } = render(<SessionsScreen />, {
+      wrapper: withApp(app),
+    });
     expect(screen.queryByTestId("session-child")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: /1 more worker/ }));
     expect(screen.getByTestId("session-child")).toHaveClass("pl-9");
-    rerender(
-      <SessionsScreen
-        shell={shell([
-          child,
-          session({
-            latestRequestDocId: "physical-parent-2",
-            latestRequestId: "logical-parent-2",
-          }),
-        ])}
-      />,
-    );
+    const advanced = [
+      child,
+      session({
+        latestRequestDocId: "physical-parent-2",
+        latestRequestId: "logical-parent-2",
+      }),
+    ];
+    act(() => publish(app, [deploymentWith(advanced)]));
+    rerender(<SessionsScreen />);
     expect(screen.getByTestId("session-child")).toHaveClass("pl-9");
     expect(screen.getByRole("button", { name: /1 worker/ })).toHaveAttribute(
       "aria-expanded",
@@ -98,11 +97,10 @@ describe("sessions started by another session", () => {
   });
 
   it("does not nest under an identical session label in a different requester scope", () => {
-    render(
-      <SessionsScreen
-        shell={shell([child, session({ requesterDid: "did:test:other" })])}
-      />,
-    );
+    const sessions = [child, session({ requesterDid: "did:test:other" })];
+    render(<SessionsScreen />, {
+      wrapper: withApp(testApp({ deployments: [deploymentWith(sessions)] })),
+    });
     expect(screen.getByTestId("session-child")).not.toHaveClass("pl-9");
   });
 
@@ -113,20 +111,10 @@ describe("sessions started by another session", () => {
     });
     const sessions = [parent, child, unresolved];
     expect(
-      filterSessions(
-        sessions,
-        { ...emptyFilter, sources: ["session"] },
-        new Set(),
-        null,
-      ),
+      filterSessions(sessions, { ...emptyFilter, sources: ["session"] }, null),
     ).toEqual([child]);
     expect(
-      filterSessions(
-        sessions,
-        { ...emptyFilter, sources: ["person"] },
-        new Set(),
-        null,
-      ),
+      filterSessions(sessions, { ...emptyFilter, sources: ["person"] }, null),
     ).toEqual([parent, unresolved]);
   });
 });

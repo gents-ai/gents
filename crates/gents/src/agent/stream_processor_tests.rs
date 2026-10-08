@@ -7,8 +7,6 @@ use crate::llm::message::{
 };
 use crate::llm::HookAction;
 use gents_loop::provider_input::ProviderInputProfile;
-use rig::agent::MultiTurnStreamItem;
-use rig::streaming::{StreamedAssistantContent, StreamedUserContent};
 
 use super::*;
 use crate::ensure_runtime_schemas;
@@ -109,6 +107,7 @@ fn fixture_agent_request(
     content: &str,
 ) -> AgentRequest {
     AgentRequest {
+        retry_parent_request_doc_id: None,
         purpose: gents_protocol::request_admission::RequestPurpose::Normal,
         doc_id,
         request_id: request_id.to_string(),
@@ -193,7 +192,7 @@ async fn first_visible_flushes_immediately_and_followup_waits_for_cadence() {
         ProviderInputProfile::OpenAiChatCompletions,
     );
     processor
-        .process_item::<()>(Ok(LoopStreamItem::ProviderAttemptStarted {
+        .process_item(Ok(LoopStreamItem::ProviderAttemptStarted {
             turn: 0,
             attempt: 0,
             capture_scope: "inference.1".parse().unwrap(),
@@ -231,12 +230,10 @@ async fn first_visible_flushes_immediately_and_followup_waits_for_cadence() {
     assert_eq!(count(&node, &doc_id).await, 3);
     assert!(processor.next_flush_deadline().await.is_none());
     processor
-        .process_item::<()>(Ok(LoopStreamItem::Item(
-            MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::ReasoningDelta {
-                id: None,
-                reasoning: "first reasoning".into(),
-            }),
-        )))
+        .process_item(Ok(LoopStreamItem::ReasoningDelta {
+            id: None,
+            reasoning: "first reasoning".into(),
+        }))
         .await
         .unwrap();
     assert_eq!(
@@ -249,7 +246,7 @@ async fn first_visible_flushes_immediately_and_followup_waits_for_cadence() {
     assert!(processor.next_flush_deadline().await.is_some());
     let message = processor.assistant_turn.clone().take_message().unwrap();
     processor
-        .process_item::<()>(Ok(LoopStreamItem::ProviderTurnReady {
+        .process_item(Ok(LoopStreamItem::ProviderTurnReady {
             turn: 0,
             attempt: 0,
             message,
@@ -341,7 +338,7 @@ async fn pre_stream_failures_do_not_fabricate_provider_attempt_closures() {
     ] {
         assert!(matches!(
             processor
-                .process_item::<()>(Ok(LoopStreamItem::AttemptFailed {
+                .process_item(Ok(LoopStreamItem::AttemptFailed {
                     turn: 0,
                     attempt,
                     error,
@@ -442,7 +439,7 @@ async fn persist_partial_turn_publishes_text_only_and_retains_partial_signature_
     );
 
     processor
-        .process_item::<()>(Ok(LoopStreamItem::ProviderAttemptStarted {
+        .process_item(Ok(LoopStreamItem::ProviderAttemptStarted {
             turn: 0,
             attempt: 0,
             capture_scope: "inference.1".parse().unwrap(),
@@ -452,7 +449,7 @@ async fn persist_partial_turn_publishes_text_only_and_retains_partial_signature_
 
     use gents_loop::provider_audit::{ClaudeAuditEvent, ClaudeBlockKind, ProviderAuditObservation};
     processor
-        .process_item::<()>(Ok(LoopStreamItem::ProviderAudit(
+        .process_item(Ok(LoopStreamItem::ProviderAudit(
             ProviderAuditObservation {
                 capture_scope: "inference.1".parse().unwrap(),
                 turn: 0,
@@ -484,7 +481,7 @@ async fn persist_partial_turn_publishes_text_only_and_retains_partial_signature_
         },
     ] {
         processor
-            .process_item::<()>(Ok(LoopStreamItem::ProviderAudit(
+            .process_item(Ok(LoopStreamItem::ProviderAudit(
                 ProviderAuditObservation {
                     capture_scope: "inference.1".parse().unwrap(),
                     turn: 0,
@@ -791,21 +788,15 @@ async fn load_message_shapes(
     shapes
 }
 
-fn text_item(text: &str) -> Result<LoopStreamItem<()>, rig::agent::StreamingError> {
-    Ok(LoopStreamItem::Item(
-        MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(
-            rig::completion::message::Text {
-                text: text.to_string(),
-            },
-        )),
-    ))
+fn text_item(text: &str) -> Result<LoopStreamItem, crate::error::LoopStreamError> {
+    Ok(LoopStreamItem::Text(text.to_string()))
 }
 
 fn tool_call_item(
     name: &str,
     args_json: &str,
     internal_id: &str,
-) -> Result<LoopStreamItem<()>, rig::agent::StreamingError> {
+) -> Result<LoopStreamItem, crate::error::LoopStreamError> {
     tool_call_item_with_ids(name, args_json, internal_id, internal_id, None)
 }
 
@@ -815,29 +806,27 @@ fn tool_call_item_with_ids(
     tool_id: &str,
     internal_id: &str,
     call_id: Option<&str>,
-) -> Result<LoopStreamItem<()>, rig::agent::StreamingError> {
-    Ok(LoopStreamItem::Item(
-        MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::ToolCall {
-            tool_call: rig::completion::message::ToolCall {
-                id: tool_id.to_string(),
-                call_id: call_id.map(ToOwned::to_owned),
-                function: rig::completion::message::ToolFunction {
-                    name: name.to_string(),
-                    arguments: serde_json::from_str(args_json).unwrap(),
-                },
-                signature: None,
-                additional_params: None,
+) -> Result<LoopStreamItem, crate::error::LoopStreamError> {
+    Ok(LoopStreamItem::ToolCall {
+        tool_call: ToolCall {
+            id: tool_id.to_string(),
+            call_id: call_id.map(ToOwned::to_owned),
+            function: ToolFunction {
+                name: name.to_string(),
+                arguments: serde_json::from_str(args_json).unwrap(),
             },
-            internal_call_id: internal_id.to_string(),
-        }),
-    ))
+            signature: None,
+            additional_params: None,
+        },
+        internal_call_id: internal_id.to_string(),
+    })
 }
 
 fn tool_result_item(
     tool_id: &str,
     result_json: &str,
     internal_id: &str,
-) -> Result<LoopStreamItem<()>, rig::agent::StreamingError> {
+) -> Result<LoopStreamItem, crate::error::LoopStreamError> {
     tool_result_item_with_call_id(tool_id, None, result_json, internal_id)
 }
 
@@ -846,35 +835,27 @@ fn tool_result_item_with_call_id(
     call_id: Option<&str>,
     result_json: &str,
     internal_id: &str,
-) -> Result<LoopStreamItem<()>, rig::agent::StreamingError> {
-    Ok(LoopStreamItem::Item(MultiTurnStreamItem::StreamUserItem(
-        StreamedUserContent::ToolResult {
-            tool_result: rig::completion::message::ToolResult {
-                id: tool_id.to_string(),
-                call_id: call_id.map(ToOwned::to_owned),
-                content: rig::one_or_many::OneOrMany::one(
-                    rig::completion::message::ToolResultContent::Text(
-                        rig::completion::message::Text {
-                            text: result_json.to_string(),
-                        },
-                    ),
-                ),
-            },
-            internal_call_id: internal_id.to_string(),
+) -> Result<LoopStreamItem, crate::error::LoopStreamError> {
+    Ok(LoopStreamItem::ToolResult {
+        tool_result: crate::llm::message::ToolResult {
+            id: tool_id.to_string(),
+            call_id: call_id.map(ToOwned::to_owned),
+            content: vec![ToolResultContent::text(result_json)],
         },
-    )))
+        internal_call_id: internal_id.to_string(),
+    })
 }
 
-fn final_item(response_text: &str) -> Result<LoopStreamItem<()>, rig::agent::StreamingError> {
-    Ok(LoopStreamItem::Item(
-        MultiTurnStreamItem::<()>::final_response(response_text, rig::completion::Usage::new()),
-    ))
+fn final_item(response_text: &str) -> Result<LoopStreamItem, crate::error::LoopStreamError> {
+    Ok(LoopStreamItem::Final {
+        text: response_text.to_string(),
+    })
 }
 
 fn turn_retracted_item(
     turn: usize,
     attempt: u32,
-) -> Result<LoopStreamItem<()>, rig::agent::StreamingError> {
+) -> Result<LoopStreamItem, crate::error::LoopStreamError> {
     Ok(LoopStreamItem::TurnRetracted {
         turn,
         attempt,
@@ -970,7 +951,7 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
         .await
         .unwrap();
     processor
-        .process_item::<()>(Ok(LoopStreamItem::ProviderTurnReady {
+        .process_item(Ok(LoopStreamItem::ProviderTurnReady {
             turn: 0,
             attempt: 0,
             message: Message::Assistant {
@@ -1148,7 +1129,7 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
     );
 
     processor
-        .process_item::<()>(Ok(LoopStreamItem::ProviderAttemptStarted {
+        .process_item(Ok(LoopStreamItem::ProviderAttemptStarted {
             turn: 0,
             attempt: 0,
             capture_scope: "inference.1".parse().unwrap(),
@@ -1172,7 +1153,7 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
     // hook may dispatch it. There is no fabricated lifecycle state here.
     let accepted_message = processor.assistant_turn.clone().take_message().unwrap();
     processor
-        .process_item::<()>(Ok(LoopStreamItem::ProviderTurnReady {
+        .process_item(Ok(LoopStreamItem::ProviderTurnReady {
             turn: 0,
             attempt: 0,
             message: accepted_message.clone(),
@@ -1364,14 +1345,14 @@ async fn multiple_streamed_tool_results_share_one_accumulated_assistant_turn() {
     );
 
     processor
-        .process_item::<()>(Ok(LoopStreamItem::AuthoredInputReady {
+        .process_item(Ok(LoopStreamItem::AuthoredInputReady {
             context: None,
             prompt: user_text_message("read several files"),
         }))
         .await
         .unwrap();
     processor
-        .process_item::<()>(Ok(LoopStreamItem::ProviderAttemptStarted {
+        .process_item(Ok(LoopStreamItem::ProviderAttemptStarted {
             turn: 0,
             attempt: 0,
             capture_scope: "inference.1".parse().unwrap(),
@@ -1396,7 +1377,7 @@ async fn multiple_streamed_tool_results_share_one_accumulated_assistant_turn() {
     }
     let accepted_message = processor.assistant_turn.clone().take_message().unwrap();
     processor
-        .process_item::<()>(Ok(LoopStreamItem::ProviderTurnReady {
+        .process_item(Ok(LoopStreamItem::ProviderTurnReady {
             turn: 0,
             attempt: 0,
             message: accepted_message.clone(),
@@ -1536,7 +1517,7 @@ async fn post_tool_resumption_keeps_each_provider_turn_separate() {
     hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::seconds(60)))
         .await;
     processor
-        .process_item::<()>(Ok(LoopStreamItem::ProviderAttemptStarted {
+        .process_item(Ok(LoopStreamItem::ProviderAttemptStarted {
             turn: 0,
             attempt: 0,
             capture_scope: "inference.1".parse().unwrap(),
@@ -1553,7 +1534,7 @@ async fn post_tool_resumption_keeps_each_provider_turn_separate() {
         .unwrap();
     let accepted_message = processor.assistant_turn.clone().take_message().unwrap();
     processor
-        .process_item::<()>(Ok(LoopStreamItem::ProviderTurnReady {
+        .process_item(Ok(LoopStreamItem::ProviderTurnReady {
             turn: 0,
             attempt: 0,
             message: accepted_message.clone(),
@@ -1587,7 +1568,7 @@ async fn post_tool_resumption_keeps_each_provider_turn_separate() {
 
     // Feed: Text("done") after the tool boundary.
     processor
-        .process_item::<()>(Ok(LoopStreamItem::ProviderAttemptStarted {
+        .process_item(Ok(LoopStreamItem::ProviderAttemptStarted {
             turn: 1,
             attempt: 0,
             capture_scope: "inference.1".parse().unwrap(),
@@ -1606,7 +1587,7 @@ async fn post_tool_resumption_keeps_each_provider_turn_separate() {
         Some(final_message.clone())
     );
     processor
-        .process_item::<()>(Ok(LoopStreamItem::ProviderTurnReady {
+        .process_item(Ok(LoopStreamItem::ProviderTurnReady {
             turn: 1,
             attempt: 0,
             message: final_message.clone(),
@@ -1694,7 +1675,7 @@ async fn turn_retraction_retains_old_bytes_but_publishes_only_the_retry() {
     );
 
     processor
-        .process_item::<()>(Ok(LoopStreamItem::ProviderAttemptStarted {
+        .process_item(Ok(LoopStreamItem::ProviderAttemptStarted {
             turn: 0,
             attempt: 0,
             capture_scope: "inference.1".parse().unwrap(),
@@ -1702,6 +1683,16 @@ async fn turn_retraction_retains_old_bytes_but_publishes_only_the_retry() {
         .await
         .unwrap();
     processor.process_item(text_item("Hel")).await.unwrap();
+    processor
+        .process_item(tool_call_item_with_ids(
+            "read_file",
+            r#"{"path":"abandoned.rs"}"#,
+            "abandoned-result",
+            "abandoned-internal",
+            Some("abandoned-call"),
+        ))
+        .await
+        .unwrap();
 
     processor
         .process_item(turn_retracted_item(0, 0))
@@ -1710,7 +1701,7 @@ async fn turn_retraction_retains_old_bytes_but_publishes_only_the_retry() {
     assert_eq!(processor.streamed_text, "");
 
     processor
-        .process_item::<()>(Ok(LoopStreamItem::ProviderAttemptStarted {
+        .process_item(Ok(LoopStreamItem::ProviderAttemptStarted {
             turn: 0,
             attempt: 1,
             capture_scope: "inference.1".parse().unwrap(),
@@ -1723,7 +1714,7 @@ async fn turn_retraction_retains_old_bytes_but_publishes_only_the_retry() {
         .unwrap();
 
     processor
-        .process_item::<()>(Ok(LoopStreamItem::ProviderTurnReady {
+        .process_item(Ok(LoopStreamItem::ProviderTurnReady {
             turn: 0,
             attempt: 1,
             message: Message::Assistant {
@@ -1745,6 +1736,12 @@ async fn turn_retraction_retains_old_bytes_but_publishes_only_the_retry() {
     let history = crate::session::load_history(&node, &session_id, "did:test:test", None)
         .await
         .unwrap();
+    assert!(history.iter().all(|message| match message {
+        Message::Assistant { content, .. } => !content
+            .iter()
+            .any(|item| matches!(item, AssistantContent::ToolCall(_))),
+        _ => true,
+    }));
     let assistant_texts = history
         .iter()
         .filter_map(|message| match message {
@@ -1804,7 +1801,7 @@ async fn turn_retraction_retains_old_bytes_but_publishes_only_the_retry() {
         None,
     )
     .unwrap();
-    assert_eq!(prefix.streams.len(), 1);
+    assert_eq!(prefix.streams.len(), 2);
     assert_eq!(prefix.streams[0].text, "Hel");
 
     node.shutdown().await;
@@ -1883,7 +1880,7 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
     );
 
     processor
-        .process_item::<()>(Ok(LoopStreamItem::ProviderAttemptStarted {
+        .process_item(Ok(LoopStreamItem::ProviderAttemptStarted {
             turn: 0,
             attempt: 0,
             capture_scope: "inference.1".parse().unwrap(),
@@ -1892,10 +1889,10 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
         .unwrap();
     // The wire parser could not shape the corrupt bytes, so the streamed rig
     // ToolCall carries them as a raw Value::String — the exact production shape.
-    let corrupt_call: Result<LoopStreamItem<()>, rig::agent::StreamingError> =
-        Ok(LoopStreamItem::Item(
-            MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::ToolCall {
-                tool_call: rig::completion::message::ToolCall {
+    let corrupt_call: Result<LoopStreamItem, crate::error::LoopStreamError> =
+        Ok(LoopStreamItem::ToolCall {
+            tool_call: crate::llm::rig_compat::from_rig_tool_call(
+                &rig::completion::message::ToolCall {
                     id: "result-1".to_string(),
                     call_id: Some("call-1".to_string()),
                     function: rig::completion::message::ToolFunction {
@@ -1907,14 +1904,14 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
                     signature: None,
                     additional_params: None,
                 },
-                internal_call_id: "internal-1".to_string(),
-            }),
-        ));
+            ),
+            internal_call_id: "internal-1".to_string(),
+        });
     processor.process_item(corrupt_call).await.unwrap();
 
     let message = processor.assistant_turn.clone().take_message().unwrap();
     processor
-        .process_item::<()>(Ok(LoopStreamItem::ProviderTurnReady {
+        .process_item(Ok(LoopStreamItem::ProviderTurnReady {
             turn: 0,
             attempt: 0,
             message,

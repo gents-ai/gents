@@ -51,6 +51,12 @@ struct ScenarioManifest {
     await_timeout_secs: u64,
     #[serde(default)]
     prepare: Vec<ScenarioPrepareStep>,
+    /// Folders the scenario's operator allows plugins to reach, written to the
+    /// run's home before its server starts exactly as `gents plugin dirs add`
+    /// would. A graph stage binds a data-chosen path with no working folder,
+    /// so this is how a scenario lets one read or write outside the defaults.
+    #[serde(default)]
+    allowed_folders: Vec<ScenarioAllowedFolder>,
     /// Environment required by canonical dependency configs, keyed by pack.
     /// Values are expanded with the scenario's normal environment interpolation.
     #[serde(default)]
@@ -68,6 +74,17 @@ struct ScenarioManifest {
     /// tool, trigger, and event-source references used by scenario validation.
     #[serde(skip)]
     config: Option<gents::document_config::PackConfig>,
+}
+
+/// One `allowed_folders` entry: `path` is relative to `init.tool_root` unless
+/// absolute, must stay inside it (a scenario with allowed folders declares
+/// one), and is made when missing so an output folder needs no fixture.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ScenarioAllowedFolder {
+    path: String,
+    #[serde(default)]
+    access: gents::pack::BindAccess,
 }
 
 fn default_timeout() -> u64 {
@@ -397,6 +414,8 @@ fn load_manifest_with(
     manifest.plugins = distribution.metadata.plugins.clone();
     manifest.config = Some(load_pack_config_with(pack, lookup)?);
     validate_manifest(&manifest).with_context(|| format!("validating {}", path.display()))?;
+    validate_expected_trigger_correlations(&manifest)
+        .with_context(|| format!("validating trigger correlations in {}", path.display()))?;
     validate_prompt_tool_contracts(pack, &manifest)
         .with_context(|| format!("validating prompt/tool contracts in {}", path.display()))?;
     validate_task_goal_declarations(&manifest)
@@ -422,6 +441,10 @@ fn load_pack_config_with(
         lookup,
         &|_, _, reference| read_pack_sidecar(pack, reference),
     )
+    .and_then(|config| {
+        gents::pack::ensure_pack_leaves_default_unselected(&config)?;
+        Ok(config)
+    })
     .with_context(|| format!("decoding canonical pack config {}", path.display()))
 }
 
@@ -707,22 +730,7 @@ fn trigger_source_collections(
     let config = scenario_config(manifest)?;
     let mut collections = std::collections::BTreeSet::new();
     for trigger_id in trigger_ids {
-        let trigger = config
-            .triggers
-            .iter()
-            .find(|trigger| trigger.trigger_id == *trigger_id)
-            .with_context(|| format!("missing Trigger {trigger_id}"))?;
-        let event_source_id = match &trigger.source {
-            gents::document_config::TriggerSource::Event { event_source_id } => event_source_id,
-            gents::document_config::TriggerSource::Schedule { .. } => {
-                bail!("scenario Trigger {trigger_id} must use an event source")
-            }
-        };
-        let source = config
-            .event_sources
-            .iter()
-            .find(|source| source.event_source_id == *event_source_id)
-            .with_context(|| format!("missing EventSource {event_source_id}"))?;
+        let source = scenario_event_source(config, trigger_id)?;
         let source_collection = source.source_collection.as_str();
         validate_collection_identifier(source_collection)?;
         collections.insert(source_collection.to_string());
@@ -730,7 +738,74 @@ fn trigger_source_collections(
     Ok(collections.into_iter().collect())
 }
 
+/// Resolves a scenario trigger to the event source that feeds it. Every
+/// load-time and run-time question about an expected trigger resolves through
+/// here, so the missing/non-event refusals cannot diverge between them.
+fn scenario_event_source<'a>(
+    config: &'a gents::document_config::PackConfig,
+    trigger_id: &str,
+) -> Result<&'a gents::document_config::EventSource> {
+    let trigger = config
+        .triggers
+        .iter()
+        .find(|trigger| trigger.trigger_id == trigger_id)
+        .with_context(|| format!("missing Trigger {trigger_id}"))?;
+    let event_source_id = match &trigger.source {
+        gents::document_config::TriggerSource::Event { event_source_id } => event_source_id,
+        gents::document_config::TriggerSource::Schedule { .. } => {
+            bail!("scenario Trigger {trigger_id} must use an event source")
+        }
+    };
+    config
+        .event_sources
+        .iter()
+        .find(|source| source.event_source_id == *event_source_id)
+        .with_context(|| format!("missing EventSource {event_source_id}"))
+}
+
+/// A scenario run awaits its stages by filtering requests on the seeded job
+/// id, and an event source only writes that correlation when it has a
+/// correlation_field, so an expected trigger without one can never match and
+/// the run can only time out. No valid no-correlation run exists; refuse it.
+fn validate_expected_trigger_correlations(manifest: &ScenarioManifest) -> Result<()> {
+    let config = scenario_config(manifest)?;
+    for trigger_id in &manifest.expect.trigger_ids {
+        let source = scenario_event_source(config, trigger_id)?;
+        if source
+            .correlation_field
+            .as_deref()
+            .is_none_or(|field| field.trim().is_empty())
+        {
+            bail!(
+                "expect.trigger_ids entry {trigger_id} uses EventSource {} without a \
+                 correlation_field, so its requests can never match the scenario run",
+                source.event_source_id
+            );
+        }
+    }
+    Ok(())
+}
+
 fn validate_manifest(manifest: &ScenarioManifest) -> Result<()> {
+    let mut allowed = BTreeSet::new();
+    for folder in &manifest.allowed_folders {
+        let path = folder.path.trim();
+        if path.is_empty() {
+            bail!("allowed_folders entries need a path");
+        }
+        if !allowed.insert(path) {
+            bail!("allowed_folders names {path} twice");
+        }
+    }
+    if !allowed.is_empty()
+        && manifest
+            .init
+            .tool_root
+            .as_deref()
+            .is_none_or(|root| root.trim().is_empty())
+    {
+        bail!("allowed_folders needs init.tool_root: every allowed folder stays inside it");
+    }
     if !manifest.expect.source_edges.is_empty() && !manifest.expect.signed_provenance {
         bail!("expect.source_edges requires expect.signed_provenance=true");
     }
@@ -896,15 +971,16 @@ fn validate_manifest(manifest: &ScenarioManifest) -> Result<()> {
 }
 
 /// What [`install_graph_dependencies`] needs beyond the packages themselves,
-/// grouped so the function stays under the argument-count lint: the spawned
-/// home, the running node it installs into, and the identity it installs as.
+/// grouped so the function stays under the argument-count lint: the run's
+/// home it installs into (before that home's node starts, since plugins
+/// install only on the node's own host), and the identity it installs as.
 struct GraphDependencyInstall<'a> {
     bin: &'a Path,
     home: &'a Path,
     registry: Option<&'a str>,
-    graphql: &'a GraphqlEndpoint,
     agent_did: &'a str,
     inference_profile_id: &'a str,
+    grant_authority: bool,
 }
 
 /// Installs every graph dependency the scenario's distribution manifest
@@ -923,8 +999,6 @@ async fn install_graph_dependencies(
             package.clone(),
             "--home".to_owned(),
             path_arg(ctx.home),
-            "--graphql".to_owned(),
-            ctx.graphql.url().to_owned(),
             "--agent-did".to_owned(),
             ctx.agent_did.to_owned(),
             "--output".to_owned(),
@@ -933,6 +1007,9 @@ async fn install_graph_dependencies(
         if let Some(registry) = ctx.registry {
             args.push("--registry".to_owned());
             args.push(registry.to_owned());
+        }
+        if ctx.grant_authority {
+            args.push("--grant-authority".to_owned());
         }
         let graph_pack = super::resolve_pack_source(package, ctx.registry, ctx.home).await?;
         for slot in &graph_pack.manifest().metadata.inference_slots {
@@ -3133,6 +3210,66 @@ fn resolve_prepare_within(pack: &Path, manifest: &ScenarioManifest) -> Result<Op
     }
 }
 
+/// Allows `manifest.allowed_folders` in `home` through the operator's own
+/// allowed-folders owner (`gents::plugin::allowed`), which keeps refusing a
+/// folder that is too broad or holds the gents home. The ceiling is the same
+/// one a `prepare` step's `bind_dir` stays inside: `init.tool_root`.
+fn allow_scenario_folders(
+    pack: &Path,
+    manifest: &ScenarioManifest,
+    home: &Path,
+) -> Result<Vec<gents::plugin::allowed::AllowedDir>> {
+    if manifest.allowed_folders.is_empty() {
+        return Ok(Vec::new());
+    }
+    let root = resolve_prepare_within(pack, manifest)?
+        .context("allowed_folders needs init.tool_root: every allowed folder stays inside it")?;
+    manifest
+        .allowed_folders
+        .iter()
+        .map(|folder| {
+            let path = root.join(folder.path.trim());
+            anyhow::ensure!(
+                !path
+                    .components()
+                    .any(|part| part == std::path::Component::ParentDir),
+                "allowed_folders path {:?} must not contain ..",
+                folder.path
+            );
+            // Checked against the existing part before anything is made, then
+            // again once it exists, so a symlink cannot lead outside either.
+            let inside = |path: &Path| path.starts_with(&root);
+            let existing = path
+                .ancestors()
+                .find(|ancestor| ancestor.exists())
+                .context("an absolute path has an existing ancestor")?;
+            let planned = existing
+                .canonicalize()
+                .with_context(|| format!("resolving {}", existing.display()))?
+                .join(path.strip_prefix(existing).unwrap_or(Path::new("")));
+            let outside = |path: &Path| {
+                anyhow::anyhow!(
+                    "allowed_folders path {} is outside init.tool_root {}",
+                    path.display(),
+                    root.display()
+                )
+            };
+            if !inside(&planned) {
+                return Err(outside(&planned));
+            }
+            std::fs::create_dir_all(&path)
+                .with_context(|| format!("creating allowed folder {}", path.display()))?;
+            let canonical = path
+                .canonicalize()
+                .with_context(|| format!("resolving allowed folder {}", path.display()))?;
+            if !inside(&canonical) {
+                return Err(outside(&canonical));
+            }
+            gents::plugin::allowed::add(home, &canonical, folder.access)
+        })
+        .collect()
+}
+
 pub(crate) async fn init_pack(args: PackInitArgs) -> Result<()> {
     let bin = std::env::current_exe().context("resolving the gents binary path")?;
     let (pack, _cache_lease, distribution) = resolve_scenario_dir(&args.pack, None).await?;
@@ -3153,6 +3290,7 @@ pub(crate) async fn init_pack(args: PackInitArgs) -> Result<()> {
         &pack_init_cli_args(&home, &manifest, tool_root.as_deref()),
     )
     .await?;
+    allow_scenario_folders(&pack, &manifest, &home)?;
     let agent_did = init
         .get("agent_did")
         .and_then(Value::as_str)
@@ -3275,7 +3413,6 @@ pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
     }
     std::fs::create_dir_all(&home)
         .with_context(|| format!("creating pack home {}", home.display()))?;
-    pre_store_with_packs(&home, &args.with_pack)?;
 
     println!("pack     {} ({})", manifest.name, pack.display());
     println!("job_id   {job_id}");
@@ -3299,6 +3436,8 @@ pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
         &pack_init_cli_args(&home, &manifest, tool_root.as_deref()),
     )
     .await?;
+    // `gents init --dangerously-overwrite` empties the home, store included.
+    pre_store_with_packs(&home, &args.with_pack)?;
     let agent_did = init
         .get("agent_did")
         .and_then(Value::as_str)
@@ -3325,6 +3464,10 @@ pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
         default_behavior_id,
     )?;
 
+    for allowed in allow_scenario_folders(&pack, &manifest, &home)? {
+        tracing::info!(path = %allowed.path.display(), access = allowed.access.as_str(), "scenario allowed folder");
+    }
+
     let port = args.http_port;
     let graphql = crate::resolve_graphql_endpoint(
         Some(&format!("http://127.0.0.1:{port}/api/v0/graphql")),
@@ -3332,6 +3475,23 @@ pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
     )?;
     let log = run_dir.join("server.log");
     let started = Instant::now();
+
+    // Dependencies install before the node applies the scenario pack, so the
+    // pack's documents may name theirs and their plugins are on the host
+    // when the behaviors that call them start.
+    install_graph_dependencies(
+        &GraphDependencyInstall {
+            bin: &bin,
+            home: &home,
+            registry: args.registry.as_deref(),
+            agent_did: &agent_did,
+            inference_profile_id: &inference_profile_id,
+            grant_authority: args.grant_authority,
+        },
+        &manifest.graph_dependencies,
+        &manifest.graph_dependency_environment,
+    )
+    .await?;
 
     let mut server = spawn_server_with_pack(
         &bin,
@@ -3351,19 +3511,6 @@ pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
         )
         .await?;
         wait_runtime_ready(&graphql, &agent_did, &mut server).await?;
-        install_graph_dependencies(
-            &GraphDependencyInstall {
-                bin: &bin,
-                home: &home,
-                registry: args.registry.as_deref(),
-                graphql: &graphql,
-                agent_did: &agent_did,
-                inference_profile_id: &inference_profile_id,
-            },
-            &manifest.graph_dependencies,
-            &manifest.graph_dependency_environment,
-        )
-        .await?;
         println!(
             "runtime  ready; waiting for {} event source collection(s)…",
             observed_collections.len()
@@ -3711,10 +3858,7 @@ fn stage_scenario_pack(
     );
     let mut authored = authored.expect("checked scenario pack configuration");
     super::super::config::binding::rebind_manifest_to_agent(&mut authored, agent_did, true)?;
-    authored
-        .agent_principal
-        .default_behavior_id
-        .get_or_insert_with(|| initialized_default_behavior_id.to_owned());
+    authored.agent_principal.default_behavior_id = Some(initialized_default_behavior_id.to_owned());
     let bindings = distribution
         .metadata
         .inference_slots
@@ -3825,6 +3969,85 @@ mod tests {
         assert_eq!(resolve_prepare_within(pack.path(), &unset).unwrap(), None);
     }
 
+    /// `allowed_folders` reach the run's home through the operator's own
+    /// allowed-folders owner, inside `init.tool_root` only.
+    #[test]
+    fn scenario_allowed_folders_are_written_inside_the_tool_root() {
+        let pack = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let manifest = |folders: serde_json::Value, tool_root: bool| -> ScenarioManifest {
+            let mut init = serde_json::json!({"inference_url": "http://x", "model_name": "m"});
+            if tool_root {
+                init["tool_root"] = serde_json::json!(root.path());
+            }
+            serde_json::from_value(serde_json::json!({
+                "name": "t", "init": init,
+                "seed": {"collection": "J", "job_id_field": "run_id", "prompt_field": "focus"},
+                "expect": {"trigger_ids": []},
+                "allowed_folders": folders,
+            }))
+            .unwrap()
+        };
+
+        let allowed = allow_scenario_folders(
+            pack.path(),
+            &manifest(
+                serde_json::json!([{"path": "out", "access": "read_write"}, {"path": "data"}]),
+                true,
+            ),
+            home.path(),
+        )
+        .unwrap();
+        let root = root.path().canonicalize().unwrap();
+        assert!(root.join("out").is_dir(), "a missing folder is made");
+        assert_eq!(
+            gents::plugin::allowed::list(home.path()).unwrap(),
+            vec![
+                gents::plugin::allowed::AllowedDir {
+                    path: root.join("data"),
+                    access: gents::pack::BindAccess::Read,
+                },
+                gents::plugin::allowed::AllowedDir {
+                    path: root.join("out"),
+                    access: gents::pack::BindAccess::ReadWrite,
+                },
+            ]
+        );
+        assert_eq!(allowed.len(), 2);
+
+        for (folders, tool_root, expected) in [
+            (
+                serde_json::json!([{"path": outside.path()}]),
+                true,
+                "outside init.tool_root",
+            ),
+            (
+                serde_json::json!([{"path": "../escape"}]),
+                true,
+                "must not contain ..",
+            ),
+            (
+                serde_json::json!([{"path": "out"}]),
+                false,
+                "needs init.tool_root",
+            ),
+            (
+                serde_json::json!([{"path": outside.path()}]),
+                false,
+                "needs init.tool_root",
+            ),
+        ] {
+            let error =
+                allow_scenario_folders(pack.path(), &manifest(folders, tool_root), home.path())
+                    .unwrap_err();
+            assert!(format!("{error:#}").contains(expected), "{error:#}");
+        }
+        let twice = manifest(serde_json::json!([{"path": "a"}, {"path": "a"}]), true);
+        assert!(format!("{:#}", validate_manifest(&twice).unwrap_err()).contains("twice"));
+    }
+
     #[test]
     fn scenario_staging_explicitly_binds_the_initialized_profile() {
         let pack = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -3857,39 +4080,36 @@ mod tests {
     }
 
     #[test]
-    fn scenario_staging_retains_an_authored_default_behavior() {
+    fn scenario_refuses_a_pack_that_selects_the_default_behavior() {
         let pack = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../gents/tests/fixtures/packs/documents_fixture");
         let distribution = read_distribution_manifest(&pack).unwrap();
         let authored_pack = tempfile::tempdir().unwrap();
-        for asset in &distribution.metadata.assets {
+        for asset in distribution
+            .metadata
+            .assets
+            .iter()
+            .map(String::as_str)
+            .chain(["manifest.json"])
+        {
             let destination = authored_pack.path().join(asset);
             std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
             std::fs::copy(pack.join(asset), destination).unwrap();
         }
+        validate_scenario_defaults(authored_pack.path()).unwrap();
         let config_path = authored_pack.path().join("pack_config.json");
         let mut config: Value =
             serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
         config["agent_principal"]["default_behavior_id"] = json!("fixture-worker");
         std::fs::write(&config_path, serde_json::to_vec(&config).unwrap()).unwrap();
 
-        let staged = stage_scenario_pack(
-            authored_pack.path(),
-            &distribution,
-            "did:key:scenario-owner",
-            "default-profile",
-            "did:key:scenario-owner:default",
-        )
-        .unwrap();
-        let (staged_config, report) = crate::desired_state::load_manifest_root(staged.path());
-        assert!(report.errors.is_empty(), "{:?}", report.errors);
-        assert_eq!(
-            staged_config
-                .unwrap()
-                .agent_principal
-                .default_behavior_id
-                .as_deref(),
-            Some("fixture-worker"),
+        let error = format!(
+            "{:#}",
+            validate_scenario_defaults(authored_pack.path()).unwrap_err()
+        );
+        assert!(
+            error.contains("must not choose the default behavior"),
+            "{error}"
         );
     }
 
@@ -4152,6 +4372,7 @@ mod tests {
             },
             await_timeout_secs: 1,
             prepare: Vec::new(),
+            allowed_folders: Vec::new(),
             graph_dependency_environment: BTreeMap::new(),
             graph_dependencies: Vec::new(),
             plugins: Vec::new(),
@@ -4179,6 +4400,65 @@ mod tests {
             load_manifest_defaults(&pack)
                 .unwrap_or_else(|error| panic!("{} should load: {error:#}", pack.display()));
         }
+    }
+
+    fn copy_fixture_pack(name: &str) -> tempfile::TempDir {
+        let copy = tempfile::tempdir().unwrap();
+        super::super::test_support::copy_tree(
+            &super::super::test_support::fixture_dir(name),
+            copy.path(),
+        )
+        .unwrap();
+        copy
+    }
+
+    /// A run awaits its stages by filtering requests on the seeded job id,
+    /// and an event source writes that correlation only when it has a
+    /// correlation_field, so an expected trigger without one is refused at
+    /// load instead of running into the await timeout.
+    #[test]
+    fn expected_trigger_without_a_correlation_field_is_refused_at_load() {
+        let dir = copy_fixture_pack("documents_fixture");
+        let config_path = dir.path().join("pack_config.json");
+        let mut config: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&config_path).unwrap()).unwrap();
+        config["event_sources"][0]["event_source_id"] = "fixture-worker-source".into();
+        config["event_sources"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("correlation_field");
+        config["triggers"][0]["source"]["event_source_id"] = "fixture-worker-source".into();
+        std::fs::write(&config_path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
+
+        let error = load_manifest_defaults(dir.path()).expect_err("pack must refuse to load: run");
+        let message = format!("{error:#}");
+        assert!(
+            message.contains(
+                "expect.trigger_ids entry fixture-worker uses EventSource fixture-worker-source \
+                 without a correlation_field, so its requests can never match the scenario run"
+            ),
+            "{message}"
+        );
+    }
+
+    /// An expected trigger whose event source is missing was refused only
+    /// once the run joined trigger to source; the shared resolution now
+    /// refuses it at load with the same wording.
+    #[test]
+    fn expected_trigger_with_a_missing_event_source_is_refused_at_load() {
+        let dir = copy_fixture_pack("documents_fixture");
+        let config_path = dir.path().join("pack_config.json");
+        let mut config: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&config_path).unwrap()).unwrap();
+        config["triggers"][0]["source"]["event_source_id"] = "absent-source".into();
+        std::fs::write(&config_path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
+
+        let error = load_manifest_defaults(dir.path()).expect_err("pack must refuse to load: run");
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("missing EventSource absent-source"),
+            "{message}"
+        );
     }
 
     #[test]
@@ -4464,6 +4744,7 @@ mod tests {
             },
             await_timeout_secs: 1,
             prepare: Vec::new(),
+            allowed_folders: Vec::new(),
             graph_dependency_environment: BTreeMap::new(),
             graph_dependencies: Vec::new(),
             plugins: Vec::new(),

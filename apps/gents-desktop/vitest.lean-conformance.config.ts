@@ -13,6 +13,6 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     include: ["tests/lean-conformance/**/*.test.ts"],
-    setupFiles: ["./tests/setup.ts"],
+    setupFiles: ["./tests/polyfills.ts", "./tests/setup.ts"],
   },
 });

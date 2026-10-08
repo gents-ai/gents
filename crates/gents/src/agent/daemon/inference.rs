@@ -13,13 +13,41 @@ use crate::admission::{self, CallKind};
 use crate::agent::loop_stream::{LoopReplayInput, TaggedMessage};
 use crate::compaction::ReductionOptions;
 use crate::config::{MaxTurnsProvenance, ResolvedBehavior};
+use crate::error::LoopFailureCause;
 use crate::hook::DefraSessionHook;
 use crate::llm::message::Message;
-use crate::llm::rig_compat::{classify_stream_failure, StreamFailureKind};
 use crate::streaming::StreamWriter;
 use crate::watcher::AgentRequest;
 
 type RequestDeadline = Option<DateTime<Utc>>;
+
+const RETRY_CONTINUATION: &str = "Continue the failed request from the recorded progress. Use recorded tool outcomes; do not repeat completed actions.";
+
+pub(super) fn request_entry(
+    mut history: Vec<TaggedMessage>,
+    content: &str,
+    resume: bool,
+    context: Option<&Message>,
+) -> Result<(Vec<TaggedMessage>, TaggedMessage)> {
+    if !resume {
+        history.push(TaggedMessage::unassociated(Message::user(
+            content.to_owned(),
+        )));
+    } else if let Some(context) = context {
+        history.push(TaggedMessage::unassociated(context.clone()));
+    } else if history
+        .last()
+        .is_some_and(|row| matches!(row.message, Message::Assistant { .. }))
+    {
+        history.push(TaggedMessage::unassociated(Message::user(
+            RETRY_CONTINUATION.to_owned(),
+        )));
+    }
+    let prompt = history
+        .pop()
+        .context("retry has no durable provider frontier")?;
+    Ok((history, prompt))
+}
 
 fn terminal_response_has_visible_output(streamed_text: &str, final_text: Option<&str>) -> bool {
     !streamed_text.trim().is_empty() || final_text.is_some_and(|text| !text.trim().is_empty())
@@ -32,15 +60,15 @@ fn terminal_response_has_visible_output(streamed_text: &str, final_text: Option<
 /// ever appended after that unmodified `Display`, never substituted into it.
 fn stream_failure_reason(
     error_display: &str,
-    failure: StreamFailureKind,
+    failure: &LoopFailureCause,
     provenance: MaxTurnsProvenance,
 ) -> String {
     match failure {
-        StreamFailureKind::MaxTurns => format!(
+        LoopFailureCause::MaxTurns => format!(
             "agent stream failed: {error_display} ({})",
             provenance.describe()
         ),
-        StreamFailureKind::Other => format!("agent stream failed: {error_display}"),
+        _ => format!("agent stream failed: {error_display}"),
     }
 }
 
@@ -117,7 +145,7 @@ where
     }
 }
 
-impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
+impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn run_inference(
         &mut self,
@@ -134,6 +162,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         effective_seed: Option<i64>,
         workspace: crate::tool_call_lifecycle::runtime::ToolWorkspaceScope,
         request_context_message: Option<crate::llm::message::Message>,
+        resume_from_history: bool,
     ) -> Result<HandleRequestOutcome> {
         let request_deadline = lifecycle.claimed_deadline_at();
         let trigger_context = crate::lifecycle::TriggerExecutionContext::parse(
@@ -373,6 +402,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 loop_config.turn_compactor =
                     Some(std::sync::Arc::new(turn_compactor_callback));
                 loop_config.context_message = request_context_message.clone();
+                loop_config.resume_from_history = resume_from_history;
                 let restored = crate::provider_context_reduction::load_unconsumed_for_request(
                     self.node.as_ref(),
                     &request.doc_id,
@@ -427,12 +457,16 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                         .into_iter()
                         .map(|row| row.reduction_key)
                         .collect();
-                    (
+                    let entry = request_entry(
                         history.to_vec(),
-                        TaggedMessage::unassociated(crate::llm::message::Message::user(
-                            request.content.clone(),
-                        )),
-                    )
+                        &request.content,
+                        resume_from_history,
+                        loop_config.context_message.as_ref(),
+                    )?;
+                    if resume_from_history {
+                        loop_config.context_message = None;
+                    }
+                    entry
                 };
                 loop_config.replay = replay;
                 let loop_tools = self.loop_tools.clone();
@@ -693,7 +727,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                 .await?;
                             let error_reason = stream_failure_reason(
                                 &error.to_string(),
-                                classify_stream_failure(&error),
+                                error.cause(),
                                 max_turns_provenance,
                             );
                             return Ok(HandleRequestOutcome::FailedAfterResponse(anyhow!(
@@ -807,12 +841,12 @@ pub(super) mod tests {
         assemble_request_context_message, await_with_request_deadline,
         ensure_request_deadline_open, request_deadline_remaining, stream_failure_reason,
         terminal_response_has_visible_output, BehaviorDaemon, MaxTurnsProvenance,
-        StreamFailureKind,
     };
     use crate::agent::completion_retry::CompletionRetryProfileFields;
     use crate::agent::runtime::StartupBarrier;
     use crate::backend_provider::BackendProviderKind;
     use crate::config::{ResolvedBehavior, SamplingConfig};
+    use crate::error::{CompletionFailure, LoopFailureCause};
     use crate::hook::{BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy};
     use crate::identity::{AgentIdentity, KeyIdentity, RuntimePrincipal};
     use crate::llm::tool::ToolDyn;
@@ -841,7 +875,7 @@ pub(super) mod tests {
     fn max_turns_failure_message_reports_default_provenance_and_keeps_pinned_prefix() {
         let reason = stream_failure_reason(
             MAX_TURNS_DISPLAY,
-            StreamFailureKind::MaxTurns,
+            &LoopFailureCause::MaxTurns,
             MaxTurnsProvenance::Default,
         );
         assert!(
@@ -858,7 +892,7 @@ pub(super) mod tests {
     fn max_turns_failure_message_reports_execution_profile_provenance() {
         let reason = stream_failure_reason(
             MAX_TURNS_DISPLAY,
-            StreamFailureKind::MaxTurns,
+            &LoopFailureCause::MaxTurns,
             MaxTurnsProvenance::ExecutionProfile,
         );
         assert!(reason.starts_with(PINNED_PREFIX));
@@ -872,7 +906,7 @@ pub(super) mod tests {
     fn max_turns_failure_message_reports_builder_provenance_without_naming_a_document() {
         let reason = stream_failure_reason(
             MAX_TURNS_DISPLAY,
-            StreamFailureKind::MaxTurns,
+            &LoopFailureCause::MaxTurns,
             MaxTurnsProvenance::BuilderOverride,
         );
         assert!(reason.starts_with(PINNED_PREFIX));
@@ -890,7 +924,10 @@ pub(super) mod tests {
     fn max_turns_clause_is_absent_from_other_stream_failures() {
         let reason = stream_failure_reason(
             "CompletionError: ProviderError: boom",
-            StreamFailureKind::Other,
+            &LoopFailureCause::Completion {
+                failure: CompletionFailure::Provider("boom".into()),
+                reason: "ProviderError: boom".into(),
+            },
             MaxTurnsProvenance::Default,
         );
         assert_eq!(
@@ -1313,6 +1350,68 @@ pub(super) mod tests {
             Some(Duration::ZERO)
         );
         assert!(ensure_request_deadline_open(Some(deadline), "test").is_err());
+    }
+
+    #[test]
+    fn retry_entry_matches_lean_frontier() {
+        for case in &crate::lean_vocab_test::lean_contract_snapshot().retry_entry_cases {
+            let message = |value: &serde_json::Value| {
+                use crate::llm::message::{
+                    AssistantContent, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
+                    UserContent,
+                };
+                let native = match value.as_u64().unwrap() {
+                    2 => crate::llm::message::Message::Assistant {
+                        id: None,
+                        content: vec![AssistantContent::ToolCall(ToolCall {
+                            id: "call-1".into(),
+                            call_id: Some("call-1".into()),
+                            signature: None,
+                            additional_params: None,
+                            function: ToolFunction {
+                                name: "read_file".into(),
+                                arguments: serde_json::json!({"path":"source.rs"}),
+                            },
+                        })],
+                    },
+                    3 => crate::llm::message::Message::User {
+                        content: vec![UserContent::ToolResult(ToolResult {
+                            id: "call-1".into(),
+                            call_id: Some("call-1".into()),
+                            content: vec![ToolResultContent::Text(Text {
+                                text: "recorded result".into(),
+                            })],
+                        })],
+                    },
+                    4 => crate::llm::message::Message::assistant("recorded progress"),
+                    10 => crate::llm::message::Message::user(super::RETRY_CONTINUATION),
+                    _ => crate::llm::message::Message::user(value.to_string()),
+                };
+                super::TaggedMessage::unassociated(native)
+            };
+            let history = case["history"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(message)
+                .collect();
+            let context = (!case["context"].is_null()).then(|| message(&case["context"]).message);
+            let (mut actual, prompt) = super::request_entry(
+                history,
+                &case["authored"].to_string(),
+                case["resume"].as_bool().unwrap(),
+                context.as_ref(),
+            )
+            .unwrap();
+            actual.push(prompt);
+            let expected: Vec<_> = case["expected"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(message)
+                .collect();
+            assert_eq!(actual, expected, "{case}");
+        }
     }
 
     #[tokio::test]

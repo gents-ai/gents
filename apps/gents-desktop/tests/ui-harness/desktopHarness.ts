@@ -28,7 +28,6 @@ import type {
 import type {
   AgentPrincipal,
   AgentBehavior,
-  AgentContext,
   BehaviorView,
   SessionSummary,
   SessionProvenance,
@@ -37,7 +36,6 @@ import type {
 import type { RequestOutcomeView } from "@source-inc/gents-desktop-client/generated/RequestOutcomeView";
 import type { MessageReconstructionView } from "@source-inc/gents-desktop-client/generated/MessageReconstructionView";
 import type { SessionContextView } from "@source-inc/gents-desktop-client/generated/SessionContextView";
-import type { ConcurrencyMode } from "@source-inc/gents-desktop-client/generated/ConcurrencyMode";
 import type { Task } from "@source-inc/gents-desktop-client/generated/Task";
 import type { Trigger } from "@source-inc/gents-desktop-client/generated/Trigger";
 import type { RenderedTimelineItem } from "@source-inc/gents-desktop-client/generated/RenderedTimelineItem";
@@ -146,6 +144,32 @@ export type MobilePerformanceHarnessController = {
   finishStreaming(): void;
   streamUpdate(): number;
   streamBurst(count: number): number;
+  /** appends `text` to the live reply, as one update */
+  streamText(text: string): void;
+  /** how long a read of an older timeline page takes, as the bridge's do */
+  setOlderPageDelay(ms: number): void;
+  /**
+   * One snapshot of a turn ending the way the bridge can deliver it: the
+   * live tail kept or dropped, the saved reply present (under its own key,
+   * as the bridge renders it) or not yet, the turn running or completed.
+   */
+  endReply(step: { live: "keep" | "drop"; saved: boolean; completed: boolean }): void;
+  /**
+   * A message the person sent, as the bridge shows it: first the pending
+   * turn, then the saved prompt row, before the live tail. Every stand-in
+   * names the request by its id, as a send returns it, so the row is one
+   * from pending to saved.
+   */
+  userTurn(stage: "pending" | "saved"): void;
+  /**
+   * From now on a send to the large session is accepted, under the request
+   * id `userTurn` uses, but the transcript does not show it until
+   * `userTurn` does: the moment between the bridge accepting a message and
+   * its read holding it.
+   */
+  holdSends(): void;
+  /** a step the reply takes, after the live tail: running, then done */
+  liveTool(state: "running" | "done"): void;
 };
 
 export type SessionSyncHarnessController = {
@@ -163,6 +187,9 @@ type DesktopUiHarness = {
   performance: MobilePerformanceHarnessController | null;
   sessionSync: SessionSyncHarnessController;
 };
+
+/* the request a held send to the large session is accepted under */
+const LARGE_SENT_REQUEST_ID = "6f1c2a7e-large-request-sent";
 
 export const MOBILE_PERFORMANCE_FIXTURE = {
   id: "mobile-interactions-v1",
@@ -197,6 +224,7 @@ export function createDesktopUiHarness(
   const scenario = normalizeScenario(options.scenario);
   const listeners = new Set<DesktopClientUpdatedHandler>();
   const sessions = new Map<string, DesktopSessionSnapshot>();
+  let sendsHeld = false;
   const sessionLineage = new Map<
     string,
     {
@@ -285,6 +313,8 @@ export function createDesktopUiHarness(
     effectiveToolRoot: null,
     suggestedToolRoot: "/tmp/gents-bombadil/workspace",
     pairingReady: false,
+    approvalRequired: false,
+    runtimeBooting: false,
     error: null,
   };
   let p2pStatus: "healthy" | "degraded" | "wedged" =
@@ -294,7 +324,8 @@ export function createDesktopUiHarness(
   let hydrationRetryCalls = 0;
   let updateEvents = 0;
   let storeVersion = 1;
-  let reconcileVersion = 1;
+  let liveSourceEpoch = 1;
+  let olderPageDelayMs = 0;
   let streamSequence = 0;
   let bridgeCalls: MobilePerformanceBridgeCall[] = [];
   let commits: MobilePerformanceCommit[] = [];
@@ -398,9 +429,15 @@ export function createDesktopUiHarness(
                     created: false,
                     replacementsApplied: 1,
                     diff: [
-                      { kind: "context", text: "impl Parser {" },
-                      { kind: "removed", text: "fn parse() -> Ast { todo!() }" },
-                      { kind: "added", text: "fn parse() -> Ast { Ast::default() }" },
+                      { kind: "context" as const, text: "impl Parser {" },
+                      {
+                        kind: "removed" as const,
+                        text: "fn parse() -> Ast { todo!() }",
+                      },
+                      {
+                        kind: "added" as const,
+                        text: "fn parse() -> Ast { Ast::default() }",
+                      },
                     ],
                     fallbackOutput: null,
                   },
@@ -502,6 +539,7 @@ export function createDesktopUiHarness(
         {
           kind: "userMessage",
           itemKey: "remote-user",
+          ownsTurn: true,
           sequence: 1,
           content: "hello from desktop",
           timestamp: THIRTY_DAYS_AGO,
@@ -554,15 +592,13 @@ export function createDesktopUiHarness(
     updateEvents += 1;
     if (reason === "store") {
       storeVersion += 1;
-      if (!responseOnly) reconcileVersion += 1;
+      if (!responseOnly) liveSourceEpoch += 1;
     }
     window.setTimeout(() => {
       for (const listener of listeners) {
         void listener({
           reason,
           storeVersion,
-          reconcileVersion,
-          responseOnly,
         });
       }
     }, 0);
@@ -574,20 +610,20 @@ export function createDesktopUiHarness(
       for (let index = 0; index < count; index += 1) {
         if (reason === "store") {
           storeVersion += 1;
-          if (!responseOnly) reconcileVersion += 1;
+          if (!responseOnly) liveSourceEpoch += 1;
         }
         for (const listener of listeners) {
           void listener({
             reason,
             storeVersion,
-            reconcileVersion,
-            responseOnly,
           });
         }
       }
     }, 0);
   }
 
+  /* the live reply as it last stood, for the saved message that replaces it */
+  let liveReply = "";
   function appendStreamChunk() {
     streamSequence += 1;
     const session = sessions.get("session-large");
@@ -758,6 +794,7 @@ export function createDesktopUiHarness(
         {
           kind: "userMessage",
           itemKey: `${requestId}-user`,
+          ownsTurn: true,
           sequence: 1,
           content: prompt,
           timestamp: now,
@@ -1096,8 +1133,15 @@ export function createDesktopUiHarness(
       const sessionId = _sessionId;
       const session = sessions.get(sessionId);
       if (!session) return null;
+      if (timelinePage?.beforeItemKey && olderPageDelayMs > 0)
+        await wait(olderPageDelayMs);
       const snapshot = clone(session);
-      snapshot.projectionRevision = { storeVersion, reconcileVersion };
+      snapshot.projectionRevision = { storeVersion };
+      snapshot.liveCursor = session.timelineItems.some(
+        (item) => item.kind === "liveAssistant",
+      )
+        ? `${session.agentDid}:${sessionId}:${session.latestRequestId}:${liveSourceEpoch}`
+        : null;
       if (!timelinePage) return snapshot;
 
       const totalItems = snapshot.timelineItems.length;
@@ -1151,8 +1195,9 @@ export function createDesktopUiHarness(
     async fetchSessionLiveDelta(request) {
       const session = sessions.get(request.sessionId);
       if (!session || session.latestRequestId !== request.requestId) return null;
-      const revision = { storeVersion, reconcileVersion };
-      if (request.baseReconcileVersion !== reconcileVersion) {
+      const revision = { storeVersion };
+      const liveCursor = `${session.agentDid}:${request.sessionId}:${session.latestRequestId}:${liveSourceEpoch}`;
+      if (request.baseLiveCursor !== liveCursor) {
         return {
           outcome: "snapshotRequired",
           revision,
@@ -1183,6 +1228,7 @@ export function createDesktopUiHarness(
             ? "unchanged"
             : "delta",
         revision,
+        liveCursor,
         requestId: request.requestId,
         turnState: session.turnState,
         status: session.status,
@@ -1196,6 +1242,14 @@ export function createDesktopUiHarness(
         throw new Error("message content is required");
       }
 
+      if (sendsHeld && request.sessionId === "session-large") {
+        return {
+          sessionId: request.sessionId,
+          requestId: LARGE_SENT_REQUEST_ID,
+          agentDid: request.agentDid,
+          behaviorId: request.behaviorId ?? null,
+        };
+      }
       if (request.sessionId && sessions.has(request.sessionId)) {
         const existing = sessions.get(request.sessionId)!;
         const nextSequence = existing.timelineItems.length + 1;
@@ -1216,6 +1270,7 @@ export function createDesktopUiHarness(
             {
               kind: "userMessage",
               itemKey: `${requestId}-user`,
+              ownsTurn: true,
               sequence: nextSequence,
               content,
               timestamp: new Date().toISOString(),
@@ -1350,6 +1405,7 @@ export function createDesktopUiHarness(
             enabled: document.enabled ?? true,
             createdAt: document.created_at ?? null,
             tags: document.tags ?? [],
+            sourceDirectory: null,
           })),
         ],
         inferenceProfiles: [
@@ -1387,6 +1443,7 @@ export function createDesktopUiHarness(
             models: [],
             advertisedModels: [],
             probeStatus: "healthy",
+            accountRef: null,
           })),
         ],
         inferenceSampling: [
@@ -1602,6 +1659,7 @@ export function createDesktopUiHarness(
           enabled: document.enabled ?? true,
           createdAt: document.created_at ?? STARTED_AT,
           tags: document.tags ?? [],
+          sourceDirectory: null,
         }),
       };
       return snapshot();
@@ -1647,6 +1705,22 @@ export function createDesktopUiHarness(
         ...deployment,
         triggers: deployment.triggers.filter(
           (trigger) => trigger.config.trigger_id !== request.triggerId,
+        ),
+      };
+      notify("config");
+      return snapshot();
+    },
+    async deleteContextConfig(request) {
+      if (
+        !deployment.contexts.some((context) => context.context_id === request.contextId)
+      )
+        throw new Error(
+          `no AgentContext document with context_id "${request.contextId}"`,
+        );
+      deployment = {
+        ...deployment,
+        contexts: deployment.contexts.filter(
+          (context) => context.context_id !== request.contextId,
         ),
       };
       notify("config");
@@ -1800,6 +1874,7 @@ export function createDesktopUiHarness(
             models: [],
             advertisedModels: [],
             probeStatus: "healthy",
+            accountRef: null,
           },
         ),
       };
@@ -2216,6 +2291,7 @@ export function createDesktopUiHarness(
         isFedramp: false,
         accessTokenExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
         enabled: true,
+        signIn: { result: "added", label: "ChatGPT", accountRef: null, hint: null },
       };
       return result;
     },
@@ -2228,6 +2304,7 @@ export function createDesktopUiHarness(
         provider: "grok",
         accessTokenExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
         enabled: true,
+        signIn: { result: "added", label: "Grok", accountRef: null, hint: null },
       };
       return result;
     },
@@ -2240,6 +2317,7 @@ export function createDesktopUiHarness(
         provider: "claude-subscription",
         accessTokenExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
         enabled: true,
+        signIn: { result: "added", label: "Claude", accountRef: null, hint: null },
       };
     },
     async cancelClaudeLogin() {},
@@ -2417,6 +2495,157 @@ export function createDesktopUiHarness(
             notify("store", true);
             return sequence;
           },
+          setOlderPageDelay(ms) {
+            olderPageDelayMs = ms;
+          },
+          streamText(text) {
+            const session = sessions.get("session-large");
+            if (!session) {
+              throw new Error("mobile performance fixture lost session-large");
+            }
+            sessions.set("session-large", {
+              ...session,
+              timelineItems: session.timelineItems.map((item) =>
+                item.kind === "liveAssistant"
+                  ? { ...item, content: `${item.content ?? ""}${text}` }
+                  : item,
+              ),
+            });
+            syncSessions();
+            notify("store", true);
+          },
+          endReply({ live, saved, completed }) {
+            const session = sessions.get("session-large");
+            if (!session) {
+              throw new Error("mobile performance fixture lost session-large");
+            }
+            const tail = session.timelineItems.find(
+              (item) => item.kind === "liveAssistant",
+            );
+            if (tail?.kind === "liveAssistant" && tail.content) {
+              liveReply = tail.content;
+            }
+            const without = session.timelineItems.filter(
+              (item) =>
+                item.itemKey !== "large-reply" &&
+                (live === "keep" || item.kind !== "liveAssistant"),
+            );
+            const reply = {
+              kind: "assistantMessage" as const,
+              itemKey: "large-reply",
+              sequence: session.timelineItems.length,
+              content: liveReply,
+              reasoning: null,
+              timestamp: STARTED_AT,
+              reconstruction: HARNESS_READY_RECONSTRUCTION,
+            };
+            /* the bridge places a saved reply before the live tail's slot */
+            const tailAt = without.findIndex((item) => item.kind === "liveAssistant");
+            const timelineItems = !saved
+              ? without
+              : tailAt < 0
+                ? [...without, reply]
+                : [...without.slice(0, tailAt), reply, ...without.slice(tailAt)];
+            sessions.set("session-large", {
+              ...session,
+              status: "active",
+              turnState: completed ? "completed" : "running",
+              timelineItems,
+            });
+            syncSessions();
+            notify("store");
+          },
+          userTurn(stage) {
+            const session = sessions.get("session-large");
+            if (!session) {
+              throw new Error("mobile performance fixture lost session-large");
+            }
+            const requestId = LARGE_SENT_REQUEST_ID;
+            const turn =
+              stage === "pending"
+                ? {
+                    kind: "pendingUserTurn" as const,
+                    itemKey: `pending-${requestId}`,
+                    requestId,
+                    content: "again",
+                    selectedSkillIds: [],
+                    lifecycleState: "pending",
+                    createdAt: STARTED_AT,
+                  }
+                : {
+                    kind: "userMessage" as const,
+                    itemKey: "large-user-sent",
+                    requestId,
+                    ownsTurn: true,
+                    sequence: session.timelineItems.length,
+                    content: "again",
+                    timestamp: STARTED_AT,
+                    reconstruction: HARNESS_READY_RECONSTRUCTION,
+                  };
+            const without = session.timelineItems.filter(
+              (item) => !("requestId" in item) || item.requestId !== requestId,
+            );
+            const tailAt = without.findIndex((item) => item.kind === "liveAssistant");
+            const timelineItems =
+              tailAt < 0
+                ? [...without, turn]
+                : [...without.slice(0, tailAt), turn, ...without.slice(tailAt)];
+            sessions.set("session-large", {
+              ...session,
+              latestRequestId: requestId,
+              timelineItems,
+            });
+            syncSessions();
+            notify("store");
+          },
+          holdSends() {
+            sendsHeld = true;
+          },
+          liveTool(state) {
+            const session = sessions.get("session-large");
+            if (!session) {
+              throw new Error("mobile performance fixture lost session-large");
+            }
+            const group = {
+              kind: "toolGroup" as const,
+              itemKey: "large-tools",
+              messageSequence: session.timelineItems.length,
+              tools: [
+                {
+                  itemKey: "large-exec",
+                  toolName: "gents_exec",
+                  statusKind: state === "running" ? "running" : "success",
+                  reconstruction: HARNESS_READY_RECONSTRUCTION,
+                  presentation: {
+                    kind: "command" as const,
+                    command: "cargo test -p gents",
+                    exitCode: state === "running" ? null : 0,
+                    timedOut: false,
+                    failed: false,
+                    durationMs: null,
+                    cwd: null,
+                    executionMode: "read_only",
+                    networkMode: "disabled",
+                    stdout: "",
+                    stderr: "",
+                    fallbackOutput: null,
+                  },
+                  partialOutputTail: null,
+                },
+              ],
+            };
+            sessions.set("session-large", {
+              ...session,
+              timelineItems: [
+                ...session.timelineItems.filter(
+                  (item) => item.itemKey !== group.itemKey,
+                ),
+                group,
+              ],
+            });
+            syncSessions();
+            notify("store");
+          },
           streamBurst(count) {
             let sequence = streamSequence;
             for (let index = 0; index < count; index += 1) {
@@ -2553,6 +2782,7 @@ function createLargePerformanceSession(): DesktopSessionSnapshot {
             kind: "userMessage" as const,
             itemKey: `large-user-${index}`,
             requestId: `large-request-${index}`,
+            ownsTurn: true,
             sequence: index,
             content: `User fixture row ${index}: ${filler}`,
             timestamp: STARTED_AT,
@@ -2803,6 +3033,7 @@ function createDeployment(): DeploymentView {
         models: ["gpt-4.1-mini"],
         advertisedModels: [],
         probeStatus: "healthy",
+        accountRef: null,
       },
     ],
     inferenceProfiles: [
@@ -2871,6 +3102,7 @@ function createDeployment(): DeploymentView {
         enabled: true,
         createdAt: STARTED_AT,
         tags: [],
+        sourceDirectory: null,
       },
       {
         skillId: "fleet-summary",
@@ -2885,6 +3117,7 @@ function createDeployment(): DeploymentView {
         enabled: true,
         createdAt: STARTED_AT,
         tags: [],
+        sourceDirectory: null,
       },
     ],
     tasks: [
@@ -2896,6 +3129,7 @@ function createDeployment(): DeploymentView {
         promptTemplate: "Inspect this host and report health.",
         goalObjectiveTemplate: null,
         goalTokenBudget: null,
+        emitOutcome: false,
         enabled: true,
         outputSchemaRef: null,
         hooks: [],

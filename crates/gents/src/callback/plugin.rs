@@ -7,6 +7,11 @@
 //! transaction, so a result is visible only once every output is written. An
 //! invocation found already executing on recovery fails with its reason and is
 //! never run twice.
+//!
+//! A stage binds the path its source names with no working folder and nobody
+//! to ask, so the path is reachable only inside a folder the operator allowed
+//! (`gents plugin dirs add`, or a pack scenario's `allowed_folders`), at the
+//! access that call asks for.
 
 use anyhow::Result;
 use defra_node::EmbeddedNode;
@@ -417,19 +422,51 @@ mod tests {
         bind: bool,
         job_path: &str,
     ) -> (std::sync::Arc<EmbeddedNode>, tempfile::TempDir) {
-        let (home, mut record) = crate::plugin::tests::executor::installed_echo();
-        if bind {
-            record.declaration.bind_dir = Some(crate::pack::PluginDirBinding {
-                input_field: "path".into(),
-                original_field: Some("origin".into()),
-                description: "a directory".into(),
-                access: Default::default(),
+        let binding = bind.then(|| crate::pack::PluginDirBinding {
+            input_field: "path".into(),
+            original_field: Some("origin".into()),
+            description: "a directory".into(),
+            access: Default::default(),
+            write_fields: Vec::new(),
+        });
+        run_plugin_binding(
+            crate::plugin::tests::executor::installed_echo(),
+            digest,
+            binding,
+            allowed.map(|path| (path, crate::pack::BindAccess::Read)),
+            job_path,
+        )
+        .await
+    }
+
+    /// [`run_binding`] for any installed plugin, declaring `binding` (over a
+    /// schema of the Job's fields, validated as a pack would be) and allowing
+    /// `allowed` at its access when given.
+    async fn run_plugin_binding(
+        (home, mut record): (tempfile::TempDir, crate::plugin::store::InstalledPlugin),
+        digest: &str,
+        binding: Option<crate::pack::PluginDirBinding>,
+        allowed: Option<(&std::path::Path, crate::pack::BindAccess)>,
+        job_path: &str,
+    ) -> (std::sync::Arc<EmbeddedNode>, tempfile::TempDir) {
+        if binding.is_some() {
+            // The Job fields the binding passes, so the declaration is one a
+            // real pack would carry.
+            record.declaration.input_schema = serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "job_run": {"type": "string"},
+                    "text": {"type": "string"},
+                    "path": {"type": "string"},
+                    "origin": {"type": "string"},
+                },
             });
+            record.declaration.bind_dir = binding;
+            record.declaration.validate().unwrap();
             crate::plugin::store::write_record(home.path(), &record).unwrap();
         }
-        if let Some(allowed) = allowed {
-            crate::plugin::allowed::add(home.path(), allowed, crate::pack::BindAccess::Read)
-                .unwrap();
+        if let Some((allowed, access)) = allowed {
+            crate::plugin::allowed::add(home.path(), allowed, access).unwrap();
         }
         let node = std::sync::Arc::new(EmbeddedNode::builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
@@ -466,13 +503,8 @@ mod tests {
                 serde_json::to_string(job_path).unwrap()
             ))
             .await;
-        let doc_id = crate::graphql::single_mutation_document(&created, "create_Job")
-            .unwrap()
-            .and_then(|row| row.get("_docID"))
-            .and_then(Value::as_str)
-            .unwrap()
-            .to_owned();
-        engine.handle_created_doc("Job", &doc_id).await;
+        assert!(!created.has_errors(), "{:?}", created.errors);
+        engine.deliver_arrivals(Some("Job")).await;
         (node, home)
     }
 
@@ -597,5 +629,56 @@ mod tests {
         assert!(rows(&node, "{ Echoed { run_ref } }", "Echoed")
             .await
             .is_empty());
+    }
+
+    /// A graph stage has no working folder, so a writing call reaches only a
+    /// folder the operator allowed `read_write` (#2303), and the same plugin's
+    /// call is denied under a read-only folder with the command that allows it.
+    #[tokio::test]
+    async fn a_graph_stage_writes_only_where_the_operator_allowed_writing() {
+        let writer = || {
+            crate::plugin::tests::executor::installed_plugin(
+                &crate::plugin::tests::create_file_wat("out.json"),
+                None,
+            )
+        };
+        let binding = || crate::pack::PluginDirBinding {
+            input_field: "path".into(),
+            original_field: None,
+            description: "the folder results are written to".into(),
+            access: crate::pack::BindAccess::ReadWrite,
+            write_fields: vec!["text".into()],
+        };
+        for (access, writes) in [
+            (crate::pack::BindAccess::Read, false),
+            (crate::pack::BindAccess::ReadWrite, true),
+        ] {
+            let out = tempfile::tempdir().unwrap();
+            let installed = writer();
+            let digest = installed.1.digest.clone();
+            let (node, _home) = run_plugin_binding(
+                installed,
+                &digest,
+                Some(binding()),
+                Some((out.path(), access)),
+                out.path().to_str().unwrap(),
+            )
+            .await;
+            let invocation = only_invocation(&node).await;
+            assert_eq!(out.path().join("out.json").exists(), writes, "{access:?}");
+            if writes {
+                assert_eq!(invocation["lifecycle_state"], LIFECYCLE_SUCCEEDED);
+            } else {
+                assert_eq!(
+                    invocation["lifecycle_state"],
+                    super::super::LIFECYCLE_DENIED
+                );
+                let error = invocation["error"].as_str().unwrap_or_default();
+                assert!(
+                    error.contains(r#"sets "text""#) && error.contains("--access read_write"),
+                    "{error}"
+                );
+            }
+        }
     }
 }

@@ -1,3 +1,7 @@
+/* The nav registry holds the rows a UX plugin contributes; the app's own
+   rows (New session, Mailbox, Sessions, Nodes) are placed by hand in Rail
+   and NavPanel, so the registry starts empty and the contract under test
+   is ordering, replacement and disposal. */
 import { afterEach, describe, expect, it } from "vitest";
 
 import { navItems, registerNavItem, type NavItem } from "@/app/navRegistry";
@@ -14,76 +18,69 @@ function byId(id: string): NavItem {
   return item;
 }
 
-const sessions: Route = { name: "sessions" };
-const newSession: Route = { name: "session", sessionId: null };
-const openSession: Route = { name: "session", sessionId: "s1" };
 const mailbox: Route = { name: "mailbox" };
-const agents: Route = { name: "agents" };
-const agent: Route = { name: "agent", agentDid: "did:x", section: "agent" };
+const agent: Route = { name: "agent", agentDid: "did:x", section: "board:page" };
+
+const make = (id: string, extra: Partial<NavItem> = {}): NavItem => ({
+  id,
+  label: id,
+  icon: null,
+  to: mailbox,
+  active: () => false,
+  placement: "primary",
+  ...extra,
+});
 
 describe("nav registry", () => {
-  it("lights each built-in row for exactly its own routes", () => {
-    const routes = [sessions, newSession, openSession, mailbox, agents, agent];
-    const litBy = (id: string) => routes.filter((r) => byId(id).active(r));
-
-    expect(litBy("new-session")).toEqual([newSession]);
-    expect(litBy("mailbox")).toEqual([mailbox]);
-    expect(litBy("sessions")).toEqual([sessions, openSession]);
-    expect(litBy("agents")).toEqual([agents]);
-  });
-
-  it("puts the app's rows on the rail and Agents at the foot", () => {
-    const placement = (id: string) => byId(id).placement;
-    expect(["new-session", "mailbox", "sessions"].map(placement)).toEqual([
-      "primary",
-      "primary",
-      "primary",
-    ]);
-    expect(placement("agents")).toBe("footer");
-  });
-
-  it("badges only the mailbox, from the context", () => {
-    const ctx = { mailboxCount: 3 };
-    expect(byId("mailbox").count?.(ctx)).toBe(3);
-    expect(byId("sessions").count).toBeUndefined();
+  it("starts empty: the app's own rows are not registry rows", () => {
+    expect(navItems()).toEqual([]);
   });
 
   it("orders by `order`, then registration, and disposes cleanly", () => {
-    const before = navItems();
-    const make = (id: string, order?: number): NavItem => ({
-      id,
-      label: id,
-      icon: null,
-      to: mailbox,
-      active: () => false,
-      placement: "primary",
-      order,
-    });
-    disposers.push(registerNavItem(make("z", 15)));
-    disposers.push(registerNavItem(make("a", 15)));
-    disposers.push(registerNavItem(make("first", -1)));
+    disposers.push(registerNavItem(make("z", { order: 15 })));
+    disposers.push(registerNavItem(make("a", { order: 15 })));
+    disposers.push(registerNavItem(make("first", { order: -1 })));
 
     const ids = navItems().map((item) => item.id);
-    expect(ids[0]).toBe("first");
-    expect(ids.indexOf("new-session")).toBeLessThan(ids.indexOf("z"));
-    expect(ids.indexOf("z")).toBeLessThan(ids.indexOf("a"));
-    expect(ids.indexOf("a")).toBeLessThan(ids.indexOf("mailbox"));
+    expect(ids).toEqual(["first", "z", "a"]);
     expect(navItems()).toBe(navItems());
 
     disposers.splice(0).forEach((dispose) => dispose());
-    expect(navItems().map((item) => item.id)).toEqual(before.map((item) => item.id));
+    expect(navItems()).toEqual([]);
+  });
+
+  it("keeps a row's active predicate, badge and placement", () => {
+    disposers.push(
+      registerNavItem(
+        make("board", {
+          to: agent,
+          active: (r) => r.name === "agent" && r.section === "board:page",
+          count: (ctx) => ctx.mailboxCount,
+          placement: "footer",
+        }),
+      ),
+    );
+    const row = byId("board");
+    expect(row.active(agent)).toBe(true);
+    expect(row.active(mailbox)).toBe(false);
+    expect(row.count?.({ mailboxCount: 3 })).toBe(3);
+    expect(row.placement).toBe("footer");
   });
 
   it("replaces on re-register and a stale disposer is inert", () => {
-    const original = byId("mailbox");
-    const dispose1 = registerNavItem({ ...original, label: "Inbox" });
-    expect(byId("mailbox").label).toBe("Inbox");
-    const dispose2 = registerNavItem({ ...original, label: "Letters" });
+    const original = make("same", { label: "One" });
+    const dispose1 = registerNavItem(original);
+    expect(byId("same").label).toBe("One");
+    const dispose2 = registerNavItem({ ...original, label: "Two" });
     dispose1();
-    expect(byId("mailbox").label).toBe("Letters");
+    expect(byId("same").label).toBe("Two");
     dispose2();
-    expect(navItems().find((item) => item.id === "mailbox")).toBeUndefined();
-    registerNavItem(original);
-    expect(byId("mailbox")).toBe(original);
+    expect(navItems().find((item) => item.id === "same")).toBeUndefined();
+  });
+
+  it("drops a malformed payload rather than crashing the rail", () => {
+    disposers.push(registerNavItem(make("ok")));
+    disposers.push(registerNavItem({ id: "broken", label: "x" } as unknown as NavItem));
+    expect(navItems().map((item) => item.id)).toEqual(["ok"]);
   });
 });

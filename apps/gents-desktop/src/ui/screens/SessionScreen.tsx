@@ -1,122 +1,85 @@
 /* One session: start a new one, or read and continue an existing one.
-   Built from the kit's conversation patterns over the desktop app's
-   session projection: the timeline items are the bridge's own
+   Built from the kit's conversation patterns over the bridge's session
+   projection: the timeline items are its own
    RenderedTimelineItem, rendered as they arrive. */
+import { placeholderFor } from "@/lib/send-status";
 import {
   Fragment,
-  createContext,
   useCallback,
-  memo,
-  useContext,
-  useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
-  type RefObject,
+  type ComponentProps,
 } from "react";
-import {
-  ArrowDown,
-  ArrowLeft,
-  ChevronDown,
-  Copy,
-  PanelRight,
-  Play,
-  Pencil,
-  Split,
-  Target,
-  Timer,
-  X,
-  Zap,
-} from "lucide-react";
+import { ArrowDown, ChevronDown } from "lucide-react";
 import { toast } from "sonner";
-import type {
-  DeploymentView,
-  DerivedCancelCauseView,
-  RenderedToolCallView,
-  DesktopSessionSnapshot,
-  GoalView,
-  RenderedTimelineItem,
-} from "@source-inc/gents-desktop-client";
-import type { SessionSummary } from "@source-inc/gents-desktop-client";
+import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
 import type { SendStatus } from "@source-inc/gents-desktop-chat";
-import { Badge } from "@gents/ui/components/badge";
 import { Button } from "@gents/ui/components/button";
 import { cn } from "@gents/ui/lib/utils";
-import { Input } from "@gents/ui/components/input";
-import {
-  AssistantMessage,
-  scrollParent,
-  Composer,
-  ToolStep,
-  ToolSteps,
-  UserMessage,
-  type ToolStepStatus,
-} from "@gents/ui/conversation";
-import type { Shell } from "@/hooks/useShell";
+import { Composer } from "@gents/ui/conversation";
+import type { ShellView } from "@/../hooks/shellView";
 import { ChatFolderPicker } from "./ChatFolderPicker";
-import { anchor, scrollViewport, useFollowTail, useOlderPages } from "@/lib/scroll";
-import { useResizableWidth } from "@/lib/resizable";
-import { ROOMY_WINDOW, useMediaQuery } from "@/lib/media";
-import { Sheet, SheetContent, SheetTitle } from "@gents/ui/components/sheet";
+import { useFollowTail, useScroller } from "@/lib/scroll";
+import { useComposerRoom, useHeaderScrolledOut } from "./sessionLayout";
 import { href, navigate } from "@/lib/router";
 import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@gents/ui/components/collapsible";
-import { Hint } from "./Hint";
-import { firstFailure, foldWorkers, workerStory, type ToolRun } from "./tool-runs";
-import { DeploymentContext, useDeployment } from "./deployment-context";
-import { ToolIcon } from "./tool-icon";
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@gents/ui/components/dropdown-menu";
+
 import { ScrollArea } from "@gents/ui/components/scroll-area";
-import { bashAccess, behaviorName, fileAccess, network } from "./behavior";
+import { behaviorName } from "./behavior";
 import { AgentAvatar } from "./AgentAvatar";
+import { PanelMenu } from "@/app/PanelMenu";
+import { PaneBar } from "@/app/PaneBar";
+import { Slot } from "@/contrib/react/slot";
+import { SESSION_HEADER_ACTIONS_AREA } from "@/contrib/types";
 import { BehaviorPicker } from "./BehaviorPicker";
-import { HoldCard } from "./HoldCard";
 import { LoadingStatus } from "./LoadingStatus";
 import { SlashSkillMenu } from "./SlashSkillMenu";
 import { useSlashSkills } from "./useSlashSkills";
-import { Thinking } from "./Thinking";
-import { activityStatus, isStopping } from "./activity-status";
-import { TracePanel } from "./TracePanel";
-import { BehaviorAvatar, BehaviorChip } from "./parts";
-import { BehaviorHoverCard } from "./HoverCards";
-import { Slot } from "@/contrib/react/slot";
-import { SESSION_HEADER_ACTIONS_AREA } from "@/contrib/types";
+import { isStopping } from "./activity-status";
+import { AccessSentence } from "./parts";
+import { NodeBehaviorStack } from "./NodeBehaviorStack";
+import { isWorkingNode } from "@/lib/nodes";
+import { SessionLoading } from "./SessionLoading";
+import { SubagentList } from "./WorkerStep";
+import { useSessionProvenance, useWorkers } from "./workers";
+import { useParentWork } from "./parentWork";
+import { type WorkerActions } from "./WorkerActions";
+import { ReplyingTo } from "./ReplyingTo";
+import { workspace } from "@/app/workspace";
+import { toastFailure } from "@/lib/failure";
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@gents/ui/components/alert-dialog";
-import { Markdown } from "./Markdown";
-import { ToolBody } from "./tool-views";
-import { SubagentList, WorkerStep, isWorkerStep } from "./WorkerStep";
-import { NO_WORKERS, useSessionProvenance, useWorkers, type Workers } from "./workers";
-import { useParentWork, type ParentWork } from "./parentWork";
-import { WorkerActionsContext, type WorkerActions } from "./WorkerActions";
-import { ArrowUpRight } from "lucide-react";
-import { toolSummary } from "./tool-summary";
-import { Popover, PopoverContent, PopoverTrigger } from "@gents/ui/components/popover";
-import { useExclusivePopover } from "@/hooks/useExclusivePopover";
-
-const stepStatus = (kind: string): ToolStepStatus =>
-  kind === "completed" || kind === "failed" || kind === "cancelled" || kind === "error"
-    ? "done"
-    : kind === "running"
-      ? "running"
-      : "pending";
-
-function formatTokens(value: number) {
-  if (value < 1_000) return String(value);
-  const amount = value / 1_000;
-  return `${amount >= 10 ? Math.round(amount) : amount.toFixed(1).replace(/\.0$/, "")}k`;
-}
+  useSelectedSession,
+  useSelectedSessionFields,
+} from "../hooks/useSelectedSession";
+import { useDraft } from "../../hooks/draftStore";
+import { useShallow } from "zustand/react/shallow";
+import { useFleet, workersOfId } from "../hooks/useFleet";
+import { listedSession, nodeOf } from "../../hooks/fleetStore";
+import { fleetNodes } from "@/lib/scope";
+import { agentOf } from "@/lib/agents";
+import { useApp, useView } from "@/app/AppContext";
+import {
+  useChatFolder,
+  useHomeDid,
+  useInterruptVisible,
+  useMailboxCause,
+  useSelectedAgentDid,
+  useNodeCount,
+  useSelectedBehaviorId,
+  useSelectedNode,
+  useSessionLoad,
+} from "@/hooks/useClient";
+import { SessionContext } from "./SessionContextMeter";
+import { ParentLine, StartedByAutomation, Title, Goal } from "./SessionHeader";
+import { TranscriptPanel } from "./Transcript";
 
 /** Add only local composer emptiness; every other blocker belongs to ClientShell. */
 export function presentedComposerSendStatus(
@@ -125,865 +88,213 @@ export function presentedComposerSendStatus(
 ): SendStatus {
   return draft.trim()
     ? canonicalNonEmptyStatus
-    : { kind: "disabled", reason: "composerEmpty", hint: "Type a message to send" };
+    : {
+        kind: "disabled",
+        reason: "composerEmpty",
+        hint: "Type a message to send",
+      };
 }
 
-/* how full the context is, as a stroked ring: the track is the window, the
-   arc is what the conversation has used; past the compaction threshold the
-   arc takes the brand color, so the number beside it need not */
-function ContextRing({
-  used,
-  window,
-  threshold,
-}: {
-  used: number;
-  window: number;
-  threshold: number;
-}) {
-  /* a 20px ring with a 7px radius: enough arc to read at a glance */
-  const r = 7;
-  const c = 2 * Math.PI * r;
-  const share = Math.min(1, used / window);
-  const nearCompaction = threshold > 0 && used >= threshold;
-  return (
-    <svg
-      viewBox="0 0 20 20"
-      className="size-5 shrink-0 -rotate-90"
-      aria-hidden="true"
-      data-testid="context-ring"
-      data-share={share.toFixed(2)}
-    >
-      <circle
-        cx="10"
-        cy="10"
-        r={r}
-        fill="none"
-        stroke="currentColor"
-        strokeOpacity="0.2"
-        strokeWidth="2"
-      />
-      <circle
-        cx="10"
-        cy="10"
-        r={r}
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeDasharray={`${share * c} ${c}`}
-        className={nearCompaction ? "text-brand" : ""}
-      />
-    </svg>
-  );
-}
-
-export function SessionContext({
-  context,
-  compact = false,
-}: {
-  context: DesktopSessionSnapshot["context"];
-  /* in the compact header: the ring alone, the numbers in its tooltip and popover */
-  compact?: boolean;
-}) {
-  const popover = useExclusivePopover();
-  const used = Math.max(0, context.estimatedConversationTokens);
-  /* the configured window as the runtime resolves it, so an edit to the
-     profile shows at once; the last request's window is history. A window
-     the runtime rejects is reported, never shown as the one in use. */
-  const windowError = context.contextWindowError ?? null;
-  const window = Math.max(1, context.contextWindow);
-  const threshold = Math.max(0, context.compactionThresholdTokens);
-  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const canHover = () => globalThis.matchMedia?.("(hover: hover)").matches ?? true;
-  const hoverOpen = () => {
-    if (!canHover()) return;
-    if (hoverTimer.current) clearTimeout(hoverTimer.current);
-    hoverTimer.current = setTimeout(() => popover.onOpenChange(true), 150);
-  };
-  const hoverClose = () => {
-    if (!canHover()) return;
-    if (hoverTimer.current) clearTimeout(hoverTimer.current);
-    hoverTimer.current = setTimeout(() => popover.onOpenChange(false), 200);
-  };
-  return (
-    <Popover
-      open={popover.open}
-      onOpenChange={popover.onOpenChange}
-      onOpenChangeComplete={popover.onOpenChangeComplete}
-    >
-      {/* the details open on hover as well as click where there is a pointer;
-          on touch a tap opens them. Leaving trigger and popup both closes. */}
-      <PopoverTrigger
-        render={
-          compact ? (
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              data-testid="context-meter-compact"
-              aria-label={
-                windowError
-                  ? `Context ~${formatTokens(used)}, window unavailable`
-                  : `Context ~${formatTokens(used)} of ${formatTokens(window)}`
-              }
-            />
-          ) : (
-            <Button
-              variant="quiet"
-              size="sm"
-              data-testid="context-meter"
-              className="gap-2"
-            />
-          )
-        }
-        onMouseEnter={hoverOpen}
-        onMouseLeave={hoverClose}
-      >
-        <ContextRing
-          used={windowError ? 0 : used}
-          window={window}
-          threshold={threshold}
-        />
-        {!compact && (
-          <span className="tabular-nums">
-            {windowError
-              ? `~${formatTokens(used)} / window unavailable`
-              : `~${formatTokens(used)} / ${formatTokens(window)}`}
-          </span>
-        )}
-      </PopoverTrigger>
-      <PopoverContent
-        ref={popover.popupRef}
-        aria-label="Session context details"
-        align="start"
-        className="w-80"
-        data-testid="context-details"
-        onMouseEnter={hoverOpen}
-        onMouseLeave={hoverClose}
-      >
-        <div className="flex items-start gap-3">
-          <div className="min-w-0 flex-1">
-            <p className="font-heading text-sm font-medium text-heading">
-              Conversation context
-            </p>
-            {windowError ? (
-              <p role="alert" className="mt-1 text-sm text-destructive">
-                The configured context window can’t be used: {windowError}
-              </p>
-            ) : (
-              <p className="mt-1 text-sm text-muted-foreground">
-                {used.toLocaleString()} estimated tokens of {window.toLocaleString()}
-              </p>
-            )}
-          </div>
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            aria-label="Close context details"
-            onClick={() => popover.onOpenChange(false)}
-          >
-            <X />
-          </Button>
-        </div>
-        <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-5 gap-y-1.5 text-sm">
-          {!windowError && (
-            <>
-              <dt className="text-muted-foreground">Compacts at</dt>
-              <dd className="text-right font-mono text-xs">
-                {threshold.toLocaleString()}
-              </dd>
-            </>
-          )}
-          <dt className="text-muted-foreground">Durable transcript</dt>
-          <dd className="text-right font-mono text-xs">
-            {context.estimatedDurableTokens.toLocaleString()}
-          </dd>
-        </dl>
-      </PopoverContent>
-    </Popover>
-  );
-}
-
-/* the trace panel's open state outlives the session; a person who works
-   with the trace open keeps it open */
-function useTraceOpen() {
-  const [open, setOpen] = useState(() => {
-    try {
-      return localStorage.getItem("gents-prototype-trace") === "1";
-    } catch {
-      return false;
-    }
-  });
-  useEffect(() => {
-    try {
-      localStorage.setItem("gents-prototype-trace", open ? "1" : "0");
-    } catch {
-      /* storage unavailable */
-    }
-  }, [open]);
-  return [open, setOpen] as const;
-}
-
-export function useBehaviorChoice(shell: Shell) {
+export function useBehaviorChoice() {
+  const selectedBehaviorId = useSelectedBehaviorId();
+  const { selectBehavior } = useApp().actions;
   return {
     // Read the same effective selection that owns composer admission. Defaults,
-    // mailbox routing, and agent changes are resolved by the shell, not here.
-    behaviorId: shell.selectedBehaviorId,
-    setPicked: shell.selectBehavior,
+    // mailbox routing, and agent changes are resolved by the selection, not here.
+    behaviorId: selectedBehaviorId,
+    setPicked: selectBehavior,
   };
+}
+
+/* the node a new chat starts on, where there is a choice: the name is the
+   button's own text, so the heading still reads as one sentence */
+function NodeChoice({
+  name,
+  selectedAgentDid,
+  onSelect,
+}: {
+  name: string;
+  selectedAgentDid: string | null;
+  onSelect: (agentDid: string) => void;
+}) {
+  const nodes = useFleet(useShallow(fleetNodes));
+  const homeDid = useHomeDid();
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <button
+            type="button"
+            title="Choose a node"
+            className="inline-flex items-center gap-1 underline decoration-border underline-offset-4 hover:decoration-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-sm"
+          />
+        }
+      >
+        {name}
+        <ChevronDown className="size-4 opacity-50" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-56">
+        <DropdownMenuRadioGroup value={selectedAgentDid ?? ""} onValueChange={onSelect}>
+          {nodes.map((n, i, all) => (
+            <Fragment key={n.agentDid}>
+              {/* a faint line between the local node and the paired ones */}
+              {i > 0 &&
+                isWorkingNode(all[i - 1]!, homeDid) &&
+                !isWorkingNode(n, homeDid) && (
+                  <DropdownMenuSeparator className="opacity-60" />
+                )}
+              <DropdownMenuRadioItem value={n.agentDid} disabled={!n.dialSucceeded}>
+                <AgentAvatar
+                  name={n.agentPrincipal.displayName ?? n.label}
+                  className="size-5 text-[9px]"
+                />
+                <span className="min-w-0 flex-1 truncate">
+                  {n.agentPrincipal.displayName ?? n.label}
+                </span>
+                {isWorkingNode(n, homeDid) && (
+                  <span className="text-xs text-muted-foreground">local</span>
+                )}
+              </DropdownMenuRadioItem>
+            </Fragment>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
 }
 
 /** Display the existing workflow owner's observation, never infer queue health. */
+/* The line under the composer holds its place whether or not it has
+   anything to say: a status arriving and leaving moved the composer up
+   and down, and a person's eye with it. One line of the small size is
+   always reserved; an error, being rarer and longer, may still grow it. */
 export function SessionSubmissionStatus({
-  error,
   activityStatus,
-}: Pick<Shell, "error" | "activityStatus">) {
+  hint,
+  reserve = true,
+}: {
+  activityStatus: ShellView["shellProjection"]["activityStatus"];
+  hint?: string | null;
+  /** a new chat has no transcript above to hold still, so its line may
+      take no room until it has something to say */
+  reserve?: boolean;
+}) {
+  const status = activityStatus;
+  const quiet = !status && hint;
+  const empty = !status && !quiet;
   return (
-    <>
-      {activityStatus && !error && (
+    <div
+      className={cn("px-1", reserve ? "mt-2 min-h-4" : !empty && "mt-2")}
+      data-testid="composer-status"
+    >
+      {status && (
         <div
           role="status"
-          title={activityStatus.detail}
-          className="mt-2 px-1 text-xs text-muted-foreground"
+          title={status.detail}
+          className="text-xs leading-4 text-muted-foreground animate-in fade-in-0 duration-200 motion-reduce:animate-none"
         >
-          <span>{activityStatus.label}</span>
+          <span>{status.label}</span>
         </div>
       )}
-      {error && (
-        <p role="alert" className="mt-2 px-1 text-sm text-destructive">
-          {error}
-        </p>
-      )}
-    </>
+      {quiet && <p className="text-xs leading-4 text-muted-foreground">{hint}</p>}
+    </div>
   );
 }
 
 /* an earlier request's failure, shown where it happened; the session has
    moved on to a later request, so there is nothing to retry here */
 
-/* where this session came from: the session whose call started it, from
-   provenance. It is an ordinary session; the link opens it as one. */
-function ParentLine({ work }: { work: ParentWork }) {
-  if (!work.parent) return null;
-  return (
-    <span className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
-      Started by
-      <a
-        href={href({ name: "session", sessionId: work.parent.sessionId })}
-        className="flex min-w-0 items-center gap-0.5 truncate hover:text-foreground hover:underline"
-      >
-        {work.parent.summary?.title ?? "another session"}
-        <ArrowUpRight className="size-3 shrink-0" />
-      </a>
-    </span>
-  );
-}
-
-/* A session nobody started by typing says who did. The list can filter on
-   it and could not show it; the session itself said nothing at all, so a
-   run that arrived overnight looked like one a person had asked for. */
-function StartedByAutomation({
-  summary,
-  agentDid,
-}: {
-  summary: SessionSummary;
-  agentDid: string | null;
-}) {
-  const how =
-    summary.triggerKind === "schedule"
-      ? "on a schedule"
-      : summary.triggerKind === "event"
-        ? "by an event"
-        : summary.triggerKind
-          ? `by a ${summary.triggerKind}`
-          : null;
-  const name = summary.taskName ?? "a task";
-  return (
-    <span className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
-      {/* a task is a Play and a schedule is a Timer, the way the config
-          names them: the mark is the thing it points at */}
-      {summary.triggerKind === "schedule" ? (
-        <Timer className="size-3 shrink-0" />
-      ) : summary.triggerKind === "event" ? (
-        <Zap className="size-3 shrink-0" />
-      ) : (
-        <Play className="size-3 shrink-0" />
-      )}
-      Started by
-      {/* the task is a thing that exists and can be changed, so the name
-         goes to it: reading why a run happened and deciding it should not
-         happen again are the same errand */}
-      {agentDid && summary.taskId ? (
-        <a
-          href={href({
-            name: "agent",
-            agentDid,
-            section: "tasks",
-            item: summary.taskId,
-          })}
-          className="truncate hover:text-foreground hover:underline"
-        >
-          {name}
-        </a>
-      ) : (
-        <span className="truncate">{name}</span>
-      )}
-      {how && <span className="shrink-0">· {how}</span>}
-    </span>
-  );
-}
-
-function copyActions(text: string | null | undefined) {
-  return [
-    {
-      label: "Copy",
-      icon: <Copy />,
-      onClick: () => {
-        void navigator.clipboard?.writeText(text ?? "");
-        toast("Copied");
-      },
+export function SessionScreen() {
+  const activeRequestId = useView((view) => view.shellProjection.activeRequestId);
+  const activityStatus = useView((view) => view.shellProjection.activityStatus);
+  const {
+    drafts,
+    stores,
+    actions: {
+      acceptsComposeIntent,
+      captureComposeIntent,
+      interruptRequest,
+      renameSession,
+      selectAgent,
+      sendMessage,
+      setChatFolder,
     },
-  ];
-}
-
-/* the sessions this one reached; memoised items read it from context so a
-   lineage refresh re-renders only the subagent rows */
-const WorkersContext = createContext<Workers>(NO_WORKERS);
-
-/* the sessions that sent work into this one; a turn another session sent is
-   labeled with its sender */
-const ParentContext = createContext<ParentWork | null>(null);
-
-/* one tool call as a row, wherever it sits: loose in the group, or among
-   the calls a run folded together */
-function Step({ tool, workers }: { tool: RenderedToolCallView; workers: Workers }) {
-  if (isWorkerStep(tool)) return <WorkerStep tool={tool} workers={workers} />;
-  const summary = toolSummary(tool);
-  return (
-    <ToolStep
-      label={`${summary.kind} ${summary.primary}`.trim()}
-      icon={<ToolIcon tool={tool} />}
-      status={stepStatus(tool.statusKind)}
-    >
-      {tool.statusKind !== "running" ? <ToolBody tool={tool} /> : undefined}
-    </ToolStep>
-  );
-}
-
-/* A worker's scattered steps as one row: who it was, where it got to, and
-   what was done to it along the way. Its steps keep their order inside. */
-function WorkerRunStep({
-  tools,
-  workers,
-}: {
-  tools: RenderedToolCallView[];
-  workers: Workers;
-}) {
-  const deployment = useDeployment();
-  const first = tools[0]!;
-  const p = first.presentation;
-  const reached = workers.byToolCall(first);
-  const name =
-    reached?.summary?.title ?? (p.kind === "subagent" ? p.name : null) ?? "a session";
-  const last = tools[tools.length - 1]!;
-  const failed = tools.some(
-    (t) => t.statusKind === "error" || t.statusKind === "failed",
-  );
-  /* the row is about one agent, so it wears that agent's mark: the same
-     avatar the session list and the parent's turns use. A worker with
-     no session summary has no behavior to wear, and falls back to the
-     kind's glyph. */
-  const behaviorId = reached?.summary?.behaviorId ?? null;
-  return (
-    <ToolStep
-      label={name}
-      icon={
-        behaviorId ? (
-          <BehaviorAvatar
-            name={behaviorName(behaviorId, deployment)}
-            behaviorId={behaviorId}
-            className="size-4 text-[8px]"
-          />
-        ) : (
-          <ToolIcon tool={first} />
-        )
-      }
-      detail={workerStory(tools)}
-      status={last.statusKind === "running" ? "running" : failed ? "pending" : "done"}
-    >
-      <ToolSteps className="-mx-2">
-        {tools.map((tool) => (
-          <WorkerStep key={tool.itemKey} tool={tool} workers={workers} />
-        ))}
-      </ToolSteps>
-    </ToolStep>
-  );
-}
-
-/* what the run was made of, and what went wrong in it if anything did */
-function runDetail(run: Extract<ToolRun, { kind: "run" }>) {
-  /* what went wrong leads, and says what it was: the reason a person opens
-     a folded run is almost always the exception inside it, and a bare count
-     of failures makes them go looking for it */
-  const bad = firstFailure(run.tools);
-  if (bad) {
-    const summary = toolSummary(bad);
-    const others = run.failures > 1 ? ` · ${run.failures - 1} more failed` : "";
-    return `${summary.kind} ${summary.primary}`.trim() + " failed" + others;
-  }
-  const top = run.tally
-    .slice(0, 4)
-    .map((t: { label: string; count: number }) => `${t.label} ${t.count}`);
-  const rest = run.tally.length - top.length;
-  return [...top, rest > 0 ? `+${rest} more` : null].filter(Boolean).join(" · ");
-}
-
-const TranscriptItem = memo(function TranscriptItem({
-  item,
-  status = null,
-}: {
-  item: RenderedTimelineItem;
-  status?: string | null;
-}) {
-  const workers = useContext(WorkersContext);
-  const parentWork = useContext(ParentContext);
-  switch (item.kind) {
-    case "userMessage":
-    case "pendingUserTurn": {
-      const sender = parentWork?.sentBy(item.requestId) ?? null;
-      const message = (
-        <UserMessage actions={copyActions(item.content)}>{item.content}</UserMessage>
-      );
-      if (!sender) return message;
-      const senderName = sender.summary?.title ?? "another session";
-      /* a turn another session sent wears that session's mark, the way any
-         other sender would; its state, where the mark cannot say it, is a
-         chip seated on the bubble's bottom edge */
-      const state = item.kind === "pendingUserTurn" ? "Queued" : null;
-      return (
-        /* the mark hangs in the transcript's right gutter, seated on the
-           first line's center: the bubble's own my-1 and py-3 put that 26px
-           down, half the avatar is 12 */
-        <div className={cn("relative", state && "mb-2")}>
-          <BehaviorAvatar
-            name={sender.behaviorName ?? senderName}
-            behaviorId={sender.summary?.behaviorId ?? null}
-            /* in the gutter where there is one; seated on the bubble's
-               top corner when the screen is too narrow to spare it */
-            className="absolute -top-1 right-2 size-6 text-[10px] ring-2 ring-background sm:top-3.5 sm:-right-8 sm:ring-0"
-            aria-hidden={false}
-            role="img"
-            aria-label={`Sent by ${senderName}`}
-            title={`Sent by ${senderName}`}
-          />
-          <div className="relative min-w-0">
-            {message}
-            {state && (
-              <Badge
-                variant="outline"
-                className="absolute right-4 bottom-0 translate-y-1/2 border-border/60 bg-background text-[10px] font-normal text-muted-foreground"
-              >
-                {state}
-              </Badge>
-            )}
-          </div>
-        </div>
-      );
-    }
-    case "assistantMessage":
-      return (
-        /* a turn that thought and then acted leaves reasoning with nothing
-           said after it: that is a think, not an empty answer, so it carries
-           no action bar and no blank line where prose would be */
-        <AssistantMessage actions={item.content ? copyActions(item.content) : false}>
-          {item.reasoning && <Reasoning text={item.reasoning} />}
-          {item.content ? <Markdown>{item.content}</Markdown> : null}
-        </AssistantMessage>
-      );
-    case "toolGroup":
-      return (
-        <ToolSteps>
-          {foldWorkers(item.tools).map((entry) =>
-            entry.kind === "one" ? (
-              <Step key={entry.tool.itemKey} tool={entry.tool} workers={workers} />
-            ) : entry.kind === "worker" ? (
-              <WorkerRunStep key={entry.key} tools={entry.tools} workers={workers} />
-            ) : (
-              <ToolStep
-                key={entry.key}
-                label={entry.label}
-                icon={<ToolIcon tool={entry.tools[0]!} />}
-                detail={runDetail(entry)}
-                status={entry.failures ? "pending" : "done"}
-                /* the moment a run forms, three rows become one with nothing
-                   to see: it arrives with a beat so the fold is noticed */
-                className="animate-in fade-in-0 slide-in-from-top-1 duration-200 motion-reduce:animate-none"
-              >
-                {/* its own group, so opening a step inside a run does not
-                    fold the run away from under it */}
-                <ToolSteps className="-mx-2">
-                  {entry.tools.map((tool) => (
-                    <Step key={tool.itemKey} tool={tool} workers={workers} />
-                  ))}
-                </ToolSteps>
-              </ToolStep>
-            ),
-          )}
-        </ToolSteps>
-      );
-    case "liveAssistant":
-      return (
-        <div data-testid="live-assistant">
-          <AssistantMessage>
-            {item.content && <Markdown>{item.content}</Markdown>}
-            {status && <Thinking label={status} />}
-          </AssistantMessage>
-        </div>
-      );
-  }
-});
-
-const STOP_SOURCES: Record<string, string> = {
-  requestInterrupt: "a stop request on this request",
-  requestLifecycle: "the request's lifecycle state",
-  deadline: "its deadline",
-};
-
-function StoppedNotice({ cause }: { cause: DerivedCancelCauseView | null }) {
-  const headline =
-    cause?.cause === "userCancelled"
-      ? "You stopped this response."
-      : cause?.cause === "deadline"
-        ? "This response stopped at its deadline."
-        : "This response was stopped.";
-  const at = cause?.at ? new Date(cause.at) : null;
-  return (
-    <Collapsible
-      className="px-2 text-xs text-muted-foreground"
-      data-testid="stopped-notice"
-    >
-      <p className="flex items-center gap-2">
-        {headline}
-        {cause && (
-          <CollapsibleTrigger className="cursor-pointer underline decoration-border underline-offset-4 hover:text-foreground">
-            Details
-          </CollapsibleTrigger>
-        )}
-      </p>
-      {cause && (
-        <CollapsibleContent>
-          <dl className="mt-2 grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1 font-mono text-[11px]">
-            <dt>stopped by</dt>
-            <dd>{STOP_SOURCES[cause.source] ?? cause.source}</dd>
-            {at && !Number.isNaN(at.getTime()) && (
-              <>
-                <dt>at</dt>
-                <dd>{at.toLocaleTimeString()}</dd>
-              </>
-            )}
-            {cause.evidence.map((line) => (
-              <Fragment key={line}>
-                <dt>evidence</dt>
-                <dd className="break-all">{line}</dd>
-              </Fragment>
-            ))}
-          </dl>
-        </CollapsibleContent>
-      )}
-    </Collapsible>
-  );
-}
-
-type TranscriptActions = Pick<Shell, "loadOlderSessionTimeline" | "retryMessage">;
-
-export const TranscriptPanel = memo(function TranscriptPanel({
-  actionsRef,
-  holdsCount,
-  inFlight,
-  stopping = false,
-  ownerRef,
-  session,
-  workers,
-  parentWork,
-  workerActions,
-  deployment,
-}: {
-  actionsRef: RefObject<TranscriptActions>;
-  holdsCount: number;
-  inFlight: boolean;
-  stopping?: boolean;
-  ownerRef: RefObject<HTMLDivElement | null>;
-  session: DesktopSessionSnapshot | null;
-  workers: Workers;
-  parentWork: ParentWork;
-  workerActions: WorkerActions;
-  deployment: DeploymentView | null;
-}) {
-  const loadingOlder = useOlderPages(
-    ownerRef,
-    session?.sessionId ?? null,
-    session?.timelinePage?.hasOlder ?? false,
-    () => actionsRef.current.loadOlderSessionTimeline(),
-  );
-  const [retrying, setRetrying] = useState(false);
-  const live = session?.timelineItems.find((item) => item.kind === "liveAssistant");
-  const status = inFlight
-    ? activityStatus(session?.timelineItems ?? [], stopping)
-    : null;
-  const wasInterrupted = session?.turnState === "interrupted";
-  const responseError =
-    session?.turnState === "failed"
-      ? "The request failed before a response was available. Check the request trace for details."
-      : "";
-  const showError = Boolean(responseError) && !wasInterrupted && !inFlight;
-
-  const retry = async () => {
-    const requestId = session?.latestRequestId;
-    if (!requestId) return;
-    setRetrying(true);
-    try {
-      await actionsRef.current.retryMessage(requestId);
-    } catch (error) {
-      toast(`Couldn't retry: ${String(error)}`);
-    } finally {
-      setRetrying(false);
-    }
-  };
-
-  return (
-    /* the condensed header floats over the scroller, so a step opening
-       near the top must stop below it, not under it (h-12 plus a little) */
-    <div
-      /* the composer is sticky over the foot of this scroller, so the
-         transcript keeps its height clear: without it the last thing in a
-         session sits underneath the composer, and anything that sticks to
-         the bottom lands there too */
-      className="mt-6 grid grid-cols-[minmax(0,1fr)] gap-5 pb-[var(--composer-h,0px)] [--step-scroll-inset:56]"
-      data-testid="transcript-panel"
-    >
-      {session?.timelinePage?.hasOlder && (
-        <div
-          role="status"
-          aria-live="polite"
-          className="min-h-5 text-center text-xs text-muted-foreground"
-          data-testid="transcript-older-status"
-        >
-          {loadingOlder ? "Loading older messages…" : null}
-        </div>
-      )}
-      <DeploymentContext.Provider value={deployment}>
-        <WorkersContext.Provider value={workers}>
-          <WorkerActionsContext.Provider value={workerActions}>
-            <ParentContext.Provider value={parentWork}>
-              {session?.timelineItems.map((item) => (
-                <div key={item.itemKey} data-timeline-key={item.itemKey}>
-                  <TranscriptItem
-                    item={item}
-                    status={item.kind === "liveAssistant" ? status : null}
-                  />
-                </div>
-              ))}
-            </ParentContext.Provider>
-          </WorkerActionsContext.Provider>
-        </WorkersContext.Provider>
-      </DeploymentContext.Provider>
-      {wasInterrupted && !inFlight && (
-        <StoppedNotice cause={session?.latestRequestOutcome?.cancelCause ?? null} />
-      )}
-      {showError && (
-        <div className="rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3">
-          <p className="text-sm font-medium">
-            The assistant could not finish this turn.
-          </p>
-          <pre className="mt-1 font-mono text-[11px] whitespace-pre-wrap text-muted-foreground">
-            {responseError}
-          </pre>
-          {session?.retryEligibility?.eligible && (
-            <Button
-              size="sm"
-              variant="outline"
-              className="mt-3"
-              disabled={retrying}
-              onClick={retry}
-            >
-              {retrying ? "Retrying…" : "Retry"}
-            </Button>
-          )}
-        </div>
-      )}
-      {status && !live && holdsCount === 0 && (
-        <AssistantMessage>
-          <Thinking label={status} />
-        </AssistantMessage>
-      )}
-    </div>
-  );
-});
-
-export function SessionScreen({ shell }: { shell: Shell }) {
-  const session = shell.selectedSession;
-  const { draft, setDraft } = shell;
+  } = useApp();
+  const chatFolder = useChatFolder();
+  const nodeCount = useNodeCount();
+  const draftKey = useView((view) => view.draftKey);
+  const inFlight = useInterruptVisible();
+  const mailboxCause = useMailboxCause();
+  const sendStatus = useView((view) => view.shellProjection.nonEmptyContentSendStatus);
+  const selectedAgentDid = useSelectedAgentDid();
+  const deployment = useSelectedNode();
+  const selectedSessionId = stores.selection.use.sessionId();
+  const sending = stores.chat.use.sending();
+  const sessionLoad = useSessionLoad();
+  const session = useSelectedSessionFields(selectScreenFacts);
+  const homeDid = useHomeDid();
+  const sessionWorkers = useFleet((s) => workersOfId(s, session?.sessionId));
+  const [draft, setDraft] = useDraft(drafts, draftKey);
   const [requestedStop, setRequestedStop] = useState<string | null>(null);
-  /* the fork notice keeps its session through its exit; the shell owner decides when it shows */
-  const [forked, setForked] = useState<{ sessionId: string; title: string } | null>(
-    null,
-  );
-  const forkNotice = useExclusivePopover();
-  const [traceOpenPref, setTracePref] = useTraceOpen();
-  /* the remembered state is a desktop habit; on a phone the sheet opens only by
-     hand, and takes its turn with the shell's popovers like any other dialog */
-  const traceSheet = useExclusivePopover();
   /* the transcript column follows new content while the reader is near
      the bottom; a reader who has scrolled up is left where they are */
-  const column = useRef<HTMLDivElement>(null);
-  const viewport = () => scrollViewport(column.current);
-  const transcriptContentSignal = useMemo(
-    () =>
-      (session?.timelineItems ?? [])
-        .map((item) => {
-          switch (item.kind) {
-            case "assistantMessage":
-            case "liveAssistant":
-              return `${item.itemKey}:${item.content?.length ?? 0}:${item.reasoning?.length ?? 0}`;
-            case "userMessage":
-              return `${item.itemKey}:${item.content?.length ?? 0}`;
-            case "pendingUserTurn":
-              return `${item.itemKey}:${item.content.length}`;
-            case "toolGroup":
-              return `${item.itemKey}:${item.tools
-                .map(
-                  (tool) =>
-                    `${tool.itemKey}:${tool.statusKind}:${tool.partialOutputTail?.length ?? 0}`,
-                )
-                .join(",")}`;
-          }
-        })
-        .join("|"),
-    [session?.timelineItems],
+  const column = useRef<HTMLDivElement | null>(null);
+  const [scroller, ownScroller] = useScroller();
+  const columnRef = useCallback(
+    (element: HTMLDivElement | null) => {
+      column.current = element;
+      ownScroller(element);
+    },
+    [ownScroller],
   );
-  const transcriptActions = useRef<TranscriptActions>({
-    loadOlderSessionTimeline: shell.loadOlderSessionTimeline,
-    retryMessage: shell.retryMessage,
-  });
-  useLayoutEffect(() => {
-    transcriptActions.current = {
-      loadOlderSessionTimeline: shell.loadOlderSessionTimeline,
-      retryMessage: shell.retryMessage,
-    };
-  }, [shell.loadOlderSessionTimeline, shell.retryMessage]);
   /* away from the bottom, a button offers the way back; scrolling is the cue */
-  const { atBottom, toBottom } = useFollowTail(
-    column,
-    shell.selectedSessionId,
-    transcriptContentSignal,
-  );
+  const { atBottom, toBottom, settle } = useFollowTail(scroller, selectedSessionId);
   /* once the full header scrolls out, a condensed one sticks to the top */
-  const headerEnd = useRef<HTMLDivElement>(null);
-  const [condensed, setCondensed] = useState(false);
-  useEffect(() => {
-    const el = headerEnd.current;
-    const root = viewport();
-    if (!el || !root) return;
-    const io = new IntersectionObserver(([e]) => setCondensed(!e!.isIntersecting), {
-      root,
-    });
-    io.observe(el);
-    return () => io.disconnect();
-  }, [shell.selectedSessionId]);
-  const wide = useMediaQuery(ROOMY_WINDOW);
-  const traceOpen = wide ? traceOpenPref : traceSheet.open;
-  const setTraceOpen = (open: boolean) =>
-    wide ? setTracePref(open) : traceSheet.onOpenChange(open);
-  const trace = useResizableWidth({
-    key: "gents-prototype-trace-width",
-    initial: 520,
-    min: 320,
-    max: (container) => container * 0.6,
-  });
-  const choice = useBehaviorChoice(shell);
-  const deployment = shell.selectedDeployment;
-  const provenance = useSessionProvenance(shell);
-  const workers = useWorkers(shell, provenance);
-  const parentWork = useParentWork(shell, provenance);
-  /* the composer mounts with the session, not with the screen, so this
-     measures from a callback ref rather than an effect that would run once
-     while it was still absent. The height goes on the column, not the
-     composer: a custom property inherits down, and the blocks that need to
-     clear it are the composer's siblings. */
-  const composerCleanup = useRef<(() => void) | null>(null);
-  const composer = useCallback((el: HTMLDivElement | null) => {
-    composerCleanup.current?.();
-    composerCleanup.current = null;
-    if (!el) return;
-    /* what a block sticking to the foot needs is not the composer's height
-       but how far its top sits above the scrollport's bottom edge. The two
-       coincide only when the scroller ends where the window does, which is
-       not true once the app is drawn inside a window frame. */
-    const publish = () => {
-      const scroller = scrollParent(el);
-      const floor = scroller
-        ? scroller.getBoundingClientRect().bottom
-        : window.innerHeight;
-      const gap = Math.max(0, Math.round(floor - el.getBoundingClientRect().top));
-      /* the transcript pins itself to the foot when a session opens, and
-         this measurement arrives after that: the room it reserves appears
-         underneath a view that has already stopped, leaving it exactly a
-         composer short of the end. A reader at the foot stays at the foot. */
-      const was =
-        scroller && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
-      column.current?.style.setProperty("--composer-h", `${gap}px`);
-      if (scroller && was !== null && was < 4)
-        requestAnimationFrame(() => {
-          scroller.scrollTop = scroller.scrollHeight;
-        });
-    };
-    publish();
-    const size = new ResizeObserver(publish);
-    size.observe(el);
-    /* the frame around the app resizes without the composer changing size */
-    window.addEventListener("resize", publish);
-    composerCleanup.current = () => {
-      size.disconnect();
-      window.removeEventListener("resize", publish);
-    };
-  }, []);
+  const [condensed, headerEnd] = useHeaderScrolledOut(scroller);
+  const choice = useBehaviorChoice();
+  const provenance = useSessionProvenance();
+  const workers = useWorkers(provenance);
+  const parentWork = useParentWork(provenance);
+  const composer = useComposerRoom(column, settle);
   /* a person stopping a subagent from here: the canonical interrupt of the
      one request that row's call caused; the row settles when that request
      is terminal */
   const workerActions = useMemo<WorkerActions>(
     () => ({
       interrupt: (request) => {
-        void shell.api
-          .interruptRequest({
-            requestId: request.requestId,
-            agentDid: request.agentDid,
-            cause: "userCancelled",
-          })
-          .catch((e: unknown) =>
-            toast(`Couldn't stop: ${e instanceof Error ? e.message : String(e)}`),
-          );
+        interruptRequest({
+          requestId: request.requestId,
+          agentDid: request.agentDid,
+        }).catch((e: unknown) => toastFailure("stop", e));
       },
     }),
-    [shell.api],
+    [interruptRequest],
   );
-  const agentName = deployment?.agentPrincipal.displayName ?? "the agent";
+  /* the principal name, or the pairing label while a paired node has not
+     replicated its principal yet */
+  const agentName =
+    deployment?.agentPrincipal.displayName ?? deployment?.label ?? "the agent";
   /* the snapshot says what happened in a session; the summary says where it
      came from, which is the list's own view of it */
-  const summary =
-    deployment?.sessions.find((x) => x.sessionId === session?.sessionId) ?? null;
+  const summary = useFleet((s) =>
+    listedSession(s, deployment?.agentDid, session?.sessionId),
+  );
+  const sessionNode = useFleet((s) => nodeOf(s, session?.agentDid));
 
   const send = async (text: string) => {
-    const pending = shell.sendMessage(text, session?.behaviorId ?? choice.behaviorId);
-    const intentGeneration = shell.captureComposeIntent();
+    const pending = sendMessage(text, session?.behaviorId ?? choice.behaviorId);
+    const intentGeneration = captureComposeIntent();
     const result = await pending;
     if (result) setDraft((current) => (current === text ? "" : current));
-    if (!shell.acceptsComposeIntent(intentGeneration)) return;
-    if (result && result.sessionId !== shell.selectedSessionId) {
+    if (!acceptsComposeIntent(intentGeneration)) return;
+    if (result && result.sessionId !== selectedSessionId) {
+      if (!selectedSessionId) workspace.adoptNewSessionDock(result.sessionId);
       navigate({ name: "session", sessionId: result.sessionId });
     }
   };
 
   const contextFor = (behaviorId?: string | null) => {
-    const b = deployment?.behaviors.find((x) => x.behaviorId === behaviorId);
+    const b = agentOf(deployment, behaviorId);
     return deployment?.contexts.find((c) => c.context_id === b?.contextId);
   };
   const startSlash = useSlashSkills(
@@ -1000,18 +311,15 @@ export function SessionScreen({ shell }: { shell: Shell }) {
   );
 
   /* ---- start a new session ---- */
-  if (!shell.selectedSessionId) {
+  if (!selectedSessionId) {
     const env = deployment?.behaviorEnvironments.find(
       (e) => e.behaviorId === choice.behaviorId,
     );
     const chosenName = behaviorName(choice.behaviorId, deployment);
-    const startStatus = presentedComposerSendStatus(
-      draft,
-      shell.nonEmptyContentSendStatus,
-    );
+    const startStatus = presentedComposerSendStatus(draft, sendStatus);
     return (
       <div
-        key={shell.selectedAgentDid ?? "new"}
+        key={selectedAgentDid ?? "new"}
         data-testid="session-screen"
         className="mx-auto grid min-h-full max-w-2xl content-center gap-6 px-6 py-16 animate-in fade-in-0 slide-in-from-bottom-2 duration-300 ease-out fill-mode-both motion-reduce:animate-none"
       >
@@ -1019,10 +327,19 @@ export function SessionScreen({ shell }: { shell: Shell }) {
           <AgentAvatar name={agentName} className="size-8" />
           <div>
             <h1 className="font-heading text-lg font-medium text-heading">
-              Start a new chat with {agentName}
+              Start a new chat with{" "}
+              {nodeCount > 1 ? (
+                <NodeChoice
+                  name={agentName}
+                  selectedAgentDid={selectedAgentDid}
+                  onSelect={selectAgent}
+                />
+              ) : (
+                agentName
+              )}
             </h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              {shell.mailboxCause
+              {mailboxCause
                 ? "Answering a mailbox item; the first message starts its request"
                 : "The first message creates the session automatically"}
             </p>
@@ -1034,46 +351,37 @@ export function SessionScreen({ shell }: { shell: Shell }) {
             onChange={setDraft}
             onSend={send}
             models={[]}
-            disabled={shell.nonEmptyContentSendStatus.kind === "disabled"}
+            disabled={sendStatus.kind === "disabled"}
             above={
-              <SlashSkillMenu
-                items={startSlash.items}
-                active={startSlash.active}
-                onPick={startSlash.accept}
-              />
+              <>
+                <ReplyingTo />
+                <SlashSkillMenu
+                  items={startSlash.items}
+                  active={startSlash.active}
+                  onPick={startSlash.accept}
+                />
+              </>
             }
             onKeyDown={startSlash.onKeyDown}
             leading={
               <>
                 <BehaviorPicker
-                  shell={shell}
                   deployment={deployment}
                   behaviorId={choice.behaviorId}
                   onChange={choice.setPicked}
                 />
-                <ChatFolderPicker
-                  folder={shell.chatFolder}
-                  onChange={shell.setChatFolder}
-                />
+                <ChatFolderPicker folder={chatFolder} onChange={setChatFolder} />
               </>
             }
-            sending={shell.sending}
-            placeholder={
-              startStatus.kind === "disabled" ? startStatus.hint : "Ask anything"
-            }
+            sending={sending}
+            placeholder={placeholderFor(startStatus, "Ask anything")}
           />
+          {/* inside the composer's row, so the grid's gap is not paid twice
+              around a line that is usually empty */}
+          <SessionSubmissionStatus activityStatus={activityStatus} reserve={false} />
         </div>
-        <SessionSubmissionStatus
-          error={shell.error}
-          activityStatus={shell.activityStatus}
-        />
         <p className="text-xs text-muted-foreground">
-          {chosenName} <strong className="font-medium text-foreground">can</strong>{" "}
-          {env
-            ? `${fileAccess(env.fileAccess)} files and ${bashAccess(env.bashAccess)} commands`
-            : "…"}
-          , and <strong className="font-medium text-foreground">has access</strong> to{" "}
-          {network(env?.networkAccess)}.
+          <AccessSentence name={chosenName} env={env} />
           {deployment && choice.behaviorId && (
             <>
               {" "}
@@ -1096,12 +404,10 @@ export function SessionScreen({ shell }: { shell: Shell }) {
   }
 
   /* ---- an existing session ---- */
-  const holdsHere = shell.holds.filter((h) => h.sessionId === session?.sessionId);
-  const inFlight = shell.interruptVisible ?? Boolean(shell.selectedTrackedRequestId);
 
   /* stop: the interrupt reaches this request only; sessions it started keep
      their own work, each stoppable from its row or its own screen */
-  const stoppableRequestId = shell.activeRequestId ?? session?.latestRequestId ?? null;
+  const stoppableRequestId = activeRequestId ?? session?.latestRequestId ?? null;
   const stopping = isStopping({
     inFlight,
     requestId: stoppableRequestId,
@@ -1117,106 +423,44 @@ export function SessionScreen({ shell }: { shell: Shell }) {
     const release = () =>
       setRequestedStop((current) => (current === requestId ? null : current));
     try {
-      await shell.api.interruptRequest({
-        requestId,
-        agentDid: shell.selectedAgentDid,
-        cause: "userCancelled",
-      });
+      await interruptRequest({ requestId, agentDid: selectedAgentDid });
     } catch (e) {
       release();
-      toast(`Couldn't stop: ${e instanceof Error ? e.message : String(e)}`);
+      toastFailure("stop", e);
     }
   };
 
   /* Local text plus the canonical shell admission decision. */
-  const status = presentedComposerSendStatus(draft, shell.nonEmptyContentSendStatus);
+  const status = presentedComposerSendStatus(draft, sendStatus);
 
-  /* PROTOTYPE ONLY: fork this session and open the copy */
-  const fork = async () => {
-    if (!session) return;
-    try {
-      const sessionId = await shell.forkSession(session.sessionId);
-      /* the copy exists; moving to it is the person's call */
-      setForked({ sessionId, title: `${session.title ?? "Session"} (fork)` });
-      forkNotice.onOpenChange(true);
-    } catch (e) {
-      toast(`Couldn't fork: ${String(e)}`);
-    }
-  };
+  /* Until the session is here, nothing of its screen is. Drawn without it,
+     the screen assembled under the reader's eye — chrome, then a title
+     reading "loading", then the transcript — and changed shape as each
+     part landed. One mark, centred, says it is coming. A load that failed,
+     or a session the store does not have, keeps the screen: its
+     LoadingStatus says what happened and offers the way on. */
+  if (!session && sessionLoad.phase !== "failed" && sessionLoad.found !== false)
+    return <SessionLoading />;
 
   return (
     <div
-      className="grid h-full min-h-0"
+      className="grid h-full min-h-0 grid-cols-[minmax(0,1fr)]"
       data-testid="session-screen"
-      style={{
-        gridTemplateColumns: wide
-          ? `minmax(0,1fr) ${traceOpen ? "auto" : "0px"} ${traceOpen ? trace.width : 0}px`
-          : "minmax(0,1fr) 0px 0px",
-        /* the columns ease when the panel opens or closes, not while it is dragged */
-        transition: trace.isDragging
-          ? undefined
-          : "grid-template-columns 260ms cubic-bezier(0.22, 1, 0.36, 1)",
-      }}
     >
       <div className="relative flex min-h-0 min-w-0 flex-col">
-        {/* takes no space in the flow (negative margin), so nothing shifts when it appears */}
+        {/* once the header has scrolled out, a fade at the top says the
+            transcript continues above, where the condensed title now is */}
         <div
-          className={`absolute inset-x-0 top-0 z-20 ${condensed ? "" : "pointer-events-none invisible"}`}
-        >
-          <div className="mx-auto flex h-12 w-full max-w-page items-center gap-3 border-b border-border/60 bg-background/95 px-6 backdrop-blur">
-            <a
-              href={href({ name: "sessions" })}
-              aria-label="Sessions"
-              className="text-muted-foreground hover:text-foreground"
-            >
-              <ArrowLeft className="size-4" />
-            </a>
-            <BehaviorHoverCard
-              deployment={deployment}
-              behaviorId={session?.behaviorId ?? null}
-            >
-              <button
-                type="button"
-                aria-label={`About ${behaviorName(session?.behaviorId ?? null, deployment)} behavior`}
-                className="rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-              >
-                <BehaviorAvatar
-                  name={behaviorName(session?.behaviorId ?? null, deployment)}
-                  behaviorId={session?.behaviorId}
-                  className="size-6 text-[10px]"
-                />
-              </button>
-            </BehaviorHoverCard>
-            <span className="min-w-0 flex-1 truncate font-heading text-sm font-medium text-heading">
-              {session?.title}
-            </span>
-            {session?.context && <SessionContext context={session.context} compact />}
-            <Hint label="Fork session">
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                aria-label="Fork session"
-                onClick={fork}
-              >
-                <Split />
-              </Button>
-            </Hint>
-            <Hint label={traceOpen ? "Close side panel" : "Open side panel"}>
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                aria-label={traceOpen ? "Close side panel" : "Open side panel"}
-                className={traceOpen ? "bg-accent text-foreground" : undefined}
-                onClick={() => setTraceOpen(!traceOpen)}
-              >
-                <PanelRight />
-              </Button>
-            </Hint>
-          </div>
-        </div>
+          aria-hidden="true"
+          data-testid="transcript-top-fade"
+          className={cn(
+            "pointer-events-none absolute inset-x-0 top-0 z-20 h-8 bg-gradient-to-b from-background to-transparent transition-opacity duration-200",
+            condensed ? "opacity-100" : "opacity-0",
+          )}
+        />
         {/* transcript and composer scroll together in the kit's scroll area;
             the composer sticks to the foot so the bar runs the full height */}
-        <div ref={column} className="min-h-0 flex-1">
+        <div ref={columnRef} className="min-h-0 flex-1">
           <ScrollArea className="h-full">
             {/* the right gutter is the sender marks' column, so it is only
                   spent where marks can appear: a session another sent to, on a
@@ -1228,12 +472,64 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                 parentWork.hasSenders && "sm:pr-14",
               )}
             >
-              <a
-                href={href({ name: "sessions" })}
-                className="mb-4 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
-              >
-                <ArrowLeft className="size-3.5" /> Sessions
-              </a>
+              <PaneBar>
+                {/* the header's facts, once the header has scrolled out: they
+                    ease in where the reader's eye already is, and the bar's
+                    height never changes, so nothing moves */}
+                <div
+                  aria-hidden={!condensed}
+                  data-testid="pane-bar-condensed"
+                  className={cn(
+                    "flex min-w-0 flex-1 items-center gap-2 transition-[opacity,transform] duration-150 ease-out",
+                    condensed
+                      ? "translate-y-0 opacity-100"
+                      : "pointer-events-none translate-y-1 opacity-0",
+                  )}
+                >
+                  <NodeBehaviorStack
+                    nodeDid={session?.agentDid}
+                    behaviorId={session?.behaviorId}
+                    size="sm"
+                    keyboard
+                    workers={sessionWorkers}
+                  />
+                  <div className="min-w-0 flex-1 [&_form]:min-w-0 [&_h1]:truncate [&_h1]:text-sm [&_input]:h-7 [&_input]:text-sm">
+                    {session ? (
+                      <Title
+                        key={session.sessionId + (session.title ?? "")}
+                        title={session.title ?? "Untitled session"}
+                        onRename={async (title) => {
+                          await renameSession(session.sessionId, title);
+                          toast("Renamed");
+                        }}
+                      />
+                    ) : (
+                      /* no session to name: the LoadingStatus below says what
+                       happened, so the title stays neutral */
+                      <h1 className="font-heading text-sm font-medium text-heading">
+                        Session
+                      </h1>
+                    )}
+                  </div>
+                </div>
+                {/* the meter rides up with the header, next to the menu */}
+                {session?.context && (
+                  <div
+                    aria-hidden={!condensed}
+                    className={cn(
+                      "flex shrink-0 items-center transition-[opacity,transform] duration-150 ease-out",
+                      condensed
+                        ? "translate-y-0 opacity-100"
+                        : "pointer-events-none translate-y-1 opacity-0",
+                    )}
+                  >
+                    <SessionContext context={session.context} compact />
+                  </div>
+                )}
+                {/* actions a UX plugin adds to the session's bar, before the menu */}
+                <Slot area={SESSION_HEADER_ACTIONS_AREA} />
+                <PanelMenu routeName="session" />
+              </PaneBar>
               <div className="flex items-start justify-between gap-4">
                 <div>
                   {session ? (
@@ -1241,18 +537,15 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                       key={session.sessionId + (session.title ?? "")}
                       title={session.title ?? "Untitled session"}
                       onRename={async (title) => {
-                        await shell.api.renameSession({
-                          agentDid: shell.selectedAgentDid ?? session.agentDid ?? "",
-                          sessionId: session.sessionId,
-                          title,
-                        });
-                        await shell.refreshSnapshot();
+                        await renameSession(session.sessionId, title);
                         toast("Renamed");
                       }}
                     />
                   ) : (
+                    /* no session to name: the LoadingStatus below says what
+                       happened, so the title stays neutral */
                     <h1 className="font-heading text-lg font-medium text-heading">
-                      {shell.sessionLoad.phase}
+                      Session
                     </h1>
                   )}
                   {parentWork.parent && (
@@ -1276,50 +569,29 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                       </div>
                     )}
                   <div className="mt-3 flex flex-wrap items-center gap-2">
-                    <BehaviorChip
-                      behaviorId={session?.behaviorId ?? null}
-                      deployment={deployment}
+                    <NodeBehaviorStack
+                      nodeDid={session?.agentDid}
+                      behaviorId={session?.behaviorId}
+                      workers={sessionWorkers}
                     />
+                    <span className="text-sm text-muted-foreground">
+                      {behaviorName(session?.behaviorId ?? null, deployment)}
+                      {/* the node only when it is not the local one, as the
+                          marks beside it do */}
+                      {sessionNode && !isWorkingNode(sessionNode, homeDid)
+                        ? ` on ${sessionNode.agentPrincipal.displayName ?? sessionNode.label}`
+                        : null}
+                    </span>
                     {session?.context && <SessionContext context={session.context} />}
                   </div>
                 </div>
-                <div className="flex gap-1">
-                  <Slot area={SESSION_HEADER_ACTIONS_AREA} />
-                  <Hint label="Fork session">
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      aria-label="Fork session"
-                      onClick={fork}
-                    >
-                      <Split />
-                    </Button>
-                  </Hint>
-                  <Hint label={traceOpen ? "Close side panel" : "Open side panel"}>
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      aria-label={traceOpen ? "Close side panel" : "Open side panel"}
-                      aria-pressed={traceOpen}
-                      className={traceOpen ? "bg-accent text-foreground" : undefined}
-                      onClick={() => setTraceOpen(!traceOpen)}
-                    >
-                      <PanelRight />
-                    </Button>
-                  </Hint>
-                </div>
               </div>
 
-              {session?.goal && <Goal goal={session.goal} />}
               <div ref={headerEnd} aria-hidden="true" />
-              <TranscriptPanel
-                deployment={deployment}
-                actionsRef={transcriptActions}
-                holdsCount={holdsHere.length}
+              <SelectedTranscript
                 inFlight={inFlight}
                 stopping={stopping}
-                ownerRef={column}
-                session={session}
+                scroller={scroller}
                 workers={workers}
                 parentWork={parentWork}
                 workerActions={workerActions}
@@ -1334,6 +606,9 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                 ref={composer}
                 className="sticky bottom-0 z-20 mt-auto bg-background pt-6 pb-6"
               >
+                {/* a goal outlives the turns under it, so it sits with the
+                    next one rather than at the top where it scrolls away */}
+                {session?.goal && <Goal goal={session.goal} />}
                 {/* conversation still running on under the composer: a short
                     fade on its top edge says the transcript has not ended,
                     where a hard edge reads as the end of it */}
@@ -1356,388 +631,86 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                     <ArrowDown />
                   </Button>
                 )}
-                <LoadingStatus shell={shell} />
-                {/* a held tool call blocks the turn, so it pins above the composer as the
-                    desktop's HoldsPanel does: the first in full, any others as one row each */}
-                {holdsHere[0] && (
-                  <div className="mb-3">
-                    <HoldCard
-                      title={`${holdsHere[0].toolName} needs your approval`}
-                      detail={
-                        <code className="font-mono text-xs">{holdsHere[0].args}</code>
-                      }
-                      onApprove={() =>
-                        shell.resolveHold(holdsHere[0]!.toolCallId, true)
-                      }
-                      onDeny={() => shell.resolveHold(holdsHere[0]!.toolCallId, false)}
-                    >
-                      {holdsHere.length > 1 && (
-                        <span className="ml-auto text-xs text-muted-foreground">
-                          {holdsHere.length - 1} more waiting
-                        </span>
-                      )}
-                    </HoldCard>
-                    {holdsHere.slice(1).map((h) => (
-                      <div
-                        key={h.toolCallId}
-                        className="mt-1 flex items-center gap-2 rounded-xl border border-border/60 bg-raised px-3 py-1.5 text-sm"
-                      >
-                        <span className="min-w-0 flex-1 truncate">
-                          {h.toolName}
-                          <code className="ml-2 font-mono text-xs text-muted-foreground">
-                            {h.args}
-                          </code>
-                        </span>
-                        <Button
-                          size="sm"
-                          variant="brand"
-                          onClick={() => shell.resolveHold(h.toolCallId, true)}
-                        >
-                          Approve
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => shell.resolveHold(h.toolCallId, false)}
-                        >
-                          Deny
-                        </Button>
-                      </div>
-                    ))}
-                  </div>
-                )}
+                <LoadingStatus />
                 <div data-testid="composer">
                   <Composer
                     value={draft}
                     onChange={setDraft}
                     onSend={send}
                     models={[]}
-                    disabled={
-                      shell.nonEmptyContentSendStatus.kind === "disabled" && !inFlight
-                    }
+                    disabled={sendStatus.kind === "disabled" && !inFlight}
                     above={
-                      <SlashSkillMenu
-                        items={slash.items}
-                        active={slash.active}
-                        onPick={slash.accept}
-                      />
+                      <>
+                        <ReplyingTo />
+                        <SlashSkillMenu
+                          items={slash.items}
+                          active={slash.active}
+                          onPick={slash.accept}
+                        />
+                      </>
                     }
                     onKeyDown={slash.onKeyDown}
                     leading={
-                      <ChatFolderPicker
-                        folder={shell.chatFolder}
-                        onChange={shell.setChatFolder}
-                      />
+                      <ChatFolderPicker folder={chatFolder} onChange={setChatFolder} />
                     }
-                    sending={shell.sending || inFlight}
+                    sending={sending || inFlight}
                     onStop={inFlight && !stopping ? stop : undefined}
                     placeholder={
-                      status.kind === "disabled" && !inFlight
-                        ? status.hint
-                        : "Ask anything"
+                      inFlight ? "Ask anything" : placeholderFor(status, "Ask anything")
                     }
                   />
                 </div>
-                {status.kind === "disabled" &&
-                  !shell.activityStatus &&
-                  !shell.error &&
-                  !inFlight && (
-                    <p className="mt-2 px-1 text-xs text-muted-foreground">
-                      {status.hint}
-                    </p>
-                  )}
+                {/* the placeholder already says why sending is off while the
+                    box is empty; the hint is only for when typed text hides it */}
                 <SessionSubmissionStatus
-                  error={shell.error}
-                  activityStatus={shell.activityStatus}
+                  activityStatus={activityStatus}
+                  hint={
+                    status.kind === "disabled" && !inFlight && draft.trim() !== ""
+                      ? status.hint
+                      : null
+                  }
                 />
               </div>
             </div>
           </ScrollArea>
         </div>
       </div>
-      {/* the drag handle: a hairline that darkens on hover; arrow keys resize too */}
-      <div
-        {...trace.handleProps}
-        aria-label="Resize trace"
-        aria-hidden={!traceOpen || !wide}
-        tabIndex={traceOpen && wide ? 0 : -1}
-        /* a closed panel's handle takes no width, or it overflows its 0px track */
-        className={cn(
-          "group flex cursor-col-resize items-center justify-center overflow-hidden outline-none focus-visible:bg-accent",
-          traceOpen && wide ? "w-3" : "w-0",
-        )}
-      >
-        <div className="h-10 w-0.5 rounded-full bg-border transition-colors group-hover:bg-muted-foreground group-focus-visible:bg-ring" />
-      </div>
-      {/* the panel keeps its width inside a clipping cell, so it slides rather than squashes */}
-      <div
-        className="min-h-0 min-w-0 overflow-hidden py-4"
-        aria-hidden={!traceOpen || !wide}
-      >
-        <div
-          className="h-full pr-4 transition-transform duration-[260ms] ease-[cubic-bezier(0.22,1,0.36,1)]"
-          style={{
-            width: trace.width,
-            transform: traceOpen ? "translateX(0)" : "translateX(24px)",
-          }}
-        >
-          {wide && <TracePanel shell={shell} onClose={() => setTraceOpen(false)} />}
-        </div>
-      </div>
-      {/* in a narrow window the panel is a sheet over the transcript */}
-      {!wide && (
-        <Sheet
-          open={traceSheet.open}
-          onOpenChange={traceSheet.onOpenChange}
-          onOpenChangeComplete={traceSheet.onOpenChangeComplete}
-        >
-          <SheetContent
-            ref={traceSheet.popupRef}
-            side="right"
-            className="w-[92vw] max-w-md border-0 bg-transparent p-2 shadow-none"
-          >
-            <SheetTitle className="sr-only">Side panel</SheetTitle>
-            <TracePanel shell={shell} onClose={() => setTraceOpen(false)} />
-          </SheetContent>
-        </Sheet>
-      )}
-      <AlertDialog
-        open={forkNotice.open && forked !== null}
-        onOpenChange={forkNotice.onOpenChange}
-        onOpenChangeComplete={forkNotice.onOpenChangeComplete}
-      >
-        <AlertDialogContent ref={forkNotice.popupRef} aria-modal="true">
-          <AlertDialogHeader>
-            <AlertDialogTitle>Forked</AlertDialogTitle>
-            <AlertDialogDescription>
-              A copy of this transcript is now its own session, "{forked?.title}". This
-              one stays as it is. Open the fork, or stay here and find it later in the
-              sessions list.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Stay here</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                const target = forked;
-                forkNotice.onOpenChange(false);
-                if (target) navigate({ name: "session", sessionId: target.sessionId });
-              }}
-            >
-              Open the fork
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </div>
   );
 }
 
-/* the session's title, renamed in place the way the desktop's chat
-   header does: a pencil beside it, Enter or blur saves, Escape reverts */
-function Title({
-  title,
-  onRename,
-}: {
-  title: string;
-  onRename: (title: string) => Promise<void>;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(title);
-  const submit = async () => {
-    const next = draft.trim();
-    setEditing(false);
-    if (!next || next === title) {
-      setDraft(title);
-      return;
-    }
-    try {
-      await onRename(next);
-    } catch (e) {
-      toast(`Couldn't rename: ${String(e)}`);
-      setDraft(title);
-    }
-  };
-  if (editing)
-    return (
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          void submit();
-        }}
-      >
-        <Input
-          autoFocus
-          aria-label={`Rename ${title}`}
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={() => void submit()}
-          onKeyDown={(e) => {
-            if (e.key === "Escape") {
-              setDraft(title);
-              setEditing(false);
-            }
-          }}
-          className="h-8 w-[28rem] max-w-full font-heading text-lg font-medium text-heading"
-        />
-      </form>
-    );
-  return (
-    <span className="group/title flex items-center gap-1">
-      <h1 className="font-heading text-lg font-medium text-heading">{title}</h1>
-      <Hint label="Rename">
-        <Button
-          variant="quiet"
-          size="icon-xs"
-          aria-label={`Rename ${title}`}
-          className="opacity-0 transition-opacity group-hover/title:opacity-100 focus-visible:opacity-100"
-          onClick={() => setEditing(true)}
-        >
-          <Pencil />
-        </Button>
-      </Hint>
-    </span>
-  );
+/* The transcript is the one reader of every streamed chunk: it alone selects
+   the whole session, so a chunk re-renders it and not the screen around it. */
+function SelectedTranscript(
+  props: Omit<ComponentProps<typeof TranscriptPanel>, "session">,
+) {
+  return <TranscriptPanel {...props} session={useSelectedSession()} />;
 }
 
-/* the goal a session runs under: what a task or trigger set as its
-   objective, with the budget it has used */
-function Goal({ goal }: { goal: GoalView }) {
-  const used = goal.tokenBudget
-    ? Math.round((goal.tokensUsed / goal.tokenBudget) * 100)
-    : null;
-  return (
-    <div className="mt-4 rounded-2xl border border-dashed border-border px-4 py-3">
-      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        <Target className="size-3.5" />
-        <span className="font-mono uppercase tracking-wide">Goal</span>
-        <span>· {goal.status ?? "active"}</span>
-        {goal.wrapupRequested && <span>· wrapping up</span>}
-        {used !== null && (
-          <span className="ml-auto font-mono">
-            {used}% of {Math.round(goal.tokenBudget! / 1000)}k tokens
-          </span>
-        )}
-      </div>
-      {goal.objective && <p className="mt-1 text-sm">{goal.objective}</p>}
-      {goal.lastBlockedReason && (
-        <p className="mt-1 text-xs text-destructive">
-          Blocked: {goal.lastBlockedReason}
-        </p>
-      )}
-    </div>
-  );
-}
+/* What the screen around the transcript reads from the session. A streamed
+   chunk keeps each of these, so it reaches the transcript and not the screen. */
+type ScreenFacts = Pick<
+  DesktopSessionSnapshot,
+  | "sessionId"
+  | "agentDid"
+  | "behaviorId"
+  | "title"
+  | "context"
+  | "goal"
+  | "latestRequestId"
+  | "latestRequestOutcome"
+>;
 
-/* The model's reasoning, folded under the answer the way the desktop does.
-   It runs to thousands of words, so opening it shows a screenful and says
-   how much more there is. A tool's contents scroll inside their frame,
-   because they are reference to dip into; reasoning is prose read from the
-   top, and a scroller inside a transcript traps the wheel and stops a
-   reader scanning past it. It stays quieter than the answer it explains. */
-function Reasoning({ text }: { text: string }) {
-  const [open, setOpen] = useState(false);
-  const [all, setAll] = useState(false);
-  /* whether there is anything behind the fade: a short reasoning needs no
-     way to expand it, and offering one says there is more to read */
-  const [clipped, setClipped] = useState(false);
-  const root = useRef<HTMLDivElement>(null);
-  const body = useRef<HTMLDivElement>(null);
-  const words = text.trim().split(/\s+/).length;
-  useEffect(() => {
-    const el = body.current;
-    if (!open || !el) return;
-    const measure = () => setClipped(el.scrollHeight > el.clientHeight + 1);
-    measure();
-    /* prose reflows as fonts land and the column resizes */
-    const observer = new ResizeObserver(measure);
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [open, all, text]);
-  /* folding thousands of words away moves everything under them; hold the
-     block where the reader left it rather than dropping them elsewhere */
-  const fold = (next: () => void) => {
-    const restore = anchor(root.current);
-    next();
-    restore();
+function selectScreenFacts(session: DesktopSessionSnapshot | null): ScreenFacts | null {
+  if (!session) return null;
+  return {
+    sessionId: session.sessionId,
+    agentDid: session.agentDid,
+    behaviorId: session.behaviorId,
+    title: session.title,
+    context: session.context,
+    goal: session.goal,
+    latestRequestId: session.latestRequestId,
+    latestRequestOutcome: session.latestRequestOutcome,
   };
-  return (
-    <Collapsible
-      ref={root}
-      open={open}
-      onOpenChange={(next) => (next ? setOpen(true) : fold(() => setOpen(false)))}
-      className="mb-2"
-    >
-      {/* the controls at the foot are the way out, so the trigger stays put:
-          two sticky things for one block meet in the middle as soon as the
-          block is short, and then neither is where it was reached for */}
-      <CollapsibleTrigger className="-mx-2 -my-1 flex cursor-pointer items-center gap-1.5 rounded-lg px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent/30 hover:text-foreground">
-        <ChevronDown
-          className={cn("size-3.5 transition-transform", open && "rotate-180")}
-        />
-        Thinking
-        <span className="tabular-nums opacity-70">
-          · {words.toLocaleString()} words
-        </span>
-      </CollapsibleTrigger>
-      <CollapsibleContent className="mt-1 border-l border-border pl-3">
-        <div
-          ref={body}
-          className={cn(
-            "relative text-muted-foreground",
-            !all && "max-h-80 overflow-hidden",
-          )}
-        >
-          <Markdown>{text}</Markdown>
-          {!all && clipped && (
-            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-background to-transparent" />
-          )}
-        </div>
-        {/* the way out sits where the reading ends, not back up at the top,
-            and it is there whether or not the rest was ever unfolded; a
-            reasoning that fits on a screen needs neither */}
-        {(all || clipped) && (
-          /* at the foot of the view while the block is in it, clear of the
-             composer, so a long reasoning can be left without reading to
-             the end of it */
-          <div
-            className={cn(
-              "mt-1 flex w-fit items-center gap-1 rounded-lg p-0.5",
-              /* only a block taller than the view has anywhere to stick:
-                 clipped, it is a screenful and its foot is already in
-                 reach, and sticky inside a short box just parks the
-                 controls at its end, which may be under the composer */
-              /* the composer floats over the foot of the scroller, and
-                 padding the transcript does not move a sticky element:
-                 it pins against the scrollport, so the offset is still
-                 the room the composer leaves */
-              all &&
-                "sticky bottom-[calc(var(--composer-h,0px)+0.75rem)] z-10 border border-border bg-raised/95 shadow-sm backdrop-blur",
-            )}
-          >
-            {all ? (
-              <Button
-                variant="quiet"
-                size="xs"
-                onClick={() => fold(() => setAll(false))}
-              >
-                Show less
-              </Button>
-            ) : (
-              <Button variant="quiet" size="xs" onClick={() => setAll(true)}>
-                Show all {words.toLocaleString()} words
-              </Button>
-            )}
-            <Button
-              variant="quiet"
-              size="xs"
-              onClick={() => fold(() => setOpen(false))}
-            >
-              Close
-            </Button>
-          </div>
-        )}
-      </CollapsibleContent>
-    </Collapsible>
-  );
 }

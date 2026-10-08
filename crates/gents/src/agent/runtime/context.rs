@@ -2,9 +2,9 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::llm::rig_compat::ProviderClient;
 use crate::llm::tool::ToolDyn;
 use anyhow::Result;
-use rig::client::CompletionClient;
 use tokio::sync::{mpsc, watch, Mutex};
 
 use crate::admission::AdmissionRegistry;
@@ -121,7 +121,7 @@ impl RuntimeContext {
     ) -> Result<()> {
         let tool_names = tool_surface.tool_names();
         let api_key = match &behavior.backend_auth {
-            crate::document_config::BackendAuth::PrincipalOAuth => "no-key".to_owned(),
+            crate::document_config::BackendAuth::PrincipalOAuth { .. } => "no-key".to_owned(),
             _ => behavior.completion_client_api_key()?,
         };
         let allowed_targets =
@@ -206,8 +206,7 @@ impl RuntimeContext {
         client: C,
     ) -> Result<()>
     where
-        C: CompletionClient,
-        C::CompletionModel: 'static,
+        C: ProviderClient,
     {
         let model = Arc::new(build_admitted_model(
             client,

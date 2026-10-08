@@ -26,7 +26,7 @@ const originalUserAgent = navigator.userAgent;
 const originalMaxTouchPoints = navigator.maxTouchPoints;
 
 function enterTauri(platform: string, userAgent = originalUserAgent, touchPoints = 0) {
-  (window as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+  (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
   Object.defineProperty(navigator, "platform", { configurable: true, value: platform });
   Object.defineProperty(navigator, "userAgent", {
     configurable: true,
@@ -40,7 +40,7 @@ function enterTauri(platform: string, userAgent = originalUserAgent, touchPoints
 
 describe("native shell classifier", () => {
   afterEach(() => {
-    delete (window as Record<string, unknown>).__TAURI_INTERNALS__;
+    delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
     delete document.documentElement.dataset.shell;
     delete document.documentElement.dataset.windowFullscreen;
     Object.defineProperty(navigator, "platform", {
@@ -133,7 +133,7 @@ describe("native shell classifier", () => {
     });
     expect(isMobileTauriShell()).toBe(false);
 
-    (window as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+    (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
     expect(isMobileTauriShell()).toBe(true);
   });
 });

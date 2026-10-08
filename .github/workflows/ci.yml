@@ -374,6 +374,8 @@ jobs:
 
       - name: Run full CLI test suite
         if: matrix.suite == 'cli' && github.event_name != 'pull_request'
+        env:
+          RUST_MIN_STACK: 16777216
         # --no-fail-fast: cli binaries run alphabetically; without this the
         # first red binary hides every later one (how a broken cli_subagent
         # masked cli_trace_export for days — see #1139).
@@ -383,6 +385,14 @@ jobs:
         run: |
           env -u CARGO_TARGET_DIR cargo test --target-dir "$CARGO_TARGET_DIR" \
             --no-fail-fast -p gents-cli -- --nocapture --test-threads=1
+
+      - name: Check the iOS simulator build
+        if: matrix.suite == 'desktop' && github.event_name != 'pull_request'
+        # iOS shares the desktop crates, so desktop-only Tauri APIs break it
+        # silently; a compile check is the cheapest gate (#890).
+        run: |
+          rustup target add aarch64-apple-ios-sim
+          cargo check -p gents-desktop-tauri --lib --target aarch64-apple-ios-sim
 
       - name: Show Rust build cache stats
         # The three heavy suites use runner-local incremental state. Keep one
@@ -548,10 +558,10 @@ jobs:
       - name: Build desktop packages
         run: npm run build:packages
 
-      - name: Install Playwright browser
+      - name: Install Playwright browsers
         if: matrix.suite == 'browser'
         working-directory: apps/gents-desktop
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install --with-deps chromium webkit
 
       - name: Check desktop formatting
         if: matrix.suite == 'unit'

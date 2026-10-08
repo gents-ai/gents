@@ -1,8 +1,7 @@
 //! Generated cases exercise the actual native transaction and publication owner.
 use super::*;
 use crate::identity::AgentIdentity;
-use crate::lifecycle::materialize::{sign_request, RequestSigner};
-use crate::lifecycle::queue::{goal_continuation_identity, prepare_goal_continuation};
+use crate::lifecycle::queue::goal_continuation_identity;
 use crate::request_admission::SIGNED_REQUEST_FIELDS;
 use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
@@ -13,9 +12,7 @@ use crate::tool_call_lifecycle::admission_fixture::publish_accepted_on_claimed_r
 use crate::tool_call_lifecycle::{AwaitMode, SpawnedBackgroundToolAdmission};
 
 // Reuse the existing real-DB Goal fixture and independent signed-field checks.
-#[path = "../operator_resume/support.rs"]
-mod support;
-use support::*;
+use super::super::operator_resume::support::*;
 
 #[derive(Deserialize)]
 struct PublicationContracts {

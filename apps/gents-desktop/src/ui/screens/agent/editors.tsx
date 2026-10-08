@@ -30,6 +30,7 @@ import { href, type Route } from "@/lib/router";
 import { Switch } from "@gents/ui/components/switch";
 import { Textarea } from "@gents/ui/components/textarea";
 import { Fact, Row, StackedRow } from "./rows";
+import { focusFirstProblem } from "./draft";
 
 export type Choice = { value: string; label: string };
 
@@ -42,21 +43,41 @@ type Common = {
   disabled?: boolean;
 };
 
-export function DraftActions({
-  dirty,
-  saving,
-  error,
-  onSave,
-  onCancel,
-  saveLabel = "Save",
-}: {
+/** What DraftActions reads of a draft (useDraft). */
+type DraftLike = {
   dirty: boolean;
   saving: boolean;
   error: string | null;
-  onSave: () => unknown;
-  onCancel: () => void;
+  problems?: Partial<Record<string, string>>;
+  save: () => unknown;
+  reset: () => void;
+};
+
+/** A draft's Save and Cancel, and its error. Each field comes from the
+    draft unless the editor says otherwise. */
+export function DraftActions({
+  draft,
+  fields,
+  problems = draft.problems ?? {},
+  dirty = draft.dirty,
+  error = draft.error,
+  onSave = () => draft.save(),
+  onCancel = draft.reset,
+  saveLabel = "Save",
+}: {
+  draft: DraftLike;
+  /** each field with a problem's element, in the order they are drawn: Save
+      goes to the first instead of saving */
+  fields?: Partial<Record<string, string>>;
+  /** the draft's problems, where the editor works them out itself */
+  problems?: Partial<Record<string, string>>;
+  dirty?: boolean;
+  error?: string | null;
+  onSave?: () => unknown;
+  onCancel?: () => void;
   saveLabel?: string;
 }) {
+  const { saving } = draft;
   return (
     <div className="mb-6">
       {error && (
@@ -71,7 +92,9 @@ export function DraftActions({
         <Button
           variant="brand"
           disabled={!dirty || saving}
-          onClick={() => void onSave()}
+          onClick={() => {
+            if (!focusFirstProblem(problems, fields)) void onSave();
+          }}
         >
           {saving ? "Saving…" : saveLabel}
         </Button>
@@ -80,14 +103,18 @@ export function DraftActions({
   );
 }
 
+/* Enter leaves a one-line field, as a form would; nothing is saved until
+   the draft's own Save */
+const blurOnEnter = (e: React.KeyboardEvent<HTMLElement>) => {
+  if (e.key === "Enter" && !e.shiftKey) (e.target as HTMLElement).blur();
+};
+
 export function TextRow({
   id,
   label,
   description,
   value,
   onChange,
-  onCommit,
-  onEnter,
   placeholder,
   mono,
   password,
@@ -97,8 +124,6 @@ export function TextRow({
 }: Common & {
   value: string;
   onChange: (v: string) => void;
-  onCommit: () => void;
-  onEnter: (e: React.KeyboardEvent<HTMLElement>) => void;
   placeholder?: string;
   mono?: boolean;
   password?: boolean;
@@ -113,8 +138,7 @@ export function TextRow({
         type={password ? "password" : "text"}
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        onBlur={onCommit}
-        onKeyDown={onEnter}
+        onKeyDown={blurOnEnter}
         placeholder={placeholder}
         className={`${wide ? "w-96 max-md:w-full" : "w-72 max-md:w-full"} ${mono ? "font-mono text-xs" : ""}`}
       />
@@ -129,25 +153,24 @@ export function NumberRow({
   description,
   value,
   onChange,
-  onCommit,
-  onEnter,
   placeholder,
+  error,
+  disabled,
 }: Common & {
   value: string;
   onChange: (v: string) => void;
-  onCommit: () => void;
-  onEnter: (e: React.KeyboardEvent<HTMLElement>) => void;
   placeholder?: string;
 }) {
   return (
-    <Row label={label} description={description} htmlFor={id}>
+    <Row label={label} description={description} htmlFor={id} error={error}>
       <Input
         id={id}
+        aria-invalid={error ? true : undefined}
+        disabled={disabled}
         inputMode="decimal"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        onBlur={onCommit}
-        onKeyDown={onEnter}
+        onKeyDown={blurOnEnter}
         placeholder={placeholder}
         className="w-36"
       />
@@ -161,7 +184,6 @@ export function AreaRow({
   description,
   value,
   onChange,
-  onCommit,
   placeholder,
   rows = 3,
   mono,
@@ -172,7 +194,6 @@ export function AreaRow({
 }: Common & {
   value: string;
   onChange: (v: string) => void;
-  onCommit: () => void;
   placeholder?: string;
   rows?: number;
   mono?: boolean;
@@ -204,7 +225,6 @@ export function AreaRow({
         readOnly={disabled}
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        onBlur={onCommit}
         placeholder={placeholder}
         rows={rows}
         style={clipped ? { maxHeight: `calc(${rows}lh + 1rem + 2px)` } : undefined}
@@ -277,16 +297,12 @@ export function PathRow({
   description,
   value,
   onChange,
-  onCommit,
-  onEnter,
   placeholder,
   error,
   disabled,
 }: Common & {
   value: string;
   onChange: (v: string) => void;
-  onCommit: () => void;
-  onEnter: (e: React.KeyboardEvent<HTMLElement>) => void;
   placeholder?: string;
 }) {
   const [picking, setPicking] = useState(false);
@@ -297,10 +313,7 @@ export function PathRow({
         defaultPath: value || null,
         title: String(label),
       });
-      if (picked) {
-        onChange(picked);
-        onCommit();
-      }
+      if (picked) onChange(picked);
     } finally {
       setPicking(false);
     }
@@ -314,8 +327,7 @@ export function PathRow({
           disabled={disabled}
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          onBlur={onCommit}
-          onKeyDown={onEnter}
+          onKeyDown={blurOnEnter}
           placeholder={placeholder ?? "~/Projects/…"}
           className="min-w-0 flex-1 font-mono text-xs"
         />

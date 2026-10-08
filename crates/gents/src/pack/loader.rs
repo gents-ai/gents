@@ -26,9 +26,30 @@ pub fn load_pack_config(
         hydrate_sidecar(&mut prompt, path, manifest, read_asset)?;
         Ok(prompt)
     })?;
+    ensure_pack_leaves_default_unselected(&config)?;
     pin_pack_plugins(manifest, read_asset, &mut config)?;
     super::inference::validate_pack_inference_authoring(manifest, &config)?;
     Ok(config)
+}
+
+/// A distributable pack brings behaviors; which behavior runs by default is
+/// the user's decision, never the pack's. Install never writes the principal
+/// (it is shared identity), so an authored `default_behavior_id` would be
+/// silently ignored there and silently honoured by harnesses that stage the
+/// bundle whole. Refusing it at load keeps both paths honest. A user's own
+/// desired-state root decodes through [`decode_pack_config`] directly and
+/// keeps its principal, default included; harnesses select the behavior
+/// under test after loading.
+pub fn ensure_pack_leaves_default_unselected(config: &PackConfig) -> Result<()> {
+    if let Some(default) = &config.agent_principal.default_behavior_id {
+        anyhow::bail!(
+            "pack agent_principal sets default_behavior_id {default:?}; a pack must not choose \
+             the default behavior. Remove it from the pack: the user selects the default \
+             (\"Make default\" in the desktop Behaviors panel, or default_behavior_id in the \
+             principal of their own `gents config apply` root)"
+        );
+    }
+    Ok(())
 }
 
 /// Qualifies and pins every plugin node of `config` that names one of the

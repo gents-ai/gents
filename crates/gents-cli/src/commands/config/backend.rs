@@ -73,8 +73,12 @@ pub(super) async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> 
         .build()
         .context("building backend discovery client")?;
     let (oauth_credential, oauth_agent_did) = if target.provider_kind.is_agent_scoped_oauth() {
+        // A preset becomes a backend with no reference, which runs on the original account.
+        let account_ref = stored
+            .as_ref()
+            .and_then(|backend| backend.auth.oauth_account_ref());
         let (credential, owner) =
-            load_oauth_credential_for_discovery(&args, target.provider_kind).await?;
+            load_oauth_credential_for_discovery(&args, target.provider_kind, account_ref).await?;
         (credential, Some(owner))
     } else {
         (None, None)
@@ -112,6 +116,15 @@ pub(super) async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> 
             anyhow::bail!("{error:#}\n{guidance}");
         }
         Err(error)
+            if target.provider_kind == BackendProviderKind::XaiGrokOAuth
+                && discovery_error_is_client_version_gate(&error) =>
+        {
+            anyhow::bail!(
+                "{error:#}\n{}",
+                gents::xai_grok_oauth::grok_client_version_gate_guidance()
+            );
+        }
+        Err(error)
             if target.provider_kind == BackendProviderKind::ClaudeCliSubscription
                 && discovery_error_is_auth(&error) =>
         {
@@ -146,6 +159,7 @@ pub(super) async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> 
 async fn load_oauth_credential_for_discovery(
     args: &BackendDiscoverModelsArgs,
     provider_kind: BackendProviderKind,
+    account_ref: Option<&str>,
 ) -> Result<(Option<gents::oauth_credential::OAuthCredential>, String)> {
     let (provider, _login) = match provider_kind {
         BackendProviderKind::ChatGptCodex => (
@@ -165,9 +179,13 @@ async fn load_oauth_credential_for_discovery(
     let agent_did = resolve_agent_did(args.home.as_deref(), args.agent_did.as_deref())?;
     let (access, _) =
         crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
-    let credential =
-        crate::commands::codex_auth_probe::load_oauth_credential(&access, &agent_did, provider)
-            .await?;
+    let credential = gents::oauth_credential::resolve_oauth_credential(
+        &access,
+        &agent_did,
+        provider,
+        gents::oauth_credential::AccountPick::Reference(account_ref),
+    )
+    .await?;
     Ok((credential, agent_did))
 }
 
@@ -183,6 +201,17 @@ fn discovery_error_is_auth(error: &anyhow::Error) -> bool {
     })
 }
 
+/// Whether a model-discovery error is the provider's client-version gate (HTTP 426), so Grok
+/// discovery can append the advertised-version guidance the bare error omits. Inspects the typed
+/// status carried by [`ModelDiscoveryHttpError`] rather than scraping the rendered message.
+fn discovery_error_is_client_version_gate(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<gents::backend_provider::ModelDiscoveryHttpError>()
+            .is_some_and(|http| http.is_client_version_gate())
+    })
+}
+
 /// Connection of a stored backend. Principal OAuth resolves the invoking
 /// principal's OAuthCredential separately; it has no shared key here.
 fn stored_backend_target(backend: &InferenceBackend) -> Result<ResolvedBackendConfig> {
@@ -192,7 +221,7 @@ fn stored_backend_target(backend: &InferenceBackend) -> Result<ResolvedBackendCo
         openai_wire_api: backend.openai_wire_api,
         endpoint: backend.endpoint.clone(),
         api_key: match &backend.auth {
-            BackendAuth::PrincipalOAuth => None,
+            BackendAuth::PrincipalOAuth { .. } => None,
             auth => auth.resolve_api_key()?,
         },
         api_key_env_var: match &backend.auth {
@@ -262,7 +291,10 @@ mod tests {
     #[test]
     fn canonical_oauth_backend_retains_defaults_without_fake_catalog() {
         let (backend,plan)=backend_plan(br#"{"agent_did":"owner","backend_id":"claude","name":"Claude","provider_kind":"ClaudeCliSubscription","endpoint":"https://api.anthropic.com","auth":{"kind":"principal_oauth"}}"#).unwrap();
-        assert_eq!(backend.auth, BackendAuth::PrincipalOAuth);
+        assert_eq!(
+            backend.auth,
+            BackendAuth::PrincipalOAuth { account_ref: None }
+        );
         assert_eq!(backend.max_concurrent, None);
         assert!(plan.documents()[0].add.get("catalogs").is_none());
         assert!(plan.documents()[0].add.get("models").is_none());

@@ -68,6 +68,11 @@ decoders and native adapters translate representations, not redefine policy.
 
 ## Ownership
 
+- Core is bounded to the owned agent loop and task and data management in
+  DefraDB: documents, triggers, tasks, workflows, identity and ACP. Other
+  capabilities (OCR, git and GitHub, web research, domain tools) ship as WASM
+  plugins in packs (gents-ai/packs) and run as tools or workflow stages; core
+  adds only the plugin seam a pack needs, not the capability.
 - Request state is only `lifecycle_state`, using
   `gents_protocol::request_lifecycle::RequestLifecycleState`. Claimed work runs
   through the owned completion loop; reuse its lifecycle and terminal owners.
@@ -100,7 +105,12 @@ decoders and native adapters translate representations, not redefine policy.
 - Rig is a provider client behind `gents_loop::rig_compat` and
   `gents_loop::provider_input`, re-exported as `llm::rig_compat` and
   `provider_input` for callers here. Rig's own types stay inside those two
-  and the loop that drives them (`gents_loop::loop_stream`).
+  and the loop that drives them (`gents_loop::loop_stream`); runtime owners
+  use their native handles (`ProviderModel`, `ProviderClient`). For now,
+  provider transport adapters (the `*_http`, Codex, Claude Messages, xAI and
+  backend-client modules) may also implement Rig's HTTP client traits or
+  build its provider clients. `rig_types_stay_behind_their_owners` in
+  `write_owner_structure.rs` enforces the boundary; its allowlist only shrinks.
   Persisted messages remain native. DefraDB is the pinned public dependency in
   the workspace `Cargo.toml`; investigate node, schema, identity, and
   transaction behavior there. Claude subscriptions use Anthropic Messages HTTP

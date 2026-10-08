@@ -30,6 +30,15 @@ pub(crate) struct LeanSelfConfigPatchEntry {
     pub(crate) value: Option<String>,
 }
 
+/// A backend a profile row can select; `backend_id` and `auth` are canonical
+/// JSON text.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LeanSelfConfigBackend {
+    pub(crate) backend_id: String,
+    pub(crate) provider_kind: String,
+    pub(crate) auth: String,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct LeanSelfConfigCase {
     pub(crate) name: String,
@@ -46,4 +55,6 @@ pub(crate) struct LeanSelfConfigCase {
     pub(crate) containment_holds: bool,
     pub(crate) unchanged_on_reject: bool,
     pub(crate) control_kept_after_accept: bool,
+    #[serde(default)]
+    pub(crate) backends: Vec<LeanSelfConfigBackend>,
 }

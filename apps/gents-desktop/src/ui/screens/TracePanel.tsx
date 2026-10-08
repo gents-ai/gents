@@ -14,11 +14,14 @@ import {
 import { Spinner } from "@gents/ui/components/spinner";
 import { cn } from "@gents/ui/lib/utils";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
-import type { Shell } from "@/hooks/useShell";
+import { dockScopeOf, useDockFor } from "@/app/workspace";
+import type { SurfaceContext } from "@/app/surfaces";
 import { useNow } from "@/lib/clock";
 import { duration } from "./tool-summary";
 import { ToolBody, ToolSummary } from "./tool-views";
 import { ToolIcon } from "./tool-icon";
+import { useSessionFacts } from "../hooks/useSelectedSession";
+import { useView } from "@/app/AppContext";
 
 function Entry({
   tool,
@@ -63,35 +66,54 @@ function Entry({
   );
 }
 
-export function TracePanel({ shell, onClose }: { shell: Shell; onClose: () => void }) {
-  const session = shell.selectedSession;
-  const tools =
-    session?.timelineItems.flatMap((i) => (i.kind === "toolGroup" ? i.tools : [])) ??
-    [];
-  const running = shell.selectedTrackedRequestId !== null;
+/* the trace as a registered surface, closed through the workspace, so the
+   dock and the phone sheet mount the same thing */
+export function TraceSurface({ sessionId }: SurfaceContext) {
+  const { closeTab: closeTraceTab } = useDockFor(dockScopeOf("session", sessionId));
+  return <TracePanel onClose={() => closeTraceTab("trace")} chrome={false} />;
+}
+
+export function TracePanel({
+  onClose,
+  chrome = true,
+}: {
+  onClose: () => void;
+  /** the card and its header; off when the dock draws them */
+  chrome?: boolean;
+}) {
+  const trackedRequestId = useView((view) => view.trackedRequestId);
+  /* the tool list is kept when the session is written, so a streamed chunk
+     does not rebuild it */
+  const tools = useSessionFacts()?.tools ?? NO_TOOLS;
+  const running = trackedRequestId !== null;
+  /* every entry starts collapsed; only the reader opens one */
   const [openKey, setOpenKey] = useState<string | null>(null);
 
-  /* every entry starts collapsed; only the reader opens one */
-  const effectiveOpen = openKey;
-
   return (
-    <aside className="flex h-full min-h-0 flex-col rounded-2xl border border-border/60 bg-raised">
-      <div className="flex h-12 items-center gap-2.5 border-b border-border/60 px-3">
-        {/* the calls of a request, in order: not a setting, which is what
+    <aside
+      className={cn(
+        "flex h-full min-h-0 flex-col",
+        chrome && "rounded-2xl border border-border/60 bg-raised",
+      )}
+    >
+      {chrome && (
+        <div className="flex h-12 items-center gap-2.5 border-b border-border/60 px-3">
+          {/* the calls of a request, in order: not a setting, which is what
             the sliders mean in the shell and in the config's profiles */}
-        <ListTree className="size-4 text-muted-foreground" />
-        <span className="font-heading text-sm font-medium text-heading">Trace</span>
-        {running && <Spinner className="ml-1 text-foreground" />}
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          className="ml-auto"
-          aria-label="Close trace"
-          onClick={onClose}
-        >
-          <X />
-        </Button>
-      </div>
+          <ListTree className="size-4 text-muted-foreground" />
+          <span className="font-heading text-sm font-medium text-heading">Trace</span>
+          {running && <Spinner className="ml-1 text-foreground" />}
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            className="ml-auto"
+            aria-label="Close trace"
+            onClick={onClose}
+          >
+            <X />
+          </Button>
+        </div>
+      )}
       <ScrollArea className="min-h-0 flex-1">
         <div className="px-3 py-2">
           {tools.length === 0 && (
@@ -103,7 +125,7 @@ export function TracePanel({ shell, onClose }: { shell: Shell; onClose: () => vo
             <Entry
               key={t.itemKey}
               tool={t}
-              open={effectiveOpen === t.itemKey}
+              open={openKey === t.itemKey}
               onOpenChange={(o) => setOpenKey(o ? t.itemKey : null)}
             />
           ))}
@@ -136,3 +158,5 @@ function Took({ tool }: { tool: RenderedToolCallView }) {
     </span>
   );
 }
+
+const NO_TOOLS: readonly RenderedToolCallView[] = [];

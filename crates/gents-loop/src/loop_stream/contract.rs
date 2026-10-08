@@ -161,8 +161,25 @@ fn bounded_structured_output_preview(raw: &str) -> String {
 
 #[derive(Debug)]
 #[allow(dead_code)]
-pub enum LoopStreamItem<R> {
-    Item(MultiTurnStreamItem<R>),
+pub enum LoopStreamItem {
+    Text(String),
+    Reasoning(gents_protocol::message::Reasoning),
+    ReasoningDelta {
+        id: Option<String>,
+        reasoning: String,
+    },
+    ToolCall {
+        tool_call: ToolCall,
+        internal_call_id: String,
+    },
+    ToolResult {
+        tool_result: ToolResult,
+        internal_call_id: String,
+    },
+    /// The final turn's text; the loop ends after it.
+    Final {
+        text: String,
+    },
     ProviderAudit(crate::provider_audit::ProviderAuditObservation),
     ProviderAttemptStarted {
         turn: usize,
@@ -232,6 +249,8 @@ pub struct LoopConfig {
     pub reduction_chain_keys: Vec<String>,
     /// Turn index to resume at an unconsumed durable checkpoint.
     pub initial_turn_index: usize,
+    /// The entry prompt is already durable; do not publish it as new authored input.
+    pub resume_from_history: bool,
     pub context_window: usize,
     pub compaction_threshold: f64,
     pub retry_policy: CompletionRetryPolicy,

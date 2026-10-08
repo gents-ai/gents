@@ -1,9 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { watchProviderLoginUrl } from "../src/ui/lib/providerLogin";
-import {
-  ceilingFromInit,
-  providerSignInState,
-} from "../src/ui/screens/setup/SetupScreen";
+import { providerSignInState } from "../src/ui/screens/setup/inferenceSetupForm";
+import { ceilingFromInit } from "../src/ui/screens/setup/OnboardingWizard";
 
 const { listen, openExternalUrl } = vi.hoisted(() => ({
   listen: vi.fn(),
@@ -51,6 +49,9 @@ it("replaces stale provider sign-ins from the latest account snapshot", () => {
     planType: null,
     accessTokenExpiresAt: "2026-09-15T00:00:00Z",
     lastRefresh: null,
+    pendingSave: false,
+    accountRef: null,
+    label: "Personal",
   });
   expect(
     providerSignInState([

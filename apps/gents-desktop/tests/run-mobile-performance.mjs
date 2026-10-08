@@ -12,6 +12,8 @@ const APP_ROOT = resolve(TESTS_ROOT, "..");
 const REPOSITORY_ROOT = resolve(APP_ROOT, "..", "..");
 const DEFAULT_RUNS = 5;
 const DEFAULT_PORT = 1427;
+/* every transcript row, drawn or kept as a box of its height */
+const TRANSCRIPT_ROWS = '[data-testid="transcript-panel"] [data-window-row]';
 const VIEWPORT = { width: 390, height: 844 };
 const TYPING_NEXT_PAINT_BUDGET_MS = 50;
 const TYPING_REACT_BUDGET_MS_PER_CHARACTER = 12;
@@ -222,9 +224,13 @@ async function runSample(browserInstance, sampleIndex) {
     }),
   );
 
-  const retainedRow = await page
-    .getByText("User fixture row 560", { exact: false })
-    .elementHandle();
+  /* Rows far from the view are drawn as boxes, so the oldest row is marked
+     at its wrapper, which a box keeps: a remount while the older page lands
+     would drop the mark. The page is counted by row wrappers too. */
+  const rowsBeforeOlderPage = await page.locator(TRANSCRIPT_ROWS).count();
+  await page.evaluate((selector) => {
+    document.querySelector(selector)?.setAttribute("data-perf-retained", "");
+  }, TRANSCRIPT_ROWS);
   scenarios.push(
     await measureScenario(
       page,
@@ -238,19 +244,20 @@ async function runSample(browserInstance, sampleIndex) {
             new WheelEvent("wheel", { deltaY: -100, bubbles: true }),
           );
         });
-        await page.getByText("User fixture row 520", { exact: false }).waitFor();
+        await page.waitForFunction(
+          ([selector, count]) => document.querySelectorAll(selector).length >= count,
+          [TRANSCRIPT_ROWS, rowsBeforeOlderPage + 40],
+        );
       },
       async () => ({
-        retainedRowStillMounted: await retainedRow.evaluate((node) => node.isConnected),
+        retainedRowStillMounted: await page.evaluate(
+          () => document.querySelector("[data-perf-retained]") !== null,
+        ),
       }),
     ),
   );
 
-  const typingStartingRows = await page
-    .locator(
-      '[data-testid="transcript-panel"] [data-slot="assistant-message"], [data-testid="transcript-panel"] [data-slot="user-message"], [data-testid="transcript-panel"] [data-slot="tool-steps"]',
-    )
-    .count();
+  const typingStartingRows = await page.locator(TRANSCRIPT_ROWS).count();
   scenarios.push(
     await measureScenario(
       page,
@@ -281,11 +288,8 @@ async function runSample(browserInstance, sampleIndex) {
             );
           });
           await page.waitForFunction(
-            (count) =>
-              document.querySelectorAll(
-                '[data-testid="transcript-panel"] [data-slot="assistant-message"], [data-testid="transcript-panel"] [data-slot="user-message"], [data-testid="transcript-panel"] [data-slot="tool-steps"]',
-              ).length === count,
-            expectedRows,
+            ([selector, count]) => document.querySelectorAll(selector).length === count,
+            [TRANSCRIPT_ROWS, expectedRows],
           );
         }
       },
@@ -596,6 +600,10 @@ async function domSnapshot(page) {
     transcriptTurnBlocks: document.querySelectorAll(
       '[data-testid="transcript-panel"] [data-slot="assistant-message"], [data-testid="transcript-panel"] [data-slot="user-message"], [data-testid="transcript-panel"] [data-slot="tool-steps"]',
     ).length,
+    /* loaded rows, drawn or kept as boxes of their height */
+    transcriptRows: document.querySelectorAll(
+      '[data-testid="transcript-panel"] [data-window-row]',
+    ).length,
     serializedBodyBytes: new TextEncoder().encode(document.body.innerHTML).byteLength,
   }));
 }
@@ -725,10 +733,14 @@ function evaluateStructuralAssertions(samples) {
       observedMax: Math.max(
         ...typing.map((scenario) => scenario.dom.transcriptTurnBlocks),
       ),
+      /* five pages loaded; far rows are boxes, so at most that many drawn */
       passed: typing.every(
         (scenario) =>
           scenario.loadedPages === samples[0].fixture.typingLoadedPages &&
-          scenario.dom.transcriptTurnBlocks ===
+          scenario.dom.transcriptRows ===
+            samples[0].fixture.typingLoadedPages *
+              samples[0].fixture.transcriptPageSize &&
+          scenario.dom.transcriptTurnBlocks <=
             samples[0].fixture.typingLoadedPages *
               samples[0].fixture.transcriptPageSize,
       ),
@@ -928,11 +940,8 @@ function collectEnvironment(browserVersion) {
 }
 
 async function openMobileNavigation(page) {
-  await page
-    .getByTestId("session-screen")
-    .getByRole("link", { name: "Sessions", exact: true })
-    .first()
-    .click();
+  /* the bar's own Back button leads back to the list */
+  await page.getByTestId("window-bar").getByRole("button", { name: "Back" }).click();
   await page
     .locator('[data-testid="session-session-large"]')
     .waitFor({ state: "visible" });

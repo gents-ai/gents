@@ -31,6 +31,7 @@ use super::p2p_ops;
 use super::ClientCore;
 #[cfg(test)]
 use super::ClientPeerStatus;
+use crate::client::peer_directory::RemovalCause;
 
 const REQUEST_PATCH_SIGNATURE_CAPACITY: usize = 2_048;
 
@@ -1070,7 +1071,7 @@ impl ClientCore {
         let peer_id = normalize_required("peer_id", peer_id)?;
         let removal = self
             .route_manager
-            .remove_peer(&self.sync_state, peer_id)
+            .remove_peer(&self.sync_state, peer_id, RemovalCause::Operator)
             .await?;
         let removed = removal.record;
         let warning = match removal.cleanup_error {
@@ -1115,6 +1116,21 @@ impl ClientCore {
             .iter()
             .find(|record| record.agent_did == agent_did)
             .and_then(crate::local_runtime::operator_endpoint)
+    }
+
+    /// The identity of the hosted runtime serving `agent_did`, which signs
+    /// that runtime's operator commands.
+    pub fn operator_signer(
+        &self,
+        agent_did: &str,
+    ) -> Result<std::sync::Arc<dyn gents::identity::AgentIdentity>> {
+        let record = self
+            .sync_state
+            .records()
+            .into_iter()
+            .find(|record| record.agent_did == agent_did)
+            .context("no runtime record for this agent")?;
+        crate::local_runtime::operator_signer(&record)
     }
 
     pub fn operator_access(&self, agent_did: &str) -> Result<ConfigAccess> {

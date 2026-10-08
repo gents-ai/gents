@@ -77,6 +77,13 @@ pub(crate) enum Command {
     #[command(about = "Probe a DefraDB-backed ChatGPT OAuth credential")]
     CodexAuthProbe(CodexAuthProbeArgs),
     #[command(
+        about = "List, label, disable or remove the subscription accounts signed in on this node"
+    )]
+    Accounts {
+        #[command(subcommand)]
+        command: AccountsCommand,
+    },
+    #[command(
         name = "grok-login",
         about = "Sign in with Grok / xAI subscription OAuth and store credentials in DefraDB"
     )]
@@ -1097,7 +1104,7 @@ pub(crate) struct PackRunArgs {
     #[arg(
         long,
         default_value_t = false,
-        help = "Allow a prepare-step plugin that declares standing authority (bind_dir alone needs none)"
+        help = "Allow a prepare-step or dependency plugin that declares standing authority (bind_dir alone needs none)"
     )]
     pub(crate) grant_authority: bool,
     #[arg(
@@ -1422,6 +1429,70 @@ pub(crate) struct CodexAuthProbeArgs {
 }
 
 #[derive(clap::Args)]
+pub(crate) struct AccountsTargetArgs {
+    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long, help = "GraphQL endpoint for the target gents node")]
+    pub(crate) graphql: Option<String>,
+    #[arg(long, help = "Agent DID that owns the accounts")]
+    pub(crate) agent_did: Option<String>,
+    #[arg(long, value_parser = ACCOUNT_PROVIDERS, help = "Only accounts of this sign-in provider")]
+    pub(crate) provider: Option<String>,
+}
+
+const ACCOUNT_PROVIDERS: [&str; 3] = ["chatgpt-codex", "claude-subscription", "xai-oauth"];
+const ACCOUNT_HELP: &str = "The account: its label, credential_id or account_ref";
+
+#[derive(Subcommand)]
+pub(crate) enum AccountsCommand {
+    #[command(
+        about = "List accounts, and backends that use no account, with the profiles that use them"
+    )]
+    List {
+        #[command(flatten)]
+        target: AccountsTargetArgs,
+        #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
+        output: OutputFormat,
+        #[arg(
+            long,
+            help = "Fail when usage cannot be read, as without a running runtime; accounts read in the last five minutes are still skipped"
+        )]
+        refresh: bool,
+    },
+    #[command(about = "Rename an account")]
+    Label {
+        #[command(flatten)]
+        target: AccountsTargetArgs,
+        #[arg(help = ACCOUNT_HELP)]
+        account: String,
+        #[arg(help = "The new label")]
+        label: String,
+    },
+    #[command(
+        about = "Disable an account; profiles using it fail until moved or it is signed in again"
+    )]
+    Disable {
+        #[command(flatten)]
+        target: AccountsTargetArgs,
+        #[arg(help = ACCOUNT_HELP)]
+        account: String,
+    },
+    #[command(
+        about = "Delete an account's tokens on this node and the backend sign-in created for it, unless a profile uses it"
+    )]
+    Remove {
+        #[command(flatten)]
+        target: AccountsTargetArgs,
+        #[arg(help = ACCOUNT_HELP)]
+        account: String,
+        #[arg(long, help = "Remove without asking")]
+        yes: bool,
+    },
+}
+
+const LOGIN_LABEL_HELP: &str = "Name for the account signed in to: names a new account or renames a stored one (default: the product name, numbered for a second account)";
+
+#[derive(clap::Args)]
 pub(crate) struct CodexLoginArgs {
     #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
     pub(crate) home: Option<PathBuf>,
@@ -1429,8 +1500,10 @@ pub(crate) struct CodexLoginArgs {
     pub(crate) graphql: Option<String>,
     #[arg(long, help = "Agent DID that owns the OAuthCredential document")]
     pub(crate) agent_did: Option<String>,
-    #[arg(long, default_value = "chatgpt-codex")]
+    #[arg(long, default_value = "chatgpt-codex", value_parser = ["chatgpt-codex"], help = "OAuth provider key (only chatgpt-codex)")]
     pub(crate) provider: String,
+    #[arg(long, help = LOGIN_LABEL_HELP)]
+    pub(crate) label: Option<String>,
     #[arg(long, default_value_t = false, help = "Use ChatGPT device-code login")]
     pub(crate) device_auth: bool,
     #[arg(long, help = "OAuth issuer override for testing")]
@@ -1465,8 +1538,10 @@ pub(crate) struct GrokLoginArgs {
     pub(crate) graphql: Option<String>,
     #[arg(long, help = "Agent DID that owns the OAuthCredential document")]
     pub(crate) agent_did: Option<String>,
-    #[arg(long, default_value = "xai-oauth")]
+    #[arg(long, default_value = "xai-oauth", value_parser = ["xai-oauth"], help = "OAuth provider key (only xai-oauth)")]
     pub(crate) provider: String,
+    #[arg(long, help = LOGIN_LABEL_HELP)]
+    pub(crate) label: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -1477,8 +1552,10 @@ pub(crate) struct ClaudeLoginArgs {
     pub(crate) graphql: Option<String>,
     #[arg(long, help = "Agent DID that owns the OAuthCredential document")]
     pub(crate) agent_did: Option<String>,
-    #[arg(long, default_value = "claude-subscription")]
+    #[arg(long, default_value = "claude-subscription", value_parser = ["claude-subscription"], help = "OAuth provider key (only claude-subscription)")]
     pub(crate) provider: String,
+    #[arg(long, help = LOGIN_LABEL_HELP)]
+    pub(crate) label: Option<String>,
     #[arg(
         long,
         default_value_t = false,
@@ -1868,7 +1945,7 @@ pub(crate) struct ServeArgs {
     #[arg(
         long,
         default_value_t = false,
-        help = "Expose the Grok TUI leader socket so stock Grok can attach as the pager client (`gents grok` needs it)"
+        help = "Expose the Grok TUI leader socket so stock Grok can attach as the pager client: start this server first, then run `grok --leader --leader-socket <path>`"
     )]
     pub(crate) grok_shim: bool,
     #[arg(
@@ -2293,6 +2370,8 @@ pub(crate) enum BackendPresetArg {
     ChatGptCodex,
     #[value(name = "xai-oauth")]
     XaiGrokOAuth,
+    #[value(name = "xai")]
+    XaiApiKey,
     #[value(
         name = "claude-cli-subscription",
         alias = "claude-subscription",
@@ -2317,6 +2396,7 @@ impl BackendPresetArg {
             Self::OpenRouter => "openrouter",
             Self::ChatGptCodex => "chatgpt-codex",
             Self::XaiGrokOAuth => "xai-oauth",
+            Self::XaiApiKey => "xai",
             Self::ClaudeCliSubscription => "claude-cli-subscription",
             Self::Anthropic => "anthropic",
             Self::Ollama => "ollama",
@@ -2334,6 +2414,7 @@ impl BackendPresetArg {
             Self::Anthropic => BackendProviderKind::AnthropicApiKey,
             Self::GenericOpenAiCompatible
             | Self::OpenAi
+            | Self::XaiApiKey
             | Self::Ollama
             | Self::Vllm
             | Self::LlamaCpp => BackendProviderKind::OpenAiCompatible,
@@ -2347,6 +2428,7 @@ impl BackendPresetArg {
             Self::OpenRouter => Some("https://openrouter.ai/api/v1"),
             Self::ChatGptCodex => Some(gents::chatgpt_codex::default_backend_endpoint()),
             Self::XaiGrokOAuth => Some(gents::xai_grok_oauth::default_backend_endpoint()),
+            Self::XaiApiKey => Some(gents::inference_setup::XAI_API_ENDPOINT),
             Self::ClaudeCliSubscription => {
                 Some(gents::claude_subscription::default_backend_endpoint())
             }
@@ -2372,6 +2454,7 @@ impl BackendPresetArg {
             | Self::OpenAi
             | Self::OpenRouter
             | Self::Anthropic
+            | Self::XaiApiKey
             | Self::Vllm => None,
         }
     }
@@ -2381,6 +2464,7 @@ impl BackendPresetArg {
             Self::OpenAi => Some("OPENAI_API_KEY"),
             Self::OpenRouter => Some("OPENROUTER_API_KEY"),
             Self::Anthropic => Some("ANTHROPIC_API_KEY"),
+            Self::XaiApiKey => Some("XAI_API_KEY"),
             Self::GenericOpenAiCompatible
             | Self::ChatGptCodex
             | Self::XaiGrokOAuth
@@ -2393,7 +2477,7 @@ impl BackendPresetArg {
 
     pub(crate) fn default_openai_wire_api(self) -> Option<OpenAiWireApi> {
         match self {
-            Self::OpenAi => Some(OpenAiWireApi::Responses),
+            Self::OpenAi | Self::XaiApiKey => Some(OpenAiWireApi::Responses),
             Self::GenericOpenAiCompatible
             | Self::OpenRouter
             | Self::ChatGptCodex
@@ -3062,6 +3146,11 @@ pub(crate) struct ToolsSetArgs {
 pub(crate) enum InferenceProfileCommand {
     #[command(name = "set")]
     Set(InferenceProfileSetArgs),
+    #[command(
+        name = "set-account",
+        about = "Move a profile to another account of its provider, or list where it can move"
+    )]
+    SetAccount(InferenceProfileSetAccountArgs),
     #[command(name = "list", about = "List InferenceProfile documents")]
     List(ConfigListArgs),
     #[command(name = "show", about = "Show an InferenceProfile document")]
@@ -3190,6 +3279,32 @@ pub(crate) struct InferenceProfileSetArgs {
     /// Canonical InferenceProfile JSON document, including its owning agent DID.
     #[arg(long)]
     pub(crate) file: PathBuf,
+    /// Create or move the profile on this account; fills the document's backend_id.
+    #[arg(long, help = ACCOUNT_HELP)]
+    pub(crate) account: Option<String>,
+    /// Narrows --account; alone, picks the provider's earliest-connected enabled account.
+    #[arg(long, value_parser = ACCOUNT_PROVIDERS)]
+    pub(crate) provider: Option<String>,
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct InferenceProfileSetAccountArgs {
+    /// The profile_id to move.
+    pub(crate) profile: String,
+    #[arg(
+        help = "The account: its label, credential_id or account_ref, or an API-key backend's \
+                id or name; without it, list the accounts the profile can move to"
+    )]
+    pub(crate) account: Option<String>,
+    #[arg(long, value_parser = ACCOUNT_PROVIDERS, help = "Narrows the account to this sign-in provider")]
+    pub(crate) provider: Option<String>,
+    /// Also move the other profiles of the profile's behaviors on the same account.
+    #[arg(long, requires = "account")]
+    pub(crate) with_compaction: bool,
     #[arg(long)]
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]
@@ -3848,6 +3963,10 @@ pub(crate) enum GoalCommand {
     Set(GoalSetArgs),
     #[command(about = "Resume a goal and atomically enqueue its continuation")]
     ResumeRequest(GoalResumeArgs),
+    #[command(
+        about = "Move the profile a usage limit stopped to another account, then resume the goal"
+    )]
+    ResumeOn(GoalResumeOnArgs),
     #[command(about = "Delete the durable goal for a session")]
     Clear(GoalShowArgs),
 }
@@ -3889,6 +4008,30 @@ pub(crate) struct GoalResumeArgs {
     pub(crate) output: OutputFormat,
 }
 
+#[derive(clap::Args)]
+pub(crate) struct GoalResumeOnArgs {
+    #[arg(
+        help = "The account to move to: its label, credential_id or account_ref, or an API-key \
+                backend's id or name"
+    )]
+    pub(crate) account: String,
+    #[command(flatten)]
+    pub(crate) scope: GoalScopeArgs,
+    #[arg(
+        long,
+        value_name = "REQUEST_ID",
+        help = "The request the usage limit stopped; reuse this ID when retrying"
+    )]
+    pub(crate) from: String,
+    #[arg(long, value_parser = ACCOUNT_PROVIDERS, help = "Narrows the account to this sign-in provider")]
+    pub(crate) provider: Option<String>,
+    /// Also move the other profiles of the profile's behaviors on the same account.
+    #[arg(long)]
+    pub(crate) with_compaction: bool,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Json)]
+    pub(crate) output: OutputFormat,
+}
+
 #[derive(Clone, Copy, Debug, ValueEnum)]
 pub(crate) enum GoalStatusArg {
     Active,
@@ -3915,6 +4058,13 @@ pub(crate) struct GoalSetArgs {
         help = "Remove the charged-token budget"
     )]
     pub(crate) clear_token_budget: bool,
+    #[arg(
+        long,
+        value_name = "on|off",
+        value_parser = clap::builder::BoolishValueParser::new(),
+        help = "Resume a usage-limited goal by itself at the reset the provider reported"
+    )]
+    pub(crate) auto_resume: Option<bool>,
     #[arg(long, value_enum, default_value_t = OutputFormat::Json)]
     pub(crate) output: OutputFormat,
 }

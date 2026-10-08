@@ -2,45 +2,18 @@
    in one list. A row is a backend; its kind decides the credential
    section. OpenAI-compatible and OpenRouter take a key or an env var;
    ChatGPT/Codex and Grok exist only through a subscription sign-in, so
-   the account card sits in the row with connect, cancel and disconnect.
-   Everything else is the desktop app's Backends panel field for field. */
+   the account card sits in the row with connect, cancel and disconnect. */
+import type { NodeView } from "../../../hooks/fleetStore";
+import { setEnabled } from "./enabled";
 import { dependentsWarning } from "./dependents";
-import { useEffect, useRef, useState } from "react";
-import { PROVIDER_VISUALS, SetupScreen, type ProviderId } from "../setup/SetupScreen";
-import type { InferenceProviderOption } from "@source-inc/gents-desktop-client";
+import { useState } from "react";
+import { SetupScreen } from "../setup/SetupScreen";
+import { PROVIDER_VISUALS } from "../setup/InferenceSetup";
+import type { ProviderId } from "../setup/inferenceSetupForm";
 import { toast } from "sonner";
-import type {
-  BackendProviderKind,
-  BackendSaveRequest,
-  DeploymentView,
-  InferenceBackend,
-  InferenceBackendView,
-  OpenAiWireApi,
-  ProviderAccountView,
-  InferenceAuthMethod,
-  InferenceProviderId,
-} from "@source-inc/gents-desktop-client";
-import { Badge } from "@gents/ui/components/badge";
+import type { InferenceBackendView } from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
-import type { Shell } from "@/hooks/useShell";
-import {
-  bridgeErrorCode,
-  CREDENTIAL_NOT_SAVED,
-  PROVIDER_CREDENTIAL_KIND,
-  setupErrorMessage,
-} from "@/lib/providerLogin";
-import { optionalInteger, requiredHttpUrl, str, useDraft } from "./draft";
-import {
-  ChoiceRow,
-  DraftActions,
-  FactRow,
-  NumberRow,
-  SwitchRow,
-  TextRow,
-  TagsRow,
-} from "./editors";
-import { DeleteButton, ListDetail, type ListRow } from "./ListDetail";
-import { Group, Row } from "./rows";
+import { ListDetail, type ListRow } from "./ListDetail";
 import { RowMenu } from "./RowMenu";
 import {
   DropdownMenu,
@@ -51,672 +24,12 @@ import {
 } from "@gents/ui/components/dropdown-menu";
 import { Plus } from "lucide-react";
 import { ProviderLogo } from "../ProviderLogo";
-
-export function backendSave(
-  agentDid: string,
-  fields: {
-    backendId: string;
-    name: string;
-    providerKind: string;
-    openaiWireApi: string | null;
-    endpoint: string;
-    apiKey: string | null;
-    apiKeyEnvVar: string | null;
-    connectTimeoutSecs: number | null;
-    discoveryTimeoutSecs: number | null;
-    maxConcurrent: number | null;
-    maxQueueDepth: number | null;
-    enabled: boolean | null;
-  },
-): BackendSaveRequest {
-  return {
-    document: {
-      agent_did: agentDid,
-      backend_id: fields.backendId,
-      name: fields.name,
-      provider_kind: fields.providerKind as BackendProviderKind,
-      openai_wire_api: (fields.openaiWireApi as OpenAiWireApi | null) ?? null,
-      endpoint: fields.endpoint,
-      auth: isSubscriptionKind(fields.providerKind)
-        ? { kind: "principal_oauth" }
-        : fields.apiKey
-          ? { kind: "api_key", key: fields.apiKey }
-          : fields.apiKeyEnvVar
-            ? { kind: "environment", variable: fields.apiKeyEnvVar }
-            : { kind: "unauthenticated" },
-      connect_timeout_secs: fields.connectTimeoutSecs,
-      discovery_timeout_secs: fields.discoveryTimeoutSecs,
-      max_concurrent: fields.maxConcurrent,
-      max_queue_depth: fields.maxQueueDepth,
-      enabled: fields.enabled,
-    },
-  };
-}
-
-const isSubscriptionKind = (kind: string) =>
-  kind === "ChatGptCodex" ||
-  kind === "XaiGrokOAuth" ||
-  kind === "ClaudeCliSubscription";
-
-const healthy = (status: string | null) => status === "healthy" || status === "ok";
-
-const KINDS = [
-  { value: "OpenAiCompatible", label: "OpenAI compatible" },
-  { value: "OpenRouter", label: "OpenRouter" },
-  { value: "ChatGptCodex", label: "ChatGPT / Codex (subscription)" },
-  { value: "XaiGrokOAuth", label: "Grok (subscription)" },
-  { value: "ClaudeCliSubscription", label: "Anthropic / Claude (subscription)" },
-  { value: "AnthropicApiKey", label: "Anthropic API key" },
-];
-/* subscription kinds, and the provider name their account carries */
-const SUBSCRIPTION: Record<
-  string,
-  {
-    provider: string;
-    providerId: InferenceProviderId;
-    authMethod: InferenceAuthMethod;
-    title: string;
-    note: string;
-    login: "codex" | "grok" | "claude";
-  }
-> = {
-  ChatGptCodex: {
-    provider: PROVIDER_CREDENTIAL_KIND.openai,
-    providerId: "openai",
-    authMethod: "chat_gpt_oauth",
-    title: "ChatGPT / Codex",
-    note: "Use an eligible ChatGPT subscription for Codex inference.",
-    login: "codex",
-  },
-  XaiGrokOAuth: {
-    provider: PROVIDER_CREDENTIAL_KIND.grok,
-    providerId: "grok",
-    authMethod: "grok_oauth",
-    title: "Grok / xAI",
-    note: "Use SuperGrok or an eligible X Premium+ subscription.",
-    login: "grok",
-  },
-  ClaudeCliSubscription: {
-    provider: PROVIDER_CREDENTIAL_KIND.anthropic,
-    providerId: "anthropic",
-    authMethod: "claude_oauth",
-    title: "Anthropic / Claude",
-    note: "Use a Claude Pro or Max subscription.",
-    login: "claude",
-  },
-};
-
-export function useAccounts(shell: Shell, agentDid: string) {
-  const [accounts, setAccounts] = useState<ProviderAccountView[]>([]);
-  const api = shell.api;
-  const load = () =>
-    (api.listProviderAccounts?.(agentDid) ?? Promise.resolve([])).then(
-      setAccounts,
-      () => setAccounts([]),
-    );
-  useEffect(() => {
-    void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agentDid, shell.snapshot]);
-  return { accounts, reload: load };
-}
-
-/* the account card for a subscription backend */
-function AccountRows({
-  shell,
-  deployment,
-  kind,
-  accounts,
-  reload,
-}: {
-  shell: Shell;
-  deployment: DeploymentView;
-  kind: string;
-  accounts: ProviderAccountView[];
-  reload: () => Promise<void>;
-}) {
-  const sub = SUBSCRIPTION[kind]!;
-  const account = accounts.find(
-    (a) => a.provider === sub.provider && a.enabled && !a.pendingSave,
-  );
-  const unsaved = accounts.some((a) => a.provider === sub.provider && a.pendingSave);
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), 60_000);
-    return () => window.clearInterval(timer);
-  }, []);
-  const expired = account ? Date.parse(account.accessTokenExpiresAt) < now : false;
-  const [busy, setBusy] = useState(false);
-  const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
-  const api = shell.api;
-  const signIn = async () => {
-    setBusy(true);
-    try {
-      if (sub.login === "codex") await api.codexLogin(deployment.agentDid);
-      else if (sub.login === "claude") await api.claudeLogin(deployment.agentDid);
-      else await api.grokLogin(deployment.agentDid);
-      toast("Signed in");
-      await reload();
-    } catch (error) {
-      toast(`Sign in failed: ${setupErrorMessage(error)}`);
-      if (bridgeErrorCode(error) === CREDENTIAL_NOT_SAVED) await reload();
-    } finally {
-      setBusy(false);
-    }
-  };
-  const retrySave = async () => {
-    if (!api.retrySaveProviderAccount) return;
-    setBusy(true);
-    try {
-      await api.retrySaveProviderAccount(deployment.agentDid, sub.provider);
-      toast("Signed in");
-      await reload();
-    } catch (error) {
-      toast(`Save failed: ${setupErrorMessage(error)}`);
-      await reload();
-    } finally {
-      setBusy(false);
-    }
-  };
-  const disconnect = async () => {
-    if (!account) return;
-    setBusy(true);
-    try {
-      await api.disconnectProviderAccount?.(deployment.agentDid, account.credentialId);
-      toast("Disconnected");
-      setConfirmingDisconnect(false);
-      await reload();
-    } catch (error) {
-      toast(
-        `Disconnect failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <>
-      <Row label="Account" description={sub.note}>
-        <span className="flex items-center gap-2">
-          {account && (
-            <Badge variant={expired ? "destructive" : "secondary"}>
-              {expired ? "Expired" : "Connected"}
-            </Badge>
-          )}
-          {account && !confirmingDisconnect && (
-            <Button
-              size="sm"
-              variant="quiet"
-              disabled={busy}
-              onClick={() => setConfirmingDisconnect(true)}
-            >
-              Disconnect
-            </Button>
-          )}
-          {account && confirmingDisconnect && (
-            <>
-              <span className="text-xs text-muted-foreground">
-                Disconnect {sub.title}?
-              </span>
-              <Button
-                size="sm"
-                variant="quiet"
-                disabled={busy}
-                onClick={() => setConfirmingDisconnect(false)}
-              >
-                Keep connected
-              </Button>
-              <Button
-                size="sm"
-                variant="destructive"
-                disabled={busy}
-                onClick={disconnect}
-              >
-                {busy ? "Disconnecting…" : "Disconnect now"}
-              </Button>
-            </>
-          )}
-          {unsaved && api.retrySaveProviderAccount ? (
-            <Button size="sm" variant="brand" disabled={busy} onClick={retrySave}>
-              Retry save
-            </Button>
-          ) : null}
-          <Button
-            size="sm"
-            variant={account || unsaved ? "outline" : "brand"}
-            disabled={busy}
-            onClick={signIn}
-          >
-            {busy ? "Signing in…" : account ? "Reconnect" : "Connect"}
-          </Button>
-        </span>
-      </Row>
-      {account && (
-        <>
-          <FactRow label="Signed in as">
-            {account.accountId ?? "Account identity unavailable — reconnect to refresh"}
-            {account.planType ? ` · ${account.planType}` : ""}
-          </FactRow>
-          <FactRow label="Expires">
-            {new Date(account.accessTokenExpiresAt).toLocaleString()} ·{" "}
-            {expired
-              ? "expired"
-              : `in ${Math.max(1, Math.ceil((Date.parse(account.accessTokenExpiresAt) - Date.now()) / 60000))} minutes`}
-          </FactRow>
-        </>
-      )}
-    </>
-  );
-}
-
-export function BackendEditor({
-  shell,
-  deployment,
-  backend,
-  accounts,
-  reload,
-  embedded = false,
-}: {
-  shell: Shell;
-  deployment: DeploymentView;
-  backend: InferenceBackendView;
-  accounts: ProviderAccountView[];
-  reload: () => Promise<void>;
-  /* in a sheet beside another page: no Danger zone */
-  embedded?: boolean;
-}) {
-  const base = {
-    name: "agent" as const,
-    agentDid: deployment.agentDid,
-    section: "inference",
-  };
-  const saved = {
-    name: backend.name ?? "",
-    providerKind: backend.providerKind ?? "OpenAiCompatible",
-    openaiWireApi: backend.openaiWireApi ?? "",
-    endpoint: backend.endpoint ?? "",
-    apiKeyEnvVar: backend.apiKeyEnvVar ?? "",
-    apiKey: "",
-    connectTimeoutSecs: str(backend.connectTimeoutSecs),
-    discoveryTimeoutSecs: str(backend.discoveryTimeoutSecs),
-    maxConcurrent: str(backend.maxConcurrent),
-    maxQueueDepth: str(backend.maxQueueDepth),
-    enabled: backend.enabled ?? true,
-    tags: backend.tags,
-  };
-  const d = useDraft(saved, async (next) => {
-    const name = next.name.trim();
-    if (!name) throw new Error("Name is required");
-    const endpoint =
-      next.providerKind === "ClaudeCliSubscription" &&
-      next.endpoint === "claude-cli://subscription"
-        ? next.endpoint
-        : requiredHttpUrl("Endpoint", next.endpoint);
-    if (next.apiKey.trim() && next.apiKeyEnvVar.trim())
-      throw new Error("Choose an API key or an environment variable, not both");
-    const maxConcurrent = optionalInteger("Max concurrent", next.maxConcurrent, {
-      min: 1,
-    });
-    const maxQueueDepth = optionalInteger("Max queue depth", next.maxQueueDepth, {
-      min: 0,
-    });
-    const connectTimeoutSecs = optionalInteger(
-      "Connect timeout",
-      next.connectTimeoutSecs,
-      { min: 1 },
-    );
-    const discoveryTimeoutSecs = optionalInteger(
-      "Discovery timeout",
-      next.discoveryTimeoutSecs,
-      { min: 1 },
-    );
-    let auth: InferenceBackend["auth"] | undefined;
-    if (isSubscriptionKind(next.providerKind)) auth = { kind: "principal_oauth" };
-    else if (next.apiKey.trim()) auth = { kind: "api_key", key: next.apiKey };
-    else if (next.apiKeyEnvVar.trim())
-      auth = { kind: "environment", variable: next.apiKeyEnvVar.trim() };
-    else if (!backend.apiKeyConfigured || isSubscriptionKind(saved.providerKind))
-      auth = { kind: "unauthenticated" };
-
-    const changes: Partial<Omit<InferenceBackend, "agent_did" | "backend_id">> = {
-      name,
-      provider_kind: next.providerKind as BackendProviderKind,
-      openai_wire_api: (next.openaiWireApi as OpenAiWireApi) || null,
-      endpoint,
-      connect_timeout_secs: connectTimeoutSecs,
-      discovery_timeout_secs: discoveryTimeoutSecs,
-      max_concurrent: maxConcurrent,
-      max_queue_depth: maxQueueDepth,
-      enabled: next.enabled,
-      tags: next.tags.length ? next.tags : null,
-    };
-    if (auth) changes.auth = auth;
-    await shell.applyConfig((api) =>
-      api.patchConfigComponents({
-        agentDid: deployment.agentDid,
-        patches: [{ collection: "InferenceBackend", id: backend.backendId, changes }],
-      }),
-    );
-  });
-  const [probe, setProbe] = useState<string | null>(null);
-  const [discoveredModels, setDiscoveredModels] = useState<string[] | null>(null);
-  const discoveryRevision = useRef(0);
-  const id = (f: string) => `${backend.backendId}-${f}`;
-  const subscription = d.draft.providerKind in SUBSCRIPTION;
-  useEffect(() => {
-    discoveryRevision.current += 1;
-    setDiscoveredModels(null);
-    setProbe(null);
-  }, [d.draft.providerKind, d.draft.endpoint]);
-  const users = deployment.inferenceProfiles
-    .filter((p) => p.backend_id === backend.backendId)
-    .map((p) => p.display_name ?? p.profile_id);
-  return (
-    <>
-      <Group
-        title={embedded ? undefined : (backend.name ?? backend.backendId)}
-        action={
-          <span className="flex items-center gap-2">
-            <ProviderLogo
-              kind={d.draft.providerKind}
-              endpoint={d.draft.endpoint}
-              className="mr-1"
-            />
-            {subscription && <Badge variant="secondary">Subscription</Badge>}
-            <Badge variant={healthy(backend.probeStatus) ? "secondary" : "destructive"}>
-              {backend.probeStatus ?? "unprobed"}
-            </Badge>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={async () => {
-                const revision = ++discoveryRevision.current;
-                try {
-                  if (subscription) {
-                    setProbe("Discovering models…");
-                    const connection = SUBSCRIPTION[d.draft.providerKind]!;
-                    const result = await shell.api.discoverInferenceModels({
-                      requestKey: `backend-${backend.backendId}-${Date.now()}`,
-                      agentDid: deployment.agentDid,
-                      provider: connection.providerId,
-                      authMethod: connection.authMethod,
-                      endpoint: d.draft.endpoint,
-                      apiKey: null,
-                    });
-                    if (!result.reachable)
-                      throw new Error(result.failure?.message ?? "Discovery failed");
-                    if (discoveryRevision.current !== revision) return;
-                    setDiscoveredModels(
-                      result.models.map((option) => option.advertised.model_name),
-                    );
-                    setProbe(`Authenticated · ${result.models.length} models`);
-                    return;
-                  }
-                  const endpoint = requiredHttpUrl("Endpoint", d.draft.endpoint);
-                  setProbe("probing…");
-                  const r = await shell.api.probeInferenceEndpoint(endpoint);
-                  if (discoveryRevision.current !== revision) return;
-                  setProbe(
-                    r.reachable
-                      ? `reachable · ${r.models.length} models`
-                      : "unreachable",
-                  );
-                  toast(r.reachable ? "Endpoint reachable" : "Endpoint unreachable");
-                } catch (error) {
-                  if (discoveryRevision.current !== revision) return;
-                  setProbe("probe failed");
-                  toast(
-                    `Probe failed: ${error instanceof Error ? error.message : String(error)}`,
-                  );
-                }
-              }}
-            >
-              {subscription ? "Refresh models" : "Probe"}
-            </Button>
-          </span>
-        }
-      >
-        <FactRow label="Backend ID" mono>
-          {backend.backendId}
-        </FactRow>
-        <TextRow
-          id={id("name")}
-          label="Name"
-          value={d.draft.name}
-          onChange={(v) => d.set("name", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
-        />
-        <ChoiceRow
-          id={id("kind")}
-          label="Provider kind"
-          description="Decides how it is paid for: a key, or a subscription sign-in."
-          value={d.draft.providerKind}
-          onChange={(v) => d.choose("providerKind", v)}
-          items={KINDS}
-        />
-        {!subscription && (
-          <ChoiceRow
-            id={id("wire")}
-            label="OpenAI wire API"
-            description="Leave automatic unless the endpoint requires one protocol."
-            value={d.draft.openaiWireApi}
-            onChange={(v) => d.choose("openaiWireApi", v)}
-            items={[
-              { value: "responses", label: "Responses" },
-              { value: "chat_completions", label: "Chat completions" },
-            ]}
-            none="Automatic"
-          />
-        )}
-        <FactRow
-          label="Used by"
-          description="Delete is blocked while a behavior points here."
-        >
-          {users.length ? users.join(", ") : "no behavior"}
-        </FactRow>
-      </Group>
-      <Group title={subscription ? "Subscription" : "Credential"}>
-        {subscription ? (
-          <AccountRows
-            shell={shell}
-            deployment={deployment}
-            kind={d.draft.providerKind}
-            accounts={accounts}
-            reload={reload}
-          />
-        ) : (
-          <>
-            <TextRow
-              id={id("env")}
-              label="API key env var"
-              description="Read from the environment at start."
-              value={d.draft.apiKeyEnvVar}
-              onChange={(v) => d.set("apiKeyEnvVar", v)}
-              onCommit={d.commit}
-              onEnter={d.onEnter}
-              placeholder="OPENAI_API_KEY"
-              mono
-            />
-            <TextRow
-              id={id("key")}
-              label="API key"
-              description={
-                backend.apiKeyConfigured
-                  ? "A key is stored; enter one to replace it."
-                  : "Stored by the bridge, never shown again."
-              }
-              value={d.draft.apiKey}
-              onChange={(v) => d.set("apiKey", v)}
-              onCommit={d.commit}
-              onEnter={d.onEnter}
-              placeholder={backend.apiKeyConfigured ? "Configured" : "sk-…"}
-              password
-            />
-            {backend.apiKeyConfigured && (
-              <Row label="Stored key">
-                <Button
-                  size="sm"
-                  variant="quiet"
-                  onClick={() =>
-                    shell
-                      .applyConfig((api) =>
-                        api.patchConfigComponents({
-                          agentDid: deployment.agentDid,
-                          patches: [
-                            {
-                              collection: "InferenceBackend",
-                              id: backend.backendId,
-                              changes: { auth: { kind: "unauthenticated" } },
-                            },
-                          ],
-                        }),
-                      )
-                      .then(() => toast("Stored key cleared"))
-                      .catch((error) =>
-                        toast(
-                          `Clear failed: ${error instanceof Error ? error.message : String(error)}`,
-                        ),
-                      )
-                  }
-                >
-                  Clear stored key
-                </Button>
-              </Row>
-            )}
-          </>
-        )}
-      </Group>
-      <Group title="Endpoint and models">
-        <TextRow
-          id={id("endpoint")}
-          label="Endpoint"
-          value={d.draft.endpoint}
-          onChange={(v) => d.set("endpoint", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
-          placeholder="https://…/v1"
-          mono
-          wide
-        />
-        {probe && <FactRow label="Last probe">{probe}</FactRow>}
-        <FactRow
-          label="Advertised models"
-          description="Runtime discovery owns this catalog. Select a model on a profile."
-          mono
-        >
-          {(discoveredModels ?? backend.models).length ? (
-            <span className="flex flex-col gap-1 whitespace-normal">
-              {(discoveredModels ?? backend.models).map((model) => (
-                <span key={model}>{model}</span>
-              ))}
-            </span>
-          ) : (
-            "No catalog yet — refresh models"
-          )}
-        </FactRow>
-        <NumberRow
-          id={id("connect-timeout")}
-          label="Connect timeout seconds"
-          description="Positive whole number, or blank for the runtime default."
-          value={d.draft.connectTimeoutSecs}
-          placeholder="Runtime default (10)"
-          onChange={(v) => d.set("connectTimeoutSecs", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
-        />
-        <NumberRow
-          id={id("discovery-timeout")}
-          label="Discovery timeout seconds"
-          description="Positive whole number, or blank for the runtime default."
-          value={d.draft.discoveryTimeoutSecs}
-          placeholder="Runtime default (10)"
-          onChange={(v) => d.set("discoveryTimeoutSecs", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
-        />
-        <NumberRow
-          id={id("conc")}
-          label="Max concurrent"
-          description="Whole number of 1 or more."
-          value={d.draft.maxConcurrent}
-          onChange={(v) => d.set("maxConcurrent", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
-        />
-        <NumberRow
-          id={id("queue")}
-          label="Max queue depth"
-          description="Whole number of 0 or more; 0 disables queueing."
-          value={d.draft.maxQueueDepth}
-          onChange={(v) => d.set("maxQueueDepth", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
-        />
-        <SwitchRow
-          id={id("enabled")}
-          label="Enabled"
-          checked={d.draft.enabled}
-          onChange={(v) => d.choose("enabled", v)}
-        />
-        <TagsRow
-          id={id("tags")}
-          label="Tags"
-          value={d.draft.tags}
-          onChange={(v) => d.set("tags", v)}
-        />
-      </Group>
-      <DraftActions
-        dirty={d.dirty}
-        saving={d.saving}
-        error={d.error}
-        onSave={d.save}
-        onCancel={d.reset}
-      />
-      {!embedded && (
-        <DeleteButton
-          label={backend.name ?? backend.backendId}
-          warning={dependentsWarning(deployment, "backend", backend.backendId)}
-          base={base}
-          onDelete={() =>
-            shell.applyConfig((api) =>
-              api.deleteBackendConfig({
-                backendId: backend.backendId,
-                agentDid: deployment.agentDid,
-              }),
-            )
-          }
-        />
-      )}
-    </>
-  );
-}
-
-/* the provider catalog the bridge publishes, once per mount */
-/* the provider catalog; a failed read is said, with a way to ask again */
-function useSetupCatalog(shell: Shell) {
-  const [providers, setProviders] = useState<InferenceProviderOption[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [attempt, setAttempt] = useState(0);
-  useEffect(() => {
-    let live = true;
-    setError(null);
-    const read = shell.api.getInferenceSetupCatalog?.();
-    if (!read) return;
-    read.then(
-      (c) => {
-        if (live) setProviders(c.providers);
-      },
-      (e: unknown) => {
-        if (live) setError(e instanceof Error ? e.message : String(e));
-      },
-    );
-    return () => {
-      live = false;
-    };
-  }, [shell.api, attempt]);
-  return { providers, error, retry: () => setAttempt((n) => n + 1) };
-}
+import { useApp } from "@/app/AppContext";
+import { useAccounts, useProviderUsage, useSetupCatalog } from "@/hooks/useProviders";
+import { healthy, KINDS, SUBSCRIPTION } from "./inferenceKinds";
+import { UsageBar } from "./ProviderUsage";
+import { AccountDialogs, backendAccount, type AccountAction } from "./ProviderAccounts";
+import { BackendEditor } from "./BackendEditor";
 
 /* which catalog provider a configured backend belongs to */
 function providerOf(b: InferenceBackendView): ProviderId {
@@ -742,23 +55,19 @@ function providerOf(b: InferenceBackendView): ProviderId {
    provider step with it chosen. The editor sits behind the `inference`
    route; Back from it goes to Models. */
 export function InferencePanel({
-  shell,
   deployment,
   item,
-  onAddingChange,
   under,
   orphans = [],
 }: {
-  shell: Shell;
-  deployment: DeploymentView;
+  deployment: NodeView;
   item?: string;
-  /* tells the Models page the New backend form is open, so it steps aside */
-  onAddingChange?: (adding: boolean) => void;
   /* rows to nest under a configured backend: its models */
   under?: (b: InferenceBackendView) => ListRow[];
   /* profiles whose backend no longer exists, listed after the backends */
   orphans?: ListRow[];
 }) {
+  const { changeConfig } = useApp().actions;
   const base = {
     name: "agent" as const,
     agentDid: deployment.agentDid,
@@ -769,19 +78,18 @@ export function InferencePanel({
     agentDid: deployment.agentDid,
     section: "profiles",
   };
-  const { accounts, reload } = useAccounts(shell, deployment.agentDid);
-  const catalog = useSetupCatalog(shell);
+  const { accounts, reload } = useAccounts(deployment.agentDid);
+  const [acting, setActing] = useState<AccountAction | null>(null);
+  const providerUsage = useProviderUsage(deployment.agentDid);
+  const usageOf = (backendId: string) =>
+    providerUsage.usage.find((u) => u.backendId === backendId);
+  const catalog = useSetupCatalog();
   const providers = catalog.providers;
   /* the provider whose inputs are open, from a catalog row or Add another */
-  const [adding, setAddingState] = useState<ProviderId | null>(null);
-  const setAdding = (next: ProviderId | null) => {
-    setAddingState(next);
-    onAddingChange?.(next !== null);
-  };
+  const [adding, setAdding] = useState<ProviderId | null>(null);
   if (adding)
     return (
       <SetupScreen
-        shell={shell}
         initialStep="inference"
         purpose="add-backend"
         provider={adding}
@@ -799,18 +107,23 @@ export function InferencePanel({
   /* backends in the catalog's provider order, so two of one provider sit together */
   const order = (id: ProviderId) => providers.findIndex((p) => p.id === id);
   const configured = deployment.inferenceBackends
-    .map((b) => ({ b, provider: providerOf(b) }))
+    .map((b) => ({ b, provider: providerOf(b), stored: backendAccount(accounts, b) }))
     .sort((x, y) => order(x.provider) - order(y.provider));
   const missing = providers.filter((p) => !configured.some((c) => c.provider === p.id));
   const rowMeta = (b: InferenceBackendView) => {
     const sub = SUBSCRIPTION[b.providerKind ?? ""];
-    const account =
-      sub &&
-      accounts.find((a) => a.provider === sub.provider && a.enabled && !a.pendingSave);
+    const stored = backendAccount(accounts, b);
+    /* the label only where the row's title does not already say it */
+    const label =
+      stored?.label && stored.label !== (b.name ?? b.backendId)
+        ? `${stored.label} · `
+        : "";
     const cred = sub
-      ? account
-        ? "signed in"
-        : "not signed in"
+      ? stored
+        ? `${label}${b.enabled === false ? "off" : stored.enabled ? "signed in" : "disabled"}`
+        : b.accountRef
+          ? "account not on this node"
+          : "not signed in"
       : b.apiKeyConfigured
         ? "key stored"
         : b.apiKeyEnvVar
@@ -839,7 +152,7 @@ export function InferencePanel({
         item={item}
         back={{ route: models, label: "Providers" }}
         rows={[
-          ...configured.map(({ b, provider }) => ({
+          ...configured.map(({ b, provider, stored }) => ({
             id: b.backendId,
             children: under?.(b),
             metaLeadToggles: true,
@@ -859,46 +172,67 @@ export function InferencePanel({
             badge: healthy(b.probeStatus) ? undefined : (b.probeStatus ?? undefined),
             badgeTone: "bad" as const,
             trailing: (
-              <RowMenu
-                name={b.name ?? b.backendId}
-                base={base}
-                id={b.backendId}
-                enabled={{
-                  checked: b.enabled !== false,
-                  onChange: (enabled) =>
-                    shell.applyConfig((api) =>
-                      api.patchConfigComponents({
-                        agentDid: deployment.agentDid,
-                        patches: [
-                          {
-                            collection: "InferenceBackend",
-                            id: b.backendId,
-                            changes: { enabled },
-                          },
-                        ],
-                      }),
-                    ),
-                }}
-                onDelete={() =>
-                  shell.applyConfig((api) =>
-                    api.deleteBackendConfig({
-                      backendId: b.backendId,
-                      agentDid: deployment.agentDid,
-                    }),
-                  )
-                }
-                warning={dependentsWarning(deployment, "backend", b.backendId)}
-              >
-                {/* another local server or a second key, yes; a second subscription, no:
-                    a principal_oauth backend has no account of its own, it uses the
-                    agent's one sign-in for that provider */}
-                {provider !== "anthropic" && provider !== "grok" && (
+              <>
+                {(!SUBSCRIPTION[b.providerKind ?? ""] || stored?.enabled) && (
+                  <UsageBar view={usageOf(b.backendId)} />
+                )}
+                <RowMenu
+                  name={b.name ?? b.backendId}
+                  base={base}
+                  id={b.backendId}
+                  enabled={{
+                    checked: b.enabled !== false,
+                    onChange: (enabled) =>
+                      setEnabled(
+                        changeConfig,
+                        deployment.agentDid,
+                        "InferenceBackend",
+                        b.backendId,
+                        enabled,
+                      ),
+                  }}
+                  /* an added account's backend goes with Remove account */
+                  onDelete={
+                    b.accountRef && stored
+                      ? undefined
+                      : () =>
+                          changeConfig("deleteBackendConfig", {
+                            backendId: b.backendId,
+                            agentDid: deployment.agentDid,
+                          })
+                  }
+                  warning={dependentsWarning(deployment, "backend", b.backendId)}
+                >
                   <DropdownMenuItem onClick={() => setAdding(provider)}>
                     Add another{" "}
                     {providers.find((x) => x.id === provider)?.displayName ?? "backend"}
                   </DropdownMenuItem>
-                )}
-              </RowMenu>
+                  {stored && (
+                    <>
+                      <DropdownMenuItem
+                        onClick={() => setActing({ action: "rename", account: stored })}
+                      >
+                        Rename account…
+                      </DropdownMenuItem>
+                      {stored.enabled && (
+                        <DropdownMenuItem
+                          onClick={() =>
+                            setActing({ action: "disconnect", account: stored })
+                          }
+                        >
+                          Disconnect…
+                        </DropdownMenuItem>
+                      )}
+                      <DropdownMenuItem
+                        variant="destructive"
+                        onClick={() => setActing({ action: "remove", account: stored })}
+                      >
+                        Remove account…
+                      </DropdownMenuItem>
+                    </>
+                  )}
+                </RowMenu>
+              </>
             ),
           })),
           ...orphans,
@@ -941,18 +275,31 @@ export function InferencePanel({
           </DropdownMenu>
         }
         detail={(id) => {
-          const backend = deployment.inferenceBackends.find((b) => b.backendId === id)!;
+          /* the list also holds profiles and providers not set up yet;
+             only a backend opens here */
+          const backend = deployment.inferenceBackends.find((b) => b.backendId === id);
+          if (!backend) return null;
           return (
             <BackendEditor
               key={backend.backendId}
-              shell={shell}
               deployment={deployment}
               backend={backend}
               accounts={accounts}
               reload={reload}
+              usage={{
+                view: usageOf(backend.backendId),
+                refresh: providerUsage.refresh,
+              }}
             />
           );
         }}
+      />
+      <AccountDialogs
+        deployment={deployment}
+        accounts={accounts}
+        reload={reload}
+        acting={acting}
+        onClose={() => setActing(null)}
       />
     </>
   );

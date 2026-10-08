@@ -30,6 +30,7 @@ pub struct AgentRequest {
     pub behavior_id: String,
     pub session_id: String,
     pub content: String,
+    pub retry_parent_request_doc_id: Option<String>,
     pub max_total_tokens: Option<i64>,
     pub input: gents_protocol::request_input::RequestInput,
     pub execution_origin: Option<String>,
@@ -99,6 +100,7 @@ impl TryFrom<gents_protocol::row::AgentRequestRow> for AgentRequest {
                 .session_id
                 .context("agent request is missing session_id")?,
             content: row.content.context("agent request is missing content")?,
+            retry_parent_request_doc_id: normalize_optional_string(row.retry_parent_request_doc_id),
             max_total_tokens: row.max_total_tokens,
             input: row.input.unwrap_or_default(),
             execution_origin: normalize_optional_string(row.execution_origin),

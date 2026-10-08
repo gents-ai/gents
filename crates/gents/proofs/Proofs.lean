@@ -22,6 +22,7 @@ import Proofs.CanonicalOutput
 import Proofs.StreamingResponse.ReasoningAudit
 import Proofs.CanonicalOutput.Execution.AuxiliaryCases
 import Proofs.PromptAssembly.ClaudeWire
+import Proofs.PromptAssembly.ResponsesStorage
 import Proofs.Compaction
 import Proofs.PromptAssembly
 import Proofs.RenderedCapture
@@ -35,6 +36,7 @@ import Proofs.Goals
 import Proofs.GoalAutomation
 import Proofs.GoalAutomation.OperatorResume
 import Proofs.GoalAutomation.ClaimedPublication
+import Proofs.GoalAutomation.ResetResume
 import Proofs.GoalAutomation.RequestHead
 import Proofs.GoalAutomation.ReadinessGate
 import Proofs.Mailbox

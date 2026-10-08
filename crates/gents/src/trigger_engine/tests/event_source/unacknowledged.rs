@@ -32,6 +32,41 @@ fn ping_snapshot(generation: u64, emit_outcome: bool) -> Arc<ActiveRuntimeSnapsh
     )
 }
 
+#[tokio::test]
+async fn seeded_arrival_delivery_does_not_wait_for_the_mutation_gate() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(&node).await.unwrap();
+    node.add_schema("type OutcomePing { message: String }")
+        .await
+        .unwrap();
+    let snapshot = ping_snapshot(1, false);
+    persist_event_bindings(&node, &snapshot).await;
+    let (_tx, rx) = watch::channel(snapshot.clone());
+    let mut source = EventSource::new(rx, node.clone(), CancellationToken::new());
+    source.reconcile_subscriptions(&snapshot).await;
+    let response = crate::config_client::ConfigAccess::Local(node.clone())
+        .write(
+            "test.cursor_gate_source",
+            r#"mutation { create_OutcomePing(input: {message: "ready"}) {_docID} }"#,
+        )
+        .await
+        .unwrap();
+    let doc_id = crate::graphql::created_doc_id(&response, "OutcomePing").unwrap();
+    let held = crate::config_client::ConfigApplyTxn::begin_local(&node, None)
+        .await
+        .unwrap();
+    let intent = tokio::time::timeout(Duration::from_secs(5), source.next_fire())
+        .await
+        .expect("seeded arrival reads must not wait for the mutation gate")
+        .expect("source remains open");
+    held.discard().await.unwrap();
+    assert_eq!(
+        intent.event_vars["source_doc_id"].as_str(),
+        Some(doc_id.as_str())
+    );
+    assert_eq!(intent.trigger_id.as_deref(), Some("ping-trigger"));
+}
+
 /// One `OutcomePing` without `handoff_id`, created after the trigger's cursor
 /// is seeded, delivered once through the durable arrival path.
 async fn first_delivery(emit_outcome: bool) -> (Delivery, FireIntent) {
@@ -93,7 +128,9 @@ impl Delivery {
                         crate::config_client::event_source_cursor::load_or_seed_for_source(
                             txn,
                             owner,
-                            "ping-trigger",
+                            &gents_protocol::event_delivery::EventConsumer::Trigger {
+                                trigger_id: "ping-trigger".into(),
+                            },
                             "OutcomePing",
                         )
                         .await?
@@ -145,15 +182,19 @@ impl Delivery {
         emitted
     }
 
-    async fn trigger_error(&self) -> serde_json::Value {
+    async fn trigger_status(&self, status: &str) -> serde_json::Value {
         for _ in 0..100 {
             let trigger = observed_trigger(self.node.as_ref(), "ping-trigger").await;
-            if trigger["last_status"].as_str() == Some("error") {
+            if trigger["last_status"].as_str() == Some(status) {
                 return trigger;
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        panic!("the refused fire never became visible on its Trigger");
+        panic!("the fire never became visible as {status} on its Trigger");
+    }
+
+    async fn trigger_error(&self) -> serde_json::Value {
+        self.trigger_status("error").await
     }
 }
 
@@ -258,6 +299,164 @@ async fn transient_fire_failure_retries_on_a_bounded_backoff() {
         delivery.pending_documents().await,
         vec![delivery.doc_id.clone()]
     );
+}
+
+/// A fire whose result never reaches the acknowledgment channel records the
+/// reason on its `Trigger` instead of parking silently, keeps the arrival
+/// pending, and is still retried only on the capped backoff — its own
+/// `Trigger` write must not re-drive it without bound.
+#[tokio::test]
+async fn an_unacknowledged_fire_records_its_reason_on_the_trigger() {
+    let (mut delivery, intent) = first_delivery(false).await;
+    let before = delivery.cursor().await;
+    // The guard the intent carries owns the write. Dropping the intent
+    // unacknowledged is the state a driver that dies before any result
+    // leaves behind, so the reason is recorded without the source ever
+    // being polled again.
+    drop(intent);
+    let trigger = delivery
+        .trigger_status(crate::trigger_engine::UNACKNOWLEDGED_STATUS)
+        .await;
+    assert!(
+        trigger["last_error"]
+            .as_str()
+            .is_some_and(|error| error.contains("acknowledgment channel closed")),
+        "{trigger}"
+    );
+    assert_eq!(trigger["fire_count"].as_i64().unwrap_or(0), 0);
+    assert_eq!(
+        trigger["last_fired_source_doc_id"].as_str(),
+        Some(delivery.doc_id.as_str()),
+        "{trigger}"
+    );
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    let mut redrives = 0;
+    while let Ok(Some(retried)) =
+        tokio::time::timeout_at(deadline, delivery.source.next_fire()).await
+    {
+        redrives += 1;
+        drop(retried);
+    }
+    assert!(
+        (1..=8).contains(&redrives),
+        "the unacknowledged arrival was re-driven {redrives} times"
+    );
+    assert_eq!(delivery.cursor().await, before);
+    assert_eq!(
+        delivery.pending_documents().await,
+        vec![delivery.doc_id.clone()]
+    );
+}
+
+/// A driver that dies between emitting the intent and seeing it answered —
+/// here a panic inside dispatch — is the loss mode no live owner can report;
+/// the guard dropped during the unwind still records the fire's reason.
+#[tokio::test]
+async fn a_driver_that_dies_mid_dispatch_records_the_fire_as_unacknowledged() {
+    let (delivery, intent) = first_delivery(false).await;
+    let engine = TriggerEngine::new(
+        delivery.snapshot_tx.subscribe(),
+        Arc::new(PanicMaterializer),
+    );
+    let previous_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let driver = tokio::spawn(async move {
+        engine.dispatch(intent).await;
+    });
+    let joined = driver.await;
+    std::panic::set_hook(previous_hook);
+    joined.expect_err("the materializer must have killed the driver");
+    let trigger = delivery
+        .trigger_status(crate::trigger_engine::UNACKNOWLEDGED_STATUS)
+        .await;
+    assert_eq!(
+        trigger["last_fired_source_doc_id"].as_str(),
+        Some(delivery.doc_id.as_str()),
+        "{trigger}"
+    );
+}
+
+/// A fire that is acknowledged disarms the guard: its `on_result` writer is
+/// the only `Trigger` write the fire produces.
+#[tokio::test]
+async fn an_acknowledged_fire_records_no_unacknowledged_status() {
+    let (delivery, intent) = first_delivery(false).await;
+    (intent.on_result)(FireResult::Errored {
+        error: "acknowledged transient failure".into(),
+    });
+    let trigger = delivery.trigger_status("error").await;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    let settled = observed_trigger(delivery.node.as_ref(), "ping-trigger").await;
+    assert_ne!(
+        settled["last_status"].as_str(),
+        Some(crate::trigger_engine::UNACKNOWLEDGED_STATUS),
+        "{settled}"
+    );
+    assert!(
+        trigger["last_error"]
+            .as_str()
+            .is_some_and(|error| error.contains("acknowledged transient failure")),
+        "{trigger}"
+    );
+}
+
+/// Kills the driver inside dispatch, the one production loss mode the guard
+/// exists for.
+struct PanicMaterializer;
+
+impl MaterializerHandle for PanicMaterializer {
+    fn materialize(
+        &self,
+        _task: &crate::runtime_snapshot::ResolvedTask,
+        _trigger_id: Option<&str>,
+        _trigger_kind: TriggerKind,
+        _trigger_doc_id: Option<&str>,
+        _source_doc_id: Option<&str>,
+        _correlation: Option<&str>,
+        _trigger_context: Option<&str>,
+        _rendered_prompt: &str,
+        _rendered_goal_objective: Option<&str>,
+        _durable_fire_key: &str,
+        _delivery: Option<&crate::trigger_engine::durable::PreparedFire>,
+        _prepared_ids: Option<(&str, &str)>,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<String>> + Send + '_>> {
+        Box::pin(async { panic!("injected materializer panic") })
+    }
+
+    fn has_active_runtime_request_for_trigger(
+        &self,
+        _agent_did: &str,
+        _trigger_id: &str,
+        _excluded_request_id: Option<&str>,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<bool>> + Send + '_>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    fn supersede_active_runtime_requests_for_trigger(
+        &self,
+        _agent_did: &str,
+        _trigger_id: &str,
+        _excluded_request_id: Option<&str>,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<usize>> + Send + '_>> {
+        Box::pin(async { Ok(0) })
+    }
+
+    fn recover_goal_task_fire(
+        &self,
+        _task: &crate::runtime_snapshot::ResolvedTask,
+        _durable_fire_key: &str,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<Option<String>>> + Send + '_>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    fn has_materialized_group_request(
+        &self,
+        _agent_did: &str,
+        _trigger_id: &str,
+        _durable_fire_key: &str,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<bool>> + Send + '_>> {
+        Box::pin(async { Ok(false) })
+    }
 }
 
 /// A refusal decided by the source document is retried when that document is

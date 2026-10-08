@@ -8,7 +8,7 @@ use crate::document_config::AdvertisedModel;
 pub use gents_loop::backend_provider::BackendProviderKind;
 
 /// Agent-scoped credential provider selected by each backend kind.
-pub(crate) trait BackendProviderOauthExt {
+pub trait BackendProviderOauthExt {
     fn oauth_provider(self) -> Option<&'static str>;
 }
 
@@ -36,6 +36,12 @@ pub struct ModelDiscoveryHttpError {
 impl ModelDiscoveryHttpError {
     pub fn is_auth(&self) -> bool {
         matches!(self.status, 401 | 403)
+    }
+
+    /// HTTP 426 Upgrade Required: the provider demands a newer client version
+    /// than the one gents advertised.
+    pub fn is_client_version_gate(&self) -> bool {
+        self.status == 426
     }
 }
 
@@ -118,7 +124,10 @@ impl OpenAiModelRecord {
     }
 
     /// Preserve provider-advertised limits without inferring them from model IDs.
-    fn into_advertised(self, kind: BackendProviderKind) -> Option<AdvertisedModel> {
+    /// `xai_api`: an `OpenAiCompatible` backend at the xAI API endpoint, whose
+    /// `/v1/models` advertises `capabilities.reasoning_effort` exactly for the
+    /// models that accept an effort (absent means none) and `context_length`.
+    fn into_advertised(self, kind: BackendProviderKind, xai_api: bool) -> Option<AdvertisedModel> {
         let reasoning_efforts = if kind.uses_messages_wire() {
             self.capabilities.as_ref().map(|caps| {
                 ["low", "medium", "high", "xhigh", "max"]
@@ -127,6 +136,17 @@ impl OpenAiModelRecord {
                     .filter_map(|effort| crate::config::ReasoningEffort::parse(effort).ok())
                     .collect()
             })
+        } else if xai_api {
+            Some(
+                self.capabilities
+                    .as_ref()
+                    .and_then(|caps| caps["reasoning_effort"].as_array())
+                    .into_iter()
+                    .flatten()
+                    .filter_map(serde_json::Value::as_str)
+                    .filter_map(|effort| crate::config::ReasoningEffort::parse(effort).ok())
+                    .collect(),
+            )
         } else {
             None
         };
@@ -143,7 +163,7 @@ impl OpenAiModelRecord {
             },
             if kind == BackendProviderKind::XaiGrokOAuth {
                 self.context_window
-            } else if kind == BackendProviderKind::OpenRouter {
+            } else if kind == BackendProviderKind::OpenRouter || xai_api {
                 self.context_length
             } else if kind == BackendProviderKind::OpenAiCompatible {
                 self.max_model_len
@@ -248,6 +268,8 @@ pub async fn discover_models(
     api_key: Option<&str>,
     oauth_credential: Option<&crate::oauth_credential::OAuthCredential>,
 ) -> Result<Vec<AdvertisedModel>> {
+    let xai_api = kind == BackendProviderKind::OpenAiCompatible
+        && crate::inference_setup::is_xai_api_endpoint(endpoint);
     let endpoint = match kind {
         BackendProviderKind::ChatGptCodex => crate::chatgpt_codex::normalize_endpoint(endpoint),
         BackendProviderKind::XaiGrokOAuth => crate::xai_grok_oauth::normalize_endpoint(endpoint),
@@ -391,7 +413,7 @@ pub async fn discover_models(
         let openai_models = models
             .data
             .into_iter()
-            .filter_map(|model| model.into_advertised(kind));
+            .filter_map(|model| model.into_advertised(kind, xai_api));
         let chatgpt_codex_models = models
             .models
             .into_iter()
@@ -443,7 +465,7 @@ mod tests {
         }))
         .unwrap();
         let advertised = router
-            .into_advertised(BackendProviderKind::OpenRouter)
+            .into_advertised(BackendProviderKind::OpenRouter, false)
             .unwrap();
         assert_eq!(advertised.context_window, Some(128000));
         assert_eq!(advertised.max_output_tokens, Some(4096));
@@ -453,11 +475,58 @@ mod tests {
         .unwrap();
         assert_eq!(
             local
-                .into_advertised(BackendProviderKind::OpenAiCompatible)
+                .into_advertised(BackendProviderKind::OpenAiCompatible, false)
                 .unwrap()
                 .context_window,
             Some(1048576)
         );
+    }
+
+    #[test]
+    fn xai_api_catalog_records_effort_lists_and_context_length() {
+        use crate::config::ReasoningEffort::{High, Low, Medium, None as Off, XHigh};
+        let record = |value| serde_json::from_value::<OpenAiModelRecord>(value).unwrap();
+        let grok_4_3 = || {
+            record(serde_json::json!({
+                "id":"grok-4.3", "object":"model", "context_length":1000000,
+                "capabilities":{"reasoning_effort":["none","low","medium","high","xhigh"],
+                    "default_reasoning_effort":"low"}
+            }))
+        };
+        let grok_4_5 = record(serde_json::json!({
+            "id":"grok-4.5", "object":"model", "context_length":2000000,
+            "capabilities":{"reasoning_effort":["low","medium","high","xhigh"],
+                "default_reasoning_effort":"high"}
+        }));
+        let grok_4_20 = record(serde_json::json!({
+            "id":"grok-4.20-0309-reasoning", "object":"model", "context_length":2000000
+        }));
+        let xai = |record: OpenAiModelRecord| {
+            record
+                .into_advertised(BackendProviderKind::OpenAiCompatible, true)
+                .unwrap()
+        };
+        let advertised = xai(grok_4_3());
+        assert_eq!(
+            advertised.reasoning_efforts,
+            Some(vec![Off, Low, Medium, High, XHigh])
+        );
+        assert_eq!(advertised.context_window, Some(1000000));
+        let advertised = xai(grok_4_5);
+        assert_eq!(
+            advertised.reasoning_efforts,
+            Some(vec![Low, Medium, High, XHigh])
+        );
+        assert_eq!(advertised.context_window, Some(2000000));
+        let advertised = xai(grok_4_20);
+        assert_eq!(advertised.reasoning_efforts, Some(vec![]));
+        assert_eq!(advertised.context_window, Some(2000000));
+
+        let other = grok_4_3()
+            .into_advertised(BackendProviderKind::OpenAiCompatible, false)
+            .unwrap();
+        assert_eq!(other.reasoning_efforts, None);
+        assert_eq!(other.context_window, None);
     }
 
     #[test]
@@ -664,21 +733,7 @@ mod tests {
             r#"{"data":[{"id":"row-1","model":"grok-4.5","name":"Grok 4.5","contextWindow":256000,"apiBackend":"responses"},{"id":"row-2","modelId":"grok-build-0.1","name":"Grok Build"}]}"#,
         )
         .await;
-        let credential = crate::oauth_credential::OAuthCredential {
-            doc_id: None,
-            credential_id: "xai-oauth:did:key:zAgent".to_string(),
-            agent_did: "did:key:zAgent".to_string(),
-            provider: crate::xai_grok_oauth::XAI_OAUTH_PROVIDER.to_string(),
-            access_token: "access-token".to_string(),
-            refresh_token: "refresh-token".to_string(),
-            id_token: None,
-            account_id: None,
-            chatgpt_plan_type: None,
-            is_fedramp: false,
-            access_token_expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
-            last_refresh: None,
-            enabled: true,
-        };
+        let credential = grok_credential();
 
         let models = discover_models(
             &Client::new(),
@@ -697,6 +752,40 @@ mod tests {
             "Grok discovery must query the official /models-v2 catalog: {}",
             requests[0]
         );
+    }
+
+    #[tokio::test]
+    async fn discover_models_grok_426_is_a_client_version_gate() {
+        // The subscription proxy answers 426 when the advertised
+        // `x-grok-client-version` is below its floor; the CLI needs the typed
+        // status to append the version-gate guidance.
+        let (endpoint, _requests) = spawn_model_discovery_server_with_status(
+            "426 Upgrade Required",
+            r#"{"error":{"message":"Your Grok CLI version (1.0.13) is outdated. Please update to version 1.0.46 or later"}}"#,
+        )
+        .await;
+        let credential = grok_credential();
+
+        let error = discover_models(
+            &Client::new(),
+            BackendProviderKind::XaiGrokOAuth,
+            &endpoint,
+            None,
+            Some(&credential),
+        )
+        .await
+        .expect_err("426 from /models-v2 must fail discovery");
+
+        let http = error
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<ModelDiscoveryHttpError>())
+            .expect("426 must surface as ModelDiscoveryHttpError so the CLI appends version-gate guidance");
+        assert_eq!(http.status, 426, "{http}");
+        assert!(
+            http.is_client_version_gate(),
+            "426 is the client-version gate, not an auth failure: {http}"
+        );
+        assert!(!http.is_auth(), "{http}");
     }
 
     #[tokio::test]
@@ -719,6 +808,10 @@ mod tests {
             access_token_expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
             last_refresh: None,
             enabled: true,
+            account_ref: None,
+            connected_at: None,
+            provider_account_key: None,
+            label: None,
         };
 
         let models = discover_models(
@@ -789,6 +882,32 @@ mod tests {
             access_token_expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
             last_refresh: None,
             enabled: true,
+            account_ref: None,
+            connected_at: None,
+            provider_account_key: None,
+            label: None,
+        }
+    }
+
+    fn grok_credential() -> crate::oauth_credential::OAuthCredential {
+        crate::oauth_credential::OAuthCredential {
+            doc_id: None,
+            credential_id: "xai-oauth:did:key:zAgent".to_string(),
+            agent_did: "did:key:zAgent".to_string(),
+            provider: crate::xai_grok_oauth::XAI_OAUTH_PROVIDER.to_string(),
+            access_token: "access-token".to_string(),
+            refresh_token: "refresh-token".to_string(),
+            id_token: None,
+            account_id: None,
+            chatgpt_plan_type: None,
+            is_fedramp: false,
+            access_token_expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+            last_refresh: None,
+            enabled: true,
+            account_ref: None,
+            connected_at: None,
+            provider_account_key: None,
+            label: None,
         }
     }
 

@@ -8,6 +8,7 @@ import type { ManagedServerResetResult } from "../generated/ManagedServerResetRe
 import type { HomeResetDisposition } from "../generated/HomeResetDisposition.js";
 import type { ManagedServerToolCeiling } from "../generated/ManagedServerToolCeiling.js";
 import type { ProviderAccountView } from "../generated/ProviderAccountView.js";
+import type { BackendUsageView } from "../generated/BackendUsageView.js";
 import type { InferenceSetupCatalog } from "../generated/InferenceSetupCatalog.js";
 import type { InferenceDiscoveryRequest } from "../generated/InferenceDiscoveryRequest.js";
 import type { InferenceDiscoveryResult } from "../generated/InferenceDiscoveryResult.js";
@@ -146,7 +147,7 @@ export type DesktopApiAdapter = {
     sessionId: string;
     agentDid?: string | null;
     requestId: string;
-    baseReconcileVersion: number;
+    baseLiveCursor: string;
     baseContentByteLen: number;
     baseContentHash: string;
     baseReasoningByteLen: number;
@@ -247,16 +248,19 @@ export type DesktopApiAdapter = {
   codexLogin: (
     agentDid: string,
     provider?: string | null,
+    label?: string | null,
   ) => Promise<CodexLoginResult>;
   cancelCodexLogin: () => Promise<void>;
   grokLogin: (
     agentDid: string,
     provider?: string | null,
+    label?: string | null,
   ) => Promise<GrokLoginResult>;
   cancelGrokLogin: () => Promise<void>;
   claudeLogin: (
     agentDid: string,
     provider?: string | null,
+    label?: string | null,
   ) => Promise<ClaudeLoginResult>;
   cancelClaudeLogin: () => Promise<void>;
   listProviderAccounts?: (agentDid: string) => Promise<ProviderAccountView[]>;
@@ -270,6 +274,26 @@ export type DesktopApiAdapter = {
     agentDid: string,
     provider: string,
   ) => Promise<ProviderAccountView>;
+  renameProviderAccount?: (
+    agentDid: string,
+    credentialId: string,
+    label: string,
+  ) => Promise<void>;
+  /** Removes the account and the backends its sign-in created that no
+   *  profile uses. */
+  removeProviderAccount?: (
+    agentDid: string,
+    credentialId: string,
+  ) => Promise<void>;
+  /** Asks the runtime to read usage (skipping accounts read in the last
+   *  five minutes), then returns each backend's stored usage. `refresh` is
+   *  true for an explicit Refresh, the only read whose failure rejects.
+   *  `provider` is a credential kind. */
+  readProviderUsage?: (
+    agentDid: string,
+    refresh: boolean,
+    provider?: string | null,
+  ) => Promise<BackendUsageView[]>;
   saveInferenceProfileConfig: (
     request: InferenceProfileSaveRequest,
   ) => Promise<DesktopClientSnapshot>;

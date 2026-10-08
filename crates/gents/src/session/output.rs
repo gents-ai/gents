@@ -134,8 +134,8 @@ struct ReadCache {
     /// Rows the caller read by an exact scoped query in the same transaction;
     /// each still passes coordinate validation before it enters `headers`.
     observed: BTreeMap<String, super::canonical_rows::TranscriptMessageRow>,
-    /// Undecoded scoped headers of one session, for coordinate validation.
-    sessions: BTreeMap<String, Vec<serde_json::Value>>,
+    /// Bulk readers cache scoped session headers; single-header readers query twins only.
+    sessions: Option<BTreeMap<String, Vec<serde_json::Value>>>,
 }
 
 impl ReadAccess<'_, '_> {
@@ -180,9 +180,14 @@ pub(crate) async fn load_canonical_message_in_txn(
     gents_protocol::output::TranscriptMessage,
     gents_protocol::message::Message,
 )> {
-    TxnCanonicalReader::new(txn, agent_did, requester_did)
-        .load_message(header_doc_id)
-        .await
+    reconstruct_scoped_message(
+        ReadAccess::Txn(txn),
+        header_doc_id,
+        agent_did,
+        requester_did,
+        &mut ReadCache::default(),
+    )
+    .await
 }
 
 /// Exact reconstruction of many headers of one scope in one authoritative
@@ -211,7 +216,10 @@ impl<'a, 'txn> TxnCanonicalReader<'a, 'txn> {
             txn,
             agent_did,
             requester_did,
-            cache: ReadCache::default(),
+            cache: ReadCache {
+                sessions: Some(BTreeMap::new()),
+                ..ReadCache::default()
+            },
         }
     }
 
@@ -506,7 +514,7 @@ async fn load_header(
 }
 
 /// Scoped headers sharing `header`'s key or sequence in its session. A
-/// transaction reads its session once: validating each of a request's
+/// bulk transaction reader reads its session once: validating each of a request's
 /// headers by its own query costs the session size per header.
 async fn coordinate_twins(
     access: ReadAccess<'_, '_>,
@@ -519,31 +527,40 @@ async fn coordinate_twins(
     let scope = session_scope_filter(agent_did, session_id, requester_did);
     let key = &header.message.message_key;
     let sequence = header.message.sequence;
-    if !matches!(access, ReadAccess::Txn(_)) {
+    if cache.sessions.is_none() {
         let escaped = crate::graphql::escape_graphql_string(key);
         let query = format!(
-            r#"{{ AgentMessage(filter: {{ {scope},
-            _or: [{{ message_key: {{ _eq: "{escaped}" }} }}, {{ sequence: {{ _eq: {sequence} }} }}]
-        }}) {{ {AGENT_MESSAGE_FIELDS} }} }}"#
+            r#"{{
+            key_matches: AgentMessage(filter: {{ {scope}, message_key: {{ _eq: "{escaped}" }} }}) {{ {AGENT_MESSAGE_FIELDS} }}
+            sequence_matches: AgentMessage(filter: {{ {scope}, sequence: {{ _eq: {sequence} }} }}) {{ {AGENT_MESSAGE_FIELDS} }}
+        }}"#
         );
         let response = access
             .query(&query, "validate_canonical_header_coordinate")
             .await?;
-        return rows_value(&response, "AgentMessage")?
-            .iter()
-            .map(decode_transcript_message_row)
-            .collect();
+        let mut seen = BTreeSet::new();
+        let mut rows = Vec::new();
+        for selection in ["key_matches", "sequence_matches"] {
+            for value in rows_value(&response, selection)? {
+                let row = decode_transcript_message_row(value)?;
+                if seen.insert(row.doc_id.clone()) {
+                    rows.push(row);
+                }
+            }
+        }
+        return Ok(rows);
     }
-    if !cache.sessions.contains_key(session_id) {
+    let sessions = cache.sessions.as_mut().expect("bulk coordinate cache");
+    if !sessions.contains_key(session_id) {
         let query =
             format!(r#"{{ AgentMessage(filter: {{ {scope} }}) {{ {AGENT_MESSAGE_FIELDS} }} }}"#);
         let response = access
             .query(&query, "validate_canonical_header_coordinate")
             .await?;
         let rows = rows_value(&response, "AgentMessage")?.clone();
-        cache.sessions.insert(session_id.clone(), rows);
+        sessions.insert(session_id.clone(), rows);
     }
-    cache.sessions[session_id]
+    sessions[session_id]
         .iter()
         .filter(|row| {
             row.get("message_key").and_then(serde_json::Value::as_str) == Some(key.as_str())
@@ -1466,6 +1483,11 @@ fn warn_unverifiable_replay_capture(capture_key: &str, error: &anyhow::Error) {
     );
 }
 
+/// Capture versions whose stored request body can be decoded for reasoning
+/// replay. v1 rows keep their own readers and never carry a replayable
+/// provenance manifest; later versions decode through the versioned container.
+const REPLAY_CAPTURE_VERSIONS: &[u32] = &[2, 3];
+
 #[allow(clippy::too_many_arguments)]
 async fn verify_replay_capture(
     node: &EmbeddedNode,
@@ -1486,6 +1508,14 @@ async fn verify_replay_capture(
         attempt,
     } = coordinate;
     let capture_scope_label = capture_scope.to_string();
+    // Rows are immutable, so every container version ever written stays in the
+    // store; replay accepts the ones whose request body decodes through the
+    // versioned container. A v1 row never carries a replayable provenance
+    // manifest, and an unknown version is reported rather than reinterpreted.
+    let capture_version = capture["capture_version"]
+        .as_u64()
+        .and_then(|value| u32::try_from(value).ok())
+        .unwrap_or_default();
     replay_ensure!(
         required_row_str(capture, "capture_key")? == capture_key
             && required_row_str(capture, "request_doc_id")? == request_doc_id
@@ -1494,8 +1524,7 @@ async fn verify_replay_capture(
             && required_row_str(capture, "agent_did")? == agent_did
             && required_row_str(capture, "requester_did")? == requester_did.unwrap_or("")
             && required_row_str(capture, "capture_scope")? == capture_scope_label
-            && capture["capture_version"].as_u64()
-                == Some(u64::from(gents_protocol::rendered_request::CAPTURE_VERSION))
+            && REPLAY_CAPTURE_VERSIONS.contains(&capture_version)
             && capture["turn_index"].as_u64() == Some(u64::from(turn_index))
             && capture["attempt"].as_u64() == Some(u64::from(attempt)),
         "canonical replay capture disagrees with its exact provider close coordinate"
@@ -1553,7 +1582,7 @@ async fn verify_replay_capture(
     };
     let body = crate::rendered_request::decode_capture_json_embedded_cached(
         node,
-        gents_protocol::rendered_request::CAPTURE_VERSION,
+        capture_version,
         required_row_str(capture, "request_json")?,
         crate::rendered_request::CapturePayloadKind::RequestBody,
         cache,

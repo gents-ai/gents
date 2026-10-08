@@ -143,14 +143,17 @@ test.describe("kit shell", () => {
           top: frame.top,
           bottom: frame.bottom,
           headerTop: header.getBoundingClientRect().top,
-          headerInset: getComputedStyle(header).paddingLeft,
+          headerInset: getComputedStyle(document.querySelector(".app-bar-first")!)
+            .paddingLeft,
           editorBottom: editor.bottom,
           height: window.innerHeight,
         };
       });
       expect(bounds.top).toBe(0);
       expect(bounds.headerTop).toBe(0);
-      expect(bounds.headerInset).toBe("16px");
+      /* the bar's plain inset: a native title bar sits above the webview,
+         so no room is left for traffic lights */
+      expect(bounds.headerInset).toBe("12px");
       expect(bounds.bottom).toBeLessThanOrEqual(bounds.height);
       expect(bounds.editorBottom).toBeLessThanOrEqual(bounds.height);
     }
@@ -210,7 +213,7 @@ test.describe("kit shell", () => {
 
   test("agents and configuration are reachable", async ({ page }) => {
     await gotoHarness(page);
-    await page.getByLabel("breadcrumb").getByRole("link", { name: "Agents" }).click();
+    await page.getByRole("link", { name: "Agents" }).first().click();
     await expect(page.getByTestId("agents-screen")).toBeVisible();
     await expect(page.getByRole("heading", { name: "Agents" })).toBeVisible();
     await expect(page.getByText("Network", { exact: true })).toHaveCount(0);
@@ -223,7 +226,7 @@ test.describe("kit shell", () => {
     page,
   }) => {
     await gotoHarness(page);
-    await page.getByLabel("breadcrumb").getByRole("link", { name: "Agents" }).click();
+    await page.getByRole("link", { name: "Agents" }).first().click();
     const sync = page.getByRole("button", { name: /Sync healthy/ });
     const syncDialog = page.getByRole("dialog", { name: "Database sync details" });
 
@@ -334,10 +337,20 @@ test.describe("kit shell", () => {
       .click();
     const transcript = page.getByTestId("transcript-panel");
     const removed = transcript.locator("[data-diff=removed]");
+    // Consecutive calls sit in one activity group, folded to its header
+    // until opened; then only the step's caret opens the step, so the
+    // row's text stays selectable.
+    const groups = transcript
+      .locator("button[aria-expanded=false]")
+      .filter({ hasText: /edited|ran|read|used/i });
+    for (let opened = 0; opened < 4 && (await groups.count()); opened += 1) {
+      await groups.first().click();
+    }
     for (let opened = 0; opened < 4 && !(await removed.count()); opened += 1) {
       await transcript
-        .locator("[data-slot=collapsible-trigger][aria-expanded=false]")
+        .locator("[data-slot=collapsible]")
         .filter({ hasText: /parser\.rs|edited|read|\$/ })
+        .getByRole("button", { name: "Show detail" })
         .first()
         .click();
     }
@@ -417,7 +430,7 @@ test.describe("kit shell", () => {
   test("keeps dialogs inside short windows", async ({ page }) => {
     await page.setViewportSize({ width: 800, height: 300 });
     await gotoHarness(page);
-    await page.getByLabel("breadcrumb").getByRole("link", { name: "Agents" }).click();
+    await page.getByRole("link", { name: "Agents" }).first().click();
     await page.getByRole("button", { name: "Add agent" }).click();
 
     const dialog = page.getByRole("dialog", { name: "Add agent" });
@@ -490,11 +503,14 @@ test.describe("kit shell", () => {
     await sendButton(page).click();
     await expect(page.getByText(/received "inspect the runtime"/)).toBeVisible();
 
-    await page
-      .getByTestId("session-screen")
-      .getByRole("link", { name: "Sessions" })
-      .last()
-      .click();
+    /* the list, not the previous screen: the rail's own link, which the
+       menu sheet holds below md */
+    const toSessions = async () => {
+      const menu = page.getByRole("button", { name: "Menu" });
+      if (await menu.isVisible()) await menu.click();
+      await page.getByRole("link", { name: "Sessions" }).first().click();
+    };
+    await toSessions();
     await page
       .getByTestId("sessions-screen")
       .getByRole("link", { name: /introduction-and-greetings/ })
@@ -504,15 +520,74 @@ test.describe("kit shell", () => {
       page.getByText(/seeded turn gives the transcript a stable row/),
     ).toBeVisible();
 
-    await page
-      .getByTestId("session-screen")
-      .getByRole("link", { name: "Sessions" })
-      .last()
-      .click();
+    await toSessions();
     await page
       .getByTestId("sessions-screen")
       .getByRole("link", { name: /inspect the runtime/ })
       .click();
     await expect(page.getByText(/received "inspect the runtime"/)).toBeVisible();
+  });
+});
+
+test.describe("each session's dock", () => {
+  test("is as it was when a session is left and come back to", async ({
+    page,
+  }, testInfo) => {
+    test.skip(
+      testInfo.project.name !== "chromium-desktop",
+      "the dock is a column only in a roomy window",
+    );
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await gotoHarness(page);
+    await page
+      .getByTestId("sessions-screen")
+      .getByRole("link", { name: /introduction-and-greetings/ })
+      .click();
+    await page
+      .getByRole("button", { name: "More" })
+      .filter({ visible: true })
+      .first()
+      .click();
+    await page.getByRole("menuitem", { name: "Trace" }).click();
+    const resize = page.getByRole("separator", { name: "Resize panel" });
+    await expect(resize).toBeVisible();
+    const cell = page.getByTestId("dock-cell");
+    /* settled: the opening spring has stopped moving */
+    let restingWidth = 0;
+    await expect
+      .poll(async () => {
+        const before = (await cell.boundingBox())?.width ?? 0;
+        await page.waitForTimeout(150);
+        const after = (await cell.boundingBox())?.width ?? 0;
+        restingWidth = after;
+        return after > 300 && Math.abs(after - before) < 1;
+      })
+      .toBe(true);
+
+    /* away from the session: its dock is not this screen's */
+    await page.getByRole("link", { name: "Sessions" }).first().click();
+    await expect(page.getByTestId("sessions-screen")).toBeVisible();
+    await expect(resize).toHaveCount(0);
+
+    /* back: open as it stood, at its width in the first frame, no spring */
+    await page.getByTestId("window-bar").getByRole("button", { name: "Back" }).click();
+    const firstFrameWidth = await page.evaluate(
+      () =>
+        new Promise<number>((resolve) =>
+          requestAnimationFrame(() =>
+            resolve(
+              document
+                .querySelector('[data-testid="dock-cell"]')
+                ?.getBoundingClientRect().width ?? 0,
+            ),
+          ),
+        ),
+    );
+    expect(Math.abs(firstFrameWidth - restingWidth)).toBeLessThan(2);
+    await expect(resize).toBeVisible();
+
+    /* and the screens outside a session still have no dock open */
+    await page.getByRole("link", { name: "Sessions" }).first().click();
+    await expect(resize).toHaveCount(0);
   });
 });

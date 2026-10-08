@@ -1111,3 +1111,225 @@ async fn concurrent_keyed_appends_resolve_sequence_conflicts_without_duplicates(
     );
     node.shutdown().await;
 }
+
+#[tokio::test]
+async fn single_header_transaction_matches_bulk_coordinate_validation() {
+    use crate::config_client::ConfigAccess;
+    use canonical_rows::{
+        decode_transcript_message_row, transcript_message_create_variables, AGENT_MESSAGE_FIELDS,
+        CREATE_AGENT_MESSAGE_MUTATION,
+    };
+    use gents_protocol::output::MessagePublication;
+
+    for case in [
+        "unrelated",
+        "key",
+        "sequence",
+        "both",
+        "foreign",
+        "requester",
+        "fork",
+    ] {
+        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        ensure_runtime_schemas(&node).await.unwrap();
+        import_history_observation(
+            &node,
+            "request",
+            "session",
+            "did:test:owner",
+            None,
+            "accepted",
+            "accepted-key",
+            1,
+            None,
+        )
+        .await;
+        ConfigAccess::transact_local(&node, None, "test.single_header_coordinates", |txn| {
+            Box::pin(async move {
+                let response = txn
+                    .execute(&format!("{{ AgentMessage {{ {AGENT_MESSAGE_FIELDS} }} }}"))
+                    .await?;
+                let original = decode_transcript_message_row(&response["data"]["AgentMessage"][0])?;
+                let mut noise = transcript_message_create_variables(&original.message)?;
+                noise["input"]["message_key"] = serde_json::json!("unrelated-key");
+                noise["input"]["sequence"] = serde_json::json!(99);
+                noise["input"]["blocks"] = serde_json::json!({"invalid": "unrelated"});
+                for index in 0..if case == "unrelated" { 49 } else { 1 } {
+                    noise["input"]["message_key"] = serde_json::json!(format!("unrelated-{index}"));
+                    noise["input"]["sequence"] = serde_json::json!(99 + index);
+                    txn.execute_with_variables(CREATE_AGENT_MESSAGE_MUTATION, &noise)
+                        .await?;
+                }
+
+                let mut other = original.message.clone();
+                let mut target = original.doc_id.clone();
+                match case {
+                    "key" => other.sequence = 2,
+                    "sequence" => other.message_key = "sequence-twin".into(),
+                    "both" => other.native_id = Some("distinct-physical-twin".into()),
+                    "foreign" => other.agent_did = "did:test:foreign".into(),
+                    "requester" => other.requester_did = Some("did:test:requester".into()),
+                    "fork" => {
+                        other.session_id = "child-session".into();
+                        other.message_key = "fork-key".into();
+                        other.request_doc_id = None;
+                        other.publication = MessagePublication::Fork {
+                            origin_message_doc_id: original.doc_id.clone(),
+                        };
+                    }
+                    _ => {}
+                }
+                if case != "unrelated" {
+                    let created = txn
+                        .execute_with_variables(
+                            CREATE_AGENT_MESSAGE_MUTATION,
+                            &transcript_message_create_variables(&other)?,
+                        )
+                        .await?;
+                    assert_ne!(
+                        crate::graphql::created_doc_id(&created, "AgentMessage")?,
+                        original.doc_id,
+                    );
+                    if case == "fork" {
+                        target = crate::graphql::created_doc_id(&created, "AgentMessage")?;
+                    }
+                }
+                let single =
+                    output::load_canonical_message_in_txn(txn, &target, "did:test:owner", None)
+                        .await
+                        .map_err(|error| format!("{error:#}"));
+                let bulk = output::TxnCanonicalReader::new(txn, "did:test:owner", None)
+                    .load_message(&target)
+                    .await
+                    .map_err(|error| format!("{error:#}"));
+                assert_eq!(single, bulk, "single/bulk mismatch for {case}");
+                assert_eq!(
+                    single.is_err(),
+                    matches!(case, "key" | "sequence" | "both"),
+                    "{case}"
+                );
+                Ok(())
+            })
+        })
+        .await
+        .unwrap();
+        node.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn retry_frontier_matches_lean_admission() {
+    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(&node).await.unwrap();
+    async fn write_doc(
+        node: &std::sync::Arc<defra_node::EmbeddedNode>,
+        mutation: &str,
+        field: &str,
+    ) -> String {
+        let response = crate::config_client::ConfigAccess::Local(node.clone())
+            .write("test.retry_frontier", mutation)
+            .await
+            .unwrap();
+        let response: defra_node::QueryResponse = serde_json::from_value(response).unwrap();
+        crate::graphql::single_mutation_document(&response, field)
+            .unwrap()
+            .unwrap()["_docID"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    }
+    for (index, case) in crate::lean_vocab_test::lean_contract_snapshot()
+        .retry_frontier_cases
+        .iter()
+        .enumerate()
+    {
+        let session_id = format!("retry-frontier-{index}");
+        let session = escape_graphql_string(&session_id);
+        let state = if case["scoped_terminal"].as_bool().unwrap() {
+            "dead"
+        } else {
+            "processing"
+        };
+        let parent = write_doc(&node, &format!(r#"mutation {{ create_AgentRequest(input: {{
+            request_id: "retry-frontier-parent-{index}", purpose: "normal", agent_did: "did:test:test",
+            behavior_id: "general", session_id: "{session}", content: "Do the work",
+            lifecycle_state: "{state}", failure_reason:"Stale", execution_origin: "interactive", created_at: "2026-10-07T00:00:00Z"
+        }}) {{ _docID }} }}"#), "create_AgentRequest").await;
+        let mut request = crate::watcher::AgentRequest::try_from(
+            serde_json::from_value::<gents_protocol::row::AgentRequestRow>(serde_json::json!({
+                "_docID":"successor", "request_id":"successor", "purpose":"normal",
+                "agent_did":"did:test:test", "session_id":session_id, "behavior_id":"general",
+                "content":"Do the work", "created_at":"2026-10-07T00:00:01Z",
+                "retry_parent_request_doc_id":parent
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        if !case["same_requester"].as_bool().unwrap() {
+            request.requester_did = Some("did:test:other".into());
+        }
+        if !case["same_session"].as_bool().unwrap() {
+            request.session_id = format!("fresh-session-{index}");
+        }
+        if case["published"].as_bool().unwrap() {
+            import_history_observation(
+                &node,
+                &parent,
+                &session_id,
+                "did:test:test",
+                None,
+                "Do the work",
+                &canonical_rows::authored_message_key(&parent, "prompt"),
+                1,
+                None,
+            )
+            .await;
+        }
+        let parent_gql = escape_graphql_string(&parent);
+        if case["running"].as_bool().unwrap() {
+            let mode = if case["background"].as_bool().unwrap() {
+                "background"
+            } else {
+                "foreground"
+            };
+            write_doc(
+                &node,
+                &format!(
+                    r#"mutation {{ create_AgentToolCall(input: {{
+                tool_call_key:"retry-frontier-tool-{index}", request_doc_id:"{parent_gql}",
+                lifecycle_state:"running", await_mode:"{mode}"
+            }}) {{_docID}} }}"#
+                ),
+                "create_AgentToolCall",
+            )
+            .await;
+        }
+        let actual = history::retry_has_published_input(&node, &request).await;
+        assert_eq!(actual.ok(), case["expected"].as_bool(), "{case}");
+        if case["name"] == "ready" {
+            request.retry_parent_request_doc_id = Some(
+                write_doc(
+                    &node,
+                    &format!(
+                        r#"mutation {{
+                create_AgentRequest(input: {{ request_id:"retry-frontier-second", purpose:"normal",
+                    agent_did:"did:test:test", behavior_id:"general", session_id:"{session}",
+                    content:"Do the work", lifecycle_state:"failed", execution_origin:"interactive",
+                    created_at:"2026-10-07T00:00:02Z", retry_parent_request_doc_id:"{parent_gql}"
+                }}) {{_docID}} }}"#
+                    ),
+                    "create_AgentRequest",
+                )
+                .await,
+            );
+            assert_eq!(
+                history::retry_has_published_input(&node, &request)
+                    .await
+                    .ok(),
+                case["expected"].as_bool(),
+                "retry chain must find the same authored input"
+            );
+        }
+    }
+    node.shutdown().await;
+}

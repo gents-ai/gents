@@ -7,7 +7,7 @@
    disable/reload/uninstall; a bare global is the author's leak. After
    hermes-agent's contrib/plugin.ts. */
 import type { Route } from "@/lib/router";
-import type { DeploymentView } from "@source-inc/gents-desktop-client";
+import type { NodeView } from "../../hooks/fleetStore";
 import { onUxEvent, type UxEventListener } from "./events";
 import { registry } from "./registry";
 import { TRANSCRIPT_DIRECTIVE_AREA, type Contribution } from "./types";
@@ -36,12 +36,14 @@ export interface UxOs {
   }) => Promise<string | null>;
 }
 
-/** what a plugin may read of the app, and the two verbs it may call on it */
+/** what a plugin may read of the app, and the two verbs it may call on it.
+    A node is the fleet store's view of a deployment: everything but its
+    sessions and mailbox, which have their own stores. */
 export interface UxShell {
   route: () => Route;
   navigate: (route: Route) => void;
-  deployments: () => readonly DeploymentView[];
-  selectedDeployment: () => DeploymentView | null;
+  deployments: () => readonly NodeView[];
+  selectedDeployment: () => NodeView | null;
   selectedSessionId: () => string | null;
   /** a user turn in the selected session, attributed to the plugin */
   send: (content: string) => Promise<void>;

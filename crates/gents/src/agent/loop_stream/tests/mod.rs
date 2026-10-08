@@ -9,10 +9,7 @@ use futures::{stream, Stream, StreamExt};
 use rig::completion::{CompletionError, CompletionModel, CompletionRequest, CompletionResponse};
 
 use crate::llm::message::Message;
-use rig::streaming::{
-    RawStreamingChoice, RawStreamingToolCall, StreamedAssistantContent, StreamedUserContent,
-    StreamingCompletionResponse,
-};
+use rig::streaming::{RawStreamingChoice, RawStreamingToolCall, StreamingCompletionResponse};
 use tokio::sync::Mutex;
 
 use super::*;
@@ -35,3 +32,4 @@ include!("tool_execution.rs");
 
 include!("invalid_tool_progress.rs");
 include!("repeated_tool_failure.rs");
+include!("schema_argument_repair.rs");

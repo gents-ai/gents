@@ -45,12 +45,15 @@
 //! answer with ordinary shaped method-not-found errors of the shim's own
 //! wording. No permission document is ever created by this leaf.
 //!
-//! All queries go through the in-process embedded node (`node.execute`) with
-//! every interpolated value passed through `escape_graphql_string`; no HTTP
-//! GraphQL helper is used. Projection is bounded and request-id-scoped: one
-//! `AgentToolCall` query per request id, then one canonical presentation
-//! load per projected call row (the owner's per-call identity chain). No
-//! graph walks beyond the rows of the request being projected.
+//! Reads run in-process through `graphql_with_transaction_retry`, and
+//! presentations through `load_tool_call_presentation` over `ConfigAccess`,
+//! with every interpolated value passed through `escape_graphql_string`; no
+//! HTTP GraphQL helper is used. `project_tools` is bounded and
+//! request-id-scoped: one `AgentToolCall` query per request id, then one
+//! canonical presentation load per projected call row (the owner's per-call
+//! identity chain), and no graph walks beyond the rows of that request.
+//! `session_tool_results` reads one root session's calls of a single tool,
+//! with one presentation load per call its caller has not yet settled.
 
 use std::{char::REPLACEMENT_CHARACTER, collections::HashMap, sync::Arc};
 
@@ -506,6 +509,61 @@ pub(super) async fn project_tools(
 
     let projection = project_tool_rows(&rows, &presentations);
     Ok(projection)
+}
+
+/// One call of a named tool in a root session and its durable reply.
+pub(crate) struct SessionToolResult {
+    pub doc_id: String,
+    /// `Ok(None)` until the reply is delivered. An `Err` belongs to this call
+    /// alone: the other calls of the batch are still read.
+    pub result: Result<Option<String>>,
+}
+
+/// Calls of `tool_name` in this root session (requester is the principal),
+/// excluding `skip`ped physical identities, each read through the canonical
+/// presentation owner.
+pub(crate) async fn session_tool_results(
+    node: &Arc<EmbeddedNode>,
+    principal: &str,
+    session_id: &str,
+    tool_name: &str,
+    skip: &std::collections::HashSet<String>,
+) -> Result<Vec<SessionToolResult>> {
+    let scope = gents::session::session_scope_filter(principal, session_id, Some(principal));
+    let query = format!(
+        r#"{{ AgentToolCall(filter: {{ {scope}, tool_name: {{_eq: "{}"}} }}, order: {{started_at: ASC}}) {{ _docID }} }}"#,
+        escape_graphql_string(tool_name)
+    );
+    let response =
+        graphql_with_transaction_retry(node, &query, "grok shim session tool call query").await?;
+    #[derive(Deserialize)]
+    struct Row {
+        #[serde(rename = "_docID")]
+        doc_id: String,
+    }
+    let rows: Vec<Row> = serde_json::from_value(
+        response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentToolCall"))
+            .cloned()
+            .context("missing AgentToolCall rows")?,
+    )
+    .context("invalid AgentToolCall identity")?;
+    let access = ConfigAccess::Local(node.clone());
+    let mut results = Vec::new();
+    for Row { doc_id } in rows {
+        if skip.contains(&doc_id) {
+            continue;
+        }
+        let result =
+            load_tool_call_presentation(&access, &doc_id, principal, session_id, Some(principal))
+                .await
+                .map(|presentation| presentation.result)
+                .with_context(|| format!("canonical tool presentation for {doc_id}"));
+        results.push(SessionToolResult { doc_id, result });
+    }
+    Ok(results)
 }
 
 /// The durable chronology sort key of one tool call row:

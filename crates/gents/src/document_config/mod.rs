@@ -140,6 +140,25 @@ pub async fn ensure_agent_principal(
         "principal DID must not be blank"
     );
     let owner = agent_did.to_owned();
+    let existing: Option<AgentPrincipal> =
+        ConfigAccess::transact_local_readonly(node, None, "ensure_agent_principal.read", |txn| {
+            let owner = &owner;
+            Box::pin(async move {
+                crate::config_client::read_desired_state_record_in_txn(
+                    txn,
+                    Collection::AgentPrincipal,
+                    owner,
+                    owner,
+                )
+                .await?
+                .map(|(_, value)| serde_json::from_value(value).map_err(Into::into))
+                .transpose()
+            })
+        })
+        .await?;
+    if let Some(principal) = existing {
+        return Ok(principal);
+    }
     ConfigAccess::transact_local(node, None, "ensure_agent_principal", move |txn| {
         let owner = owner.clone();
         Box::pin(async move {

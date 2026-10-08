@@ -1,7 +1,5 @@
 /* A section that is a list of documents and one document's settings,
-   routed by item id, as the desktop app's config tabs are (list on the
-   left, editor beside it; here the list is the page and a row opens the
-   editor). */
+   routed by item id: the list is the page and a row opens the editor. */
 import { Fragment, useMemo, useRef, useState, type ReactNode } from "react";
 import { ArrowLeft, ChevronDown, Plus, Trash2 } from "lucide-react";
 import { Badge } from "@gents/ui/components/badge";
@@ -28,6 +26,7 @@ import { FieldLegend, FieldRows, FieldSet } from "@gents/ui/components/field";
 import { toast } from "sonner";
 import { href, navigate, type Route } from "@/lib/router";
 import { Row } from "./rows";
+import { toastFailure } from "@/lib/failure";
 
 /* a row is a link to its document, or a button when it acts instead */
 function RowLink({
@@ -209,7 +208,7 @@ export type ListRow = {
   metaLeadToggles?: boolean;
 };
 
-/* pack provenance (desktop #1511): a document from a pack carries a
+/* pack provenance: a document from a pack carries a
    gents:pack:<origin> tag; lists can filter by it */
 const PACK_ORIGIN_PREFIX = "gents:pack:";
 const NOT_FROM_PACK_FILTER = "__not_from_pack__";
@@ -283,7 +282,7 @@ export function ListDetail({
     try {
       await onCreate();
     } catch (error) {
-      toast(`Create failed: ${error instanceof Error ? error.message : String(error)}`);
+      toastFailure("create it", error);
     } finally {
       creatingRef.current = false;
       setCreating(false);
@@ -501,7 +500,7 @@ export function ConfirmDelete({
       onOpenChange(false);
       if (after) navigate(after);
     } catch (error) {
-      toast(`Delete failed: ${error instanceof Error ? error.message : String(error)}`);
+      toastFailure(`delete ${label}`, error);
     } finally {
       setDeleting(false);
     }
@@ -556,6 +555,7 @@ export function DeleteButton({
   label,
   onDelete,
   base,
+  noun = NOUNS[base.section] ?? "item",
   after,
   warning,
   companion,
@@ -563,6 +563,8 @@ export function DeleteButton({
   label: string;
   onDelete: () => Promise<unknown>;
   base: Extract<Route, { name: "agent" }>;
+  /* what is deleted, when it is not the section's document */
+  noun?: string;
   /* where to go once deleted; the list when absent */
   after?: Route;
   /* what else the delete leaves behind, said in the confirmation */
@@ -570,7 +572,6 @@ export function DeleteButton({
   /* a document that can go with it, offered as a ticked box */
   companion?: { label: string; onDelete: () => Promise<unknown> };
 }) {
-  const noun = NOUNS[base.section] ?? "item";
   const [open, setOpen] = useState(false);
   return (
     <FieldSet className="mt-12 mb-8" data-testid="danger-zone">

@@ -1,35 +1,37 @@
 /* A new model drafted beside the page that needs it: the full profile
    editor, nothing saved until Create, and the caller gets the id. */
+import type { NodeView } from "../../../hooks/fleetStore";
 import { useState } from "react";
-import type { DeploymentView } from "@source-inc/gents-desktop-client";
-import type { Shell } from "@/hooks/useShell";
 import { EditorSheet } from "./EditorSheet";
-import { ProfileEditor, newProfileDocument } from "./ProfilesPanel";
+import { ProfileEditor, newProfileDocument } from "./ProfileEditor";
+import { useAccounts } from "@/hooks/useProviders";
 
 export function ProfileSheet({
-  shell,
   deployment,
   open,
   onClose,
   backendId,
 }: {
-  shell: Shell;
-  deployment: DeploymentView;
+  deployment: NodeView;
   open: boolean;
   /* the new profile's id, or null when discarded */
   onClose: (profileId: string | null) => void;
   /* the backend it is added to (a backend's Add profile row) */
   backendId?: string;
 }) {
-  const [draft, setDraft] = useState(() => newProfileDocument(deployment, backendId));
-  const [openedFor, setOpenedFor] = useState(backendId);
-  if (open && openedFor !== backendId) {
-    setOpenedFor(backendId);
-    setDraft(newProfileDocument(deployment, backendId));
+  const { accounts } = useAccounts(deployment.agentDid);
+  const [draft, setDraft] = useState(() =>
+    newProfileDocument(deployment, backendId, accounts),
+  );
+  /* drafted as it opens, from the accounts as they are by then */
+  const [wasOpen, setWasOpen] = useState(false);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open) setDraft(newProfileDocument(deployment, backendId, accounts));
   }
   const close = (id: string | null) => {
     onClose(id);
-    setDraft(newProfileDocument(deployment, backendId));
+    setDraft(newProfileDocument(deployment, backendId, accounts));
   };
   return (
     <EditorSheet
@@ -41,7 +43,6 @@ export function ProfileSheet({
       {open && (
         <ProfileEditor
           key={draft.profile_id}
-          shell={shell}
           deployment={deployment}
           profile={draft}
           draft={{ onSaved: (id) => close(id), onCancel: () => close(null) }}

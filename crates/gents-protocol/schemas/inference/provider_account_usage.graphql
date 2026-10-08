@@ -1,0 +1,13 @@
+# Provider-reported usage for one provider account, per node: each agent
+# keeps its own row, so two nodes using one account never share or merge
+# usage. An observation, kept off OAuthCredential because every credential
+# write reloads the runtime view.
+type ProviderAccountUsage @index(fields: ["agent_did", "provider", "usage_key"], unique: true) {
+    agent_did: String @index @immutable
+    provider: String
+    usage_key: String
+    report: JSON
+    observed_at: DateTime
+    read_at: DateTime
+    read_error: String
+}

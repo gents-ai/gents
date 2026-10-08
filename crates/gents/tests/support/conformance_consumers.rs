@@ -84,6 +84,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_arrival_checkpoints_preserve_committed_delivery_across_crashes",
         },
         ConformanceConsumer::RustTest {
+            id: "trigger_engine::tests::durable_contract::generated_callback_arrival_checkpoints_use_invocation_receipts",
+            package: "gents",
+            source_path: "crates/gents/src/trigger_engine/tests/durable_contract.rs",
+            module_path: "trigger_engine::tests::durable_contract",
+            function: "generated_callback_arrival_checkpoints_use_invocation_receipts",
+        },
+        ConformanceConsumer::RustTest {
             id: "trigger_engine::tests::durable_contract::generated_terminal_outcome_action_traces_use_native_owners",
             package: "gents",
             source_path: "crates/gents/src/trigger_engine/tests/durable_contract.rs",
@@ -140,6 +147,20 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_claude_wire_start_cases_drive_native_parser",
         },
         ConformanceConsumer::RustTest {
+            id: "completion_factory::tests::generated_responses_storage_cases_drive_loop_config",
+            package: "gents",
+            source_path: "crates/gents/src/completion_factory/tests.rs",
+            module_path: "completion_factory::tests",
+            function: "generated_responses_storage_cases_drive_loop_config",
+        },
+        ConformanceConsumer::RustTest {
+            id: "completion_factory::tests::generated_responses_effort_cases_drive_loop_config",
+            package: "gents",
+            source_path: "crates/gents/src/completion_factory/tests.rs",
+            module_path: "completion_factory::tests",
+            function: "generated_responses_effort_cases_drive_loop_config",
+        },
+        ConformanceConsumer::RustTest {
             id: "streaming::auxiliary_tests::generated_auxiliary_cases_drive_non_claude_sink_audit_without_publication",
             package: "gents",
             source_path: "crates/gents/src/streaming/auxiliary_tests.rs",
@@ -187,6 +208,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             source_path: "crates/gents/src/lean_vocab_test/canonical_presentation/native_adapter.rs",
             module_path: "lean_vocab_test::support::canonical_presentation::native_adapter",
             function: "generated_payload_presentation_cases_use_native_reconstruction",
+        },
+        ConformanceConsumer::RustTest {
+            id: "canonical_execution_native_adapter::every_generated_native_execution_script_runs_to_completion",
+            package: "gents",
+            source_path: "crates/gents/src/lean_vocab_test/canonical_execution/native_adapter.rs",
+            module_path: "canonical_execution_native_adapter",
+            function: "every_generated_native_execution_script_runs_to_completion",
         },
         ConformanceConsumer::RustTest {
             id: "conformance::persona_request::generated_root_admission_cases_drive_production_root_policy",
@@ -243,6 +271,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             source_path: "crates/gents/src/config_client/desired_state/tests.rs",
             module_path: "config_client::desired_state::tests",
             function: "guarded_publication_matches_lean_publish_if_cases",
+        },
+        ConformanceConsumer::RustTest {
+            id: "config_client::desired_state::tests::generated_default_replacements_preserve_runtime_startup_selection",
+            package: "gents",
+            source_path: "crates/gents/src/config_client/desired_state/tests.rs",
+            module_path: "config_client::desired_state::tests",
+            function: "generated_default_replacements_preserve_runtime_startup_selection",
         },
         ConformanceConsumer::RustTest {
             id: "agent::runtime::tests::behavior_resolution::explicit_behavior_resolution_matches_lean_binding_cases",
@@ -350,6 +385,20 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "gates_costs_and_decisions_match_lean",
         },
         ConformanceConsumer::RustTest {
+            id: "optimization::subject::tests::task_seed_coverage_matches_lean_for_canonical_pack_and_definition_inputs",
+            package: "gents",
+            source_path: "crates/gents/src/optimization/subject.rs",
+            module_path: "optimization::subject::tests",
+            function: "task_seed_coverage_matches_lean_for_canonical_pack_and_definition_inputs",
+        },
+        ConformanceConsumer::RustTest {
+            id: "optimization::driver::matrix::an_unexercised_task_target_is_refused_before_any_job_or_trial_is_created",
+            package: "gents",
+            source_path: "crates/gents/src/optimization/driver/matrix.rs",
+            module_path: "optimization::driver::matrix",
+            function: "an_unexercised_task_target_is_refused_before_any_job_or_trial_is_created",
+        },
+        ConformanceConsumer::RustTest {
             id: "commands::codex_shim::turn_projection::tests::generated_reasoning_projection_cases_drive_turn_projection_notifications",
             package: "gents-cli",
             source_path: "crates/gents-cli/src/commands/codex_shim/turn_projection.rs",
@@ -441,6 +490,20 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_plugin_resource_cases_bind_budget_and_consent",
         },
         ConformanceConsumer::RustTest {
+            id: "plugin::http_calls::tests::generated_plugin_network_cases_drive_admission",
+            package: "gents",
+            source_path: "crates/gents/src/plugin/http_calls_tests.rs",
+            module_path: "plugin::http_calls::tests",
+            function: "generated_plugin_network_cases_drive_admission",
+        },
+        ConformanceConsumer::RustTest {
+            id: "plugin::tests::generated_plugin_call_access_cases_drive_bind_admission",
+            package: "gents",
+            source_path: "crates/gents/src/plugin/tests.rs",
+            module_path: "plugin::tests",
+            function: "generated_plugin_call_access_cases_drive_bind_admission",
+        },
+        ConformanceConsumer::RustTest {
             id: "pack::tests::generated_plugin_model_slots_require_optional_behavior_free_declarations",
             package: "gents",
             source_path: "crates/gents/src/pack.rs",
@@ -460,6 +523,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             source_path: "crates/gents/src/agent/loop_stream/tests/claude.rs",
             module_path: "agent::loop_stream::tests",
             function: "claude_messages_redacted_and_signed_tool_round_trip_through_owned_loop",
+        },
+        ConformanceConsumer::RustTest {
+            id: "agent::loop_stream::tests::generated_schema_argument_repair_cases_drive_owned_loop",
+            package: "gents",
+            source_path: "crates/gents/src/agent/loop_stream/tests/schema_argument_repair.rs",
+            module_path: "agent::loop_stream::tests",
+            function: "generated_schema_argument_repair_cases_drive_owned_loop",
         },
         ConformanceConsumer::RustTest {
             id: "agent::loop_stream::tests::generated_invalid_tool_progress_cases_drive_owned_loop",
@@ -518,11 +588,25 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_goal_operator_resume_cases_drive_real_transactions",
         },
         ConformanceConsumer::RustTest {
+            id: "goal::operator_resume::tests::generated_resume_on_cases_drive_account_preflight_and_receipt_recovery",
+            package: "gents",
+            source_path: "crates/gents/src/goal/operator_resume/tests.rs",
+            module_path: "goal::operator_resume::tests",
+            function: "generated_resume_on_cases_drive_account_preflight_and_receipt_recovery",
+        },
+        ConformanceConsumer::RustTest {
             id: "goal::operator_resume::contract_tests::generated_goal_config_reactivation_cases_drive_transactional_setter",
             package: "gents",
             source_path: "crates/gents/src/goal/operator_resume/contract_tests.rs",
             module_path: "goal::operator_resume::contract_tests",
             function: "generated_goal_config_reactivation_cases_drive_transactional_setter",
+        },
+        ConformanceConsumer::RustTest {
+            id: "goal::reset_resume::contract_tests::generated_goal_reset_resume_cases_drive_real_transactions",
+            package: "gents",
+            source_path: "crates/gents/src/goal/reset_resume/contract_tests.rs",
+            module_path: "goal::reset_resume::contract_tests",
+            function: "generated_goal_reset_resume_cases_drive_real_transactions",
         },
         ConformanceConsumer::RustTest {
             id: "cli_goal::goal_resume_request_reuses_signed_predecessor_and_returns_same_child",
@@ -649,6 +733,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             source_path: "crates/gents/tests/conformance/goals.rs",
             module_path: "conformance::goals",
             function: "generated_goal_readiness_gate_cases_fence_retry_accounting",
+        },
+        ConformanceConsumer::RustTest {
+            id: "trigger_engine::goal_source::claimed_readiness_tests::generated_claimed_readiness_cases_drive_goal_source",
+            package: "gents",
+            source_path: "crates/gents/src/trigger_engine/goal_source/claimed_readiness_tests.rs",
+            module_path: "trigger_engine::goal_source::claimed_readiness_tests",
+            function: "generated_claimed_readiness_cases_drive_goal_source",
         },
         ConformanceConsumer::RustTest {
             id: "conformance::goals::generated_goal_transition_cases_fence_runtime_state_machine",
@@ -882,6 +973,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_backend_health_cases_match_prober_transitions",
         },
         ConformanceConsumer::RustTest {
+            id: "backend_health::tests::generated_backend_probe_schedule_cases_match_runtime_selection",
+            package: "gents",
+            source_path: "crates/gents/src/backend_health.rs",
+            module_path: "backend_health::tests",
+            function: "generated_backend_probe_schedule_cases_match_runtime_selection",
+        },
+        ConformanceConsumer::RustTest {
             id: "http::prometheus::tests::backend_probe_status_metric_reflects_measured_health",
             package: "gents-cli",
             source_path: "crates/gents-cli/src/http/prometheus.rs",
@@ -901,6 +999,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             source_path: "crates/gents-desktop-bridge/src/snapshot/tests/session_state.rs",
             module_path: "gents_desktop_bridge::snapshot::tests::session_state",
             function: "session_snapshot_projection_consumes_generated_client_shell_contract_cases",
+        },
+        ConformanceConsumer::RustTest {
+            id: "gents_desktop_bridge::snapshot::session::live_delta::tests::generated_live_cursor_contract",
+            package: "gents-desktop-bridge",
+            source_path: "crates/gents-desktop-bridge/src/snapshot/session/live_delta/tests.rs",
+            module_path: "gents_desktop_bridge::snapshot::session::live_delta::tests",
+            function: "generated_live_cursor_contract",
         },
         ConformanceConsumer::RustTest {
             id: "gents_desktop_bridge::snapshot::tests::session_state::session_snapshot_binds_request_lifecycle_operator_ui_cases",

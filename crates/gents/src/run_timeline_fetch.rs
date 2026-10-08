@@ -109,8 +109,56 @@ pub async fn load_run_timeline(access: &ConfigAccess, request_id: &str) -> Resul
                 timeline.background_completion_diagnostics_error = Some(error.to_string());
             }
         }
+        // Best effort, like the diagnostics above: the call rows stand alone.
+        if let Err(error) = name_serving_accounts(access, agent_did, &mut timeline.events).await {
+            tracing::debug!(%error, "timeline call accounts unavailable");
+        }
     }
     Ok(timeline)
+}
+
+/// Label each call with the account its `backend_id` runs on now. A call that
+/// started before that account's sign-in took the slot (a slot reused after
+/// every account was removed) gets none, as does one with no start time.
+async fn name_serving_accounts(
+    access: &ConfigAccess,
+    agent_did: &str,
+    events: &mut [crate::run_timeline::RunTimelineEvent],
+) -> Result<()> {
+    let accounts = crate::oauth_credential::list_accounts(access, agent_did).await?;
+    let backends = access
+        .transact("timeline.serving_accounts", |txn| {
+            Box::pin(async move {
+                crate::config_client::list_inference_backends_in_txn(txn, agent_did).await
+            })
+        })
+        .await?;
+    for event in events {
+        let crate::run_timeline::RunTimelineEvent::InferenceCall(call) = event else {
+            continue;
+        };
+        let Some(backend) = backends
+            .iter()
+            .find(|backend| call.backend_id.as_deref() == Some(backend.backend_id.as_str()))
+        else {
+            continue;
+        };
+        let Some(at) = call
+            .started_at
+            .as_deref()
+            .or(call.queued_at.as_deref())
+            .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
+        else {
+            continue;
+        };
+        let since = crate::oauth_credential::backend_account(backend, &accounts)
+            .flatten()
+            .and_then(|account| account.connected_at);
+        if since.is_none_or(|since| at >= since) {
+            call.account = Some(crate::oauth_credential::serving_account(backend, &accounts).label);
+        }
+    }
+    Ok(())
 }
 
 /// Load the prompt-free subset of ordinary timeline rows needed by live run
@@ -743,6 +791,155 @@ mod tests {
             .unwrap()
             .contains("synthetic-inline-secret"));
 
+        node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn call_rows_carry_the_serving_account() {
+        use crate::oauth_credential::{list_accounts, remove_account_in_txn, store_sign_in};
+        let did = "did:key:z6MkTestTimelineAccounts";
+        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        let access = ConfigAccess::Local(node.clone());
+        let spec = crate::inference_setup::connection_spec(
+            crate::inference_setup::InferenceProviderId::Anthropic,
+            crate::inference_setup::InferenceAuthMethod::ClaudeOauth,
+            "",
+        )
+        .unwrap();
+        let original = serde_json::from_value(serde_json::json!({
+            "agent_did": did, "backend_id": "claude", "name": "Claude",
+            "provider_kind": spec.provider_kind, "endpoint": spec.endpoint,
+            "auth": {"kind": "principal_oauth"},
+        }))
+        .unwrap();
+        crate::config_client::write_inference_backend_document(&access, &original)
+            .await
+            .unwrap();
+        let sign_in = |who: &str| {
+            crate::claude_oauth::credential_from_login_tokens(
+                did,
+                crate::claude_oauth::CLAUDE_OAUTH_PROVIDER,
+                &crate::claude_oauth::ClaudeLoginTokens {
+                    access_token: "access-SECRET".into(),
+                    refresh_token: format!("refresh-SECRET-{who}"),
+                    expires_in: Some(3600),
+                    scope: None,
+                    account_id: Some("IDENTITY".into()),
+                    organization_uuid: Some("org-KEY".into()),
+                    account_uuid: Some(format!("account-KEY-{who}")),
+                },
+                chrono::Utc::now(),
+            )
+        };
+        store_sign_in(&access, sign_in("a"), None).await.unwrap();
+        let b = store_sign_in(&access, sign_in("b"), Some("label-b"))
+            .await
+            .unwrap();
+        let b_backend = format!(
+            "{}-{}",
+            crate::claude_oauth::CLAUDE_OAUTH_PROVIDER,
+            b.credential.account_ref.as_deref().unwrap()
+        );
+        let at =
+            |minutes: i64| (chrono::Utc::now() + chrono::Duration::minutes(minutes)).to_rfc3339();
+        let response = node
+            .execute(&format!(
+                r#"mutation {{
+                    create_AgentRequest(input: {{
+                        request_id: "request-accounts" purpose: "normal" agent_did: "{did}"
+                        behavior_id: "general" content: "run" lifecycle_state: "completed"
+                        created_at: "{}"
+                    }}) {{ _docID }}
+                }}"#,
+                at(0),
+            ))
+            .await;
+        assert!(!response.has_errors(), "seed: {:?}", response.errors);
+        let request_doc_id = created_doc_id(&response, "create_AgentRequest");
+        let call = |call_id: &str, seq: i64, backend_id: &str, kind: &str, started_at: &str| {
+            format!(
+                r#"create_InferenceCall(input: {{
+                    call_id: "{call_id}" request_id: "request-accounts"
+                    request_doc_id: "{request_doc_id}" call_seq: {seq}
+                    backend_id: "{backend_id}" agent_did: "{did}" call_kind: "{kind}"
+                    attempt: 1 call_state: "completed" started_at: "{started_at}"
+                }}) {{ _docID }}"#
+            )
+        };
+        let response = node
+            .execute(&format!(
+                "mutation {{ {} {} {} }}",
+                call("call-a", 1, "claude", "inference", &at(1)),
+                call("call-b", 2, &b_backend, "compaction", &at(1)),
+                call("call-gone", 3, "deleted-backend", "inference", &at(1)),
+            ))
+            .await;
+        assert!(!response.has_errors(), "seed: {:?}", response.errors);
+        let accounts = || async {
+            let timeline = load_run_timeline(&access, "request-accounts")
+                .await
+                .expect("load timeline");
+            let text = serde_json::to_string(&timeline).unwrap();
+            for secret in ["SECRET", "IDENTITY", "KEY"] {
+                assert!(!text.contains(secret), "{secret} in {text}");
+            }
+            timeline
+                .events
+                .into_iter()
+                .filter_map(|event| match event {
+                    crate::run_timeline::RunTimelineEvent::InferenceCall(call) => {
+                        Some((call.call_id, call.account))
+                    }
+                    _ => None,
+                })
+                .collect::<BTreeMap<_, _>>()
+        };
+        let label = |label: &str| Some(label.to_string());
+        assert_eq!(
+            accounts().await,
+            BTreeMap::from([
+                ("call-a".to_string(), label("Claude")),
+                ("call-b".to_string(), label("label-b")),
+                ("call-gone".to_string(), None),
+            ])
+        );
+
+        for account in list_accounts(&access, did).await.unwrap() {
+            access
+                .transact("test.remove", |txn| {
+                    let credential_id = account.credential_id.clone();
+                    Box::pin(async move { remove_account_in_txn(txn, did, &credential_id).await })
+                })
+                .await
+                .unwrap();
+        }
+        let reused = store_sign_in(&access, sign_in("new"), Some("label-new"))
+            .await
+            .unwrap();
+        assert_eq!(reused.credential.account_ref, None, "the original slot");
+        // The bound is the sign-in's `connected_at`; move it past call-a's start.
+        access
+            .write(
+                "test.connected_at",
+                &format!(
+                    r#"mutation {{ update_OAuthCredential(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ connected_at: "{}" }}) {{ _docID }} }}"#,
+                    reused.doc_id,
+                    at(60)
+                ),
+            )
+            .await
+            .unwrap();
+        let response = node
+            .execute(&format!(
+                "mutation {{ {} }}",
+                call("call-later", 4, "claude", "inference", &at(120))
+            ))
+            .await;
+        assert!(!response.has_errors(), "seed: {:?}", response.errors);
+        let after = accounts().await;
+        assert_eq!(after["call-a"], None, "before the reused slot's sign-in");
+        assert_eq!(after["call-later"], label("label-new"));
         node.shutdown().await;
     }
 

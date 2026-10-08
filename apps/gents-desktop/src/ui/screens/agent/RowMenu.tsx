@@ -16,6 +16,7 @@ import {
 import { Switch } from "@gents/ui/components/switch";
 import { href, navigate, type Route } from "@/lib/router";
 import { ConfirmDelete, NOUNS } from "./ListDetail";
+import { toastFailure } from "@/lib/failure";
 
 export function RowMenu({
   name,
@@ -53,9 +54,7 @@ export function RowMenu({
       await enabled.onChange(next);
       toast(`${name} is ${next ? "on" : "off"}`);
     } catch (e) {
-      toast(
-        `Couldn’t turn it ${next ? "on" : "off"}: ${e instanceof Error ? e.message : String(e)}`,
-      );
+      toastFailure(`turn it ${next ? "on" : "off"}`, e);
     } finally {
       setBusy(false);
     }
@@ -68,7 +67,7 @@ export function RowMenu({
       toast(`Duplicated ${name}`);
       navigate({ ...base, item: copy });
     } catch (e) {
-      toast(`Duplicate failed: ${e instanceof Error ? e.message : String(e)}`);
+      toastFailure(`duplicate ${name}`, e);
     } finally {
       setBusy(false);
     }

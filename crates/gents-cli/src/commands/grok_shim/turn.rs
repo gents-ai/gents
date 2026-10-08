@@ -667,6 +667,7 @@ impl TurnManager {
                 let mut after = String::new();
                 let mut delivery_after = String::new();
                 let mut goal_cursor = super::goals::GoalCursor::default();
+                let mut graph_cursor = super::graph_runs::GraphRunCursor::default();
                 let mut goal_refresh_at = tokio::time::Instant::now();
                 loop {
                     tokio::time::sleep(TERMINAL_POLL_INTERVAL).await;
@@ -692,6 +693,19 @@ impl TurnManager {
                         {
                             tracing::warn!(%error, session_id = %observed_session,
                             "Grok goal observation failed; retrying");
+                        }
+                        for error in graph_cursor
+                            .refresh(
+                                &manager.node,
+                                &manager.config.agent_did,
+                                &observed_session,
+                                &sender,
+                                &projections,
+                            )
+                            .await
+                        {
+                            tracing::warn!(error = %format_args!("{error:#}"),
+                            session_id = %observed_session, "Grok graph run observation failed");
                         }
                     }
                     if let Err(error) = manager

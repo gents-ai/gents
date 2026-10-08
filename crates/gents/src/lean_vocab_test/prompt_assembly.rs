@@ -211,6 +211,29 @@ pub(crate) struct LeanPromptAssemblyClaudeWireStartCase {
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+pub(crate) struct LeanPromptAssemblyResponsesStorageCase {
+    pub(crate) name: String,
+    pub(crate) family: String,
+    pub(crate) wire: String,
+    pub(crate) endpoint: String,
+    #[serde(deserialize_with = "required_nullable")]
+    pub(crate) store: Option<bool>,
+    pub(crate) encrypted_include: bool,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+pub(crate) struct LeanPromptAssemblyResponsesEffortCase {
+    pub(crate) name: String,
+    pub(crate) endpoint: String,
+    #[serde(deserialize_with = "required_nullable")]
+    pub(crate) advertised: Option<Vec<String>>,
+    #[serde(deserialize_with = "required_nullable")]
+    pub(crate) requested: Option<String>,
+    #[serde(deserialize_with = "required_nullable")]
+    pub(crate) expected: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 pub(crate) struct LeanClaudeWireThinkingStart {
     pub(crate) index: u64,
     pub(crate) thinking: String,
@@ -310,17 +333,20 @@ pub(crate) struct LeanPromptAssemblyClaudeCheckpointCase {
     pub(crate) replay: Vec<Vec<LeanClaudeReplayBlock>>,
 }
 
-/// Pair-safe protected prefix selected by the existing compaction and Claude
-/// replay owners before any summary completion is attempted.
+/// Reduction ceiling and the pair-safe prefix it admits, both derived by the
+/// compaction and Claude replay owners before any summary completion.
 #[derive(Debug, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanProtectedReplayCompactionCase {
     pub(crate) name: String,
     pub(crate) message_count: usize,
     pub(crate) raw_index: usize,
-    pub(crate) max_prefix: usize,
     pub(crate) required: Vec<LeanCanonicalCoordinate>,
     pub(crate) rows: Vec<LeanClaudeTaggedReplayRow>,
+    pub(crate) ceiling_error: String,
+    #[serde(deserialize_with = "required_nullable")]
+    pub(crate) ceiling: Option<usize>,
+    #[serde(deserialize_with = "required_nullable")]
     pub(crate) selected_split: Option<usize>,
     pub(crate) outcome: String,
 }

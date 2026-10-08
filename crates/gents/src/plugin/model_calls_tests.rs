@@ -8,8 +8,10 @@ use serde_json::{json, Value};
 
 use super::*;
 use crate::plugin::executor::PluginExecutor;
+use crate::plugin::rounds::{drive, HostCalls, Round, MAX_ROUNDS};
 use crate::plugin::store::{self, InstalledPlugin};
-use crate::plugin::tests::executor::installed_plugin;
+use crate::plugin::tests::executor::{asking_plugin_wat, installed_plugin};
+use crate::plugin::{PluginBudget, PluginOutcome, PluginVerdict};
 
 const KEY: &str = "sekret-key-0123";
 
@@ -164,75 +166,8 @@ impl ModelResolver for Never {
     }
 }
 
-/// A plugin that reads its input and, while it asks for model calls, writes
-/// `canned` instead of a result: once (until `model_results` arrives) or
-/// forever. Without `"model_calls":true` in the input, or once satisfied, it
-/// echoes its input as the result.
 fn model_plugin_wat(canned: &Value, forever: bool) -> String {
-    let escape = |text: &str| {
-        text.bytes()
-            .map(|byte| format!("\\{byte:02x}"))
-            .collect::<String>()
-    };
-    let canned = canned.to_string();
-    let results = "model_results";
-    let calls = "\"model_calls\":true";
-    let stop = if forever {
-        "(i32.const 1)".to_owned()
-    } else {
-        format!(
-            "(i32.eqz (call $contains (i32.const 50000) (i32.const {}) (local.get $n)))",
-            results.len()
-        )
-    };
-    format!(
-        r#"(module
-  (import "wasi_snapshot_preview1" "fd_read" (func $fd_read (param i32 i32 i32 i32) (result i32)))
-  (import "wasi_snapshot_preview1" "fd_write" (func $fd_write (param i32 i32 i32 i32) (result i32)))
-  (memory (export "memory") 2)
-  (data (i32.const 8192) "{canned_bytes}")
-  (data (i32.const 50000) "{results_bytes}")
-  (data (i32.const 50100) "{calls_bytes}")
-  (func $contains (param $needle i32) (param $nlen i32) (param $hlen i32) (result i32)
-    (local $i i32) (local $j i32)
-    (block $notfound
-      (loop $outer
-        (br_if $notfound (i32.gt_u (i32.add (local.get $i) (local.get $nlen)) (local.get $hlen)))
-        (local.set $j (i32.const 0))
-        (block $mismatch
-          (loop $inner
-            (if (i32.eq (local.get $j) (local.get $nlen)) (then (return (i32.const 1))))
-            (br_if $mismatch (i32.ne
-              (i32.load8_u (i32.add (local.get $i) (local.get $j)))
-              (i32.load8_u (i32.add (local.get $needle) (local.get $j)))))
-            (local.set $j (i32.add (local.get $j) (i32.const 1)))
-            (br $inner)))
-        (local.set $i (i32.add (local.get $i) (i32.const 1)))
-        (br $outer)))
-    (i32.const 0))
-  (func (export "_start")
-    (local $n i32)
-    (i32.store (i32.const 60000) (i32.const 0))
-    (i32.store (i32.const 60004) (i32.const 8000))
-    (drop (call $fd_read (i32.const 0) (i32.const 60000) (i32.const 1) (i32.const 60008)))
-    (local.set $n (i32.load (i32.const 60008)))
-    (if (call $contains (i32.const 50100) (i32.const {calls_len}) (local.get $n))
-      (then
-        (if {stop}
-          (then
-            (i32.store (i32.const 60000) (i32.const 8192))
-            (i32.store (i32.const 60004) (i32.const {canned_len}))
-            (drop (call $fd_write (i32.const 1) (i32.const 60000) (i32.const 1) (i32.const 60012)))
-            (return)))))
-    (i32.store (i32.const 60000) (i32.const 0))
-    (i32.store (i32.const 60004) (local.get $n))
-    (drop (call $fd_write (i32.const 1) (i32.const 60000) (i32.const 1) (i32.const 60012)))))"#,
-        canned_bytes = escape(&canned),
-        results_bytes = escape(results),
-        calls_bytes = escape(calls),
-        calls_len = calls.len(),
-        canned_len = canned.len(),
-    )
+    asking_plugin_wat("model_calls", "model_results", canned, forever)
 }
 
 fn request(id: &str) -> Value {
@@ -883,9 +818,11 @@ async fn fuel_is_spent_across_rounds() {
         wall_clock: Duration::from_secs(30),
         ..PluginBudget::default()
     };
-    let outcome = drive(session(&fake), json!({}), budget, round)
-        .await
-        .unwrap();
+    let calls = HostCalls {
+        model: Some(session(&fake)),
+        http: None,
+    };
+    let outcome = drive(calls, json!({}), budget, round).await.unwrap();
     assert_eq!(outcome.verdict, PluginVerdict::OutOfFuel);
     assert_eq!(*seen.lock().unwrap(), [Some(100), Some(40)]);
 }

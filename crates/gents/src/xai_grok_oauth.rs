@@ -30,7 +30,11 @@ pub const XAI_OAUTH_PROVIDER: &str = "xai-oauth";
 /// Subscription inference proxy (not the metered developer API).
 pub const XAI_GROK_OAUTH_BASE_URL: &str = "https://cli-chat-proxy.grok.com/v1";
 
-const GROK_CLIENT_VERSION: &str = "1.0.13";
+// The subscription proxy gates on `x-grok-client-version` and answers HTTP 426
+// when the advertised client is below its minimum (observed floor 1.0.13, from
+// the proxy's 426 body). Keep this at or above the floor;
+// GENTS_XAI_GROK_CLIENT_VERSION overrides it at runtime.
+const GROK_CLIENT_VERSION: &str = "1.0.46";
 const GROK_CLIENT_VERSION_ENV: &str = "GENTS_XAI_GROK_CLIENT_VERSION";
 
 pub fn default_backend_endpoint() -> &'static str {
@@ -73,6 +77,19 @@ pub fn grok_client_version() -> String {
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| GROK_CLIENT_VERSION.to_string())
+}
+
+/// Operator guidance for the proxy's client-version gate (HTTP 426). The
+/// proxy's own minimum travels in the response body both error surfaces
+/// already print, so this only names the version gents sent and the runtime
+/// override.
+pub fn grok_client_version_gate_guidance() -> String {
+    format!(
+        "Grok proxy rejected the client version gents sent ({}). Update gents, or set \
+         {} to a version the proxy accepts and retry.",
+        grok_client_version(),
+        GROK_CLIENT_VERSION_ENV
+    )
 }
 
 /// Headers the Grok CLI chat proxy uses to recognize subscription clients.
@@ -290,6 +307,7 @@ fn promote_xai_context_usage(value: &mut Value) -> bool {
 async fn build_authenticated_http(
     node: Arc<EmbeddedNode>,
     agent_did: &str,
+    account_ref: Option<&str>,
 ) -> Result<CapturingXaiGrokOAuthHttpClient> {
     let provider = XAI_OAUTH_PROVIDER;
     let (bearer, _credential) = crate::oauth_http::bootstrap_oauth_client(
@@ -298,6 +316,7 @@ async fn build_authenticated_http(
         provider,
         OAuthRefreshKind::Xai,
         XAI_OAUTH_PRODUCT,
+        crate::oauth_credential::AccountPick::Reference(account_ref),
     )
     .await?;
     Ok(XaiGrokOAuthHttpClient::with_inner(
@@ -319,11 +338,12 @@ pub type CapturingXaiGrokOAuthHttpClient = XaiGrokOAuthHttpClient<
 pub async fn build_responses_client(
     node: Arc<EmbeddedNode>,
     agent_did: &str,
+    account_ref: Option<&str>,
     endpoint: &str,
 ) -> Result<rig::providers::openai::Client<CapturingXaiGrokOAuthHttpClient>> {
     let headers = build_xai_grok_oauth_headers()?;
     let endpoint = normalize_endpoint(endpoint);
-    let http = build_authenticated_http(node, agent_did).await?;
+    let http = build_authenticated_http(node, agent_did, account_ref).await?;
     crate::inference_http::build_openai_responses_client(
         "xai-oauth-managed",
         &endpoint,
@@ -336,11 +356,12 @@ pub async fn build_responses_client(
 pub async fn build_chat_completions_client(
     node: Arc<EmbeddedNode>,
     agent_did: &str,
+    account_ref: Option<&str>,
     endpoint: &str,
 ) -> Result<rig::providers::openai::CompletionsClient<CapturingXaiGrokOAuthHttpClient>> {
     let endpoint = normalize_endpoint(endpoint);
     // Identity headers ride along via `prepare` on every request.
-    let http = build_authenticated_http(node, agent_did).await?;
+    let http = build_authenticated_http(node, agent_did, account_ref).await?;
     crate::inference_http::build_openai_chat_completions_client(
         "xai-oauth-managed",
         &endpoint,
@@ -402,6 +423,33 @@ mod tests {
                 .get("user-agent")
                 .and_then(|value| value.to_str().ok()),
             Some("xai-grok-cli")
+        );
+    }
+
+    #[test]
+    fn default_grok_client_version_is_pinned_above_proxy_floor() {
+        let parse = |version: &str| -> Vec<u64> {
+            version
+                .split('.')
+                .map(|part| part.parse().unwrap())
+                .collect()
+        };
+        assert_eq!(GROK_CLIENT_VERSION, "1.0.46");
+        // The proxy's 426 version-gate body observed in #2274 demanded
+        // "1.0.13 or later"; a pin below that floor fails every request.
+        assert!(parse(GROK_CLIENT_VERSION) >= parse("1.0.13"));
+    }
+
+    #[test]
+    fn grok_client_version_gate_guidance_names_sent_version_and_override() {
+        let guidance = grok_client_version_gate_guidance();
+        assert!(
+            guidance.contains(&grok_client_version()),
+            "guidance must name the version gents sent: {guidance}"
+        );
+        assert!(
+            guidance.contains(GROK_CLIENT_VERSION_ENV),
+            "guidance must name the runtime override: {guidance}"
         );
     }
 

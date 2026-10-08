@@ -52,6 +52,8 @@ libc = "0.2"
 tauri-plugin = { version = "2", features = ["build"] }
 
 [dev-dependencies]
+async-trait = "0.1"
+wiremock = "0.6"
 gents-desktop-core = { workspace = true, features = ["test-fixtures"] }
 gents-lean-contract.workspace = true
 tauri = { version = "2", features = ["test"] }

@@ -46,18 +46,16 @@ pub struct AggregateTokenLedger {
 pub const AGGREGATE_TOKEN_BUDGET_EXHAUSTED_PREFIX: &str = "aggregate_token_budget_exhausted: ";
 
 /// Recover only the typed request-budget failure from an anyhow context
-/// chain. Matching the underlying `StreamingError` rather than arbitrary text
+/// chain. Matching the underlying `LoopStreamError` rather than arbitrary text
 /// prevents provider/model content from forging Harbor's scoreable outcome.
 pub fn aggregate_token_budget_exhaustion_message(error: &anyhow::Error) -> Option<String> {
     error.chain().find_map(|cause| {
-        let streaming_error = cause.downcast_ref::<StreamingError>()?;
-        let StreamingError::Completion(CompletionError::ProviderError(reason)) = streaming_error
-        else {
-            return None;
-        };
+        let reason = cause
+            .downcast_ref::<crate::error::LoopStreamError>()?
+            .provider_message()?;
         reason
             .starts_with(AGGREGATE_TOKEN_BUDGET_EXHAUSTED_PREFIX)
-            .then(|| reason.clone())
+            .then(|| reason.to_string())
     })
 }
 

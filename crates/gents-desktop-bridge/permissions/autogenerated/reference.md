@@ -2000,6 +2000,58 @@ Denies the desktop_provider_account_disconnect command without any pre-configure
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-provider-account-remove`
+
+</td>
+<td>
+
+Enables the desktop_provider_account_remove command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-provider-account-remove`
+
+</td>
+<td>
+
+Denies the desktop_provider_account_remove command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-provider-account-rename`
+
+</td>
+<td>
+
+Enables the desktop_provider_account_rename command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-provider-account-rename`
+
+</td>
+<td>
+
+Denies the desktop_provider_account_rename command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-provider-account-retry-save`
 
 </td>
@@ -2045,6 +2097,32 @@ Enables the desktop_provider_accounts_list command without any pre-configured sc
 <td>
 
 Denies the desktop_provider_accounts_list command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-provider-usage-read`
+
+</td>
+<td>
+
+Enables the desktop_provider_usage_read command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-provider-usage-read`
+
+</td>
+<td>
+
+Denies the desktop_provider_usage_read command without any pre-configured scope.
 
 </td>
 </tr>

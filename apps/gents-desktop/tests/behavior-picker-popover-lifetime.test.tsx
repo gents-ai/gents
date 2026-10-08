@@ -1,6 +1,7 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import { renderIn, testApp } from "./app-fixture";
 import type { SyncHealthView } from "@source-inc/gents-desktop-client";
 
 const popoverControl = vi.hoisted(() => ({
@@ -35,7 +36,9 @@ vi.mock("@gents/ui/components/popover", async () => {
           props.onOpenChangeComplete?.(false);
         });
       }
-      return () => popoverControl.completions.delete(id);
+      return () => {
+        popoverControl.completions.delete(id);
+      };
     }, [id, mounted, props.open, props.onOpenChangeComplete]);
     return (
       <Context.Provider value={{ ...props, mounted }}>
@@ -68,7 +71,6 @@ vi.mock("@gents/ui/components/popover", async () => {
 
 import { SyncHealth } from "../src/ui/app/SyncHealth";
 import { BehaviorPicker } from "../src/ui/screens/BehaviorPicker";
-import type { Shell } from "../src/hooks/useShell";
 import { deployment } from "./config-panel-wiring/fixtures";
 
 const healthy: SyncHealthView = {
@@ -82,8 +84,6 @@ const healthy: SyncHealthView = {
   quarantinedDagCount: 0,
 };
 
-const shell = { behaviorDescriptions: {} } as Shell;
-
 async function acknowledgeClose() {
   await act(async () => {
     for (const complete of [...popoverControl.completions.values()]) complete();
@@ -94,7 +94,6 @@ function Harness({ showPicker = true }: { showPicker?: boolean }) {
   return (
     <>
       <BehaviorPicker
-        shell={shell}
         deployment={showPicker ? deployment : { ...deployment, behaviors: [] }}
         behaviorId="default"
         onChange={vi.fn()}
@@ -107,7 +106,7 @@ function Harness({ showPicker = true }: { showPicker?: boolean }) {
 describe("BehaviorPicker popover lifetime", () => {
   it("releases an active picker removed while sync is pending", async () => {
     const user = userEvent.setup();
-    const view = render(<Harness />);
+    const view = renderIn(testApp(), <Harness />);
 
     await user.click(screen.getByRole("button", { name: "Behavior" }));
     expect(
@@ -129,7 +128,7 @@ describe("BehaviorPicker popover lifetime", () => {
 
   it("opens the create sheet only after the picker has closed", async () => {
     const user = userEvent.setup();
-    render(<Harness />);
+    renderIn(testApp(), <Harness />);
 
     await user.click(screen.getByRole("button", { name: "Behavior" }));
     await screen.findByRole("dialog", { name: "Choose behavior" });
@@ -150,7 +149,7 @@ describe("BehaviorPicker popover lifetime", () => {
 
   it("lets a popover opened during the picker's exit take the turn from create", async () => {
     const user = userEvent.setup();
-    render(<Harness />);
+    renderIn(testApp(), <Harness />);
 
     await user.click(screen.getByRole("button", { name: "Behavior" }));
     await screen.findByRole("dialog", { name: "Choose behavior" });
@@ -169,7 +168,7 @@ describe("BehaviorPicker popover lifetime", () => {
 
   it("withdraws a pending create when the picker is reopened during its exit", async () => {
     const user = userEvent.setup();
-    render(<Harness />);
+    renderIn(testApp(), <Harness />);
 
     await user.click(screen.getByRole("button", { name: "Behavior" }));
     await screen.findByRole("dialog", { name: "Choose behavior" });
@@ -188,7 +187,7 @@ describe("BehaviorPicker popover lifetime", () => {
 
   it("cancels a pending picker when its chosen behavior disappears", async () => {
     const user = userEvent.setup();
-    const view = render(<Harness />);
+    const view = renderIn(testApp(), <Harness />);
 
     await user.click(screen.getByRole("button", { name: /Show sync diagnostics/ }));
     expect(

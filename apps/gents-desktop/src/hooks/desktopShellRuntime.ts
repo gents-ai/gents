@@ -1,8 +1,9 @@
 import type { ChatWorkflowState } from "@source-inc/gents-desktop-chat";
-import type {
-  DesktopSessionSnapshot,
-  P2PHealth,
-  SessionLiveDeltaView,
+import {
+  isTerminalTurnState,
+  type DesktopSessionSnapshot,
+  type P2PHealth,
+  type SessionLiveDeltaView,
 } from "@source-inc/gents-desktop-client";
 
 export const SESSION_TIMELINE_PAGE_SIZE = 40;
@@ -78,18 +79,6 @@ export function desktopUpdateRefreshScope(
   return "full";
 }
 
-export async function dismissMailboxItemAndClearMatchingRoute(
-  itemId: string,
-  dismiss: (itemId: string) => Promise<void>,
-  currentRouteItemId: () => string | null,
-  clearMatchingRoute: () => void,
-) {
-  await dismiss(itemId);
-  if (currentRouteItemId() === itemId) {
-    clearMatchingRoute();
-  }
-}
-
 const utf8 = new TextEncoder();
 
 function liveTextHash(value: string) {
@@ -106,7 +95,8 @@ export function sessionLiveDeltaRequest(
   requestId: string,
 ) {
   const revision = session.projectionRevision;
-  if (!revision || session.latestRequestId !== requestId) return null;
+  if (!revision || !session.liveCursor || session.latestRequestId !== requestId)
+    return null;
   const live = session.timelineItems.find((item) => item.kind === "liveAssistant");
   const content = live?.content ?? "";
   const reasoning = live?.reasoning ?? "";
@@ -114,7 +104,7 @@ export function sessionLiveDeltaRequest(
     sessionId: session.sessionId,
     agentDid: session.agentDid,
     requestId,
-    baseReconcileVersion: revision.reconcileVersion,
+    baseLiveCursor: session.liveCursor,
     baseContentByteLen: utf8.encode(content).byteLength,
     baseContentHash: liveTextHash(content),
     baseReasoningByteLen: utf8.encode(reasoning).byteLength,
@@ -145,6 +135,15 @@ function applyLiveTextPatch(
   return next || null;
 }
 
+/** Native adapter of ClientLiveDelta.accepts; identity is encoded by the bridge. */
+export function acceptsLiveCursor(
+  base: string | null | undefined,
+  current: string | null | undefined,
+  terminal: boolean,
+): boolean {
+  return !terminal && base != null && base === current;
+}
+
 /** Apply a bridge-checked response suffix without rebuilding historical rows. */
 export function applySessionLiveDelta(
   current: DesktopSessionSnapshot,
@@ -154,13 +153,22 @@ export function applySessionLiveDelta(
     delta.outcome === "snapshotRequired" ||
     delta.requestId !== current.latestRequestId ||
     !current.projectionRevision ||
-    delta.revision.reconcileVersion !== current.projectionRevision.reconcileVersion ||
+    !acceptsLiveCursor(
+      current.liveCursor,
+      delta.liveCursor,
+      (!!delta.turnState && isTerminalTurnState(delta.turnState)) ||
+        (!!current.turnState && isTerminalTurnState(current.turnState)),
+    ) ||
     delta.revision.storeVersion < current.projectionRevision.storeVersion
   ) {
     return null;
   }
   if (delta.outcome === "unchanged") {
-    return { ...current, projectionRevision: delta.revision };
+    return {
+      ...current,
+      turnState: delta.turnState,
+      projectionRevision: delta.revision,
+    };
   }
   if (delta.outcome !== "delta" || !delta.content || !delta.reasoning) {
     return null;
@@ -226,4 +234,29 @@ export function trackedRequestIdForSession(
   }
 
   return null;
+}
+
+/** How a failed action is reported, once: what failed, as a person would say
+    it, and why. */
+export function actionFailure(label: string, error: unknown): string {
+  return `Couldn’t ${label}: ${error instanceof Error ? error.message : String(error)}`;
+}
+
+/* Failures an action has already shown the person. A caller that catches
+   one still learns that it failed, to keep what was typed, but does not
+   report it again. The bridge rejects with strings, which cannot be
+   marked, so those become errors with the same message. */
+const shownFailures = new WeakSet<object>();
+
+/** `error`, marked as already shown; rethrow this. */
+export function shownFailure(error: unknown): object {
+  const failure =
+    typeof error === "object" && error !== null ? error : new Error(String(error));
+  shownFailures.add(failure);
+  return failure;
+}
+
+/** Whether an action already showed this failure. */
+export function wasShown(error: unknown): boolean {
+  return typeof error === "object" && error !== null && shownFailures.has(error);
 }

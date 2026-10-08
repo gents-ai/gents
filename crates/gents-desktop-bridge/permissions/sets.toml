@@ -214,6 +214,9 @@ permissions = [
   "allow-desktop-claude-login-cancel",
   "allow-desktop-provider-account-disconnect",
   "allow-desktop-provider-account-retry-save",
+  "allow-desktop-provider-account-rename",
+  "allow-desktop-provider-account-remove",
+  "allow-desktop-provider-usage-read",
 ]
 
 [[set]]

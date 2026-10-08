@@ -245,9 +245,11 @@ async fn start_core_with_local_route(root: &Path) -> Result<(ClientCore, ClientC
             .context("agent home path is not UTF-8")?,
     )
     .await?;
-    let client =
-        ClientCore::start_with_paths_and_options(client_paths, ClientCoreOptions::local_only())
-            .await?;
+    let client = ClientCore::start_with_paths_and_options(
+        client_paths,
+        ClientCoreOptions::local_simulated_route(),
+    )
+    .await?;
     client.add_local_standard_peer_for_test(&agent_did).await?;
     Ok((runtime, client, agent_did))
 }

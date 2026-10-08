@@ -123,6 +123,7 @@ fn backend_admission_config(
 
 fn background_child_request(index: usize, behavior_id: &str) -> AgentRequest {
     AgentRequest {
+        retry_parent_request_doc_id: None,
         purpose: gents_protocol::request_admission::RequestPurpose::Normal,
         doc_id: format!("child-doc-{index}"),
         request_id: format!("child-request-{index}"),
@@ -890,6 +891,158 @@ async fn generation_supervisor_restages_slot_on_api_key_rotation() {
         .await
         .expect("calls from the rotated slot are admitted");
     admitted.finish_success(None).await.unwrap();
+
+    let _ = shutdown_tx.send(true);
+    tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .expect("supervisor should stop on shutdown")
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn backend_change_restages_the_slot_and_drains_the_call_in_flight() {
+    use crate::document_config::BackendAuth;
+
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let agent_did = "did:test:reconcile-backend-change";
+    let runtime_status = RuntimeStatusHandle::new(node.clone(), agent_did);
+
+    let mut behavior = PendingAgentBehavior::new("general")
+        .build_with_identity_for_test(test_identity("switch-general"));
+    behavior.backend_id = Some("claude".to_string());
+    behavior.backend_auth = BackendAuth::PrincipalOAuth { account_ref: None };
+    let mut switched = behavior.clone();
+    switched.backend_id = Some("claude-subscription-acct-b".to_string());
+    switched.backend_auth = BackendAuth::PrincipalOAuth {
+        account_ref: Some("acct-b".to_string()),
+    };
+    let principal = stub_principal();
+    let initial_snapshot = snapshot_for_behaviors_with_principal(
+        node.as_ref(),
+        "general",
+        vec![Arc::new(behavior)],
+        principal.clone(),
+    )
+    .await;
+    let switched_snapshot = snapshot_for_behaviors_with_principal(
+        node.as_ref(),
+        "general",
+        vec![Arc::new(switched)],
+        principal,
+    )
+    .await;
+
+    // (request id, generation, backend id, account ref) of each finished request.
+    let (done_tx, mut done_rx) =
+        mpsc::unbounded_channel::<(String, u64, Option<String>, Option<String>)>();
+    let (held_tx, mut held_rx) = mpsc::unbounded_channel::<String>();
+    let release = Arc::new(Notify::new());
+    let runner = {
+        let release = release.clone();
+        move |behavior: Arc<ResolvedBehavior>,
+              _tool_surface: Arc<ToolSurface>,
+              request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+              generation: u64,
+              mut shutdown: watch::Receiver<bool>| {
+            let (done_tx, held_tx, release) = (done_tx.clone(), held_tx.clone(), release.clone());
+            async move {
+                loop {
+                    let request = tokio::select! {
+                        _ = shutdown.changed() => return Ok(()),
+                        message = async {
+                            let mut receiver = request_rx.lock().await;
+                            receiver.recv().await
+                        } => match message {
+                            Some(request) => request,
+                            None => return Ok(()),
+                        },
+                    };
+                    if request.request_id == "held" {
+                        let _ = held_tx.send(request.request_id.clone());
+                        release.notified().await;
+                    }
+                    let _ = done_tx.send((
+                        request.request_id,
+                        generation,
+                        behavior.backend_id.clone(),
+                        behavior.backend_auth.oauth_account_ref().map(str::to_owned),
+                    ));
+                }
+            }
+        }
+    };
+
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let supervisor = GenerationSupervisor::bootstrap(
+        initial_snapshot,
+        crate::admission::AdmissionRegistry::new(node.clone()),
+        crate::retry::RetryPolicy {
+            max_retries: 3,
+            base_delay_ms: 5,
+            max_delay_ms: 25,
+        },
+        runner,
+        runtime_status,
+        shutdown_rx.clone(),
+        None,
+    )
+    .await
+    .unwrap();
+    let initial = supervisor.current_snapshot();
+    let mut held = background_child_request(0, "general");
+    held.request_id = "held".to_string();
+    initial.dispatchers["general"].send(held).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), held_rx.recv())
+        .await
+        .expect("the old slot claims the first request")
+        .unwrap();
+
+    let (active_tx, mut active_rx) = watch::channel(initial.clone());
+    let (proposal_tx, proposal_rx) = mpsc::channel(4);
+    let task = tokio::spawn(supervisor.run(active_tx, proposal_rx, shutdown_rx));
+    proposal_tx.send(switched_snapshot).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), active_rx.changed())
+        .await
+        .expect("a backend change publishes a generation while a call is in flight")
+        .unwrap();
+    let updated = active_rx.borrow().clone();
+    assert!(
+        !initial.dispatchers["general"].same_channel(&updated.dispatchers["general"]),
+        "a backend change must restage the slot"
+    );
+    drop(initial);
+
+    let mut queued = background_child_request(1, "general");
+    queued.request_id = "queued".to_string();
+    updated.dispatchers["general"].send(queued).await.unwrap();
+    let next = tokio::time::timeout(Duration::from_secs(5), done_rx.recv())
+        .await
+        .expect("the queued request runs on the new slot")
+        .unwrap();
+    assert_eq!(
+        next,
+        (
+            "queued".to_string(),
+            updated.generation,
+            Some("claude-subscription-acct-b".to_string()),
+            Some("acct-b".to_string()),
+        )
+    );
+
+    release.notify_one();
+    let drained = tokio::time::timeout(Duration::from_secs(5), done_rx.recv())
+        .await
+        .expect("the call in flight finishes on the retired slot")
+        .unwrap();
+    assert_eq!(drained.0, "held");
+    assert_ne!(drained.1, updated.generation);
+    assert_eq!(
+        (drained.2, drained.3),
+        (Some("claude".to_string()), None),
+        "the call in flight keeps the old account"
+    );
 
     let _ = shutdown_tx.send(true);
     tokio::time::timeout(Duration::from_secs(5), task)

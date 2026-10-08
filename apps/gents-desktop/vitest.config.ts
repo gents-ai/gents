@@ -20,6 +20,6 @@ export default defineConfig({
       "src/**/*.test.ts",
       "src/**/*.test.tsx",
     ],
-    setupFiles: ["./tests/setup.ts"],
+    setupFiles: ["./tests/polyfills.ts", "./tests/setup.ts"],
   },
 });

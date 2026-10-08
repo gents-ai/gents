@@ -355,7 +355,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::EVENT_SOURCE_CURSOR_NAME,
         gents_protocol::schemas::EVENT_SOURCE_CURSOR,
-        "bafyreibmj2c3mvftyp3zj6te24ql5grwbzoxiztuvpxz7idukpoxytvo24"
+        "bafyreichgs26urdud6sk4qualskmzpcodc5o2mlljnswcxmleihz2vo2qq"
     ),
     baseline_entry!(
         gents_protocol::schemas::TRIGGER_FIRE_NAME,
@@ -395,7 +395,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::OAUTH_CREDENTIAL_NAME,
         gents_protocol::schemas::OAUTH_CREDENTIAL,
-        "bafyreiab3wqm3em2cepvj22l733ziz4azytl3gc7zozcm5e2s7nuehkx6u"
+        "bafyreiaivlc7otkzrjp2odvomku7tsleqcux2cbaaqcev6gthjrmnrwhly"
     ),
     baseline_entry!(
         gents_protocol::schemas::INFERENCE_PROFILE_NAME,
@@ -440,7 +440,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::GOAL_NAME,
         gents_protocol::schemas::GOAL,
-        "bafyreib7xrvv4razwfdgso4ef5xhqqk2s53c37oszc75ireafycm7bwk3y"
+        "bafyreidnydri5bsdfrqdpc3vgrd72efr5df6qnzok5f4fjxig7nc7pebcy"
     ),
     baseline_entry!(
         gents_protocol::schemas::GOAL_CREATION_CLAIM_NAME,
@@ -471,6 +471,11 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
         gents_protocol::schemas::RENDERED_REQUEST_NAME,
         gents_protocol::schemas::RENDERED_REQUEST,
         "bafyreicderii4drvuggodfzo24q5ergcponrix4u6zv6qfo75uvescmwh4"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::RENDERED_REQUEST_BLOCK_NAME,
+        gents_protocol::schemas::RENDERED_REQUEST_BLOCK,
+        "bafyreicl23h6anxhpfmdmomvgpegd42apgmvddtjtcqlteabtcog3d7h5i"
     ),
     baseline_entry!(
         gents_protocol::schemas::PROVIDER_CONTEXT_REDUCTION_NAME,
@@ -621,6 +626,11 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
         gents_protocol::schemas::PACK_INSTALLATION_NAME,
         gents_protocol::schemas::PACK_INSTALLATION,
         "bafyreig6h74o5jnh3t466vqhuj5qqcfifock267tmrhdlbaay66oh7pqxu"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::PROVIDER_ACCOUNT_USAGE_NAME,
+        gents_protocol::schemas::PROVIDER_ACCOUNT_USAGE,
+        "bafyreifhv54fli6vfs3jt5kh5iglqmqaksxwihxu6ju3wsz3en7dlgzoyi"
     ),
 ];
 

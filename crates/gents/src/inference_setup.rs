@@ -19,6 +19,7 @@ pub const LOCAL_DEFAULT_ENDPOINT: &str = "http://127.0.0.1:11434/v1";
 pub const GROK_ENDPOINT: &str = "https://cli-chat-proxy.grok.com/v1";
 pub const CLAUDE_ENDPOINT: &str = "claude-cli://subscription";
 pub const CODEX_ENDPOINT: &str = "https://chatgpt.com/backend-api/codex";
+pub const XAI_API_ENDPOINT: &str = "https://api.x.ai/v1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -321,6 +322,19 @@ pub fn connection_spec(
             oauth_provider: Some(crate::xai_grok_oauth::XAI_OAUTH_PROVIDER),
             api_key_required: false,
         },
+        (Grok, ApiKey) => InferenceConnectionSpec {
+            backend_name: "xAI",
+            provider_kind: BackendProviderKind::OpenAiCompatible,
+            openai_wire_api: Some(OpenAiWireApi::Responses),
+            endpoint: if requested.is_empty() {
+                XAI_API_ENDPOINT
+            } else {
+                requested
+            }
+            .into(),
+            oauth_provider: None,
+            api_key_required: true,
+        },
         (Local, OptionalApiKey) => InferenceConnectionSpec {
             backend_name: "Local server",
             provider_kind: BackendProviderKind::OpenAiCompatible,
@@ -384,10 +398,44 @@ pub fn provider_selection_for_backend(
         {
             (InferenceProviderId::OpenAi, InferenceAuthMethod::ApiKey)
         }
+        BackendProviderKind::OpenAiCompatible if is_xai_api_endpoint(endpoint) => {
+            (InferenceProviderId::Grok, InferenceAuthMethod::ApiKey)
+        }
         BackendProviderKind::OpenAiCompatible => (
             InferenceProviderId::Local,
             InferenceAuthMethod::OptionalApiKey,
         ),
+    }
+}
+
+/// Exact xAI API endpoint, ignoring ASCII case and trailing `/`
+/// (`PromptAssembly.ResponsesStorage.atXaiApi`).
+pub(crate) fn is_xai_api_endpoint(endpoint: &str) -> bool {
+    endpoint
+        .trim_end_matches('/')
+        .eq_ignore_ascii_case(XAI_API_ENDPOINT)
+}
+
+/// The reasoning effort a request sends. An `OpenAiCompatible` Responses
+/// backend at the xAI API endpoint sends only an effort the model's discovered
+/// catalog advertises: xAI returns 400 "does not support parameter
+/// reasoningEffort" for any effort on the other models. Unknown support omits
+/// it too, so the model default applies
+/// (`PromptAssembly.ResponsesStorage.sentEffort`).
+pub(crate) fn sent_reasoning_effort(
+    kind: BackendProviderKind,
+    wire: OpenAiWireApi,
+    endpoint: &str,
+    advertised: Option<&[ReasoningEffort]>,
+    effort: Option<ReasoningEffort>,
+) -> Option<ReasoningEffort> {
+    if kind == BackendProviderKind::OpenAiCompatible
+        && wire == OpenAiWireApi::Responses
+        && is_xai_api_endpoint(endpoint)
+    {
+        effort.filter(|effort| advertised.is_some_and(|list| list.contains(effort)))
+    } else {
+        effort
     }
 }
 
@@ -600,6 +648,29 @@ mod tests {
             max_context_window: None,
             max_output_tokens: None,
             reasoning_efforts: None,
+        }
+    }
+
+    #[test]
+    fn sent_reasoning_effort_leaves_other_kinds_and_wires_alone() {
+        for (kind, wire) in [
+            (
+                BackendProviderKind::OpenAiCompatible,
+                OpenAiWireApi::ChatCompletions,
+            ),
+            (BackendProviderKind::OpenRouter, OpenAiWireApi::Responses),
+        ] {
+            assert_eq!(
+                sent_reasoning_effort(
+                    kind,
+                    wire,
+                    XAI_API_ENDPOINT,
+                    Some(&[]),
+                    Some(ReasoningEffort::Low)
+                ),
+                Some(ReasoningEffort::Low),
+                "{kind:?} {wire:?}"
+            );
         }
     }
 
@@ -875,6 +946,56 @@ mod tests {
             anthropic.auth_methods,
             vec![InferenceAuthMethod::ClaudeOauth]
         );
+    }
+
+    #[test]
+    fn grok_api_key_connects_to_the_xai_responses_endpoint() {
+        let spec =
+            connection_spec(InferenceProviderId::Grok, InferenceAuthMethod::ApiKey, "").unwrap();
+        assert_eq!(spec.provider_kind, BackendProviderKind::OpenAiCompatible);
+        assert_eq!(spec.openai_wire_api, Some(OpenAiWireApi::Responses));
+        assert_eq!(spec.endpoint, XAI_API_ENDPOINT);
+        assert!(spec.api_key_required);
+        assert!(spec.oauth_provider.is_none());
+
+        let explicit = connection_spec(
+            InferenceProviderId::Grok,
+            InferenceAuthMethod::ApiKey,
+            "https://proxy.example/v1",
+        )
+        .unwrap();
+        assert_eq!(explicit.endpoint, "https://proxy.example/v1");
+
+        let oauth = connection_spec(
+            InferenceProviderId::Grok,
+            InferenceAuthMethod::GrokOauth,
+            "",
+        )
+        .unwrap();
+        assert_eq!(oauth.provider_kind, BackendProviderKind::XaiGrokOAuth);
+        assert_eq!(oauth.endpoint, GROK_ENDPOINT);
+        assert_eq!(
+            oauth.oauth_provider,
+            Some(crate::xai_grok_oauth::XAI_OAUTH_PROVIDER)
+        );
+    }
+
+    #[test]
+    fn existing_xai_api_backends_recover_grok_api_key() {
+        for endpoint in ["https://api.x.ai/v1", "https://api.x.ai/v1/"] {
+            assert_eq!(
+                provider_selection_for_backend(BackendProviderKind::OpenAiCompatible, endpoint),
+                (InferenceProviderId::Grok, InferenceAuthMethod::ApiKey)
+            );
+        }
+        let recommendation = recommendation_for_model(
+            InferenceProviderId::Grok,
+            InferenceAuthMethod::ApiKey,
+            &advertised("grok-model"),
+        )
+        .unwrap();
+        assert_eq!(recommendation.max_concurrent.recommended, 8);
+        assert_eq!(recommendation.top_p.unwrap().recommended, 0.95);
     }
 
     #[test]

@@ -73,21 +73,22 @@ fn open_db_explorer_window<R: Runtime>(app: &AppHandle<R>, url: &str) -> Result<
         existing
             .navigate(parsed)
             .map_err(|error| BridgeError::new(BridgeErrorCode::Backend, format!("{error}")))?;
+        #[cfg(not(any(target_os = "ios", target_os = "android")))]
         existing
             .set_focus()
             .map_err(|error| BridgeError::new(BridgeErrorCode::Backend, format!("{error}")))?;
         return Ok(());
     }
-    WebviewWindowBuilder::new(app, DB_EXPLORER_WINDOW_LABEL, WebviewUrl::External(parsed))
-        .title("DB Explorer")
-        .inner_size(1280.0, 860.0)
-        .build()
-        .map_err(|error| {
-            BridgeError::new(
-                BridgeErrorCode::Backend,
-                format!("opening the DB explorer window failed: {error}"),
-            )
-        })?;
+    let builder =
+        WebviewWindowBuilder::new(app, DB_EXPLORER_WINDOW_LABEL, WebviewUrl::External(parsed));
+    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    let builder = builder.title("DB Explorer").inner_size(1280.0, 860.0);
+    builder.build().map_err(|error| {
+        BridgeError::new(
+            BridgeErrorCode::Backend,
+            format!("opening the DB explorer window failed: {error}"),
+        )
+    })?;
     Ok(())
 }
 

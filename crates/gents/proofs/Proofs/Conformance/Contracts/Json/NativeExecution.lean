@@ -543,7 +543,7 @@ private def titleActivation : Handover.TitleActivation :=
   , generation := 7, duration := 5, deadline := 10 }
 
 private def titleClaimed? : Option World :=
-  SessionComposition.activateTitle titlePending 1 1 titleActivation 1
+  SessionComposition.activateTitle titlePending 1 5 titleActivation 1
     { transportRetries := 0, resampleRetries := 0, allowRepair := false } none
 
 private def titleClaimed : World := titleClaimed?.get (by native_decide)
@@ -551,7 +551,7 @@ private def titleClaimed : World := titleClaimed?.get (by native_decide)
 private def titleProcessing? : Option World := do
   let released ← scheduling titleClaimed 1 .release
   let held ← acquire released 1 true
-  Handover.beginProcessing held 1 2 7
+  Handover.beginProcessing held 1 5 7
 
 private def titleProcessing : World := titleProcessing?.get (by native_decide)
 
@@ -579,56 +579,66 @@ private def titleFutureDatedRaw : Segment :=
 private def titleEarlierRecoveryClose : Segment :=
   { AuxiliaryCases.recoveryClose .title with createdAt := 11 }
 
-/-- The gate scripts start from an actual typed title claim and begin. Signed
-admission remains a separate joined fixture; the native execution initializer
-cannot yet create that request or translate the title capture scope. -/
+private def titleRetryRaw : Segment :=
+  { AuxiliaryCases.observed .title with
+    id := 102, coordinate := ⟨10, .auxiliary .title 1 0 1⟩, createdAt := 7 }
+
+private def titleRetryClose : Segment :=
+  { AuxiliaryCases.close .title .complete with
+    id := 103, coordinate := titleRetryRaw.coordinate, createdAt := 8 }
+
+/-- Native title seeds use the typed title claim and begin owners. Their claim
+time plus duration equals the deadline installed by the native claim owner.
+Replication and operations lacking native physical inputs remain explicit
+external-premise experiments. Parent lifecycle is absent from `TitleBinding`:
+the native fixture may use a terminal parent without changing these results. -/
 def titleCases : List Case :=
-  let nativeGap :=
-    "The model seed uses the real typed title claim/begin owner, but native execution initializes only a signed normal local-self request; signed title admission and title capture-scope translation are separate unbound interfaces."
-  [ mkModelCase "title_claimed_renewal_while_permit_wait" titleClaimed
-      [.renew 8 10] nativeGap
-  , mkModelCase "title_reasoning_audit_complete_no_message" titleProcessing
+  [ mkCase "title_claimed_renewal_while_permit_wait" titleClaimed
+      [.renew 8 10]
+  , mkCase "title_reasoning_audit_complete_no_message" titleProcessing
       [.appendRaw 1 5 (AuxiliaryCases.observed .title),
        .closeAuxiliary 5 7 (AuxiliaryCases.close .title .complete),
-       .terminalizeNoMessage] nativeGap
-  , mkModelCase "title_live_partial_retains_received_reasoning" titleProcessing
+       .terminalizeNoMessage]
+  , mkCase "title_live_partial_retains_received_reasoning" titleProcessing
       [.appendRaw 1 5 (AuxiliaryCases.observed .title),
        .closePartial 6 7 titleLivePartial,
-       .terminalizeNoMessageAt 7] nativeGap
-  , mkModelCase "title_expired_headerless_recovery_no_message" titleProcessing
+       .terminalizeNoMessageAt 7]
+  , mkCase "title_expired_headerless_recovery_no_message" titleProcessing
       [.appendRaw 1 5 (AuxiliaryCases.observed .title),
        .recoverTerminal 2 20 8 .interrupted .noMessage
-         [⟨AuxiliaryCases.recoveryClose .title, none⟩]] nativeGap
-  , mkModelCase "title_expired_unlatched_recovery_no_message" titleProcessing
+         [⟨AuxiliaryCases.recoveryClose .title, none⟩]]
+  , mkCase "title_expired_unlatched_recovery_no_message" titleProcessing
       [.appendRaw 1 5 (AuxiliaryCases.observed .title),
        .recoverTerminal 2 20 8 .failed .noMessage
-         [⟨AuxiliaryCases.recoveryClose .title, none⟩]] nativeGap
+         [⟨AuxiliaryCases.recoveryClose .title, none⟩]]
   , mkModelCase "title_recovery_accepts_closed_partial_before_future_dated_raw"
       titleProcessing
       [.replicate titleFutureDatedRaw,
        .recoverTerminal 2 11 8 .interrupted .noMessage
          [⟨titleEarlierRecoveryClose, none⟩]]
-      "A future-dated raw fact arriving by replication is outside the local append-time premise. Existing recovery permits a valid Partial closure at its own earlier observed time; native title admission remains unbound to this model seed."
-  , mkModelCase "title_retraction_keeps_observed_reasoning" titleProcessing
+      "A future-dated raw fact arriving by replication is outside the local append-time premise. Existing recovery permits a valid Partial closure at its own earlier observed time; the native local-write adapter does not simulate replication."
+  , mkCase "title_retraction_keeps_observed_reasoning" titleProcessing
       [.appendRaw 1 5 (AuxiliaryCases.observed .title),
        .retract 6 titleRetraction,
-       .terminalizeNoMessageAt 7] nativeGap
-  , mkModelCase "title_open_audit_blocks_ordinary_terminal" titleProcessing
+       .terminalizeNoMessageAt 7]
+  , mkCase "title_open_audit_blocks_ordinary_terminal" titleProcessing
       [.appendRaw 1 5 (AuxiliaryCases.observed .title),
        .terminalizeNoMessageAt 6,
        .closeAuxiliary 7 7 { (AuxiliaryCases.close .title .«partial») with createdAt := 7 },
-       .terminalizeNoMessageAt 8] nativeGap
+       .terminalizeNoMessageAt 8]
   , mkModelCase "title_closed_extent_allows_terminal_after_late_raw" titleProcessing
       [.appendRaw 1 5 (AuxiliaryCases.observed .title),
        .closePartial 6 7 titleLivePartial,
        .replicate titleLateOutsideExtent,
-       .terminalizeNoMessageAt 7] nativeGap
+       .terminalizeNoMessageAt 7]
+      "A late raw fact arriving by replication is outside the native local-write adapter's append premise."
   , mkModelCase "title_terminal_replay_ignores_late_raw" titleProcessing
       [.appendRaw 1 5 (AuxiliaryCases.observed .title),
        .closePartial 6 7 titleLivePartial,
        .terminalizeNoMessageAt 7,
        .replicate titleLateOutsideExtent,
-       .terminalizeNoMessageAt 8] nativeGap
+       .terminalizeNoMessageAt 8]
+      "A late raw fact arriving after terminalization by replication is outside the native local-write adapter's append premise."
   , mkModelCase "title_rejects_publication_and_tool_dispatch" titleProcessing
       [.appendRaw 1 5 (AuxiliaryCases.observed .title),
        .acceptTurn (AuxiliaryCases.nativePublicationClose .title)
@@ -637,12 +647,30 @@ def titleCases : List Case :=
        .publishAuthored authored compactionBoundary,
        .terminalizeCompleted,
        .closeAuxiliary 5 7 (AuxiliaryCases.close .title .complete),
-       .terminalizeNoMessage] nativeGap
-  , mkModelCase "normal_request_rejects_title_source" (world 5)
+       .terminalizeNoMessage]
+      "Dispatch names an unmaterialized tool and terminal selection names an unpublished header; the native owners require physical tool/header inputs. The separate title publication case binds the representable denial."
+  , mkCase "normal_request_rejects_title_source" (world 5)
       [.appendRaw 1 5 (AuxiliaryCases.observed .title),
        .retract 6 titleRetraction,
        .appendRaw 1 6 (raw 102 0 0 6)]
-      "The native execution seed initializer cannot expose a title-source record under a normal request until the title-source protocol adapter is bound to this fixture." ]
+  , mkCase "title_rejects_assistant_publication" titleProcessing
+      [.appendRaw 1 5 (AuxiliaryCases.observed .title),
+       .acceptTurn (AuxiliaryCases.nativePublicationClose .title)
+         AuxiliaryCases.nativePublicationMessage [],
+       .closeAuxiliary 5 7 (AuxiliaryCases.close .title .complete),
+       .terminalizeNoMessage]
+  , mkCase "title_retry_retains_distinct_attempt_coordinates" titleProcessing
+      [.appendRaw 1 5 (AuxiliaryCases.observed .title),
+       .retract 6 titleRetraction,
+       .appendRaw 1 7 titleRetryRaw,
+       .closeAuxiliary 8 7 titleRetryClose,
+       .terminalizeNoMessageAt 9]
+  , mkCase "title_rejects_parent_request_source" titleProcessing
+      [.appendRaw 1 5 { (AuxiliaryCases.observed .title) with
+          coordinate := ⟨titleActivation.binding.parentPhysical, AuxiliaryCases.source .title⟩ },
+       .appendRaw 1 5 (AuxiliaryCases.observed .title),
+       .closeAuxiliary 5 7 (AuxiliaryCases.close .title .complete),
+       .terminalizeNoMessage] ]
 
 example : titleCases.map (fun value => value.expected.map (List.map (·.accepted))) =
     [some [true], some [true, true, true], some [true, true, true],
@@ -650,7 +678,8 @@ example : titleCases.map (fun value => value.expected.map (List.map (·.accepted
       some [true, false, true, true],
       some [true, true, true, true], some [true, true, true, true, true],
       some [true, false, false, false, false, true, true],
-      some [false, false, true]] := by native_decide
+      some [false, false, true], some [true, false, true, true],
+      some [true, true, true, true, true], some [false, true, true, true]] := by native_decide
 
 example : ((run titleProcessing 600
     [.replicate titleFutureDatedRaw,
@@ -750,9 +779,22 @@ def recoveryItemJson (value : RecoveryItem) : String :=
   "{\"closing\":" ++ canonicalSegmentJson value.closing ++ ",\"message\":" ++
     (value.message.map canonicalMessageJson).getD "null" ++ "}"
 
+private def titleBindingJson (binding : Handover.TitleBinding) : String :=
+  "{\"physical_request\":" ++ toString binding.physicalRequest ++
+    ",\"logical_request\":" ++ toString binding.logicalRequest ++
+    ",\"parent_physical\":" ++ toString binding.parentPhysical ++
+    ",\"parent_logical\":" ++ toString binding.parentLogical ++
+    ",\"agent\":" ++ toString binding.agent ++
+    ",\"session\":" ++ toString binding.session ++
+    ",\"authenticated\":" ++ jsonOptionalBool (some binding.authenticated) ++ "}"
+
 def seedJson (value : World) : String :=
+  let titleBinding := value.claimed.bind fun claimed => match claimed.evidence with
+    | .titleAudit binding => some binding
+    | _ => none
   "{" ++ "\"request_id\":" ++ toString value.requestId ++ ","
     ++ "\"purpose\":" ++ jsonString value.purpose.toWire ++ ","
+    ++ "\"title_binding\":" ++ (titleBinding.map titleBindingJson).getD "null" ++ ","
     ++ "\"session_id\":" ++ toString value.sessionId ++ ","
     ++ "\"principal\":" ++ toString value.principal ++ ","
     ++ "\"lease\":" ++ Conformance.RequestExecutionLeaseContracts.worldJson value.lease ++ ","
@@ -889,16 +931,18 @@ def casesJson : String := jsonArray (cases.map caseJson)
 
 example : cases.all (fun value => value.expected.isSome) = true := by native_decide
 
-/-- Collections represented as empty, plus omitted optional execution state, are
-empty in every native-adaptable seed. Title model-only seeds carry their real
-typed claim, which the current native initializer cannot represent. -/
+/-- Every native seed has no durable output, transcript reservations, tool
+execution, compaction or terminal selection. Optional claim state is absent
+except for the exact title seeds produced by the typed claim/begin owners and
+bound by the signed native initializer. -/
 example : cases.all (fun value => value.seed.segments.isEmpty && value.seed.messages.isEmpty &&
     value.seed.transcript.messages.isEmpty && value.seed.transcript.toolCalls.isEmpty &&
     value.seed.transcript.inFlight == ∅ && value.seed.compactionCursor.isNone &&
     value.seed.toolContexts.isEmpty &&
     value.seed.terminalSelection.isNone &&
     (value.nativeGap.isSome ||
-      (value.seed.gateOwner.isNone && value.seed.claimed.isNone))) = true := by
+      (value.seed.gateOwner.isNone && value.seed.claimed.isNone) ||
+      decide (value.seed = titleClaimed ∨ value.seed = titleProcessing))) = true := by
   native_decide
 
 /-- Every script is substantive, serializable through its modeled operations,

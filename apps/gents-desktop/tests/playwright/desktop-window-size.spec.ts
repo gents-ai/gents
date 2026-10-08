@@ -26,7 +26,7 @@ const MINIMUM = { width: mainWindow.minWidth, height: mainWindow.minHeight };
 
 type Box = { x: number; y: number; width: number; height: number };
 
-async function boxOf(page: Page, locator: ReturnType<Page["locator"]>) {
+async function boxOf(locator: ReturnType<Page["locator"]>) {
   await expect(locator).toBeVisible();
   const box = await locator.boundingBox();
   expect(box).not.toBeNull();
@@ -34,7 +34,7 @@ async function boxOf(page: Page, locator: ReturnType<Page["locator"]>) {
 }
 
 async function expectInsideViewport(page: Page, locator: ReturnType<Page["locator"]>) {
-  const box = await boxOf(page, locator);
+  const box = await boxOf(locator);
   const { width, height } = page.viewportSize()!;
   expect(box.x).toBeGreaterThanOrEqual(0);
   expect(box.y).toBeGreaterThanOrEqual(0);
@@ -43,12 +43,11 @@ async function expectInsideViewport(page: Page, locator: ReturnType<Page["locato
 }
 
 async function expectApart(
-  page: Page,
   a: ReturnType<Page["locator"]>,
   b: ReturnType<Page["locator"]>,
 ) {
-  const first = await boxOf(page, a);
-  const second = await boxOf(page, b);
+  const first = await boxOf(a);
+  const second = await boxOf(b);
   const overlaps =
     first.x < second.x + second.width &&
     second.x < first.x + first.width &&
@@ -81,8 +80,7 @@ test.describe("half-screen window", () => {
       const header = page.locator(".app-titlebar");
       await expectInsideViewport(page, page.getByRole("button", { name: "Menu" }));
       await expectApart(
-        page,
-        header.getByLabel("breadcrumb"),
+        header.getByRole("link", { name: "Agents" }).first(),
         header.getByRole("button", { name: /Sync healthy/ }),
       );
       await expectInsideViewport(
@@ -97,7 +95,7 @@ test.describe("half-screen window", () => {
       await expectNoPageHorizontalOverflow(page);
 
       /* agents */
-      await page.getByLabel("breadcrumb").getByRole("link", { name: "Agents" }).click();
+      await page.getByRole("link", { name: "Agents" }).first().click();
       await expect(page.getByTestId("agents-screen")).toBeVisible();
       await expectInsideViewport(page, page.getByRole("button", { name: "Add agent" }));
       await expectNoPageHorizontalOverflow(page);
@@ -147,10 +145,11 @@ test.describe("half-screen window", () => {
         .click();
       await expectInsideViewport(page, composer(page));
       await page
-        .getByRole("button", { name: "Open side panel" })
+        .getByRole("button", { name: "More" })
         .filter({ visible: true })
         .first()
         .click();
+      await page.getByRole("menuitem", { name: "Trace" }).click();
       /* the side panel opens as a sheet over the transcript, not a column */
       const sheet = page.getByRole("dialog", { name: "Side panel" });
       await expect(sheet).toBeVisible();
@@ -158,7 +157,7 @@ test.describe("half-screen window", () => {
         element.getAnimations({ subtree: true }).forEach((a) => a.finish()),
       );
       await expectInsideViewport(page, sheet);
-      await expect(page.getByRole("separator", { name: "Resize trace" })).toHaveCount(
+      await expect(page.getByRole("separator", { name: "Resize panel" })).toHaveCount(
         0,
       );
       await page.keyboard.press("Escape");
@@ -166,7 +165,7 @@ test.describe("half-screen window", () => {
       await expectInsideViewport(page, composer(page));
       await expectNoPageHorizontalOverflow(page);
 
-      await page.getByLabel("breadcrumb").getByRole("link", { name: "Agents" }).click();
+      await page.getByRole("link", { name: "Agents" }).first().click();
       await expect(page.getByTestId("agents-screen")).toBeVisible();
       await expectInsideViewport(page, page.getByRole("button", { name: "Add agent" }));
       await expectNoPageHorizontalOverflow(page);
@@ -178,16 +177,26 @@ test.describe("half-screen window", () => {
   }) => {
     await page.setViewportSize({ width: 900, height: 800 });
     await gotoHarness(page);
-    await page.evaluate(() => localStorage.setItem("gents-prototype-nav", "expanded"));
+    await page.evaluate(() =>
+      localStorage.setItem(
+        "gents-preferences",
+        JSON.stringify({ state: { nav: "expanded" }, version: 1 }),
+      ),
+    );
     await page.reload();
     await openConfig(page);
     /* the canvas keeps the room the expanded nav would take */
-    const canvas = await boxOf(page, page.getByTestId("agent-screen"));
+    const canvas = await boxOf(page.getByTestId("agent-screen"));
     expect(canvas.width).toBeGreaterThan(800);
+    expect((await boxOf(page.getByTestId("pane"))).x).toBeLessThan(100);
     await expect(page.getByRole("combobox", { name: "Section" })).toBeVisible();
     await expectNoPageHorizontalOverflow(page);
 
+    /* a wide window shows the expanded nav as a column beside the pane */
     await page.setViewportSize({ width: 1440, height: 900 });
+    await expect
+      .poll(async () => (await boxOf(page.getByTestId("pane"))).x)
+      .toBeGreaterThanOrEqual(300);
     await expect(page.getByRole("link", { name: "New session" }).first()).toBeVisible();
     await expect(page.getByRole("combobox", { name: "Section" })).toBeHidden();
   });

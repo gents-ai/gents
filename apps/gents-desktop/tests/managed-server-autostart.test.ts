@@ -28,6 +28,8 @@ describe("managed server launch restoration", () => {
       effectiveToolRoot: null,
       suggestedToolRoot: "/Users/test",
       pairingReady: false,
+      approvalRequired: false,
+      runtimeBooting: false,
       error: null,
     });
 
@@ -47,6 +49,8 @@ describe("managed server launch restoration", () => {
       effectiveToolRoot: null,
       suggestedToolRoot: "/Users/test",
       pairingReady: false,
+      approvalRequired: false,
+      runtimeBooting: false,
       error: null,
     });
 
@@ -66,6 +70,8 @@ describe("managed server launch restoration", () => {
       effectiveToolRoot: null,
       suggestedToolRoot: "/Users/test",
       pairingReady: false,
+      approvalRequired: false,
+      runtimeBooting: false,
       error: null,
     });
     const first = restoreManagedServer(api);

@@ -479,6 +479,105 @@ mod tests {
     use super::*;
     use crate::identity::KeyIdentity;
 
+    fn xai_effort_fixtures(
+        endpoint: &str,
+        model: &str,
+        effort: Option<&str>,
+        catalogued_efforts: Option<&[&str]>,
+    ) -> (
+        crate::document_config::InferenceBackend,
+        crate::document_config::InferenceProfile,
+        crate::document_config::InferenceBackendObservation,
+    ) {
+        let backend = serde_json::from_value(serde_json::json!({
+            "agent_did":"did:key:test", "backend_id":"xai", "name":"xAI",
+            "provider_kind":"OpenAiCompatible", "openai_wire_api":"responses",
+            "endpoint":endpoint,
+            "auth":{"kind":"environment","variable":"XAI_API_KEY"}
+        }))
+        .unwrap();
+        let profile = serde_json::from_value(serde_json::json!({
+            "agent_did":"did:key:test", "profile_id":"grok", "backend_id":"xai",
+            "model_name":model, "reasoning_effort":effort
+        }))
+        .unwrap();
+        let observation = serde_json::from_value(serde_json::json!({
+            "backend_id":"xai", "probe_status":"healthy",
+            "catalogs":[{"agent_did":null,"observed_at":"2026-01-01T00:00:00Z",
+                "models":[{"model_name":model,"reasoning_efforts":catalogued_efforts}]}]
+        }))
+        .unwrap();
+        (backend, profile, observation)
+    }
+
+    #[test]
+    fn unsent_reasoning_effort_explains_the_omission() {
+        const XAI: &str = "https://api.x.ai/v1";
+        const G45: &[&str] = &["low", "medium", "high", "xhigh"];
+        let warning = |endpoint, model, effort, catalogued, observed: bool| {
+            let (backend, profile, observation) =
+                xai_effort_fixtures(endpoint, model, effort, catalogued);
+            unsent_reasoning_effort(&backend, &profile, observed.then_some(&observation))
+        };
+        let text = warning(
+            XAI,
+            "grok-4.20-0309-reasoning",
+            Some("low"),
+            Some(&[]),
+            true,
+        )
+        .expect("grok-4.20 warns");
+        assert!(text.contains("grok-4.20-0309-reasoning"), "{text}");
+        assert!(text.contains("no reasoning effort"), "{text}");
+        let text = warning(XAI, "grok-4.5", Some("none"), Some(G45), true).expect("grok-4.5 none");
+        assert!(text.contains("low, medium, high, xhigh"), "{text}");
+        let text = warning(XAI, "grok-4.5", Some("low"), Some(G45), false).expect("no observation");
+        assert!(text.contains("no discovered catalog"), "{text}");
+        let text = warning(XAI, "grok-4.5", Some("low"), None, true).expect("stale catalog");
+        assert!(text.contains("predates effort discovery"), "{text}");
+        let g43: &[&str] = &["none", "low", "medium", "high", "xhigh"];
+        assert_eq!(warning(XAI, "grok-4.3", Some("low"), Some(g43), true), None);
+        assert_eq!(warning(XAI, "grok-4.5", None, Some(G45), true), None);
+        assert_eq!(
+            warning(
+                "https://api.openai.com/v1",
+                "grok-4.20-0309-reasoning",
+                Some("low"),
+                Some(&[]),
+                true
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn xai_api_key_profile_admits_an_unadvertised_effort() {
+        let (backend, profile, observation) = xai_effort_fixtures(
+            "https://api.x.ai/v1",
+            "grok-4.20-0309-reasoning",
+            Some("low"),
+            Some(&[]),
+        );
+        assert!(
+            advertised_model_for_profile(&backend, &profile, Some(&observation))
+                .unwrap()
+                .is_some()
+        );
+        let (backend, profile, observation) = xai_effort_fixtures(
+            "https://api.openai.com/v1",
+            "grok-4.20-0309-reasoning",
+            Some("low"),
+            Some(&[]),
+        );
+        let error = advertised_model_for_profile(&backend, &profile, Some(&observation))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("does not advertise selected reasoning effort"),
+            "{error}"
+        );
+    }
+
     fn stub_principal() -> Arc<RuntimePrincipal> {
         let identity = Arc::new(
             KeyIdentity::load_or_create(
@@ -745,7 +844,7 @@ pub fn backend_catalog<'a>(
 ) -> anyhow::Result<Option<&'a crate::document_config::BackendModelCatalog>> {
     let credential_scope = matches!(
         backend.auth,
-        crate::document_config::BackendAuth::PrincipalOAuth
+        crate::document_config::BackendAuth::PrincipalOAuth { .. }
     )
     .then_some(backend.agent_did.as_str());
     Ok(observation
@@ -753,6 +852,75 @@ pub fn backend_catalog<'a>(
         .map(|observation| observation.catalog_for(credential_scope))
         .transpose()?
         .flatten())
+}
+
+/// Whether a profile's reasoning effort is admitted against its model's
+/// advertised list. An `OpenAiCompatible` backend at the xAI API endpoint
+/// admits any effort: the request omits an unadvertised one instead
+/// ([`crate::inference_setup::sent_reasoning_effort`]).
+pub fn admits_reasoning_effort(
+    backend: &crate::document_config::InferenceBackend,
+    effort: ReasoningEffort,
+    advertised: &[ReasoningEffort],
+) -> bool {
+    advertised.contains(&effort)
+        || (backend.provider_kind == BackendProviderKind::OpenAiCompatible
+            && crate::inference_setup::is_xai_api_endpoint(&backend.endpoint))
+}
+
+/// Why a profile's reasoning effort will not be sent, or `None` when it is
+/// (or none is set). Only an xAI API-key Responses backend omits an effort
+/// ([`crate::inference_setup::sent_reasoning_effort`]); the model default
+/// applies then.
+pub fn unsent_reasoning_effort(
+    backend: &crate::document_config::InferenceBackend,
+    profile: &crate::document_config::InferenceProfile,
+    observation: Option<&crate::document_config::InferenceBackendObservation>,
+) -> Option<String> {
+    let effort = profile.reasoning_effort?;
+    let fields = backend.backend_fields();
+    let model = backend_catalog(backend, observation)
+        .ok()
+        .flatten()
+        .and_then(|catalog| {
+            catalog
+                .models
+                .iter()
+                .find(|model| model.model_name == profile.model_name)
+        });
+    let advertised = model.and_then(|model| model.reasoning_efforts.as_deref());
+    crate::inference_setup::sent_reasoning_effort(
+        fields.backend_provider_kind,
+        fields.openai_wire_api,
+        &fields.backend_endpoint,
+        advertised,
+        Some(effort),
+    )
+    .is_none()
+    .then(|| {
+        let reason = match (model, advertised) {
+            (None, _) => "has no discovered catalog; run `gents config backend discover-models`"
+                .to_string(),
+            (Some(_), None) => {
+                "catalog predates effort discovery; run `gents config backend discover-models`"
+                    .to_string()
+            }
+            (Some(_), Some([])) => "advertises no reasoning effort".to_string(),
+            (Some(_), Some(list)) => format!(
+                "advertises {}",
+                list.iter()
+                    .map(|effort| effort.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        };
+        format!(
+            "profile {} reasoning effort {} is not sent: model {} {reason}; the model default applies",
+            profile.profile_id,
+            effort.as_str(),
+            profile.model_name
+        )
+    })
 }
 
 /// The advertised model a profile selects on its backend, admitted against
@@ -789,7 +957,7 @@ pub fn advertised_model_for_profile(
         (profile.reasoning_effort, model.reasoning_efforts.as_ref())
     {
         anyhow::ensure!(
-            supported.contains(&effort),
+            admits_reasoning_effort(backend, effort, supported),
             "model {} does not advertise selected reasoning effort {effort:?}",
             profile.model_name
         );

@@ -419,6 +419,99 @@ fn cyclic_configuration(owner: &str) -> Vec<DesiredStateApplyDocument> {
 }
 
 #[tokio::test]
+async fn generated_default_replacements_preserve_runtime_startup_selection() -> Result<()> {
+    let snapshot = crate::lean_vocab_test::lean_contract_snapshot();
+    let cases = snapshot.configuration_scope_cases["default_replacement"]
+        .as_array()
+        .expect("Lean default replacement cases");
+    assert_eq!(cases.len(), 6);
+    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    register_config_schemas(&node).await?;
+    let access = ConfigAccess::Local(node.clone());
+    for (index, case) in cases.iter().enumerate() {
+        let owner = format!("did:key:default-replacement-{index}");
+        let principal = |default: &Value, name: &str| {
+            config(
+                Collection::AgentPrincipal,
+                json!({"agent_did":owner,"default_behavior_id":default,"display_name":name}),
+            )
+        };
+        let mut documents = vec![
+            document(backend(&owner, "backend")),
+            config(
+                Collection::InferenceProfile,
+                json!({"agent_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}),
+            ),
+            principal(&case["current"], "Original"),
+        ];
+        for behavior in ["coding", "review"] {
+            documents.push(config(
+                Collection::AgentBehavior,
+                json!({"agent_did":owner,"behavior_id":behavior,"inference_profile_id":"profile"}),
+            ));
+        }
+        apply(&access, documents).await?;
+        let mut requested = json!({"agent_principal": {
+            "agent_did":owner,"display_name":"Changed"
+        }});
+        if !case["candidate"].is_null() {
+            requested["agent_principal"]["default_behavior_id"] = case["candidate"].clone();
+        }
+        let pack: crate::document_config::PackConfig = serde_json::from_value(requested)?;
+        let mut replacement = DesiredStateApplyPlan::from_pack_config(&pack)?
+            .documents()
+            .first()
+            .expect("pack principal")
+            .clone();
+        replacement.add["default_behavior_id"] = json!("coding");
+        let plan = DesiredStateApplyPlan::new(vec![replacement])?;
+        let before = access
+            .transact("test.default.before", |txn| {
+                let owner = &owner;
+                Box::pin(
+                    async move { read_record(txn, Collection::AgentPrincipal, owner, owner).await },
+                )
+            })
+            .await?;
+        let preview = access
+            .transact("test.default.preview", |txn| {
+                let plan = &plan;
+                Box::pin(async move { validate_desired_state_plan(txn, plan).await })
+            })
+            .await;
+        let published = access
+            .transact("test.default.publish", |txn| {
+                let plan = &plan;
+                Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+            })
+            .await;
+        let allowed = case["allowed"].as_bool().expect("modeled verdict");
+        assert_eq!(preview.is_ok(), allowed, "preview: {case}: {preview:?}");
+        assert_eq!(published.is_ok(), allowed, "publish: {case}: {published:?}");
+        let after = access
+            .transact("test.default.after", |txn| {
+                let owner = &owner;
+                Box::pin(
+                    async move { read_record(txn, Collection::AgentPrincipal, owner, owner).await },
+                )
+            })
+            .await?;
+        if allowed {
+            let (_, after) = after.expect("published principal");
+            assert_eq!(after["default_behavior_id"], case["candidate"]);
+            assert_eq!(after["display_name"], "Changed");
+        } else {
+            assert_eq!(after, before, "refused replacement changed the principal");
+            let message = format!("{:#}", published.unwrap_err());
+            assert!(message.contains("default_behavior_id"), "{message}");
+            assert!(message.contains("coding"), "{message}");
+        }
+    }
+    node.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Result<()> {
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     register_config_schemas(&node).await?;
@@ -1930,6 +2023,258 @@ async fn outcome_delivery_requires_a_string_handoff_id_on_its_source_collection(
     // A collection the schema does not have yet cannot refute the delivery.
     apply(&access, vec![source("LaterPing")]).await?;
     assert_eq!(triggers().await, 1);
+    node.shutdown().await;
+    Ok(())
+}
+
+fn schema_fields(names: &[&str]) -> BTreeMap<String, SchemaField> {
+    names
+        .iter()
+        .map(|name| {
+            (
+                (*name).to_owned(),
+                SchemaField {
+                    name: (*name).to_owned(),
+                    type_name: "String".to_owned(),
+                },
+            )
+        })
+        .collect()
+}
+
+/// The trigger, task and source of one event delivery; a `group` also sets the
+/// correlation a grouped source requires.
+fn rule_documents(
+    prompt_template: &str,
+    goal_objective_template: Option<&str>,
+    emit_outcome: bool,
+    group: Option<Value>,
+    source_collection: &str,
+) -> Result<(
+    crate::document_config::Trigger,
+    crate::document_config::Task,
+    crate::document_config::EventSource,
+)> {
+    let owner = "did:key:template-rule";
+    let mut source = json!({
+        "agent_did": owner, "event_source_id": "watcher",
+        "source_collection": source_collection, "event_kind": "created",
+    });
+    if let Some(group) = group {
+        source["group"] = group;
+        source["correlation_field"] = json!("message");
+    }
+    let mut task = json!({
+        "agent_did": owner, "task_id": "work", "behavior_id": "behavior",
+        "prompt_template": prompt_template, "emit_outcome": emit_outcome,
+    });
+    if let Some(goal_objective_template) = goal_objective_template {
+        task["goal_objective_template"] = json!(goal_objective_template);
+    }
+    Ok((
+        serde_json::from_value(json!({
+            "agent_did": owner, "trigger_id": "on-doc", "task_id": "work",
+            "source": {"kind": "event", "event_source_id": "watcher"},
+        }))?,
+        serde_json::from_value(task)?,
+        serde_json::from_value(source)?,
+    ))
+}
+
+/// #2341: no schema declares the native-route provenance fields, because the
+/// trigger engine injects them into a per-document `emit_outcome` delivery's
+/// fire document; the rule resolves them without schema support.
+#[test]
+fn native_route_template_fields_pass_without_declared_schema_fields() -> Result<()> {
+    for collection in ["CallbackResult", "WorkspaceReceipt"] {
+        for name in ["handoff_id", "reply_session_id", "attempt"] {
+            let (trigger, task, source) = rule_documents(
+                &format!("Work {{{{ doc.{name} }}}}"),
+                Some("Finish work unit {{ doc.attempt }}"),
+                true,
+                None,
+                collection,
+            )?;
+            validate_event_trigger_document_fields(&trigger, &task, &source, &BTreeMap::new())
+                .unwrap_or_else(|error| {
+                    panic!("{collection}.{{doc.{name}}} resolves the native route: {error:#}")
+                });
+        }
+    }
+    Ok(())
+}
+
+/// The native-route arm states the injection site's preconditions exactly, so
+/// grouping the delivery, disabling `emit_outcome`, or watching another
+/// collection leaves the injected names undeclared. Publication refuses a
+/// grouped source whose correlation the schema does not declare earlier, in
+/// `validate_event_source_live_fields`; the template rule stays observable
+/// directly here.
+#[test]
+fn native_route_template_fields_require_the_injection_preconditions() -> Result<()> {
+    let cases = [
+        (
+            "a grouped delivery",
+            Some(json!({"expected_count": 2})),
+            true,
+            "WorkspaceReceipt",
+        ),
+        ("an outcome-less task", None, false, "CallbackResult"),
+        ("another source collection", None, true, "GapInput"),
+    ];
+    for (case, group, emit_outcome, collection) in cases {
+        let (trigger, task, source) = rule_documents(
+            "Work {{ doc.attempt }}",
+            None,
+            emit_outcome,
+            group,
+            collection,
+        )?;
+        let error = validate_event_trigger_document_fields(
+            &trigger,
+            &task,
+            &source,
+            &schema_fields(&["message"]),
+        )
+        .err()
+        .unwrap_or_else(|| panic!("{case} must refuse doc.attempt"));
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("trigger on-doc prompt_template references doc.attempt")
+                && message.contains(&format!("{collection} has no field \"attempt\""))
+                && message.contains("its fields are message"),
+            "{case}: {message}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn template_doc_fields_follow_the_declared_schema_vocabulary() -> Result<()> {
+    let declared = schema_fields(&["message", "reply_session_id", "_internal"]);
+    for prompt in [
+        "Work {{ doc.message }}",
+        "Work {{ doc.reply_session_id }}",
+        "Work {{ doc._internal }}",
+        "Work {{ doc.attempt | default('none') }}",
+    ] {
+        let (trigger, task, source) = rule_documents(prompt, None, false, None, "GapInput")?;
+        validate_event_trigger_document_fields(&trigger, &task, &source, &declared)
+            .unwrap_or_else(|error| panic!("{prompt} resolves against the schema: {error:#}"));
+    }
+    let (trigger, task, source) =
+        rule_documents("Work {{ doc.not_a_field }}", None, false, None, "GapInput")?;
+    let message = format!(
+        "{:#}",
+        validate_event_trigger_document_fields(&trigger, &task, &source, &declared).unwrap_err()
+    );
+    assert!(
+        message.contains("trigger on-doc prompt_template references doc.not_a_field")
+            && message.contains("GapInput has no field \"not_a_field\"")
+            && message.contains("its fields are message, reply_session_id"),
+        "{message}"
+    );
+    // An aggregate pseudo-field resolves through the query engine, never the
+    // delivered document, so a template cannot read it as one.
+    let (trigger, task, source) =
+        rule_documents("Work {{ doc.COUNT }}", None, false, None, "GapInput")?;
+    let message = format!(
+        "{:#}",
+        validate_event_trigger_document_fields(&trigger, &task, &source, &declared).unwrap_err()
+    );
+    assert!(
+        message.contains("prompt_template references doc.COUNT"),
+        "{message}"
+    );
+    Ok(())
+}
+
+#[test]
+fn every_fire_template_is_judged_with_its_field_named() -> Result<()> {
+    let (trigger, task, source) = rule_documents("Work", None, false, None, "GapInput")?;
+    let mut session = trigger.clone();
+    session.session_id_template = Some("Resume {{ doc.session }}".to_owned());
+    let message = format!(
+        "{:#}",
+        validate_event_trigger_document_fields(
+            &session,
+            &task,
+            &source,
+            &schema_fields(&["message"])
+        )
+        .unwrap_err()
+    );
+    assert!(
+        message.contains("session_id_template references doc.session"),
+        "{message}"
+    );
+    let (trigger, task, source) = rule_documents(
+        "Work",
+        Some("Reach {{ doc.objective }}"),
+        false,
+        None,
+        "GapInput",
+    )?;
+    let message = format!(
+        "{:#}",
+        validate_event_trigger_document_fields(
+            &trigger,
+            &task,
+            &source,
+            &schema_fields(&["message"])
+        )
+        .unwrap_err()
+    );
+    assert!(
+        message.contains("goal_objective_template references doc.objective"),
+        "{message}"
+    );
+    Ok(())
+}
+
+/// #2341: the registered schemas declare none of the native-route provenance
+/// fields, yet a per-document `emit_outcome` delivery of WorkspaceReceipt
+/// fires with them; preview and publication admit the trigger.
+#[tokio::test]
+async fn publication_applies_native_route_template_fields_the_schema_does_not_declare() -> Result<()>
+{
+    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    // The full runtime schema set: applying a Trigger seeds its event-source
+    // cursor, and the registered WorkspaceReceipt declares none of the fields
+    // the native route injects.
+    crate::ensure_runtime_schemas(&node).await?;
+    let access = ConfigAccess::Local(node.clone());
+    let owner = "did:key:native-route-owner";
+    apply(&access, cyclic_configuration(owner)).await?;
+    let documents = vec![
+        config(
+            Collection::EventSource,
+            json!({"agent_did":owner,"event_source_id":"watcher","source_collection":"WorkspaceReceipt","event_kind":"created"}),
+        ),
+        config(
+            Collection::Task,
+            json!({"agent_did":owner,"task_id":"review","behavior_id":"behavior","prompt_template":"Review {{ doc.work_unit_id }} after attempt {{ doc.attempt }}","goal_objective_template":"Seal {{ doc.attempt }}","emit_outcome":true}),
+        ),
+        config(
+            Collection::Trigger,
+            json!({"agent_did":owner,"trigger_id":"on-receipt","task_id":"review","source":{"kind":"event","event_source_id":"watcher"},"session_id_template":"{{ doc.reply_session_id }}","concurrency":"parallel"}),
+        ),
+    ];
+    let plan = DesiredStateApplyPlan::new(documents.clone())?;
+    access
+        .transact("test.native_route.preview", |txn| {
+            let plan = &plan;
+            Box::pin(async move { validate_desired_state_plan(txn, plan).await })
+        })
+        .await?;
+    apply(&access, documents).await?;
+    let rows = node.execute("{ Trigger { trigger_id } }").await;
+    assert!(!rows.has_errors());
+    assert_eq!(
+        rows.data.unwrap()["Trigger"].as_array().unwrap().len(),
+        1,
+        "an admitted trigger publishes"
+    );
     node.shutdown().await;
     Ok(())
 }

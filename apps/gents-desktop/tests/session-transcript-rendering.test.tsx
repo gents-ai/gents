@@ -1,4 +1,5 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, screen } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
@@ -13,7 +14,18 @@ vi.mock("../src/ui/screens/Markdown", () => ({
   },
 }));
 
-import { TranscriptPanel } from "../src/ui/screens/SessionScreen";
+import { TranscriptPanel } from "../src/ui/screens/Transcript";
+import { renderIn, testApp } from "./app-fixture";
+import { assistantMessage } from "./timeline-fixture";
+import { NO_PARENT } from "../src/ui/screens/parentWork";
+import { NO_WORKERS } from "../src/ui/screens/workers";
+
+/* the props these cases are not about: no workers, no parent */
+const UNRELATED = {
+  workers: NO_WORKERS,
+  parentWork: NO_PARENT,
+  workerActions: { interrupt: () => {} },
+};
 
 function session(content: string): DesktopSessionSnapshot {
   return {
@@ -23,6 +35,7 @@ function session(content: string): DesktopSessionSnapshot {
     title: "Long session",
     previewText: content,
     status: "completed",
+    goal: null,
     turnState: "completed",
     latestRequestId: "request-1",
     retryEligibility: { eligible: false, denialReason: null },
@@ -34,6 +47,7 @@ function session(content: string): DesktopSessionSnapshot {
       contextWindow: 1,
       compactionThreshold: 0,
       compactionThresholdTokens: 0,
+      compactionStrategy: "StripThenSummarize",
       durableMessageCount: 1,
       providerMessageCount: 1,
       totalCompactedMessages: 0,
@@ -41,7 +55,7 @@ function session(content: string): DesktopSessionSnapshot {
       lastRequest: null,
     },
     timelineItems: [
-      {
+      assistantMessage({
         kind: "assistantMessage",
         itemKey: "assistant-1",
         sequence: 1,
@@ -49,7 +63,7 @@ function session(content: string): DesktopSessionSnapshot {
         reasoning: null,
         timestamp: null,
         reconstruction: { state: "ready" },
-      },
+      }),
     ],
   };
 }
@@ -57,34 +71,21 @@ function session(content: string): DesktopSessionSnapshot {
 describe("SessionScreen transcript render boundary", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it("renders failures and retries through the latest action owner, then shows interruption", async () => {
+  it("renders failures and retries through the app's action, then shows interruption", async () => {
     const failed = {
       ...session("partial response"),
       turnState: "failed",
       retryEligibility: { eligible: true, denialReason: null },
     };
-    const oldRetry = vi.fn(async () => null);
-    const latestRetry = vi.fn(async () => null);
-    const actionsRef = {
-      current: {
-        loadOlderSessionTimeline: vi.fn(async () => false),
-        retryMessage: oldRetry,
-      },
-    };
-    const props = {
-      actionsRef,
-      holdsCount: 0,
-      inFlight: false,
-      ownerRef: { current: null },
-    };
-    const view = render(<TranscriptPanel {...props} session={failed} />);
+    const app = testApp();
+    const retry = vi.spyOn(app.actions, "retryMessage").mockResolvedValue(undefined);
+    const props = { ...UNRELATED, inFlight: false, scroller: null };
+    const view = renderIn(app, <TranscriptPanel {...props} session={failed} />);
     expect(screen.getByText("The assistant could not finish this turn.")).toBeVisible();
-    actionsRef.current = { ...actionsRef.current, retryMessage: latestRetry };
     await act(async () =>
       fireEvent.click(screen.getByRole("button", { name: "Retry" })),
     );
-    expect(latestRetry).toHaveBeenCalledWith("request-1");
-    expect(oldRetry).not.toHaveBeenCalled();
+    expect(retry).toHaveBeenCalledWith("request-1");
     view.rerender(
       <TranscriptPanel {...props} session={{ ...failed, turnState: "interrupted" }} />,
     );
@@ -95,20 +96,8 @@ describe("SessionScreen transcript render boundary", () => {
   it("keeps unchanged rows out of unrelated session projection renders", () => {
     markdownRender.mockClear();
     const original = session("stable markdown");
-    const actionsRef = {
-      current: {
-        loadOlderSessionTimeline: vi.fn(async () => false),
-        retryMessage: vi.fn(async () => null),
-      },
-    };
-    const ownerRef = { current: null };
-    const props = {
-      actionsRef,
-      holdsCount: 0,
-      inFlight: false,
-      ownerRef,
-    };
-    const view = render(<TranscriptPanel {...props} session={original} />);
+    const props = { ...UNRELATED, inFlight: false, scroller: null };
+    const view = renderIn(testApp(), <TranscriptPanel {...props} session={original} />);
 
     expect(markdownRender).toHaveBeenCalledTimes(1);
 
@@ -125,12 +114,8 @@ describe("SessionScreen transcript render boundary", () => {
   });
 
   it.each([true, false])(
-    "adjusts reading position only after an accepted older page (%s)",
+    "adjusts reading position only when an older page adds rows (%s)",
     async (loaded) => {
-      vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
-        callback(0);
-        return 1;
-      });
       let scrollHeight = 100;
       const viewport = document.createElement("div");
       Object.defineProperty(viewport, "scrollHeight", {
@@ -138,12 +123,6 @@ describe("SessionScreen transcript render boundary", () => {
         get: () => scrollHeight,
       });
       viewport.scrollTop = 20;
-      const owner = document.createElement("div");
-      vi.spyOn(owner, "querySelector").mockReturnValue(viewport);
-      const loadOlderSessionTimeline = vi.fn(async () => {
-        scrollHeight = 180;
-        return loaded;
-      });
       const original = session("stable markdown");
       original.timelinePage = {
         totalItems: 41,
@@ -153,26 +132,44 @@ describe("SessionScreen transcript render boundary", () => {
         oldestItemKey: "assistant-1",
         newestItemKey: "assistant-1",
       };
+      const older = assistantMessage({
+        itemKey: "assistant-0",
+        sequence: 0,
+        content: "older markdown",
+      });
+      const withOlder: DesktopSessionSnapshot = {
+        ...original,
+        timelineItems: [older, ...original.timelineItems],
+      };
+      /* as the session owner does: the older page is set as state, then the
+         load reports whether it added rows */
+      let setSession: (next: DesktopSessionSnapshot) => void = () => {};
+      function Owner() {
+        const [current, setCurrent] = useState(original);
+        setSession = setCurrent;
+        return (
+          <TranscriptPanel
+            {...UNRELATED}
+            inFlight={false}
+            scroller={viewport}
+            session={current}
+          />
+        );
+      }
+      const app = testApp();
+      vi.spyOn(app.actions, "loadOlderSessionTimeline").mockImplementation(async () => {
+        if (loaded) {
+          scrollHeight = 180;
+          setSession(withOlder);
+        }
+        return loaded;
+      });
 
-      render(
-        <TranscriptPanel
-          actionsRef={{
-            current: {
-              loadOlderSessionTimeline,
-              retryMessage: vi.fn(async () => null),
-            },
-          }}
-          holdsCount={0}
-          inFlight={false}
-          ownerRef={{ current: owner }}
-          session={original}
-        />,
-      );
+      renderIn(app, <Owner />);
       await act(async () => {
         fireEvent.wheel(viewport, { deltaY: -20 });
       });
 
-      expect(loadOlderSessionTimeline).toHaveBeenCalledTimes(1);
       expect(viewport.scrollTop).toBe(loaded ? 100 : 20);
     },
   );

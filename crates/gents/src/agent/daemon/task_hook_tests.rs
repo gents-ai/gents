@@ -558,7 +558,6 @@ async fn a_request_bound_to_a_missing_task_fails_closed() {
     assert!(reason(&row).contains("no longer exists"), "{row}");
 }
 
-#[cfg(target_os = "macos")]
 async fn install_workspace(harness: &Harness, host_path: &Path) {
     let owner = harness.owner().to_string();
     let workspace = crate::workspace::IsolatedWorkspaceDoc {
@@ -611,7 +610,6 @@ async fn install_workspace(harness: &Harness, host_path: &Path) {
     }
 }
 
-#[cfg(target_os = "macos")]
 async fn workspace_bindings(harness: &Harness) -> Vec<crate::workspace::WorkspaceBindingDoc> {
     let response = crate::graphql::graphql_with_transaction_retry(
         harness.node.as_ref(),
@@ -625,6 +623,86 @@ async fn workspace_bindings(harness: &Harness) -> Vec<crate::workspace::Workspac
     .await
     .unwrap();
     crate::graphql::rows(&response, "WorkspaceBinding").unwrap()
+}
+
+async fn materialize_writer_binding(harness: &Harness, request: &AgentRequest) {
+    crate::workspace::materialize_workspace_binding(
+        harness.node.as_ref(),
+        &request.request_id,
+        &request.doc_id,
+        harness.owner(),
+        &crate::lifecycle::WorkspaceLineage {
+            workspace_id: request.workspace_id.clone(),
+            workspace_authority: request.workspace_authority.clone(),
+            workspace_owner_agent_did: request.workspace_owner_agent_did.clone(),
+            workspace_seal_hash: request.workspace_seal_hash.clone(),
+        },
+    )
+    .await
+    .expect("materialize the writer binding");
+}
+
+#[tokio::test]
+async fn claim_admission_rejection_releases_the_bound_workspace() {
+    let harness = Harness::new().await;
+    let placement = tempfile::tempdir().expect("workspace placement directory");
+    install_workspace(&harness, placement.path()).await;
+    harness.install_task(json!([])).await;
+    let request = harness.create_request(Lineage::Trigger, true).await;
+    materialize_writer_binding(&harness, &request).await;
+    assert!(workspace_bindings(&harness)
+        .await
+        .iter()
+        .any(|binding| binding.is_active_read_write()));
+    ConfigAccess::write_local(
+        harness.node.as_ref(),
+        "test.remove_workspace_placement",
+        &format!(
+            r#"mutation {{ delete_WorkspacePlacement(filter: {{ workspace_id: {{ _eq: "{}" }}, owner_agent_did: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+            crate::graphql::escape_graphql_string(WORKSPACE_ID),
+            crate::graphql::escape_graphql_string(harness.owner()),
+        ),
+    )
+    .await
+    .unwrap();
+    let row = harness.run(request, false).await;
+    assert_eq!(harness.calls(), 0, "{row}");
+    assert_eq!(row["lifecycle_state"], "failed", "{row}");
+    assert!(reason(&row).contains("workspace"), "{row}");
+    assert!(workspace_bindings(&harness)
+        .await
+        .iter()
+        .all(|binding| !binding.is_active()));
+}
+
+/// ReadWrite claim admission reaches worker-ticket binding only on hosts with
+/// an enforceable WorkspaceWrite sandbox.
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn refused_worker_ticket_releases_the_bound_workspace_before_work() {
+    use crate::agent::worker_capacity::{
+        bind_current_claim, scope_request_capacity, WorkerCapacity, WorkerTicket,
+    };
+
+    let harness = Harness::new().await;
+    let placement = tempfile::tempdir().expect("workspace placement directory");
+    install_workspace(&harness, placement.path()).await;
+    harness.install_task(json!([])).await;
+    let request = harness.create_request(Lineage::Trigger, true).await;
+    materialize_writer_binding(&harness, &request).await;
+    let guard = WorkerCapacity::new(1).try_acquire_unbound().unwrap();
+    let row = scope_request_capacity(guard, async {
+        bind_current_claim(WorkerTicket::new("previous-request", "previous-generation")).unwrap();
+        harness.run(request, false).await
+    })
+    .await;
+    assert_eq!(harness.calls(), 0, "{row}");
+    assert_eq!(row["lifecycle_state"], "failed", "{row}");
+    assert!(reason(&row).contains("worker guard"), "{row}");
+    assert!(workspace_bindings(&harness)
+        .await
+        .iter()
+        .all(|binding| !binding.is_active()));
 }
 
 /// Claim admission refuses a ReadWrite workspace binding on a host with no
@@ -641,20 +719,7 @@ async fn a_failing_before_hook_releases_the_bound_workspace() {
             "command": ["sh", "-c", "exit 1"], "timeout_secs": 30}]))
         .await;
     let request = harness.create_request(Lineage::Trigger, true).await;
-    crate::workspace::materialize_workspace_binding(
-        harness.node.as_ref(),
-        &request.request_id,
-        &request.doc_id,
-        harness.owner(),
-        &crate::lifecycle::WorkspaceLineage {
-            workspace_id: request.workspace_id.clone(),
-            workspace_authority: request.workspace_authority.clone(),
-            workspace_owner_agent_did: request.workspace_owner_agent_did.clone(),
-            workspace_seal_hash: request.workspace_seal_hash.clone(),
-        },
-    )
-    .await
-    .expect("materialize the writer binding");
+    materialize_writer_binding(&harness, &request).await;
     assert!(workspace_bindings(&harness)
         .await
         .iter()

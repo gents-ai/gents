@@ -1,11 +1,9 @@
 use crate::llm::ToolChoice;
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
-use rig::client::CompletionClient;
-use rig::completion::CompletionModel;
 use serde::Deserialize;
 
-use crate::admission::{AdmissionRegistry, AdmittedCompletionClient};
+use crate::admission::{AdmissionRegistry, AdmittedCompletionModel};
 use crate::agent::completion_retry::CompletionRetryPolicy;
 use crate::agent::loop_stream::{AggregateTokenBudget, LoopConfig};
 use crate::backend_provider::BackendProviderKind;
@@ -46,19 +44,17 @@ pub(crate) fn behavior_slot_fingerprint(behavior: &ResolvedBehavior) -> String {
     )
 }
 
-pub(crate) fn build_admitted_model<C>(
+pub(crate) fn build_admitted_model<C: crate::llm::rig_compat::ProviderClient>(
     client: C,
     admission: AdmissionRegistry,
     behavior: &ResolvedBehavior,
-) -> <AdmittedCompletionClient<C> as CompletionClient>::CompletionModel
-where
-    C: CompletionClient,
-    C::CompletionModel: 'static,
-    <C::CompletionModel as CompletionModel>::Response: 'static,
-    <C::CompletionModel as CompletionModel>::StreamingResponse: 'static,
-{
-    AdmittedCompletionClient::new(client, admission, behavior_connection_fingerprint(behavior))
-        .completion_model(&behavior.model_name)
+) -> AdmittedCompletionModel<C::CompletionModel> {
+    crate::llm::rig_compat::admitted_model(
+        client,
+        admission,
+        behavior_connection_fingerprint(behavior),
+        &behavior.model_name,
+    )
 }
 
 /// Build a loop config for one completion loop.
@@ -97,9 +93,19 @@ pub(crate) fn loop_config(
                     reasoning_profile_params(
                         behavior.backend_provider_kind,
                         behavior.openai_wire_api,
-                        behavior.sampling.reasoning_effort,
+                        crate::inference_setup::sent_reasoning_effort(
+                            behavior.backend_provider_kind,
+                            behavior.openai_wire_api,
+                            &behavior.backend_endpoint,
+                            behavior.resolved_reasoning_efforts.as_deref(),
+                            behavior.sampling.reasoning_effort,
+                        ),
                     ),
-                    provider_additional_params(behavior.backend_provider_kind),
+                    provider_additional_params(
+                        behavior.backend_provider_kind,
+                        behavior.openai_wire_api,
+                        &behavior.backend_endpoint,
+                    ),
                 ),
                 behavior.sampling.additional_params(),
             ),
@@ -115,6 +121,7 @@ pub(crate) fn loop_config(
         active_reduction_keys: Vec::new(),
         reduction_chain_keys: Vec::new(),
         initial_turn_index: 0,
+        resume_from_history: false,
         context_window: behavior.context_window,
         compaction_threshold: behavior.compaction_threshold(),
         retry_policy: CompletionRetryPolicy::scheduled_default(),
@@ -368,14 +375,29 @@ pub(crate) fn params_disable_reasoning(params: Option<&serde_json::Value>) -> bo
         == Some(ReasoningEffort::None.as_str())
 }
 
-fn provider_additional_params(kind: BackendProviderKind) -> Option<serde_json::Value> {
+/// xAI retains Responses requests by default, so an API-key backend at its
+/// endpoint asks for `store: false` and, to keep reasoning replayable without
+/// server state, encrypted reasoning, as `patch_store_false` does for the
+/// subscription transport (`PromptAssembly.ResponsesStorage.storage`).
+fn provider_additional_params(
+    kind: BackendProviderKind,
+    wire: crate::OpenAiWireApi,
+    endpoint: &str,
+) -> Option<serde_json::Value> {
     match kind {
+        BackendProviderKind::OpenAiCompatible
+            if wire == crate::OpenAiWireApi::Responses
+                && crate::inference_setup::is_xai_api_endpoint(endpoint) =>
+        {
+            Some(serde_json::json!({
+                "store": false,
+                "include": [gents_loop::provider_patches::ENCRYPTED_REASONING_INCLUDE],
+            }))
+        }
         BackendProviderKind::OpenAiCompatible => None,
-        BackendProviderKind::OpenRouter => Some(
-            rig::providers::openrouter::ProviderPreferences::new()
-                .require_parameters(true)
-                .to_json(),
-        ),
+        BackendProviderKind::OpenRouter => Some(serde_json::json!({
+            "provider": { "require_parameters": true }
+        })),
         BackendProviderKind::ChatGptCodex
         | BackendProviderKind::XaiGrokOAuth
         | BackendProviderKind::ClaudeCliSubscription
@@ -474,7 +496,7 @@ pub(crate) async fn build_compaction_engine(
     summary.max_turns = 0;
     summary.compaction_inference = None;
     let api_key = match &summary.backend_auth {
-        crate::document_config::BackendAuth::PrincipalOAuth => "no-key".to_owned(),
+        crate::document_config::BackendAuth::PrincipalOAuth { .. } => "no-key".to_owned(),
         _ => summary.completion_client_api_key()?,
     };
     let client =

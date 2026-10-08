@@ -10,6 +10,7 @@ use crate::watcher::AgentRequest;
 
 fn request() -> AgentRequest {
     AgentRequest {
+        retry_parent_request_doc_id: None,
         purpose: gents_protocol::request_admission::RequestPurpose::Normal,
         doc_id: String::new(),
         request_id: "request-123".to_string(),
@@ -200,7 +201,11 @@ fn profile_reasoning_serializes_top_level_into_openai_body() {
                 crate::OpenAiWireApi::ChatCompletions,
                 Some(crate::config::ReasoningEffort::Max),
             ),
-            provider_additional_params(BackendProviderKind::OpenAiCompatible),
+            provider_additional_params(
+                BackendProviderKind::OpenAiCompatible,
+                crate::OpenAiWireApi::ChatCompletions,
+                crate::inference_setup::OPENAI_ENDPOINT,
+            ),
         ),
         SamplingConfig::default().additional_params(),
     );
@@ -242,15 +247,136 @@ fn profile_reasoning_serializes_top_level_into_openai_body() {
 
 #[test]
 fn openrouter_additional_params_require_parameters() {
-    let value = provider_additional_params(BackendProviderKind::OpenRouter)
-        .expect("OpenRouter should contribute additional params");
+    let value = provider_additional_params(
+        BackendProviderKind::OpenRouter,
+        crate::OpenAiWireApi::Responses,
+        crate::inference_setup::OPENAI_ENDPOINT,
+    )
+    .expect("OpenRouter should contribute additional params");
 
-    assert_eq!(value["provider"]["require_parameters"], true);
+    assert_eq!(
+        value,
+        rig::providers::openrouter::ProviderPreferences::new()
+            .require_parameters(true)
+            .to_json()
+    );
 }
 
 #[test]
 fn openai_compatible_has_no_provider_specific_additional_params() {
-    assert!(provider_additional_params(BackendProviderKind::OpenAiCompatible).is_none());
+    assert!(provider_additional_params(
+        BackendProviderKind::OpenAiCompatible,
+        crate::OpenAiWireApi::Responses,
+        crate::inference_setup::OPENAI_ENDPOINT,
+    )
+    .is_none());
+}
+
+#[test]
+fn generated_responses_storage_cases_drive_loop_config() {
+    use crate::lean_vocab_test::lean_prompt_assembly_responses_storage_cases;
+
+    let cases = lean_prompt_assembly_responses_storage_cases();
+    assert!(!cases.is_empty());
+    let mut mismatches = Vec::new();
+    for case in cases {
+        let mut behavior = behavior_with_retry(Default::default());
+        behavior.backend_provider_kind =
+            BackendProviderKind::parse_optional(Some(&case.family)).expect("Lean family");
+        behavior.openai_wire_api =
+            serde_json::from_value(serde_json::Value::String(case.wire.clone()))
+                .expect("Lean wire");
+        behavior.backend_endpoint = case.endpoint.clone();
+        let config = loop_config(
+            &behavior,
+            "preamble".to_string(),
+            0,
+            CaptureScopeKind::Inference,
+        );
+        let request = rig::completion::CompletionRequest {
+            model: None,
+            preamble: config.preamble.clone(),
+            chat_history: rig::one_or_many::OneOrMany::one(rig::completion::Message::user("hi")),
+            documents: Vec::new(),
+            tools: Vec::new(),
+            temperature: None,
+            max_tokens: None,
+            tool_choice: None,
+            additional_params: config.additional_params.clone(),
+            output_schema: None,
+        };
+        let body = config
+            .provider_input_counter
+            .project_body(&request)
+            .expect("project body");
+        let store = body.get("store").and_then(serde_json::Value::as_bool);
+        let encrypted_include = body
+            .get("include")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|include| {
+                include.iter().any(|item| {
+                    item.as_str() == Some(gents_loop::provider_patches::ENCRYPTED_REASONING_INCLUDE)
+                })
+            });
+        if (store, encrypted_include) != (case.store, case.encrypted_include) {
+            mismatches.push(format!(
+                "{}: store {store:?} include {encrypted_include}",
+                case.name
+            ));
+        }
+    }
+    assert!(mismatches.is_empty(), "{mismatches:#?}");
+}
+
+#[test]
+fn generated_responses_effort_cases_drive_loop_config() {
+    use crate::config::ReasoningEffort;
+    use crate::lean_vocab_test::lean_prompt_assembly_responses_effort_cases;
+
+    let parse = |value: &String| ReasoningEffort::parse(value).expect("Lean effort");
+    let cases = lean_prompt_assembly_responses_effort_cases();
+    assert!(!cases.is_empty());
+    let mut mismatches = Vec::new();
+    for case in cases {
+        let mut behavior = behavior_with_retry(Default::default());
+        behavior.backend_provider_kind = BackendProviderKind::OpenAiCompatible;
+        behavior.openai_wire_api = crate::OpenAiWireApi::Responses;
+        behavior.backend_endpoint = case.endpoint.clone();
+        behavior.sampling.reasoning_effort = case.requested.as_ref().map(parse);
+        behavior.resolved_reasoning_efforts = case
+            .advertised
+            .as_ref()
+            .map(|values| values.iter().map(parse).collect());
+        let config = loop_config(
+            &behavior,
+            "preamble".to_string(),
+            0,
+            CaptureScopeKind::Inference,
+        );
+        let request = rig::completion::CompletionRequest {
+            model: None,
+            preamble: config.preamble.clone(),
+            chat_history: rig::one_or_many::OneOrMany::one(rig::completion::Message::user("hi")),
+            documents: Vec::new(),
+            tools: Vec::new(),
+            temperature: None,
+            max_tokens: None,
+            tool_choice: None,
+            additional_params: config.additional_params.clone(),
+            output_schema: None,
+        };
+        let body = config
+            .provider_input_counter
+            .project_body(&request)
+            .expect("project body");
+        let sent = body
+            .pointer("/reasoning/effort")
+            .and_then(serde_json::Value::as_str);
+        if sent != case.expected.as_deref() {
+            mismatches.push(format!("{}: effort {sent:?}", case.name));
+        }
+    }
+    assert!(mismatches.is_empty(), "{mismatches:#?}");
 }
 
 #[test]
@@ -264,7 +390,11 @@ fn sampling_additional_params_merge_with_provider_params() {
     };
 
     let value = merge_optional_params(
-        provider_additional_params(BackendProviderKind::OpenRouter),
+        provider_additional_params(
+            BackendProviderKind::OpenRouter,
+            crate::OpenAiWireApi::Responses,
+            crate::inference_setup::OPENAI_ENDPOINT,
+        ),
         sampling.additional_params(),
     )
     .expect("sampling params should be present");

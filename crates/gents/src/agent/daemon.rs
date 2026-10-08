@@ -2,8 +2,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::llm::rig_compat::ProviderModel;
 use anyhow::Result;
-use rig::completion::CompletionModel;
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::{JoinError, JoinSet};
 use tracing::Instrument;
@@ -131,7 +131,7 @@ pub(crate) async fn verify_request_at_claim_boundary(
     }
 }
 
-pub(super) struct BehaviorDaemon<M: CompletionModel> {
+pub(super) struct BehaviorDaemon<M: ProviderModel> {
     node: Arc<defra_node::EmbeddedNode>,
     behavior: Arc<ResolvedBehavior>,
     provider_family: Option<String>,
@@ -178,7 +178,7 @@ fn title_task_join_result(joined: std::result::Result<Result<()>, JoinError>) ->
     }
 }
 
-impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
+impl<M: ProviderModel> BehaviorDaemon<M> {
     pub(super) fn new(
         node: Arc<defra_node::EmbeddedNode>,
         behavior: Arc<ResolvedBehavior>,
@@ -521,11 +521,11 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                     Err(error) => {
                         record_current_request_outcome("worker_ticket_missing");
                         record_current_failure_class(&error);
-                        let _ = finalize_request_failure(
+                        self.finalize_failure_before_work(
                             &mut lifecycle,
                             &stream_writer,
                             &error.to_string(),
-                            &request.request_id,
+                            &request,
                         )
                         .await;
                         return Ok(());
@@ -536,11 +536,11 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                     let error = anyhow::Error::new(error);
                     record_current_request_outcome("worker_ticket_refused");
                     record_current_failure_class(&error);
-                    let _ = finalize_request_failure(
+                    self.finalize_failure_before_work(
                         &mut lifecycle,
                         &stream_writer,
                         &error.to_string(),
-                        &request.request_id,
+                        &request,
                     )
                     .await;
                     return Ok(());
@@ -635,11 +635,11 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                 requested_behavior_id = %requested_behavior_id,
                 "rejecting request for unroutable behavior"
             );
-            finalize_request_failure(
+            self.finalize_failure_before_work(
                 &mut lifecycle,
                 &stream_writer,
                 &error.to_string(),
-                &request.request_id,
+                &request,
             )
             .await;
             return Ok(());
@@ -710,11 +710,11 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                     error = %error,
                     "failed to inspect writer workspace seal state"
                 );
-                finalize_request_failure(
+                self.finalize_failure_before_work(
                     &mut lifecycle,
                     &stream_writer,
                     &error.to_string(),
-                    &request.request_id,
+                    &request,
                 )
                 .await;
                 return Ok(());

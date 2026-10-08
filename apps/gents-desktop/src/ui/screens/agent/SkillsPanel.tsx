@@ -1,9 +1,9 @@
-/* Skills, as the desktop app's Skills tab: id (immutable after create),
+/* Skills: id (immutable after create),
    name, enabled, display name, description, instructions and tool
    dependencies, saved through SkillSaveRequest. */
+import type { NodeView } from "../../../hooks/fleetStore";
 import { dependentsWarning } from "./dependents";
-import type { DeploymentView, SkillView } from "@source-inc/gents-desktop-client";
-import type { Shell } from "@/hooks/useShell";
+import type { SkillView } from "@source-inc/gents-desktop-client";
 import { navigate } from "@/lib/router";
 import {
   AreaRow,
@@ -14,21 +14,20 @@ import {
   TagsRow,
   PathRow,
 } from "./editors";
-import { useDraft } from "./draft";
 import { DeleteButton, ListDetail } from "./ListDetail";
-import { newId } from "./draft";
+import { newId, problemOf, useDraft } from "./draft";
 import { Group } from "./rows";
 import { RowMenu } from "./RowMenu";
+import { useApp } from "@/app/AppContext";
 
 function SkillEditor({
-  shell,
   deployment,
   skill,
 }: {
-  shell: Shell;
-  deployment: DeploymentView;
+  deployment: NodeView;
   skill: SkillView;
 }) {
+  const { changeConfig } = useApp().actions;
   const base = {
     name: "agent" as const,
     agentDid: deployment.agentDid,
@@ -45,17 +44,10 @@ function SkillEditor({
     interfaceJson: skill.interfaceJson ?? "",
     tags: skill.tags,
   };
-  const d = useDraft(saved, async (next) => {
-    if (!next.name.trim()) throw new Error("Name is required");
-    if (next.interfaceJson.trim()) {
-      try {
-        JSON.parse(next.interfaceJson);
-      } catch {
-        throw new Error("Interface JSON must be valid JSON");
-      }
-    }
-    await shell.applyConfig((api) =>
-      api.saveSkillConfig({
+  const d = useDraft(
+    saved,
+    async (next) =>
+      changeConfig("saveSkillConfig", {
         document: {
           skill_id: skill.skillId,
           agent_did: deployment.agentDid,
@@ -71,8 +63,16 @@ function SkillEditor({
           tags: next.tags.length ? next.tags : null,
         },
       }),
-    );
-  });
+    {
+      problems: (next) => ({
+        name: next.name.trim() ? undefined : "Name is required",
+        interfaceJson:
+          next.interfaceJson.trim() && problemOf(() => JSON.parse(next.interfaceJson))
+            ? "Interface JSON must be valid JSON"
+            : undefined,
+      }),
+    },
+  );
   const id = (f: string) => `${skill.skillId}-${f}`;
   return (
     <>
@@ -85,8 +85,7 @@ function SkillEditor({
           label="Name"
           value={d.draft.name}
           onChange={(v) => d.set("name", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
+          error={d.problems.name}
         />
         <PathRow
           id={id("sourceDirectory")}
@@ -94,22 +93,18 @@ function SkillEditor({
           description="Where the skill's files live."
           value={d.draft.sourceDirectory}
           onChange={(v) => d.set("sourceDirectory", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <TextRow
           id={id("display")}
           label="Display name"
           value={d.draft.displayName}
           onChange={(v) => d.set("displayName", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <SwitchRow
           id={id("enabled")}
           label="Enabled"
           checked={d.draft.enabled}
-          onChange={(v) => d.choose("enabled", v)}
+          onChange={(v) => d.set("enabled", v)}
         />
         <AreaRow
           id={id("description")}
@@ -117,7 +112,6 @@ function SkillEditor({
           description="Shown in the skills catalog."
           value={d.draft.description}
           onChange={(v) => d.set("description", v)}
-          onCommit={d.commit}
           rows={2}
         />
         <AreaRow
@@ -126,7 +120,6 @@ function SkillEditor({
           description="Loaded on demand via load_skill."
           value={d.draft.instructions}
           onChange={(v) => d.set("instructions", v)}
-          onCommit={d.commit}
           rows={6}
           stacked
         />
@@ -144,7 +137,7 @@ function SkillEditor({
           description="Optional structured interface metadata. Must be valid JSON."
           value={d.draft.interfaceJson}
           onChange={(v) => d.set("interfaceJson", v)}
-          onCommit={d.commit}
+          error={d.problems.interfaceJson}
           rows={4}
           mono
           stacked
@@ -157,23 +150,18 @@ function SkillEditor({
         />
       </Group>
       <DraftActions
-        dirty={d.dirty}
-        saving={d.saving}
-        error={d.error}
-        onSave={d.save}
-        onCancel={d.reset}
+        draft={d}
+        fields={{ name: id("name"), interfaceJson: id("interface") }}
       />
       <DeleteButton
         label={skill.name ?? skill.skillId}
         warning={dependentsWarning(deployment, "skill", skill.skillId)}
         base={base}
         onDelete={() =>
-          shell.applyConfig((api) =>
-            api.deleteSkillConfig({
-              skillId: skill.skillId,
-              agentDid: deployment.agentDid,
-            }),
-          )
+          changeConfig("deleteSkillConfig", {
+            skillId: skill.skillId,
+            agentDid: deployment.agentDid,
+          })
         }
       />
     </>
@@ -181,7 +169,7 @@ function SkillEditor({
 }
 
 /* the canonical document for a skill view, for row edits and copies */
-function skillDocument(deployment: DeploymentView, s: SkillView) {
+function skillDocument(deployment: NodeView, s: SkillView) {
   return {
     skill_id: s.skillId,
     agent_did: deployment.agentDid,
@@ -199,14 +187,13 @@ function skillDocument(deployment: DeploymentView, s: SkillView) {
 }
 
 export function SkillsPanel({
-  shell,
   deployment,
   item,
 }: {
-  shell: Shell;
-  deployment: DeploymentView;
+  deployment: NodeView;
   item?: string;
 }) {
+  const { changeConfig } = useApp().actions;
   const base = {
     name: "agent" as const,
     agentDid: deployment.agentDid,
@@ -229,34 +216,32 @@ export function SkillsPanel({
             enabled={{
               checked: s.enabled !== false,
               onChange: (enabled) =>
-                shell.applyConfig((api) =>
-                  api.saveSkillConfig({
+                changeConfig(
+                  "saveSkillConfig",
+                  {
                     document: { ...skillDocument(deployment, s), enabled },
-                  }),
+                  },
+                  `turn it ${enabled ? "on" : "off"}`,
                 ),
             }}
             onDuplicate={async () => {
               const skill_id = newId("skill");
-              await shell.applyConfig((api) =>
-                api.saveSkillConfig({
-                  document: {
-                    ...skillDocument(deployment, s),
-                    skill_id,
-                    name: `${s.name ?? s.skillId}-copy`,
-                    display_name: `${s.displayName ?? s.name ?? s.skillId} copy`,
-                    created_at: null,
-                  },
-                }),
-              );
+              await changeConfig("saveSkillConfig", {
+                document: {
+                  ...skillDocument(deployment, s),
+                  skill_id,
+                  name: `${s.name ?? s.skillId}-copy`,
+                  display_name: `${s.displayName ?? s.name ?? s.skillId} copy`,
+                  created_at: null,
+                },
+              });
               return skill_id;
             }}
             onDelete={() =>
-              shell.applyConfig((api) =>
-                api.deleteSkillConfig({
-                  skillId: s.skillId,
-                  agentDid: deployment.agentDid,
-                }),
-              )
+              changeConfig("deleteSkillConfig", {
+                skillId: s.skillId,
+                agentDid: deployment.agentDid,
+              })
             }
             warning={dependentsWarning(deployment, "skill", s.skillId)}
           />
@@ -266,20 +251,18 @@ export function SkillsPanel({
       empty="No skills yet. A skill is instructions and tool references a behavior can load by name."
       onCreate={async () => {
         const skillId = newId("skill");
-        await shell.applyConfig((api) =>
-          api.saveSkillConfig({
-            document: {
-              skill_id: skillId,
-              agent_did: deployment.agentDid,
-              name: "New skill",
-              description: null,
-              instructions: "",
-              tool_refs: null,
-              display_name: null,
-              enabled: false,
-            },
-          }),
-        );
+        await changeConfig("saveSkillConfig", {
+          document: {
+            skill_id: skillId,
+            agent_did: deployment.agentDid,
+            name: "New skill",
+            description: null,
+            instructions: "",
+            tool_refs: null,
+            display_name: null,
+            enabled: false,
+          },
+        });
         navigate({
           name: "agent",
           agentDid: deployment.agentDid,
@@ -290,12 +273,7 @@ export function SkillsPanel({
       detail={(id) => {
         const skill = deployment.skills.find((s) => s.skillId === id)!;
         return (
-          <SkillEditor
-            key={skill.skillId}
-            shell={shell}
-            deployment={deployment}
-            skill={skill}
-          />
+          <SkillEditor key={skill.skillId} deployment={deployment} skill={skill} />
         );
       }}
     />

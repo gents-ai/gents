@@ -1,6 +1,7 @@
 /* Sessions: a heading row with search and New, then plain rows on the
    ground: title, the behavior's chip, and when it last moved. */
-import { useState } from "react";
+import { memo, useLayoutEffect, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import {
   ChevronDown,
   CornerDownRight,
@@ -15,60 +16,107 @@ import { Button } from "@gents/ui/components/button";
 import { Input } from "@gents/ui/components/input";
 import { cn } from "@gents/ui/lib/utils";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
-import type { Shell } from "@/hooks/useShell";
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
-import { href } from "@/lib/router";
-import { BehaviorChip } from "./parts";
-import { when } from "./time";
+import { href, navigate } from "@/lib/router";
+import { Age } from "./time";
+import {
+  defaultScope,
+  fleetNodes,
+  knownNodeIds,
+  nodesInScope,
+  sessionsInScope,
+  type Scope,
+} from "@/lib/scope";
+import { useHomeDid, useInScope, useSelectedAgentDid } from "@/hooks/useClient";
+import { sessionKeyOf } from "../../hooks/fleetStore";
+import { nodeDidOf, nodeOfSession } from "@/lib/nodes";
+import { NodeBehaviorStack } from "./NodeBehaviorStack";
+import { NodeAxis } from "./NodeAxis";
 import { SessionStatus } from "./SessionStatus";
 import { isLive } from "@/lib/live";
+import { SessionFilters, filterSessions } from "./SessionFilters";
+import { hasFilter } from "@/lib/session-filter";
+import { listViews, useListViews } from "@/app/listViews";
 import {
-  SessionFilters,
-  filterSessions,
-  hasFilter,
-  useSessionFilter,
-} from "./SessionFilters";
+  NO_SESSIONS,
+  parentOf as parentOfIn,
+  useFleet,
+  workersOf,
+} from "../hooks/useFleet";
 
-export function SessionsScreen({ shell }: { shell: Shell }) {
-  const deployment = shell.selectedDeployment;
-  const held = new Set(shell.holds.flatMap((h) => (h.sessionId ? [h.sessionId] : [])));
+export function SessionsScreen({
+  nodeDid,
+}: {
+  /** a node named on the route: the list opens narrowed to it */
+  nodeDid?: string;
+}) {
+  const nodes = useFleet(useShallow(fleetNodes));
+  const homeDid = useHomeDid();
+  const selectedNodeDid = useSelectedAgentDid();
   const [query, setQuery] = useState<string | null>(null);
   /* the three axes the summary carries: behavior, state, and what started it */
-  const [filter, setFilter] = useSessionFilter();
+  const filter = useListViews((v) => v.sessionFilter);
   /* which parents are showing their workers; a person who opened one meant it */
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
-  const conversations = filterSessions(deployment?.sessions ?? [], filter, held, query);
-  const parentOf = (c: SessionSummary) => {
-    const parent = c.startedBy;
-    return parent
-      ? (deployment?.sessions.find(
-          (s) =>
-            s.sessionId === parent.sessionId &&
-            s.agentDid === parent.agentDid &&
-            s.requesterDid === parent.requesterDid,
-        ) ?? null)
-      : null;
-  };
+  /* the nodes the list shows: the working node to start, then whatever the
+     chips choose; none chosen means every node */
+  const placement = { nodes, selectedNodeDid, homeDid };
+  const defaultNodeIds = nodesInScope(defaultScope("sessions"), placement).map(
+    nodeDidOf,
+  );
+  const storedNodeIds = useListViews((v) => v.sessionNodes);
+  /* a node named on the route narrows the list to it, once per route,
+     before the list is painted */
+  useLayoutEffect(() => {
+    if (nodeDid) listViews.setSessionNodes([nodeDid]);
+  }, [nodeDid]);
+  /* a pick whose nodes are all gone starts over at the working node */
+  const knownIds = storedNodeIds && knownNodeIds(storedNodeIds, placement);
+  const nodeIds =
+    !knownIds || (knownIds.length === 0 && storedNodeIds!.length > 0)
+      ? defaultNodeIds
+      : knownIds;
+  /* the working node is where the list starts, not a filter to clear */
+  const nodesPicked =
+    nodeIds.length !== defaultNodeIds.length ||
+    nodeIds.some((id) => !defaultNodeIds.includes(id));
+  const scope: Scope = { nodes: nodeIds.length ? nodeIds : "all", agents: [] };
+  const inScope = useInScope((ctx) => sessionsInScope(scope, ctx));
+  const nodeCounts = useFleet(
+    useShallow((s) =>
+      Object.fromEntries(
+        s.nodeKeys.map((key) => [key, s.sessionsOf[key]?.length ?? 0]),
+      ),
+    ),
+  );
+  /* the lineage of the sessions in scope only, so work elsewhere in the
+     fleet does not re-render the list */
+  const parents = useFleet(
+    useShallow((s) =>
+      Object.fromEntries(inScope.map((c) => [sessionKeyOf(c), parentOfIn(s, c)])),
+    ),
+  );
+  const workers = useFleet(
+    useShallow((s) =>
+      Object.fromEntries(inScope.map((c) => [sessionKeyOf(c), workersOf(s, c)])),
+    ),
+  );
+  const conversations = filterSessions(inScope, filter, query);
+  /* an empty list says "yet" only when no node has a session; otherwise
+     something narrowed it, the node chips included */
+  const narrowed =
+    Boolean(query) ||
+    hasFilter(filter) ||
+    Object.values(nodeCounts).some((count) => count > 0);
+  /* the session whose latest request spawned this one, by provenance */
+  const parentOf = (c: SessionSummary) => parents[sessionKeyOf(c)] ?? null;
 
-  /* Work a session handed out sits under the session that handed it out.
-     A parent with four workers is one piece of work in five sessions, and
-     a flat list sorted by recency interleaves them with everything else
-     the moment anything older moves.
-
-     A child follows its parent only when the parent is here to follow: a
-     filter or a search that keeps the child and drops the parent leaves
-     the child where it fell, with the mark it already wears saying it came
-     from somewhere. Nothing is hidden to make the shape tidy. */
-  /* Work handed out is folded under the work that handed it out: a parent
-     with four workers is one piece of work, and a list that spends five
-     rows on it stops being a list of what a person is doing.
-
-     Folded is not hidden. A worker that needs someone, or failed, or is
-     running, is on the list whether or not its parent is open — the status
-     mark is the reason to read this screen, and a fold that costs someone
-     that is worse than the rows it saved. So is a worker that matches a
-     filter: a person who asked for what needs them has asked for exactly
-     these. */
+  /* Work a session handed out sits under the session that handed it out,
+     shown only when the person opens it: a list someone is reading does not
+     rearrange itself as workers start and settle, and the parent's marks
+     say what its workers are doing. A child follows its parent only when
+     the parent is here to follow: a filter or a search that keeps the child
+     and drops the parent leaves the child where it fell. */
   type Row =
     | {
         kind: "session";
@@ -83,22 +131,11 @@ export function SessionsScreen({ shell }: { shell: Shell }) {
         hidden: number;
         open: boolean;
         running: number;
-        needing: number;
       };
 
-  /* Work handed out sits under the work that handed it out — but only when
-     someone asks to see it.
-
-     Showing a worker the moment it became busy and folding it away when it
-     settled made the list move on its own: rows appearing under the cursor,
-     rows leaving from under it, everything below shifting each time. A list
-     a person is reading should not rearrange itself because a machine got
-     on with something. Opening and closing is theirs to decide, and what
-     they decided holds.
-
-     Nothing is lost by it. The parent says what its workers are doing and
-     how many need someone, so the reason to look is on the screen; the
-     looking is a click. */
+  /* every worker on any node by the session that handed it out, whether
+     or not the list is showing it: the parent's marks say the whole piece
+     of work, and a worker on another node is still its work */
   const nested = (() => {
     const shown = new Set(conversations.map((c) => c.sessionId));
     const children = new Map<string, SessionSummary[]>();
@@ -119,12 +156,11 @@ export function SessionsScreen({ shell }: { shell: Shell }) {
       if (open)
         for (const [n, c] of kin.entries())
           rows.push({ kind: "session", session: c, child: true, delay: n });
-      const needing = kin.filter((c) => held.has(c.sessionId)).length;
       const running = kin.filter((c) => isLive(c.turnState)).length;
       /* the way in stays while there is something behind it worth opening,
          or while it is open; a parent whose workers have all finished is
          one row again */
-      if (kin.length > 0 && (open || running > 0 || needing > 0))
+      if (kin.length > 0 && (open || running > 0))
         rows.push({
           kind: "toggle",
           of: root.sessionId,
@@ -132,7 +168,6 @@ export function SessionsScreen({ shell }: { shell: Shell }) {
           hidden: open ? 0 : kin.length,
           open,
           running,
-          needing,
         });
       return rows;
     });
@@ -144,12 +179,29 @@ export function SessionsScreen({ shell }: { shell: Shell }) {
         <div className="flex h-10 items-center gap-2">
           <h1 className="font-heading text-lg font-medium text-heading">Sessions</h1>
           <div className="ml-auto flex min-w-0 items-center gap-2">
+            <NodeAxis
+              nodes={nodes}
+              homeDid={homeDid}
+              counts={nodeCounts}
+              value={nodeIds}
+              onChange={(next) => {
+                listViews.setSessionNodes(next);
+                /* a pick is the person's, so the route stops naming a node */
+                if (nodeDid) navigate({ name: "sessions" });
+              }}
+            />
             <SessionFilters
-              sessions={deployment?.sessions ?? []}
-              deployment={deployment}
-              held={held}
+              sessions={inScope}
+              nodeDids={nodesInScope(scope, placement).map(nodeDidOf)}
               value={filter}
-              onChange={setFilter}
+              onChange={listViews.setSessionFilter}
+              nodes={{
+                picked: nodesPicked,
+                clear: () => {
+                  listViews.setSessionNodes(null);
+                  if (nodeDid) navigate({ name: "sessions" });
+                },
+              }}
             />
             <Button
               variant="ghost"
@@ -168,7 +220,9 @@ export function SessionsScreen({ shell }: { shell: Shell }) {
               nativeButton={false}
               render={<a href={href({ name: "session", sessionId: null })} />}
             >
-              New
+              {/* a phone row has no width for the word beside six marks */}
+              <Plus className="sm:hidden" />
+              <span className="max-sm:sr-only">New</span>
             </Button>
           </div>
         </div>
@@ -219,121 +273,30 @@ export function SessionsScreen({ shell }: { shell: Shell }) {
                   {row.open || row.hidden === 0
                     ? `${row.kin} ${row.kin === 1 ? "worker" : "workers"}`
                     : `${row.hidden} more ${row.hidden === 1 ? "worker" : "workers"}`}
-                  {row.needing > 0 && (
-                    <span className="flex items-center gap-1 text-foreground">
-                      <span className="size-1.5 rounded-full bg-brand" />
-                      {row.needing} needs you
-                    </span>
-                  )}
                   {row.running > 0 && <span>· {row.running} running</span>}
                 </button>
               </li>
             ) : (
-              <li
+              <SessionRow
                 key={row.session.sessionId}
-                className={cn(
-                  row.delay != null &&
-                    "animate-in fade-in-0 slide-in-from-top-1 fill-mode-both duration-200 ease-out motion-reduce:animate-none",
-                )}
-                style={
-                  row.delay != null
-                    ? { animationDelay: `${row.delay * 40}ms` }
-                    : undefined
+                session={row.session}
+                child={row.child}
+                delay={row.delay ?? null}
+                parent={parentOf(row.session)}
+                workers={
+                  row.child
+                    ? NO_SESSIONS
+                    : (workers[sessionKeyOf(row.session)] ?? NO_SESSIONS)
                 }
-              >
-                <a
-                  href={href({ name: "session", sessionId: row.session.sessionId })}
-                  data-testid={`session-${row.session.sessionId}`}
-                  className={cn(
-                    "-mx-3 grid grid-cols-[auto_1fr_auto_auto] items-center gap-4 rounded-lg px-3 hover:bg-accent",
-                    /* under the work it came from, and smaller with it: a
-                       worker is a detail of the row above, and a list where
-                       everything is the same size has no shape to read */
-                    row.child ? "py-2 pl-9 text-sm" : "py-3.5",
-                  )}
-                >
-                  <SessionStatus
-                    turnState={row.session.turnState}
-                    held={held.has(row.session.sessionId)}
-                  />
-                  <p className="flex min-w-0 items-center gap-1.5 text-sm">
-                    {/* the mark says a session came from another; the indent
-                        says which one. Kept in both places: a row that only
-                        moves right reads as a wrapped title, and a child
-                        whose parent is filtered away has nothing but this */}
-                    {/* a run nobody started by typing wears the mark of what
-                        did: the list filters on this and showed nothing */}
-                    {!parentOf(row.session) && row.session.taskId && (
-                      <Play
-                        className="size-3.5 shrink-0 text-muted-foreground"
-                        role="img"
-                        aria-label={`Started by ${row.session.taskName ?? "a task"}`}
-                      >
-                        <title>
-                          Started by {row.session.taskName ?? "a task"}
-                          {row.session.triggerKind
-                            ? ` · ${row.session.triggerKind}`
-                            : ""}
-                        </title>
-                      </Play>
-                    )}
-                    {parentOf(row.session) && (
-                      <CornerDownRight
-                        className="size-3.5 shrink-0 text-muted-foreground"
-                        role="img"
-                        aria-label={`Started by ${parentOf(row.session)?.title ?? "another session"}`}
-                      >
-                        <title>
-                          Started by {parentOf(row.session)?.title ?? "another session"}
-                        </title>
-                      </CornerDownRight>
-                    )}
-                    {row.session.unreadableReason && (
-                      <Lock
-                        className="size-3.5 shrink-0 text-muted-foreground"
-                        role="img"
-                        aria-label={row.session.unreadableReason}
-                      >
-                        <title>{row.session.unreadableReason}</title>
-                      </Lock>
-                    )}
-                    <span
-                      className={cn(
-                        "truncate",
-                        (row.child || row.session.unreadableReason) &&
-                          "text-muted-foreground",
-                      )}
-                    >
-                      {row.session.title ?? "Untitled"}
-                    </span>
-                  </p>
-                  <BehaviorChip
-                    behaviorId={row.session.behaviorId}
-                    deployment={deployment}
-                    showName={false}
-                    description={
-                      shell.behaviorDescriptions[row.session.behaviorId ?? ""]
-                    }
-                    className={row.child ? "size-5 text-[9px]" : undefined}
-                  />
-                  <span
-                    className={cn(
-                      "w-20 text-right text-muted-foreground",
-                      row.child ? "text-xs" : "text-sm",
-                    )}
-                  >
-                    {when(row.session.updatedAt)}
-                  </span>
-                </a>
-              </li>
+              />
             ),
           )}
-          {conversations.length === 0 && (query || hasFilter(filter)) && (
+          {conversations.length === 0 && narrowed && (
             <li className="py-8 text-center text-sm text-muted-foreground">
               No sessions match.
             </li>
           )}
-          {conversations.length === 0 && !query && !hasFilter(filter) && (
+          {conversations.length === 0 && !narrowed && (
             <li className="grid min-h-[50vh] place-items-center animate-in fade-in-0 slide-in-from-bottom-2 duration-300 ease-out fill-mode-both motion-reduce:animate-none">
               <div className="text-center">
                 <MessageSquare className="mx-auto size-6 text-muted-foreground" />
@@ -356,3 +319,109 @@ export function SessionsScreen({ shell }: { shell: Shell }) {
     </ScrollArea>
   );
 }
+
+/* One row of the list. A fleet read that changed one session re-renders that
+   session's row: the others skip, since every prop keeps its identity while
+   unchanged (the fleet store reconciles each read by key). */
+const SessionRow = memo(function SessionRow({
+  session,
+  child,
+  delay,
+  parent,
+  workers,
+}: {
+  session: SessionSummary;
+  child: boolean;
+  delay: number | null;
+  parent: SessionSummary | null;
+  workers: readonly SessionSummary[];
+}) {
+  return (
+    <li
+      key={session.sessionId}
+      className={cn(
+        delay != null &&
+          "animate-in fade-in-0 slide-in-from-top-1 fill-mode-both duration-200 ease-out motion-reduce:animate-none",
+      )}
+      style={delay != null ? { animationDelay: `${delay * 40}ms` } : undefined}
+    >
+      <a
+        href={href({
+          name: "session",
+          sessionId: session.sessionId,
+        })}
+        data-testid={`session-${session.sessionId}`}
+        className={cn(
+          "-mx-3 grid grid-cols-[auto_1fr_auto_auto] items-center gap-4 rounded-lg px-3 hover:bg-accent",
+          /* under the work it came from, and smaller with it: a
+             worker is a detail of the row above, and a list where
+             everything is the same size has no shape to read */
+          child ? "py-2 pl-9 text-sm" : "py-3.5",
+        )}
+      >
+        <SessionStatus turnState={session.turnState} />
+        <p className="flex min-w-0 items-center gap-1.5 text-sm">
+          {/* the mark says a session came from another; the indent
+              says which one. Kept in both places: a row that only
+              moves right reads as a wrapped title, and a child
+              whose parent is filtered away has nothing but this */}
+          {/* a run nobody started by typing wears the mark of what
+              did: the list filters on this and showed nothing */}
+          {!parent && session.taskId && (
+            <Play
+              className="size-3.5 shrink-0 text-muted-foreground"
+              role="img"
+              aria-label={`Started by ${session.taskName ?? "a task"}`}
+            >
+              <title>
+                Started by {session.taskName ?? "a task"}
+                {session.triggerKind ? ` · ${session.triggerKind}` : ""}
+              </title>
+            </Play>
+          )}
+          {parent && (
+            <CornerDownRight
+              className="size-3.5 shrink-0 text-muted-foreground"
+              role="img"
+              aria-label={`Started by ${parent?.title ?? "another session"}`}
+            >
+              <title>Started by {parent?.title ?? "another session"}</title>
+            </CornerDownRight>
+          )}
+          {session.unreadableReason && (
+            <Lock
+              className="size-3.5 shrink-0 text-muted-foreground"
+              role="img"
+              aria-label={session.unreadableReason}
+            >
+              <title>{session.unreadableReason}</title>
+            </Lock>
+          )}
+          <span
+            className={cn(
+              "truncate",
+              (child || session.unreadableReason) && "text-muted-foreground",
+            )}
+          >
+            {session.title ?? "Untitled"}
+          </span>
+        </p>
+        <NodeBehaviorStack
+          nodeDid={nodeOfSession(session)}
+          behaviorId={session.behaviorId}
+          size={child ? "sm" : "md"}
+          workers={workers}
+        />
+        <span
+          className={cn(
+            "w-10 text-right text-muted-foreground sm:w-20",
+            child ? "text-xs" : "text-sm",
+          )}
+        >
+          {/* kept current by the clock, whether or not the row re-renders */}
+          <Age iso={session.updatedAt} />
+        </span>
+      </a>
+    </li>
+  );
+});

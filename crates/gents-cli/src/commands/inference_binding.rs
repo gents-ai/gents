@@ -65,7 +65,7 @@ pub(crate) async fn load_bound_context_window(
             .await?;
     let credential_scope = matches!(
         backend.auth,
-        gents::document_config::BackendAuth::PrincipalOAuth
+        gents::document_config::BackendAuth::PrincipalOAuth { .. }
     )
     .then_some(agent_did);
     let catalog = observation

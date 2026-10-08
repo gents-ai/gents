@@ -3,9 +3,8 @@ use gents_protocol::message::{
     AssistantContent as AssistantMessageContent, Message as CompletionMessage,
     Reasoning as AssistantReasoning, Text as CompletionText, ToolCall as AssistantToolCall,
 };
-use rig::agent::MultiTurnStreamItem;
-use rig::streaming::{StreamedAssistantContent, StreamedUserContent};
 
+use crate::error::LoopStreamError;
 use crate::loop_stream::LoopStreamItem;
 use crate::provider_input::ProviderInputProfile;
 use crate::request_lifecycle::RequestLifecycleControl;
@@ -15,7 +14,7 @@ use crate::stream_writer::CanonicalStreamWriter;
 pub enum StreamAction {
     Continue,
     Done,
-    Error(rig::agent::StreamingError),
+    Error(LoopStreamError),
 }
 
 pub struct StreamProcessor<'a, H, W, L>
@@ -96,9 +95,9 @@ where
         Ok(())
     }
 
-    pub async fn process_item<R>(
+    pub async fn process_item(
         &mut self,
-        item: Result<LoopStreamItem<R>, rig::agent::StreamingError>,
+        item: Result<LoopStreamItem, LoopStreamError>,
     ) -> Result<StreamAction> {
         match item {
             Ok(LoopStreamItem::ProviderAudit(observation)) => {
@@ -164,26 +163,18 @@ where
                 self.committed_text_len = self.streamed_text.len();
                 Ok(StreamAction::Continue)
             }
-            Ok(LoopStreamItem::Item(MultiTurnStreamItem::StreamAssistantItem(
-                StreamedAssistantContent::Text(text),
-            ))) => {
+            Ok(LoopStreamItem::Text(text)) => {
                 let had_visible_text = !self.streamed_text.trim().is_empty();
-                self.assistant_turn.push_text(&text.text);
-                self.streamed_text.push_str(&text.text);
-                let flush_due = self
-                    .stream_writer
-                    .write_tokens(self.doc_id, &text.text)
-                    .await?;
+                self.assistant_turn.push_text(&text);
+                self.streamed_text.push_str(&text);
+                let flush_due = self.stream_writer.write_tokens(self.doc_id, &text).await?;
                 let has_visible_text = !self.streamed_text.trim().is_empty();
                 if flush_due || (!had_visible_text && has_visible_text) {
                     self.flush_pending().await?;
                 }
                 Ok(StreamAction::Continue)
             }
-            Ok(LoopStreamItem::Item(MultiTurnStreamItem::StreamAssistantItem(
-                StreamedAssistantContent::Reasoning(reasoning),
-            ))) => {
-                let reasoning = crate::rig_compat::from_rig_reasoning(&reasoning);
+            Ok(LoopStreamItem::Reasoning(reasoning)) => {
                 let rendered = render_reasoning_text(&reasoning);
                 self.assistant_turn
                     .push_provider_reasoning(self.provider_profile, reasoning)?;
@@ -202,9 +193,7 @@ where
                 }
                 Ok(StreamAction::Continue)
             }
-            Ok(LoopStreamItem::Item(MultiTurnStreamItem::StreamAssistantItem(
-                StreamedAssistantContent::ReasoningDelta { reasoning, id },
-            ))) => {
+            Ok(LoopStreamItem::ReasoningDelta { reasoning, id }) => {
                 if self.provider_profile == ProviderInputProfile::ClaudeMessages
                     && self.assistant_turn.provider_block.is_some()
                 {
@@ -226,12 +215,10 @@ where
                 }
                 Ok(StreamAction::Continue)
             }
-            Ok(LoopStreamItem::Item(MultiTurnStreamItem::StreamAssistantItem(
-                StreamedAssistantContent::ToolCall {
-                    tool_call,
-                    internal_call_id,
-                },
-            ))) => {
+            Ok(LoopStreamItem::ToolCall {
+                tool_call,
+                internal_call_id,
+            }) => {
                 self.flush_pending().await?;
                 self.persistence_hook
                     .register_stream_tool_call_identity(
@@ -242,16 +229,13 @@ where
                     .await;
                 self.pending_tool_internal_ids
                     .push(internal_call_id.clone());
-                self.assistant_turn
-                    .push_tool_call(crate::rig_compat::from_rig_tool_call(&tool_call));
+                self.assistant_turn.push_tool_call(tool_call);
                 Ok(StreamAction::Continue)
             }
-            Ok(LoopStreamItem::Item(MultiTurnStreamItem::StreamUserItem(
-                StreamedUserContent::ToolResult {
-                    tool_result,
-                    internal_call_id,
-                },
-            ))) => {
+            Ok(LoopStreamItem::ToolResult {
+                tool_result,
+                internal_call_id,
+            }) => {
                 self.flush_pending().await?;
                 self.assistant_turn = AssistantTurnAccumulator::default();
                 self.committed_text_len = self.streamed_text.len();
@@ -259,9 +243,9 @@ where
                 self.stream_writer.reset_tail(self.doc_id).await?;
                 Ok(StreamAction::Continue)
             }
-            Ok(LoopStreamItem::Item(MultiTurnStreamItem::FinalResponse(response))) => {
-                self.assistant_turn.reconcile_text(response.response());
-                self.final_text = Some(response.response().to_string());
+            Ok(LoopStreamItem::Final { text }) => {
+                self.assistant_turn.reconcile_text(&text);
+                self.final_text = Some(text);
                 Ok(StreamAction::Done)
             }
             Ok(LoopStreamItem::TurnRetracted { turn, attempt, .. }) => {
@@ -277,6 +261,7 @@ where
                 self.active_provider_attempt = None;
                 self.active_capture_scope = None;
                 self.assistant_turn = AssistantTurnAccumulator::default();
+                self.pending_tool_internal_ids.clear();
                 self.streamed_text.truncate(self.committed_text_len);
                 self.stream_writer.reset_tail(self.doc_id).await?;
                 Ok(StreamAction::Continue)
@@ -335,7 +320,6 @@ where
                 }
                 Ok(StreamAction::Continue)
             }
-            Ok(LoopStreamItem::Item(_)) => Ok(StreamAction::Continue),
             Err(error) => Ok(StreamAction::Error(error)),
         }
     }
@@ -384,7 +368,7 @@ where
         if !handled_auxiliary {
             for observation in crate::rendered_request::scope::drain_ready_audit().await {
                 match self
-                    .process_item::<()>(Ok(LoopStreamItem::ProviderAudit(observation)))
+                    .process_item(Ok(LoopStreamItem::ProviderAudit(observation)))
                     .await?
                 {
                     StreamAction::Continue => {}

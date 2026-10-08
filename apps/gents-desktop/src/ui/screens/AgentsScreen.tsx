@@ -4,8 +4,8 @@
    offers (rename the saved label, check the peer, remove). Add agent is
    the desktop's status enrolment: a server address, a request the
    server's admin approves, then the peer joins. */
-import { useEffect, useState } from "react";
-import { EllipsisVertical, Inbox, Plus } from "lucide-react";
+import { memo, useState } from "react";
+import { EllipsisVertical, Inbox, Plus, SlidersHorizontal } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@gents/ui/components/button";
 import {
@@ -38,28 +38,59 @@ import { Input } from "@gents/ui/components/input";
 import { Spinner } from "@gents/ui/components/spinner";
 import { cn } from "@gents/ui/lib/utils";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
-import type { Shell } from "@/hooks/useShell";
 import { inferenceIsConfigured, isLocalAgent } from "@/lib/firstRun";
 import { href } from "@/lib/router";
 import { isLive } from "@/lib/live";
 import { AgentAvatar } from "./AgentAvatar";
 import { AgentHoverCard } from "./HoverCards";
+import { isWorkingNode } from "@/lib/nodes";
+import { toastFailure } from "@/lib/failure";
+import { useApp } from "@/app/AppContext";
+import { useEnrollmentRequests, useHomeDid } from "@/hooks/useClient";
+import { NO_SESSIONS, useFleet } from "@/hooks/useFleet";
+import { fleetNodes } from "@/lib/scope";
+import { nodeKeyOf, type NodeView } from "../../hooks/fleetStore";
+import { useShallow } from "zustand/react/shallow";
 
-export function AgentsScreen({ shell }: { shell: Shell }) {
+export function AgentsScreen() {
+  const {
+    actions: { removePeer, renamePeer },
+  } = useApp();
+  const nodes = useFleet(useShallow(fleetNodes));
   const [adding, setAdding] = useState(false);
-  const [renaming, setRenaming] = useState<{ peerId: string; label: string } | null>(
-    null,
-  );
+  const [renaming, setRenaming] = useState<{
+    peerId: string;
+    label: string;
+  } | null>(null);
   const [removing, setRemoving] = useState<{
     agentDid: string;
     peerId: string;
     label: string;
   } | null>(null);
   const [removingBusy, setRemovingBusy] = useState(false);
-  const pending = shell.snapshot?.client?.enrollmentRequests;
+  const pending = useEnrollmentRequests();
+  const homeDid = useHomeDid();
+  /* the node this machine runs, then the paired ones with the reachable
+     first: the dot is the first thing read on a row */
+  const groups = [
+    {
+      key: "local",
+      label: "Local node",
+      nodes: nodes.filter((d) => isWorkingNode(d, homeDid)),
+      count: false,
+    },
+    {
+      key: "remote",
+      label: "Remote nodes",
+      nodes: nodes
+        .filter((d) => !isWorkingNode(d, homeDid))
+        .sort((a, b) => Number(b.dialSucceeded) - Number(a.dialSucceeded)),
+      count: true,
+    },
+  ];
   return (
     <ScrollArea className="h-full" data-testid="agents-screen">
-      <div className="mx-auto max-w-2xl px-6 py-8">
+      <div className="mx-auto max-w-page px-6 py-8">
         <div className="flex h-10 items-center justify-between">
           <h1 className="font-heading text-lg font-medium text-heading">Agents</h1>
           <Button variant="secondary" size="sm" onClick={() => setAdding(true)}>
@@ -94,187 +125,46 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
             ))}
           </ul>
         )}
-        <ul className="mt-4 grid grid-cols-[minmax(0,1fr)] gap-3">
-          {shell.deployments.map((d) => {
-            const name = d.agentPrincipal.displayName ?? d.label;
-            const online = d.dialSucceeded;
-            const live = d.sessions.filter((c) => isLive(c.turnState)).length;
-            const waiting = d.mailboxItems.filter((m) => m.status === "open").length;
-            const config = href({
-              name: "agent",
-              agentDid: d.agentDid,
-              section: "agent",
-            });
-            const check = async () => {
-              try {
-                const r = (await shell.api.fetchPeerStatus(d.peerId)) as {
-                  reachable?: boolean;
-                };
-                toast(
-                  r?.reachable
-                    ? `${d.label} is reachable`
-                    : `${d.label} is not reachable`,
-                );
-              } catch (e) {
-                toast(`Status check failed: ${String(e)}`);
-              }
-            };
-            return (
-              <li
-                key={d.agentDid}
-                className="flex items-center gap-4 rounded-2xl border border-border/60 bg-raised px-5 py-4 transition-colors hover:border-border hover:bg-accent"
-              >
-                {/* the row lights up whole, so it is clickable whole: the
-                    link reaches back through the padding it sits in rather
-                    than ending where its text does, which left the top and
-                    bottom of every row looking live and doing nothing */}
-                <a
-                  href={href({ name: "sessions" })}
-                  onClick={() => shell.selectAgent(d.agentDid)}
-                  aria-label={`${name} sessions`}
-                  className="-my-4 -ml-5 flex min-w-0 flex-1 items-center gap-3 overflow-hidden py-4 pl-5"
-                >
-                  <AgentHoverCard
-                    deployment={d}
-                    root={shell.snapshot?.bootstrap.initToolRoot}
-                    ceiling={shell.snapshot?.bootstrap.initToolCeiling}
-                  >
-                    <span className="block shrink-0">
-                      <AgentAvatar name={name} className="size-8" />
-                    </span>
-                  </AgentHoverCard>
-                  <span
-                    className={cn(
-                      "size-2 shrink-0 rounded-full",
-                      online ? "bg-brand" : "bg-destructive",
-                    )}
-                    aria-label={online ? "online" : "offline"}
-                    role="img"
-                  />
-                  <span className="grid min-w-0 flex-1 auto-cols-[minmax(0,max-content)] grid-flow-col items-baseline justify-start gap-3">
-                    <span className="truncate font-heading text-base font-medium text-heading">
-                      {name}
-                    </span>
-                    {d.label !== name && (
-                      <span className="min-w-0 truncate text-xs text-muted-foreground">
-                        {d.label}
-                      </span>
-                    )}
-                    {!online && d.lastError && (
-                      <span className="min-w-0 truncate text-xs text-muted-foreground">
-                        {d.lastError}
-                      </span>
-                    )}
-                  </span>
-                </a>
-                {isLocalAgent(d, shell.snapshot?.bootstrap.initAgentDid) &&
-                  !inferenceIsConfigured(d) && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      nativeButton={false}
-                      render={
-                        <a
-                          href={href({
-                            name: "agent",
-                            agentDid: d.agentDid,
-                            section: "inference",
-                          })}
-                        />
-                      }
-                      title={`Configure inference for ${d.label}`}
-                    >
-                      Setup needed
-                    </Button>
-                  )}
-                {waiting > 0 && (
-                  <a
-                    href={href({ name: "mailbox" })}
-                    onClick={() => shell.selectAgent(d.agentDid)}
-                    className="flex items-center gap-1.5 rounded-full px-2 py-1 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                    title={`${waiting} item${waiting === 1 ? "" : "s"} need${waiting === 1 ? "s" : ""} your attention`}
-                  >
-                    <Inbox className="size-4" /> {waiting}
-                  </a>
-                )}
-                {live > 0 && (
-                  <span
-                    className="flex items-center gap-2 text-sm text-muted-foreground"
-                    title={`${live} running`}
-                  >
-                    <Spinner className="text-foreground" /> {live}
-                  </span>
-                )}
-                <DropdownMenu>
-                  <DropdownMenuTrigger
-                    render={
-                      <Button
-                        variant="quiet"
-                        size="icon-sm"
-                        aria-label={`${name} actions`}
-                      />
-                    }
-                  >
-                    <EllipsisVertical />
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                    <DropdownMenuGroup>
-                      <DropdownMenuItem
-                        nativeButton={false}
-                        render={<a href={href({ name: "sessions" })} />}
-                        onClick={() => shell.selectAgent(d.agentDid)}
-                      >
-                        Open sessions
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        nativeButton={false}
-                        render={<a href={config} />}
-                        onClick={() => shell.selectAgent(d.agentDid)}
-                      >
-                        Configure
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        onClick={() =>
-                          setRenaming({ peerId: d.peerId, label: d.label })
-                        }
-                      >
-                        Rename
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => void check()}>
-                        Check peer
-                      </DropdownMenuItem>
-                    </DropdownMenuGroup>
-                    {!isLocalAgent(d, shell.snapshot?.bootstrap.initAgentDid) && (
-                      <>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuGroup>
-                          <DropdownMenuItem
-                            variant="destructive"
-                            onClick={() =>
-                              setRemoving({
-                                agentDid: d.agentDid,
-                                peerId: d.peerId,
-                                label: d.label,
-                              })
-                            }
-                          >
-                            Remove peer
-                          </DropdownMenuItem>
-                        </DropdownMenuGroup>
-                      </>
-                    )}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </li>
-            );
-          })}
-        </ul>
+        {groups.map((g) => (
+          <section key={g.key} className="mt-6">
+            <h2 className="flex items-baseline gap-2 font-mono text-[11px] tracking-wide text-muted-foreground uppercase">
+              {g.label}
+              {g.count && (
+                <span className="text-muted-foreground/70">{g.nodes.length}</span>
+              )}
+            </h2>
+            {g.nodes.length === 0 && (
+              <p className="mt-3 rounded-2xl border border-dashed border-border px-5 py-4 text-sm text-muted-foreground">
+                {g.key === "local"
+                  ? "No node runs on this machine; work happens on the remote nodes."
+                  : "No remote nodes paired."}
+              </p>
+            )}
+            <ul className="mt-3 grid grid-cols-[minmax(0,1fr)] gap-3">
+              {g.nodes.map((d) => (
+                <AgentRow
+                  key={d.agentDid}
+                  node={d}
+                  homeDid={homeDid}
+                  onRename={setRenaming}
+                  onRemove={setRemoving}
+                />
+              ))}
+            </ul>
+          </section>
+        ))}
       </div>
-      <AddAgentDialog shell={shell} open={adding} onClose={() => setAdding(false)} />
+      <AddAgentDialog open={adding} onClose={() => setAdding(false)} />
       <RenameDialog
         key={renaming?.peerId ?? "none"}
-        shell={shell}
-        target={renaming}
+        title="Rename deployment"
+        description="The saved label on this desktop; the agent's own name does not change."
+        value={renaming?.label ?? null}
+        onSave={async (next) => {
+          if (!renaming) return;
+          await renamePeer(renaming.peerId, next);
+          toast("Renamed");
+        }}
         onClose={() => setRenaming(null)}
       />
       <AlertDialog
@@ -298,13 +188,11 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
                 if (!removing) return;
                 setRemovingBusy(true);
                 try {
-                  await shell.removePeer(removing.peerId, removing.agentDid);
+                  await removePeer(removing.peerId, removing.agentDid);
                   toast("Peer removed");
                   setRemoving(null);
                 } catch (error) {
-                  toast(
-                    `Remove failed: ${error instanceof Error ? error.message : String(error)}`,
-                  );
+                  toastFailure("remove the peer", error);
                 } finally {
                   setRemovingBusy(false);
                 }
@@ -319,31 +207,29 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
   );
 }
 
-function AddAgentDialog({
-  shell,
-  open,
-  onClose,
-}: {
-  shell: Shell;
-  open: boolean;
-  onClose: () => void;
-}) {
+function AddAgentDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const {
+    api,
+    actions: { refreshSnapshot },
+  } = useApp();
   const [address, setAddress] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
-    if (open) setError(null);
-  }, [open]);
+  /* every way out clears the failure, so the next opening starts clean */
+  const close = () => {
+    setError(null);
+    onClose();
+  };
   const ready = /\S/.test(address);
   const submit = async () => {
     setBusy(true);
     setError(null);
     try {
-      const r = await shell.api.requestStatusEnrollment(address.trim());
-      await shell.refreshSnapshot();
+      const r = await api.requestStatusEnrollment(address.trim());
+      await refreshSnapshot();
       toast(`Enrolment request ${r.requestId} sent · waiting for acceptance`);
       setAddress("");
-      onClose();
+      close();
     } catch (e) {
       const reason = e instanceof Error ? e.message : String(e);
       setError(`Couldn't request enrolment: ${reason}`);
@@ -352,7 +238,7 @@ function AddAgentDialog({
     }
   };
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+    <Dialog open={open} onOpenChange={(o) => !o && close()}>
       <DialogContent aria-modal="true">
         <DialogHeader>
           <DialogTitle>Add agent</DialogTitle>
@@ -387,7 +273,7 @@ function AddAgentDialog({
           </p>
         ) : null}
         <DialogFooter>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
+          <Button variant="outline" onClick={close} disabled={busy}>
             Cancel
           </Button>
           <Button
@@ -404,34 +290,38 @@ function AddAgentDialog({
   );
 }
 
-/* the saved label for a peer, the one thing the fleet row edits in place */
-function RenameDialog({
-  shell,
-  target,
+/* one label edited in place: a deployment's saved label or an account's */
+export function RenameDialog({
+  title,
+  description,
+  value,
+  onSave,
   onClose,
 }: {
-  shell: Shell;
-  target: { peerId: string; label: string } | null;
+  title: string;
+  description: string;
+  value: string | null;
+  onSave: (next: string) => Promise<void>;
   onClose: () => void;
 }) {
-  const [label, setLabel] = useState(target?.label ?? "");
+  const [label, setLabel] = useState(value ?? "");
+  const [error, setError] = useState<string | null>(null);
   const save = async () => {
-    if (!target) return;
+    if (value === null) return;
     const next = label.trim();
-    if (next && next !== target.label) {
-      await shell.renamePeer(target.peerId, next);
-      toast("Renamed");
+    try {
+      if (next && next !== value) await onSave(next);
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
     }
-    onClose();
   };
   return (
-    <Dialog open={target !== null} onOpenChange={(o) => !o && onClose()}>
+    <Dialog open={value !== null} onOpenChange={(o) => !o && onClose()}>
       <DialogContent aria-modal="true">
         <DialogHeader>
-          <DialogTitle>Rename deployment</DialogTitle>
-          <DialogDescription>
-            The saved label on this desktop; the agent's own name does not change.
-          </DialogDescription>
+          <DialogTitle>{title}</DialogTitle>
+          <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
         <form
           onSubmit={(e) => {
@@ -441,6 +331,11 @@ function RenameDialog({
         >
           <Input value={label} onChange={(e) => setLabel(e.target.value)} autoFocus />
         </form>
+        {error && (
+          <p role="alert" className="text-sm text-destructive">
+            {error}
+          </p>
+        )}
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>
             Cancel
@@ -453,3 +348,204 @@ function RenameDialog({
     </Dialog>
   );
 }
+
+/* one node: its counts are selected by key, so a change on another node
+   leaves the row as it is */
+const AgentRow = memo(function AgentRow({
+  node: d,
+  homeDid,
+  onRename,
+  onRemove,
+}: {
+  node: NodeView;
+  homeDid: string | null;
+  onRename: (peer: { peerId: string; label: string }) => void;
+  onRemove: (peer: { agentDid: string; peerId: string; label: string }) => void;
+}) {
+  const {
+    api,
+    actions: { selectAgent },
+  } = useApp();
+  const live = useFleet(
+    (s) =>
+      (s.sessionsOf[nodeKeyOf(d)] ?? NO_SESSIONS).filter((c) => isLive(c.turnState))
+        .length,
+  );
+  const waiting = useFleet(
+    (s) => (s.mailboxOf[nodeKeyOf(d)] ?? []).filter((m) => m.status === "open").length,
+  );
+  const name = d.agentPrincipal.displayName ?? d.label;
+  const online = d.dialSucceeded;
+  const config = href({
+    name: "agent",
+    agentDid: d.agentDid,
+    section: "agent",
+  });
+  const check = async () => {
+    try {
+      const r = (await api.fetchPeerStatus(d.peerId)) as {
+        reachable?: boolean;
+      };
+      toast(r?.reachable ? `${d.label} is reachable` : `${d.label} is not reachable`);
+    } catch (e) {
+      toast(`Status check failed: ${String(e)}`);
+    }
+  };
+  return (
+    <li
+      key={d.agentDid}
+      className="flex items-center gap-4 rounded-2xl border border-border/60 bg-raised px-5 py-4 transition-colors hover:border-border hover:bg-accent"
+    >
+      {/* the row lights up whole, so it is clickable whole: the
+                    link reaches back through the padding it sits in rather
+                    than ending where its text does, which left the top and
+                    bottom of every row looking live and doing nothing */}
+      <a
+        href={href({ name: "sessions", nodeDid: d.agentDid })}
+        onClick={() => selectAgent(d.agentDid)}
+        aria-label={`${name} sessions`}
+        className="-my-4 -ml-5 flex min-w-0 flex-1 items-center gap-3 overflow-hidden py-4 pl-5"
+      >
+        <AgentHoverCard deployment={d}>
+          <span className="block shrink-0">
+            <AgentAvatar name={name} className="size-8" />
+          </span>
+        </AgentHoverCard>
+        <span
+          className={cn(
+            "size-2 shrink-0 rounded-full",
+            online ? "bg-brand" : "bg-destructive",
+          )}
+          aria-label={online ? "online" : "offline"}
+          role="img"
+        />
+        <span className="grid min-w-0 flex-1 auto-cols-[minmax(0,max-content)] grid-flow-col items-baseline justify-start gap-3">
+          {/* name and label are columns that each take their full text when it
+                      fits; the short one always does, and the long one truncates
+                      into what is left (both split the row when both are long) */}
+          <span className="truncate font-heading text-base font-medium text-heading">
+            {name}
+          </span>
+          {/* the pairing label names a remote node when its principal
+                        does not; the local node's pill already says it */}
+          {!isWorkingNode(d, homeDid) && d.label !== name && (
+            <span className="min-w-0 truncate text-xs text-muted-foreground">
+              {d.label}
+            </span>
+          )}
+          {d.lastError && (
+            <span className="min-w-0 truncate text-xs text-muted-foreground">
+              {d.lastError}
+            </span>
+          )}
+        </span>
+      </a>
+      {isLocalAgent(d, homeDid) && !inferenceIsConfigured(d) && (
+        <Button
+          size="sm"
+          variant="outline"
+          nativeButton={false}
+          render={
+            <a
+              href={href({
+                name: "agent",
+                agentDid: d.agentDid,
+                section: "inference",
+              })}
+            />
+          }
+          title={`Configure inference for ${d.label}`}
+        >
+          Setup needed
+        </Button>
+      )}
+      {waiting > 0 && (
+        <a
+          href={href({ name: "mailbox", nodeDid: d.agentDid })}
+          onClick={() => selectAgent(d.agentDid)}
+          className="flex items-center gap-1.5 rounded-full px-2 py-1 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          title={`${waiting} item${waiting === 1 ? "" : "s"} need${waiting === 1 ? "s" : ""} your attention`}
+        >
+          <Inbox className="size-4" /> {waiting}
+        </a>
+      )}
+      {live > 0 && (
+        <span
+          className="flex items-center gap-2 text-sm text-muted-foreground"
+          title={`${live} running`}
+        >
+          <Spinner className="text-foreground" /> {live}
+        </span>
+      )}
+      <Button
+        variant="quiet"
+        size="icon-sm"
+        aria-label={`Configure ${name}`}
+        title="Configure"
+        nativeButton={false}
+        render={<a href={config} onClick={() => selectAgent(d.agentDid)} />}
+      >
+        <SlidersHorizontal />
+      </Button>
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={
+            <Button variant="quiet" size="icon-sm" aria-label={`${name} actions`} />
+          }
+        >
+          <EllipsisVertical />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuGroup>
+            <DropdownMenuItem
+              nativeButton={false}
+              render={
+                <a
+                  href={href({
+                    name: "sessions",
+                    nodeDid: d.agentDid,
+                  })}
+                />
+              }
+              onClick={() => selectAgent(d.agentDid)}
+            >
+              Open sessions
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              nativeButton={false}
+              render={<a href={config} />}
+              onClick={() => selectAgent(d.agentDid)}
+            >
+              Configure
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={() => onRename({ peerId: d.peerId, label: d.label })}
+            >
+              Rename
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => void check()}>Check peer</DropdownMenuItem>
+          </DropdownMenuGroup>
+          {!isLocalAgent(d, homeDid) && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuGroup>
+                <DropdownMenuItem
+                  variant="destructive"
+                  onClick={() =>
+                    onRemove({
+                      agentDid: d.agentDid,
+                      peerId: d.peerId,
+                      label: d.label,
+                    })
+                  }
+                >
+                  Remove peer
+                </DropdownMenuItem>
+              </DropdownMenuGroup>
+            </>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </li>
+  );
+});

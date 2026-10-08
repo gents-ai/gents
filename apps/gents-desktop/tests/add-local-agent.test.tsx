@@ -1,17 +1,17 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { DesktopApp } from "../src/hooks/desktopApp";
+import { renderIn, testApp } from "./app-fixture";
 
 const toast = vi.hoisted(() => vi.fn());
 vi.mock("sonner", () => ({ toast }));
 
 import type {
-  DesktopApiAdapter,
   DeploymentView,
   ManagedServerAuthorityInput,
   ManagedServerStatus,
 } from "@source-inc/gents-desktop-client";
-import type { Shell } from "../src/ui/hooks/useShell";
 import { AgentsScreen } from "../src/ui/screens/AgentsScreen";
 import { SetupScreen } from "../src/ui/screens/setup/SetupScreen";
 import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
@@ -66,39 +66,32 @@ function status(overrides: Partial<ManagedServerStatus> = {}): ManagedServerStat
 }
 
 function fleet(listed: DeploymentView[]) {
-  let deployments = listed;
   const api = {
     managedServerStatus: vi.fn(async () => status()),
     startManagedServer: vi.fn(async () => status()),
     fetchDesktopSnapshot: vi.fn(async () => ({
       bootstrap: forgeBootstrap,
-      client: { deployments },
+      client: { deployments: listed },
     })),
     requestStatusEnrollment: vi.fn(async (_address: string) => ({
       requestId: "request-1",
     })),
+    initLocalStandardRuntime: vi.fn(),
+    renamePeer: vi.fn(async () => ({
+      bootstrap: forgeBootstrap,
+      client: { deployments: listed },
+    })),
   };
-  const shell = {
+  const app = testApp({
     api,
     snapshot: { bootstrap: forgeBootstrap, client: { deployments: listed } },
-    deployments: listed,
-    refreshSnapshot: vi.fn(async () => undefined),
-    onInitLocalRuntime: vi.fn(async () => {
-      deployments = [...listed, forge];
-      return { agentDid: FORGE_DID };
-    }),
-  } as unknown as Shell;
-  return {
-    api,
-    shell,
-    lose: () => {
-      deployments = listed;
-    },
-  };
+    reportFailure: toast,
+  });
+  return { api, app };
 }
 
-async function openAddAgent(shell: Shell) {
-  render(<AgentsScreen shell={shell} />);
+async function openAddAgent(app: DesktopApp) {
+  renderIn(app, <AgentsScreen />);
   await userEvent.click(screen.getByRole("button", { name: /Add agent/ }));
   return screen.findByRole("dialog");
 }
@@ -109,8 +102,8 @@ describe("Add agent enrollment", () => {
   it.each([[forge], [remote]])(
     "does not offer local reconnect for existing or removed local agents",
     async (listed) => {
-      const { api, shell } = fleet([listed]);
-      const dialog = await openAddAgent(shell);
+      const { api, app } = fleet([listed]);
+      const dialog = await openAddAgent(app);
       expect(
         within(dialog).queryByRole("button", { name: /reconnect/i }),
       ).not.toBeInTheDocument();
@@ -119,15 +112,15 @@ describe("Add agent enrollment", () => {
       ).not.toBeInTheDocument();
       expect(within(dialog).getByLabelText("Agent server")).toBeInTheDocument();
       expect(api.startManagedServer).not.toHaveBeenCalled();
-      expect(shell.onInitLocalRuntime).not.toHaveBeenCalled();
+      expect(api.initLocalStandardRuntime).not.toHaveBeenCalled();
     },
   );
 
   it.each(["local-standard", "enrollment"])(
     "hides impossible Remove for the managed agent with source %s",
     async (source) => {
-      const { shell } = fleet([{ ...forge, source }]);
-      render(<AgentsScreen shell={shell} />);
+      const { app } = fleet([{ ...forge, source }]);
+      renderIn(app, <AgentsScreen />);
       await userEvent.click(screen.getByRole("button", { name: "Forge actions" }));
       expect(
         await screen.findByRole("menuitem", { name: "Rename" }),
@@ -139,18 +132,39 @@ describe("Add agent enrollment", () => {
   );
 
   it("retains Remove for a remote enrolled peer", async () => {
-    const { shell } = fleet([remote]);
-    render(<AgentsScreen shell={shell} />);
+    const { app } = fleet([remote]);
+    renderIn(app, <AgentsScreen />);
     await userEvent.click(screen.getByRole("button", { name: "Remote actions" }));
     expect(
       await screen.findByRole("menuitem", { name: "Remove peer" }),
     ).toBeInTheDocument();
   });
 
+  it("shows a failed request's reason, and opens clean the next time", async () => {
+    const { api, app } = fleet([forge]);
+    api.requestStatusEnrollment.mockRejectedValueOnce(new Error("server refused"));
+    let dialog = await openAddAgent(app);
+    await userEvent.type(
+      within(dialog).getByLabelText("Agent server"),
+      "server.example:9191",
+    );
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Request enrolment" }),
+    );
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "server refused",
+    );
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await userEvent.click(screen.getByRole("button", { name: /Add agent/ }));
+    dialog = await screen.findByRole("dialog");
+    expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("retains initial remote enrollment", async () => {
-    const { api, shell } = fleet([forge]);
+    const { api, app } = fleet([forge]);
     api.requestStatusEnrollment.mockResolvedValue({ requestId: "request-1" });
-    const dialog = await openAddAgent(shell);
+    const dialog = await openAddAgent(app);
     await userEvent.type(
       within(dialog).getByLabelText("Agent server"),
       "server.example:9191",
@@ -161,7 +175,25 @@ describe("Add agent enrollment", () => {
     await waitFor(() =>
       expect(api.requestStatusEnrollment).toHaveBeenCalledWith("server.example:9191"),
     );
-    expect(shell.refreshSnapshot).toHaveBeenCalled();
+    expect(api.fetchDesktopSnapshot).toHaveBeenCalled();
+  });
+});
+
+describe("renaming a deployment", () => {
+  it("renaming a deployment saves its trimmed label", async () => {
+    const { api, app } = fleet([remote]);
+    renderIn(app, <AgentsScreen />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Remote actions" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Rename" }));
+    const dialog = await screen.findByRole("dialog");
+    const input = within(dialog).getByRole("textbox");
+    await userEvent.clear(input);
+    await userEvent.type(input, " Edge 2 ");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(api.renamePeer).toHaveBeenCalledTimes(1));
+    expect(api.renamePeer).toHaveBeenCalledWith("peer-remote", "Edge 2");
   });
 });
 
@@ -187,6 +219,11 @@ describe("first-run local agent name", () => {
         bootstrap: forgeBootstrap,
         client: { deployments: [forge] },
       })),
+      initLocalStandardRuntime: vi.fn(async () => ({ agentDid: FORGE_DID })),
+      startDesktopClient: vi.fn(async () => ({
+        bootstrap: forgeBootstrap,
+        client: { deployments: [forge] },
+      })),
       listProviderAccounts: vi.fn(async () => []),
       getInferenceSetupCatalog: vi.fn(async () => ({
         contractVersion: 1,
@@ -203,21 +240,15 @@ describe("first-run local agent name", () => {
           initAgentDid: null,
           agentHomeExists: false,
         };
-    const shell = {
-      api,
-      snapshot: { bootstrap: snapshotBootstrap },
-      deployments: [],
-      applyConfig: (run: (bridge: DesktopApiAdapter) => Promise<unknown>) =>
-        run(api as unknown as DesktopApiAdapter),
-      refreshSnapshot: vi.fn(async () => undefined),
-      onInitLocalRuntime: vi.fn(async () => ({ agentDid: FORGE_DID })),
-    } as unknown as Shell;
-    render(<SetupScreen shell={shell} onDone={vi.fn()} />);
-    return { api, shell };
+    renderIn(
+      testApp({ api, snapshot: { bootstrap: snapshotBootstrap } }),
+      <SetupScreen onDone={vi.fn()} />,
+    );
+    return { api };
   }
 
   it("shows an existing home's agent by name instead of asking for one it would ignore", async () => {
-    const { api, shell } = setup({ existingHome: true, runtimeName: "Forge" });
+    const { api } = setup({ existingHome: true, runtimeName: "Forge" });
     const name = screen.getByLabelText("Agent name");
     expect(name).toHaveValue("Forge");
     expect(name).toHaveAttribute("readonly");
@@ -227,12 +258,16 @@ describe("first-run local agent name", () => {
     const next = screen.getByTestId("setup-next");
     await waitFor(() => expect(next).toBeEnabled());
     await userEvent.click(next);
-    await waitFor(() => expect(shell.onInitLocalRuntime).toHaveBeenCalledWith("Forge"));
+    await waitFor(() =>
+      expect(api.initLocalStandardRuntime).toHaveBeenCalledWith(
+        expect.objectContaining({ label: "Forge" }),
+      ),
+    );
     expect(api.startManagedServer).toHaveBeenCalledWith("Forge", expect.anything());
   });
 
   it("persists the entered name for a new home", async () => {
-    const { api, shell } = setup({ existingHome: false, runtimeName: "Scout" });
+    const { api } = setup({ existingHome: false, runtimeName: "Scout" });
     const name = screen.getByLabelText("Agent name");
     await userEvent.clear(name);
     await userEvent.type(name, "Scout");
@@ -240,13 +275,17 @@ describe("first-run local agent name", () => {
     await waitFor(() => expect(next).toBeEnabled());
     await userEvent.click(next);
 
-    await waitFor(() => expect(shell.onInitLocalRuntime).toHaveBeenCalledWith("Scout"));
+    await waitFor(() =>
+      expect(api.initLocalStandardRuntime).toHaveBeenCalledWith(
+        expect.objectContaining({ label: "Scout" }),
+      ),
+    );
     expect(api.startManagedServer).toHaveBeenCalledWith("Scout", expect.anything());
     expect(await screen.findByText(/Scout is running as/)).toBeInTheDocument();
   });
 
   it("fails clearly instead of continuing under another agent's name", async () => {
-    const { shell } = setup({ existingHome: false, runtimeName: "Forge" });
+    const { api } = setup({ existingHome: false, runtimeName: "Forge" });
     const name = screen.getByLabelText("Agent name");
     await userEvent.clear(name);
     await userEvent.type(name, "Scout");
@@ -259,8 +298,8 @@ describe("first-run local agent name", () => {
         "This computer already has a local agent named Forge, so Scout was not created. Go back to continue with Forge.",
       ),
     ).toBeInTheDocument();
-    expect(shell.onInitLocalRuntime).not.toHaveBeenCalled();
-    expect(shell.refreshSnapshot).toHaveBeenCalled();
+    expect(api.initLocalStandardRuntime).not.toHaveBeenCalled();
+    expect(api.fetchDesktopSnapshot).toHaveBeenCalled();
     expect(screen.queryByText(/Saved the local connection/)).not.toBeInTheDocument();
     expect(screen.getByText("Try again")).toBeInTheDocument();
   });

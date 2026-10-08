@@ -5,6 +5,7 @@ import type {
 } from "@source-inc/gents-desktop-client";
 import { buildInferenceSetupPlan } from "../src/ui/lib/inferenceSetupPersistence";
 import { deployment as fixtureDeployment } from "./config-panel-wiring/fixtures";
+import type { BackendProviderKind } from "@source-inc/gents-desktop-client/generated/BackendProviderKind";
 
 const recommendation: InferenceModelRecommendation = {
   defaultsVersion: "2026-09-14.1",
@@ -45,7 +46,7 @@ describe("inference setup persistence", () => {
       oauth: false,
       discovery: {
         ...discovery,
-        providerKind: existing.providerKind!,
+        providerKind: existing.providerKind as BackendProviderKind,
         effectiveEndpoint: existing.endpoint!,
       },
       model: "new-model",
@@ -163,6 +164,43 @@ describe("inference setup persistence", () => {
     expect(plan.document.inference_backends?.[0]?.backend_id).toBe("local-2");
     expect(plan.document.inference_profiles?.[0]?.backend_id).toBe("local-2");
     expect(plan.profileId).toBe("profile-local-2");
+  });
+
+  it("never treats another account reference as the same connection", () => {
+    const deployment = structuredClone(fixtureDeployment);
+    deployment.inferenceBackends = [
+      {
+        ...deployment.inferenceBackends[0]!,
+        backendId: "claude-2",
+        providerKind: "ClaudeCliSubscription",
+        endpoint: "claude-cli://subscription",
+        authKind: "principal_oauth",
+        accountRef: "acct-2",
+      },
+    ];
+    const plan = buildInferenceSetupPlan({
+      deployment,
+      provider: "anthropic",
+      apiKey: "",
+      oauth: true,
+      discovery: {
+        ...discovery,
+        providerKind: "ClaudeCliSubscription",
+        effectiveEndpoint: "claude-cli://subscription",
+        openaiWireApi: null,
+      },
+      model: "claude-sonnet",
+      recommendation,
+      settings: {
+        contextWindow: "",
+        maxOutputTokens: "",
+        temperature: "1",
+        topP: "0.95",
+        reasoningEffort: "",
+        maxConcurrent: "1",
+      },
+    });
+    expect(plan.document.inference_backends?.[0]?.backend_id).not.toBe("claude-2");
   });
 
   it("plans backend, exact model defaults, and Setup behavior in one document", () => {

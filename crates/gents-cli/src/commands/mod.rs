@@ -1,3 +1,4 @@
+pub(crate) mod accounts;
 pub(crate) mod afterburner_build;
 pub(crate) mod background;
 pub(crate) mod chain;

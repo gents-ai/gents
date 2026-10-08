@@ -651,9 +651,12 @@ pub fn floor_char_boundary(text: &str, mut index: usize) -> usize {
     index
 }
 
-/// Head and tail of every stub this module writes.
+/// Head and tail of every stub this module writes. The tail names the
+/// `sessions` read that returns the call's full stored output, which is why
+/// that tool is enabled unless a behavior opts out.
 const STUB_HEAD: &str = "[tool: ";
-const STUB_TAIL: &str = "see canonical transcript for full output]";
+const STUB_RECOVERY: &str = "full output: sessions ";
+const STUB_TAIL: &str = "]";
 const STUB_JOIN: &str = " — ";
 const STUB_TRUNCATED: &str = ", truncated";
 
@@ -680,11 +683,11 @@ fn parse_stub(tool_result: &ToolResult) -> Option<StubFacts> {
     let [ToolResultContent::Text(text)] = tool_result.content.as_slice() else {
         return None;
     };
-    let body = text
+    let (body, _recovery) = text
         .text
         .strip_prefix(STUB_HEAD)?
         .strip_suffix(STUB_TAIL)?
-        .strip_suffix(STUB_JOIN)?;
+        .rsplit_once(&format!("{STUB_JOIN}{STUB_RECOVERY}"))?;
     let (body, truncated) = match body.strip_suffix(STUB_TRUNCATED) {
         Some(head) => (head, true),
         None => (body, false),
@@ -734,9 +737,10 @@ fn strip_tool_result(
         .unwrap_or_default();
     let truncated = if truncated { STUB_TRUNCATED } else { "" };
 
+    let recovery = serde_json::json!({"action": "output", "call_id": call_id});
     let stub = format!(
         "{STUB_HEAD}{tool_name}{argument}, call_id: {call_id}, \
-         {byte_count} bytes{truncated}{STUB_JOIN}{STUB_TAIL}"
+         {byte_count} bytes{truncated}{STUB_JOIN}{STUB_RECOVERY}{recovery}{STUB_TAIL}"
     );
     tool_result.content = vec![ToolResultContent::Text(Text { text: stub })];
     tool_result

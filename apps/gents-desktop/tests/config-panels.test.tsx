@@ -1,23 +1,24 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, renderHook, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { selection } from "../src/hooks/selectionStore";
+import { publishSnapshot, renderIn, testApp, withApp } from "./app-fixture";
 
-import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
-import type { Shell } from "../src/ui/hooks/useShell";
+import type { DesktopClientSnapshot } from "@source-inc/gents-desktop-client";
 import { AgentPanel } from "../src/ui/screens/agent/AgentPanel";
-import {
-  BehaviorEditor,
-  BehaviorsPanel,
-  newBehaviorView,
-} from "../src/ui/screens/agent/BehaviorsPanel";
+import { BehaviorEditor } from "../src/ui/screens/agent/BehaviorEditor";
+import { BehaviorsPanel } from "../src/ui/screens/agent/BehaviorsPanel";
+import { newBehaviorView } from "../src/ui/screens/agent/behaviorDraft";
 import { ContextsPanel } from "../src/ui/screens/agent/ContextsPanel";
 import { EventSourcesPanel } from "../src/ui/screens/agent/EventSourcesPanel";
 import { InferencePanel } from "../src/ui/screens/agent/InferencePanel";
+import { useAccounts } from "../src/ui/hooks/useProviders";
 import {
   ProfileEditor,
-  ProfilesPanel,
   newProfileDocument,
-} from "../src/ui/screens/agent/ProfilesPanel";
+} from "../src/ui/screens/agent/ProfileEditor";
+import { ProfilesPanel } from "../src/ui/screens/agent/ProfilesPanel";
+import { ProfileSheet } from "../src/ui/screens/agent/ProfileSheet";
 import { SetupScreen } from "../src/ui/screens/setup/SetupScreen";
 import { SchedulesPanel } from "../src/ui/screens/agent/SchedulesPanel";
 import { SkillsPanel } from "../src/ui/screens/agent/SkillsPanel";
@@ -82,30 +83,17 @@ function harness() {
     deleteTriggerConfig: vi.fn().mockResolvedValue({}),
     deleteInferenceProfileConfig: vi.fn().mockResolvedValue({}),
     fetchOperationsSnapshot: vi.fn().mockResolvedValue(null),
+    fetchDesktopSnapshot: vi
+      .fn()
+      .mockResolvedValue({ bootstrap, client: { deployments: [deployment] } }),
   };
-  const refreshSnapshot = vi.fn().mockResolvedValue(undefined);
-  const shell = {
-    api: api as unknown as DesktopApiAdapter,
-    snapshot: { bootstrap },
-    saveAgentConfig: api.saveAgentConfig,
-    saveBehaviorConfig: api.saveBehaviorConfig,
-    applyConfig: (run: (bridge: DesktopApiAdapter) => Promise<unknown>) =>
-      run(api as unknown as DesktopApiAdapter),
-    refreshSnapshot,
-    runTask: async (request: Parameters<typeof api.runTask>[0]) => {
-      const result = await api.runTask(request);
-      await refreshSnapshot();
-      return result;
-    },
-    runSchedule: async (request: Parameters<typeof api.runSchedule>[0]) => {
-      const result = await api.runSchedule(request);
-      await refreshSnapshot();
-      return result;
-    },
-    captureComposeIntent: () => 0,
-    acceptsComposeIntent: (captured: number) => captured === 0,
-  } as unknown as Shell;
-  return { api, shell };
+  /* the node the panels configure is listed, and so selected, as it is
+     whenever the app shows its settings */
+  const app = testApp({
+    api,
+    snapshot: { bootstrap, client: { deployments: [deployment] } },
+  });
+  return { api, app };
 }
 
 async function replace(label: string, value: string) {
@@ -126,8 +114,8 @@ beforeEach(() => vi.clearAllMocks());
 
 describe("configuration panels", () => {
   it("continues an existing local Gents home instead of creating a new identity", async () => {
-    const { shell } = harness();
-    render(<SetupScreen shell={shell} onDone={vi.fn()} />);
+    const { app } = harness();
+    renderIn(app, <SetupScreen onDone={vi.fn()} />);
     expect(
       screen.getByText("Continue the agent already on this computer."),
     ).toBeVisible();
@@ -138,7 +126,7 @@ describe("configuration panels", () => {
   });
 
   it("clears a prior agent sign-in while the next account lookup fails", async () => {
-    const { api, shell } = harness();
+    const { api, app } = harness();
     api.getInferenceSetupCatalog = vi.fn().mockResolvedValue({
       contractVersion: 1,
       defaultsVersion: "test",
@@ -170,9 +158,9 @@ describe("configuration panels", () => {
         },
       ])
       .mockRejectedValueOnce(new Error("agent B lookup failed"));
-    const view = render(
+    const view = renderIn(
+      app,
       <SetupScreen
-        shell={shell}
         initialStep="inference"
         agentDid="did:test:agent-a"
         onDone={vi.fn()}
@@ -181,7 +169,6 @@ describe("configuration panels", () => {
     expect(await screen.findByText("Account connected")).toBeVisible();
     view.rerender(
       <SetupScreen
-        shell={shell}
         initialStep="inference"
         agentDid="did:test:agent-b"
         onDone={vi.fn()}
@@ -192,7 +179,7 @@ describe("configuration panels", () => {
   });
 
   it("uses advertised context bounds when reopening a profile with a smaller saved override", async () => {
-    const { api, shell } = harness();
+    const { api, app } = harness();
     api.getInferenceBackendRecommendation.mockResolvedValue({
       defaultsVersion: "fixture",
       summary: "",
@@ -226,7 +213,7 @@ describe("configuration panels", () => {
         ],
       })),
     };
-    render(<ProfilesPanel shell={shell} deployment={configured} item="profile-a" />);
+    renderIn(app, <ProfilesPanel deployment={configured} item="profile-a" />);
     await waitFor(() =>
       expect(api.getInferenceBackendRecommendation).toHaveBeenCalledWith(
         expect.objectContaining({ contextWindow: 272000, maxContextWindow: 872000 }),
@@ -239,7 +226,7 @@ describe("configuration panels", () => {
     const user = userEvent.setup();
     await user.clear(screen.getByLabelText("Display name"));
     await user.type(screen.getByLabelText("Display name"), "Renamed profile");
-    await user.click(screen.getByRole("button", { name: "Save", exact: true }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(api.applyConfigComponents).toHaveBeenCalled());
     expect(
       api.applyConfigComponents.mock.calls[0]![0].document.inference_profiles[0]
@@ -250,7 +237,7 @@ describe("configuration panels", () => {
   it.each([false, true])(
     "does not backfill Grok sampling on rename (existing sampling=%s)",
     async (existingSampling) => {
-      const { api, shell } = harness();
+      const { api, app } = harness();
       api.getInferenceBackendRecommendation.mockResolvedValue({
         defaultsVersion: "fixture",
         summary: "",
@@ -282,14 +269,14 @@ describe("configuration panels", () => {
             ]
           : [],
       };
-      render(<ProfilesPanel shell={shell} deployment={configured} item="profile-a" />);
+      renderIn(app, <ProfilesPanel deployment={configured} item="profile-a" />);
       await waitFor(() =>
         expect(api.getInferenceBackendRecommendation).toHaveBeenCalled(),
       );
       const user = userEvent.setup();
       await user.clear(screen.getByLabelText("Display name"));
       await user.type(screen.getByLabelText("Display name"), "Renamed Grok");
-      await user.click(screen.getByRole("button", { name: "Save", exact: true }));
+      await user.click(screen.getByRole("button", { name: "Save" }));
       await waitFor(() => expect(api.applyConfigComponents).toHaveBeenCalled());
       const document = api.applyConfigComponents.mock.calls[0]![0].document;
       if (existingSampling) {
@@ -305,15 +292,15 @@ describe("configuration panels", () => {
   );
 
   it("does not starve model defaults while equivalent snapshots refresh", async () => {
-    const { api, shell } = harness();
-    const view = render(
-      <ProfilesPanel shell={shell} deployment={deployment} item="profile-a" />,
+    const { api, app } = harness();
+    const view = renderIn(
+      app,
+      <ProfilesPanel deployment={deployment} item="profile-a" />,
     );
     for (let refresh = 0; refresh < 5; refresh++) {
       await act(() => new Promise<void>((resolve) => setTimeout(resolve, 50)));
       view.rerender(
         <ProfilesPanel
-          shell={shell}
           deployment={{
             ...deployment,
             inferenceBackends: deployment.inferenceBackends.map((backend) => ({
@@ -329,12 +316,14 @@ describe("configuration panels", () => {
   });
 
   it("refreshes subscription catalogs with authenticated discovery and hides credential IDs", async () => {
-    const { api, shell } = harness();
+    const { api, app } = harness();
     api.listProviderAccounts.mockResolvedValue([
       {
         provider: "xai-oauth",
         enabled: true,
         accountId: "person@example.test",
+        label: "Grok 2",
+        accountRef: "g-2",
         credentialId: "private-credential-id",
         planType: null,
         accessTokenExpiresAt: new Date(Date.now() + 3600000).toISOString(),
@@ -344,9 +333,9 @@ describe("configuration panels", () => {
       reachable: true,
       models: [{ advertised: { model_name: "grok-4.6" } }],
     });
-    render(
+    renderIn(
+      app,
       <InferencePanel
-        shell={shell}
         item="backend-a"
         deployment={{
           ...deployment,
@@ -357,6 +346,7 @@ describe("configuration panels", () => {
               endpoint: "https://cli-chat-proxy.grok.com/v1",
               probeStatus: "healthy",
               models: ["grok-4.5"],
+              accountRef: "g-2",
             },
           ],
         }}
@@ -379,22 +369,23 @@ describe("configuration panels", () => {
         provider: "grok",
         authMethod: "grok_oauth",
         apiKey: null,
+        accountRef: "g-2",
       }),
     );
     expect(api.probeInferenceEndpoint).not.toHaveBeenCalled();
   });
 
   it("discards subscription discovery when the edited connection changes", async () => {
-    const { api, shell } = harness();
+    const { api, app } = harness();
     let resolveDiscovery!: (value: unknown) => void;
     api.discoverInferenceModels = vi.fn().mockReturnValue(
       new Promise((resolve) => {
         resolveDiscovery = resolve;
       }),
     );
-    render(
+    renderIn(
+      app,
       <InferencePanel
-        shell={shell}
         item="backend-a"
         deployment={{
           ...deployment,
@@ -423,8 +414,735 @@ describe("configuration panels", () => {
     expect(screen.getByText("saved-model")).toBeVisible();
   });
 
+  describe("subscription backends and the account each references", () => {
+    const claudeBackend = (backendId: string, accountRef: string | null) => ({
+      ...deployment.inferenceBackends[0]!,
+      backendId,
+      name: backendId,
+      providerKind: "ClaudeCliSubscription" as const,
+      endpoint: "claude-cli://subscription",
+      accountRef,
+    });
+    const claudeDeployment = {
+      ...deployment,
+      inferenceBackends: [
+        claudeBackend("claude", null),
+        claudeBackend("claude-2", "acct-2"),
+        claudeBackend("claude-3", "acct-other"),
+      ],
+    };
+    const claudeAccount = (
+      credentialId: string,
+      accountRef: string | null,
+      accountId: string,
+      enabled = true,
+    ) => ({
+      credentialId,
+      agentDid: deployment.agentDid,
+      provider: "claude-subscription",
+      accountId,
+      planType: null,
+      accessTokenExpiresAt: "2099-01-01T00:00:00Z",
+      lastRefresh: null,
+      enabled,
+      pendingSave: false,
+      accountRef,
+      label: `label-${credentialId}`,
+    });
+
+    it("never borrows another account for a backend in the list", async () => {
+      const { api, app } = harness();
+      api.listProviderAccounts.mockResolvedValue([
+        claudeAccount("cred-original", null, "original-identity", false),
+        claudeAccount("cred-2", "acct-2", "second-identity"),
+      ]);
+      renderIn(app, <InferencePanel deployment={claudeDeployment} />);
+      expect(await screen.findAllByText(/· signed in$/)).toHaveLength(1);
+      expect(screen.getAllByText(/· disabled$/)).toHaveLength(1);
+      expect(screen.getAllByText(/account not on this node/)).toHaveLength(1);
+    });
+
+    for (const [item, credentialId, identity] of [
+      ["claude", "cred-original", "original-identity"],
+      ["claude-2", "cred-2", "second-identity"],
+    ] as const) {
+      it(`shows and disconnects the account ${item} references`, async () => {
+        const { api, app } = harness();
+        api.listProviderAccounts.mockResolvedValue([
+          claudeAccount("cred-original", null, "original-identity"),
+          claudeAccount("cred-2", "acct-2", "second-identity"),
+        ]);
+        renderIn(app, <InferencePanel deployment={claudeDeployment} item={item} />);
+        expect(await screen.findByText(identity)).toBeVisible();
+        const user = userEvent.setup();
+        await user.click(screen.getByRole("button", { name: "Disconnect" }));
+        await user.click(screen.getByRole("button", { name: "Disconnect now" }));
+        expect(api.disconnectProviderAccount).toHaveBeenCalledWith(
+          deployment.agentDid,
+          credentialId,
+        );
+      });
+    }
+
+    for (const [item, auth] of [
+      ["claude-2", { kind: "principal_oauth", account_ref: "acct-2" }],
+      ["claude", { kind: "principal_oauth" }],
+    ] as const) {
+      it(`saving ${item} keeps its account reference`, async () => {
+        const { api, app } = harness();
+        api.listProviderAccounts.mockResolvedValue([]);
+        renderIn(app, <InferencePanel deployment={claudeDeployment} item={item} />);
+        const user = await replace("Name", `${item} edited`);
+        await user.click(screen.getByRole("button", { name: "Save" }));
+        await waitFor(() => expect(api.patchConfigComponents).toHaveBeenCalledTimes(1));
+        const { patches } = api.patchConfigComponents.mock.calls[0][0];
+        expect(patches[0].changes.auth).toEqual(auth);
+      });
+    }
+
+    it("says a backend's account is not on this node and offers no reconnect", async () => {
+      const { api, app } = harness();
+      api.listProviderAccounts.mockResolvedValue([
+        claudeAccount("cred-original", null, "original-identity"),
+      ]);
+      renderIn(app, <InferencePanel deployment={claudeDeployment} item="claude-3" />);
+      expect(await screen.findByText(/account not on this node/)).toBeVisible();
+      expect(
+        screen.queryByRole("button", { name: /connect/i }),
+      ).not.toBeInTheDocument();
+      expect(screen.queryByText("original-identity")).not.toBeInTheDocument();
+    });
+
+    describe("each account is its own row with its label and state, never expired", () => {
+      const row = (
+        backendId: string,
+        name: string,
+        providerKind: "ClaudeCliSubscription" | "XaiGrokOAuth" | "ChatGptCodex",
+        accountRef: string | null,
+      ) => ({ ...claudeBackend(backendId, accountRef), name, providerKind });
+      const keyed = (backendId: string, fields: object) => ({
+        ...deployment.inferenceBackends[0]!,
+        backendId,
+        name: backendId,
+        ...fields,
+      });
+      const rowsDeployment = {
+        ...deployment,
+        inferenceBackends: [
+          row("claude", "Claude", "ClaudeCliSubscription", null),
+          row("claude-work", "Work", "ClaudeCliSubscription", "acct-2"),
+          row("grok", "Grok", "XaiGrokOAuth", null),
+          row("grok-side", "Side", "XaiGrokOAuth", "g-2"),
+          row("chatgpt", "ChatGPT", "ChatGptCodex", null),
+          row("chatgpt-team", "Team", "ChatGptCodex", "c-2"),
+          keyed("openrouter", { providerKind: "OpenRouter", apiKeyConfigured: true }),
+          keyed("openrouter-env", {
+            providerKind: "OpenRouter",
+            apiKeyEnvVar: "OPENROUTER_API_KEY",
+          }),
+          keyed("local", {}),
+          keyed("local-2", {}),
+        ],
+      };
+      const account = (
+        provider: string,
+        accountRef: string | null,
+        label: string,
+        fields: object = {},
+      ) => ({
+        ...claudeAccount(
+          `private-credential-id-${label}`,
+          accountRef,
+          `${label}-identity`,
+        ),
+        provider,
+        label,
+        ...fields,
+      });
+      const accounts = [
+        account("claude-subscription", null, "Personal", {
+          accessTokenExpiresAt: "2001-01-01T00:00:00Z",
+        }),
+        account("claude-subscription", "acct-2", "Work"),
+        account("xai-oauth", null, "Grok"),
+        account("xai-oauth", "g-2", "Side", { enabled: false }),
+        account("chatgpt-codex", null, "Main"),
+        account("chatgpt-codex", "c-2", "Team"),
+      ];
+
+      it("clears another agent's accounts and ignores its late response", async () => {
+        const { api, app } = harness();
+        let oldRead: (views: typeof accounts) => void = () => {};
+        let newRead: (views: typeof accounts) => void = () => {};
+        api.listProviderAccounts
+          .mockResolvedValueOnce(accounts)
+          .mockReturnValueOnce(new Promise((resolve) => (oldRead = resolve)))
+          .mockReturnValueOnce(new Promise((resolve) => (newRead = resolve)));
+        const { result, rerender } = renderHook(({ did }) => useAccounts(did), {
+          initialProps: { did: "agent-a" },
+          wrapper: withApp(app),
+        });
+        await waitFor(() => expect(result.current.accounts).toEqual(accounts));
+        act(() => {
+          void result.current.reload();
+        });
+        rerender({ did: "agent-b" });
+        expect(result.current.accounts).toEqual([]);
+        await act(async () => newRead([accounts[1]!]));
+        await act(async () => oldRead(accounts));
+        expect(result.current.accounts).toEqual([accounts[1]!]);
+        expect(api.listProviderAccounts).toHaveBeenLastCalledWith("agent-b");
+      });
+
+      it("keeps the latest reload when a snapshot read fails later", async () => {
+        const { api, app } = harness();
+        let oldFailure: (error: Error) => void = () => {};
+        let newRead: (views: typeof accounts) => void = () => {};
+        api.listProviderAccounts
+          .mockResolvedValueOnce(accounts)
+          .mockReturnValueOnce(new Promise((_, reject) => (oldFailure = reject)))
+          .mockReturnValueOnce(new Promise((resolve) => (newRead = resolve)));
+        const { result } = renderHook(() => useAccounts("agent-a"), {
+          wrapper: withApp(app),
+        });
+        await waitFor(() => expect(result.current.accounts).toEqual(accounts));
+        /* a later snapshot read asks again */
+        act(() =>
+          publishSnapshot(app, {
+            ...app.stores.client.getState().snapshot!,
+          }),
+        );
+        expect(result.current.accounts).toEqual(accounts);
+        act(() => {
+          void result.current.reload();
+        });
+        expect(result.current.accounts).toEqual(accounts);
+        await act(async () => newRead([accounts[1]!]));
+        await act(async () => oldFailure(new Error("older read failed")));
+        expect(result.current.accounts).toEqual([accounts[1]!]);
+      });
+
+      it("draws each row's label and state", async () => {
+        const { api, app } = harness();
+        api.listProviderAccounts.mockResolvedValue(accounts);
+        renderIn(app, <InferencePanel deployment={rowsDeployment} />);
+        const claude = "Anthropic / Claude (subscription)";
+        const grok = "Grok (subscription)";
+        const chatgpt = "ChatGPT / Codex (subscription)";
+        for (const meta of [
+          `· ${claude} · Personal · signed in`,
+          `· ${claude} · signed in`,
+          `· ${grok} · signed in`,
+          `· ${grok} · disabled`,
+          `· ${chatgpt} · Main · signed in`,
+          `· ${chatgpt} · signed in`,
+          "· OpenRouter · key stored",
+          "· OpenRouter · key from OPENROUTER_API_KEY",
+        ])
+          expect(await screen.findByText(meta)).toBeVisible();
+        expect(screen.getAllByText("· OpenAI compatible · no key")).toHaveLength(2);
+        expect(screen.queryByText(/private-credential-id/)).not.toBeInTheDocument();
+      });
+
+      it("opens a lapsed token's row as connected, with its label", async () => {
+        const { api, app } = harness();
+        api.listProviderAccounts.mockResolvedValue(accounts);
+        renderIn(app, <InferencePanel deployment={rowsDeployment} item="claude" />);
+        expect(await screen.findByText("Connected")).toBeVisible();
+        expect(screen.getByText("Personal")).toBeVisible();
+        expect(screen.queryByText("Expired")).not.toBeInTheDocument();
+        expect(screen.queryByText("Expires")).not.toBeInTheDocument();
+        expect(screen.queryByText(/private-credential-id/)).not.toBeInTheDocument();
+      });
+
+      it("offers Add another on every subscription row", async () => {
+        const { api, app } = harness();
+        api.listProviderAccounts.mockResolvedValue(accounts);
+        api.getInferenceSetupCatalog = vi.fn().mockResolvedValue({
+          providers: [
+            { id: "openai", displayName: "OpenAI" },
+            { id: "anthropic", displayName: "Anthropic" },
+            { id: "grok", displayName: "Grok" },
+          ],
+        });
+        renderIn(app, <InferencePanel deployment={rowsDeployment} />);
+        const user = userEvent.setup();
+        for (const [row, item] of [
+          ["Claude", "Add another Anthropic"],
+          ["Side", "Add another Grok"],
+          ["Team", "Add another OpenAI"],
+        ] as const) {
+          await user.click(
+            (await screen.findAllByRole("button", { name: `More for ${row}` }))[0]!,
+          );
+          expect(await screen.findByRole("menuitem", { name: item })).toBeVisible();
+          await user.keyboard("{Escape}");
+        }
+      });
+
+      it("opens a disabled account's row with its identity and Reconnect", async () => {
+        const { api, app } = harness();
+        api.listProviderAccounts.mockResolvedValue(accounts);
+        renderIn(app, <InferencePanel deployment={rowsDeployment} item="grok-side" />);
+        expect(await screen.findByText("Disabled")).toBeVisible();
+        expect(screen.getByText("Side-identity")).toBeVisible();
+        expect(screen.getByRole("button", { name: "Reconnect" })).toBeVisible();
+        expect(
+          screen.queryByRole("button", { name: "Disconnect" }),
+        ).not.toBeInTheDocument();
+      });
+
+      describe("rename, disconnect and remove an account from its row", () => {
+        /* Work runs two backends: one a profile uses, one nothing uses */
+        const usedDeployment = {
+          ...rowsDeployment,
+          inferenceBackends: [
+            ...rowsDeployment.inferenceBackends,
+            row("claude-work-spare", "Work spare", "ClaudeCliSubscription", "acct-2"),
+          ],
+          inferenceProfiles: [
+            {
+              ...deployment.inferenceProfiles[0]!,
+              profile_id: "writer",
+              display_name: "Writer",
+              backend_id: "claude-work",
+            },
+          ],
+        };
+        const setup = (item?: string) => {
+          const { api, app } = harness();
+          api.listProviderAccounts.mockResolvedValue(accounts);
+          api.renameProviderAccount = vi.fn().mockResolvedValue(undefined);
+          api.removeProviderAccount = vi.fn().mockResolvedValue(undefined);
+          renderIn(app, <InferencePanel deployment={usedDeployment} item={item} />);
+          return { api, user: userEvent.setup() };
+        };
+        const openMenu = async (
+          user: ReturnType<typeof userEvent.setup>,
+          row: string,
+        ) =>
+          user.click(
+            (await screen.findAllByRole("button", { name: `More for ${row}` }))[0]!,
+          );
+        /* none of the account actions edits a profile or a backend */
+        const expectNoConfigWrite = (api: MockApi) => {
+          expect(api.patchConfigComponents).not.toHaveBeenCalled();
+          expect(api.applyConfigComponents).not.toHaveBeenCalled();
+          expect(api.saveInferenceProfileConfig).not.toHaveBeenCalled();
+          expect(api.deleteBackendConfig).not.toHaveBeenCalled();
+        };
+
+        it("offers the account items on account rows and Remove in place of Delete on an added account's", async () => {
+          const { user } = setup();
+          await openMenu(user, "Work");
+          for (const item of ["Rename account…", "Disconnect…", "Remove account…"])
+            expect(await screen.findByRole("menuitem", { name: item })).toBeVisible();
+          expect(
+            screen.queryByRole("menuitem", { name: "Delete backend…" }),
+          ).not.toBeInTheDocument();
+          await user.keyboard("{Escape}");
+
+          await openMenu(user, "Claude");
+          for (const item of [
+            "Rename account…",
+            "Disconnect…",
+            "Remove account…",
+            "Delete backend…",
+          ])
+            expect(await screen.findByRole("menuitem", { name: item })).toBeVisible();
+          await user.keyboard("{Escape}");
+
+          await openMenu(user, "openrouter");
+          expect(
+            await screen.findByRole("menuitem", { name: "Delete backend…" }),
+          ).toBeVisible();
+          for (const item of ["Rename account…", "Disconnect…", "Remove account…"])
+            expect(
+              screen.queryByRole("menuitem", { name: item }),
+            ).not.toBeInTheDocument();
+        });
+
+        it("renames an account from its row and refuses a label another account shows", async () => {
+          const { api, user } = setup();
+          await openMenu(user, "Work");
+          await user.click(
+            await screen.findByRole("menuitem", { name: "Rename account…" }),
+          );
+          const dialog = await screen.findByRole("dialog");
+          await user.clear(within(dialog).getByRole("textbox"));
+          await user.type(within(dialog).getByRole("textbox"), "Personal");
+          await user.click(within(dialog).getByRole("button", { name: "Save" }));
+          expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+            "Personal",
+          );
+          expect(api.renameProviderAccount).not.toHaveBeenCalled();
+
+          await user.clear(within(dialog).getByRole("textbox"));
+          await user.type(within(dialog).getByRole("textbox"), "Work 2");
+          await user.click(within(dialog).getByRole("button", { name: "Save" }));
+          await waitFor(() =>
+            expect(api.renameProviderAccount).toHaveBeenCalledTimes(1),
+          );
+          expect(api.renameProviderAccount).toHaveBeenCalledWith(
+            deployment.agentDid,
+            "private-credential-id-Work",
+            "Work 2",
+          );
+          await waitFor(() =>
+            expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+          );
+          expectNoConfigWrite(api);
+        });
+
+        it("disconnects an account from its row after naming its profiles", async () => {
+          const { api, user } = setup();
+          await openMenu(user, "Work");
+          await user.click(
+            await screen.findByRole("menuitem", { name: "Disconnect…" }),
+          );
+          let dialog = await screen.findByRole("dialog");
+          expect(dialog).toHaveTextContent(
+            "These profiles use this account and fail their next turn until moved to another backend: Writer",
+          );
+          await user.click(
+            within(dialog).getByRole("button", { name: "Keep connected" }),
+          );
+          await waitFor(() =>
+            expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+          );
+          expect(api.disconnectProviderAccount).not.toHaveBeenCalled();
+
+          await openMenu(user, "Work");
+          await user.click(
+            await screen.findByRole("menuitem", { name: "Disconnect…" }),
+          );
+          dialog = await screen.findByRole("dialog");
+          await user.click(
+            within(dialog).getByRole("button", { name: "Disconnect now" }),
+          );
+          await waitFor(() =>
+            expect(api.disconnectProviderAccount).toHaveBeenCalledTimes(1),
+          );
+          expect(api.disconnectProviderAccount).toHaveBeenCalledWith(
+            deployment.agentDid,
+            "private-credential-id-Work",
+          );
+          expectNoConfigWrite(api);
+        });
+
+        it("removes an account from its row after naming its profiles and backends", async () => {
+          const { api, user } = setup();
+          await openMenu(user, "Work");
+          await user.click(
+            await screen.findByRole("menuitem", { name: "Remove account…" }),
+          );
+          const dialog = await screen.findByRole("alertdialog");
+          expect(dialog).toHaveTextContent(
+            "These profiles use this account and fail their next turn until moved to another backend: Writer",
+          );
+          expect(dialog).toHaveTextContent("Deletes its unused backends: Work spare");
+          expect(dialog).toHaveTextContent("Keeps the backends a profile uses: Work");
+          const remove = within(dialog).getByRole("button", { name: /^Delete / });
+          expect(remove).toBeDisabled();
+          await user.type(within(dialog).getByRole("textbox"), "Work");
+          await user.click(remove);
+          await waitFor(() =>
+            expect(api.removeProviderAccount).toHaveBeenCalledTimes(1),
+          );
+          expect(api.removeProviderAccount).toHaveBeenCalledWith(
+            deployment.agentDid,
+            "private-credential-id-Work",
+          );
+          expectNoConfigWrite(api);
+        });
+
+        it("offers Remove account, not Delete backend, in an added account's Danger zone", async () => {
+          const { user } = setup("claude-work");
+          await screen.findByText("Work-identity");
+          const zone = screen.getByTestId("danger-zone");
+          expect(within(zone).queryByText(/Delete backend/)).not.toBeInTheDocument();
+          await user.click(within(zone).getByRole("button", { name: /account/ }));
+          expect(await screen.findByRole("alertdialog")).toHaveTextContent(
+            "Deletes its unused backends: Work spare",
+          );
+        });
+      });
+
+      describe("rows draw reported usage only, read on open and on Refresh", () => {
+        const at = (minutes: number) =>
+          new Date(Date.now() + minutes * 60_000).toISOString();
+        const window = (label: string, usedPct: number, fields: object = {}) => ({
+          label,
+          windowMinutes: null,
+          usedPct,
+          resetsAt: at(133),
+          source: "header",
+          observedAt: at(-3),
+          lastKnown: false,
+          ...fields,
+        });
+        const view_ = (backendId: string, fields: object = {}) => ({
+          backendId,
+          windows: [],
+          plan: null,
+          note: null,
+          readAt: null,
+          readError: null,
+          read: null,
+          ...fields,
+        });
+        /* built when a test renders, so the times shown are exact */
+        const usage = () => [
+          view_("claude-work", {
+            /* the most-used window is neither the first, the last nor the longest */
+            windows: [window("7d", 30), window("5h", 81), window("1h", 10)],
+          }),
+          view_("chatgpt-team", {
+            windows: [window("5h", 20, { observedAt: at(-70), lastKnown: true })],
+          }),
+          view_("chatgpt", { note: "unknown" }),
+          view_("local", { note: "not reported" }),
+          view_("openrouter", {
+            note: "no cap on this key",
+            read: "unavailable: throttled",
+          }),
+          view_("claude", { note: "unknown" }),
+          view_("grok-side", { windows: [window("5h", 50)] }),
+        ];
+        const setup = (item?: string) => {
+          const { api, app } = harness();
+          api.listProviderAccounts.mockResolvedValue(accounts);
+          api.readProviderUsage = vi.fn().mockResolvedValue(usage());
+          const view = renderIn(
+            app,
+            <InferencePanel deployment={rowsDeployment} item={item} />,
+          );
+          return { api, app, view, user: userEvent.setup() };
+        };
+
+        it("reads usage once on open and not on a snapshot change", async () => {
+          const { api, app } = setup();
+          await waitFor(() => expect(api.readProviderUsage).toHaveBeenCalledTimes(1));
+          expect(api.readProviderUsage).toHaveBeenCalledWith(
+            deployment.agentDid,
+            false,
+            null,
+          );
+          await act(async () =>
+            publishSnapshot(app, { bootstrap } as unknown as DesktopClientSnapshot),
+          );
+          expect(api.readProviderUsage).toHaveBeenCalledTimes(1);
+        });
+
+        it("drops the previous agent's usage when the agent changes", async () => {
+          const { api, view } = setup();
+          expect(await screen.findByText("5h 81%")).toBeVisible();
+          api.readProviderUsage.mockRejectedValue(new Error("agent not running"));
+          view.rerender(
+            <InferencePanel
+              deployment={{ ...rowsDeployment, agentDid: "did:key:z6MkTestOther" }}
+            />,
+          );
+          await waitFor(() => expect(api.readProviderUsage).toHaveBeenCalledTimes(2));
+          await act(async () => {});
+          expect(screen.queryByText("5h 81%")).not.toBeInTheDocument();
+        });
+
+        it("keeps a Refresh result over an open read that lands later", async () => {
+          const { api, app } = harness();
+          api.listProviderAccounts.mockResolvedValue(accounts);
+          let land: (views: unknown) => void = () => {};
+          api.readProviderUsage = vi
+            .fn()
+            .mockReturnValueOnce(new Promise((resolve) => (land = resolve)))
+            .mockResolvedValueOnce([view_("claude", { windows: [window("5h", 12)] })]);
+          renderIn(app, <InferencePanel deployment={rowsDeployment} item="claude" />);
+          const user = userEvent.setup();
+          await user.click(await screen.findByRole("button", { name: "Refresh" }));
+          expect(await screen.findByText(/^12% used/)).toBeVisible();
+          await act(async () => land(usage()));
+          expect(screen.getByText(/^12% used/)).toBeVisible();
+        });
+
+        it("draws the most-used window on a row and no percent without a window", async () => {
+          setup();
+          expect(await screen.findByText("5h 81%")).toBeVisible();
+          expect(screen.getByText("5h 20%")).toBeVisible();
+          /* the disabled Side account draws no usage; no other row has a window */
+          expect(screen.getAllByText(/\d+%$/).map((e) => e.textContent)).toEqual([
+            "5h 81%",
+            "5h 20%",
+          ]);
+        });
+
+        it("opens a row with each window's percent, reset, source and age", async () => {
+          setup("claude-work");
+          for (const pct of [30, 81, 10])
+            expect(
+              await screen.findByText(
+                new RegExp(
+                  `^${pct}% used · resets in 2h1[23]m \\(.+\\) · from response headers, 3m ago$`,
+                ),
+              ),
+            ).toBeVisible();
+        });
+
+        it("marks a stale window as last known", async () => {
+          setup("chatgpt-team");
+          expect(
+            await screen.findByText(
+              /^20% used · .* · from response headers, 1h10m ago · last known$/,
+            ),
+          ).toBeVisible();
+        });
+
+        for (const [item, texts] of [
+          ["chatgpt", ["unknown"]],
+          ["local", ["not reported"]],
+          ["openrouter", ["no cap on this key", "Not read: throttled"]],
+        ] as const)
+          it(`says why ${item} has no number`, async () => {
+            setup(item);
+            for (const text of texts)
+              expect(await screen.findByText(text)).toBeVisible();
+            expect(screen.queryByText(/% used/)).not.toBeInTheDocument();
+          });
+
+        it("draws no usage for a disabled account", async () => {
+          setup("grok-side");
+          expect(await screen.findByText("Disabled")).toBeVisible();
+          expect(screen.queryByText(/50%/)).not.toBeInTheDocument();
+          expect(
+            screen.queryByRole("button", { name: "Refresh" }),
+          ).not.toBeInTheDocument();
+        });
+
+        it("Refresh reads the row's provider and redraws from the result", async () => {
+          const { api, user, view } = setup("claude");
+          await screen.findByText("unknown");
+          api.readProviderUsage.mockResolvedValueOnce([
+            view_("claude", { windows: [window("5h", 12)] }),
+          ]);
+          await user.click(screen.getByRole("button", { name: "Refresh" }));
+          expect(api.readProviderUsage).toHaveBeenLastCalledWith(
+            deployment.agentDid,
+            true,
+            "claude-subscription",
+          );
+          expect(await screen.findByText(/^12% used/)).toBeVisible();
+          view.unmount();
+
+          const openrouter = setup("openrouter");
+          await screen.findByText("no cap on this key");
+          await openrouter.user.click(screen.getByRole("button", { name: "Refresh" }));
+          expect(openrouter.api.readProviderUsage).toHaveBeenLastCalledWith(
+            deployment.agentDid,
+            true,
+            null,
+          );
+        });
+      });
+
+      describe("profiles pick accounts by provider and label", () => {
+        const pickDeployment = {
+          ...rowsDeployment,
+          inferenceBackends: [
+            ...rowsDeployment.inferenceBackends,
+            row("claude-gone", "Gone", "ClaudeCliSubscription", "acct-gone"),
+          ],
+        };
+        const editProfileOn = (backendId: string) => {
+          const { api, app } = harness();
+          api.listProviderAccounts.mockResolvedValue(accounts);
+          renderIn(
+            app,
+            <ProfileEditor
+              deployment={pickDeployment}
+              profile={{ ...deployment.inferenceProfiles[0]!, backend_id: backendId }}
+            />,
+          );
+          return userEvent.setup();
+        };
+
+        it("the profile backend field names accounts and skips unusable ones", async () => {
+          const user = editProfileOn("openrouter");
+          await user.click(screen.getByRole("combobox", { name: "Backend" }));
+          expect(
+            await screen.findByRole("option", { name: /^Work\s*Anthropic \/ Claude$/ }),
+          ).toBeVisible();
+          expect(
+            screen.getByRole("option", { name: /^Personal\s*Anthropic \/ Claude$/ }),
+          ).toBeVisible();
+          expect(
+            screen.getByRole("option", { name: /^Grok\s*Grok \/ xAI$/ }),
+          ).toBeVisible();
+          /* Side is disabled; Gone's account is not on this node */
+          expect(
+            screen.queryByRole("option", { name: /^Side/ }),
+          ).not.toBeInTheDocument();
+          expect(
+            screen.queryByRole("option", { name: /^Gone/ }),
+          ).not.toBeInTheDocument();
+        });
+
+        it("the profile backend field keeps an unusable backend that is the current one", async () => {
+          const user = editProfileOn("grok-side");
+          await user.click(screen.getByRole("combobox", { name: "Backend" }));
+          await screen.findByRole("option", { name: /^Work/ });
+          expect(screen.getByRole("option", { name: /^Side/ })).toBeVisible();
+          expect(
+            screen.queryByRole("option", { name: /^Gone/ }),
+          ).not.toBeInTheDocument();
+        });
+
+        const personalOff = accounts.map((a) =>
+          a.label === "Personal" ? { ...a, enabled: false } : a,
+        );
+        it("new profile preselects the first enabled account, skipping a disabled first one", () => {
+          expect(
+            newProfileDocument(rowsDeployment, undefined, personalOff).backend_id,
+          ).toBe("claude-work");
+        });
+
+        it("new profile preselects the asked backend when its account is usable", () => {
+          expect(
+            newProfileDocument(rowsDeployment, "claude-work", personalOff).backend_id,
+          ).toBe("claude-work");
+        });
+
+        it("new profile preselects another backend when the asked one's account is disabled", () => {
+          expect(
+            newProfileDocument(rowsDeployment, "claude", personalOff).backend_id,
+          ).toBe("claude-work");
+        });
+
+        it("a new profile sheet drafts from the accounts loaded before it opens", async () => {
+          const { api, app } = harness();
+          api.listProviderAccounts.mockResolvedValue(personalOff);
+          const sheet = (open: boolean) => (
+            <ProfileSheet deployment={rowsDeployment} open={open} onClose={vi.fn()} />
+          );
+          const view = renderIn(app, sheet(false));
+          await waitFor(() => expect(api.listProviderAccounts).toHaveBeenCalled());
+          await act(async () => {});
+          view.rerender(sheet(true));
+          expect(
+            await screen.findByRole("combobox", { name: "Backend" }),
+          ).toHaveTextContent(/^Work/);
+        });
+
+        it("new profile preselects the provider's first account in resolver order", () => {
+          const workFirst = [accounts[1]!, accounts[0]!, ...accounts.slice(2)];
+          expect(
+            newProfileDocument(rowsDeployment, undefined, workFirst).backend_id,
+          ).toBe("claude-work");
+        });
+      });
+    });
+  });
+
   it("does not treat a disabled subscription credential as signed in", async () => {
-    const { api, shell } = harness();
+    const { api, app } = harness();
     api.listProviderAccounts.mockResolvedValue([
       {
         provider: "xai-oauth",
@@ -432,9 +1150,9 @@ describe("configuration panels", () => {
         credentialId: "disabled-credential",
       },
     ]);
-    render(
+    renderIn(
+      app,
       <InferencePanel
-        shell={shell}
         deployment={{
           ...deployment,
           inferenceBackends: [
@@ -446,11 +1164,35 @@ describe("configuration panels", () => {
         }}
       />,
     );
-    expect(await screen.findByText(/not signed in/)).toBeVisible();
+    expect(await screen.findByText(/disabled/)).toBeVisible();
+  });
+
+  it("says off for a switched-off backend whose account is signed in", async () => {
+    const { api, app } = harness();
+    api.listProviderAccounts.mockResolvedValue([
+      { provider: "xai-oauth", enabled: true, credentialId: "signed-in-credential" },
+    ]);
+    renderIn(
+      app,
+      <InferencePanel
+        deployment={{
+          ...deployment,
+          inferenceBackends: [
+            {
+              ...deployment.inferenceBackends[0]!,
+              providerKind: "XaiGrokOAuth",
+              enabled: false,
+            },
+          ],
+        }}
+      />,
+    );
+    expect(await screen.findByText(/· off$/)).toBeVisible();
+    expect(screen.queryByText(/signed in/)).not.toBeInTheDocument();
   });
 
   it("shows runtime execution defaults and backend model choices without expanding advanced settings", async () => {
-    const { api, shell } = harness();
+    const { api, app } = harness();
     api.getInferenceSetupCatalog = vi.fn().mockResolvedValue({
       executionDefaults: {
         maxTurns: 250,
@@ -461,7 +1203,7 @@ describe("configuration panels", () => {
         deadlineSecs: 86400,
       },
     });
-    render(<ProfilesPanel shell={shell} deployment={deployment} item="profile-a" />);
+    renderIn(app, <ProfilesPanel deployment={deployment} item="profile-a" />);
     await waitFor(() => expect(screen.getByLabelText("Max turns")).toHaveValue("250"));
     await replace("Max turns", "200");
     expect(screen.getByLabelText("Max turns")).toHaveValue("200");
@@ -472,7 +1214,7 @@ describe("configuration panels", () => {
   });
 
   it("keeps a profile whose backend is gone on the Providers page", async () => {
-    const { api, shell } = harness();
+    const { api, app } = harness();
     api.getInferenceSetupCatalog = vi.fn().mockResolvedValue({ providers: [] });
     const orphan = {
       ...deployment.inferenceProfiles[0]!,
@@ -480,9 +1222,9 @@ describe("configuration panels", () => {
       display_name: "Orphaned profile",
       backend_id: "backend-deleted",
     };
-    render(
+    renderIn(
+      app,
       <ProfilesPanel
-        shell={shell}
         deployment={{
           ...deployment,
           inferenceProfiles: [...deployment.inferenceProfiles, orphan],
@@ -494,12 +1236,12 @@ describe("configuration panels", () => {
   });
 
   it("says when the provider catalog cannot be read and reads it again on Retry", async () => {
-    const { api, shell } = harness();
+    const { api, app } = harness();
     api.getInferenceSetupCatalog = vi
       .fn()
       .mockRejectedValueOnce(new Error("catalog offline"))
       .mockResolvedValueOnce({ providers: [] });
-    render(<InferencePanel shell={shell} deployment={deployment} />);
+    renderIn(app, <InferencePanel deployment={deployment} />);
     expect(await screen.findByRole("alert")).toHaveTextContent("catalog offline");
     await userEvent.setup().click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
@@ -507,7 +1249,7 @@ describe("configuration panels", () => {
   });
 
   it("opens shared provider setup without eagerly creating a blank backend", async () => {
-    const { api, shell } = harness();
+    const { api, app } = harness();
     api.getInferenceSetupCatalog = vi.fn().mockResolvedValue({
       providers: [
         {
@@ -527,7 +1269,7 @@ describe("configuration panels", () => {
         },
       ],
     });
-    render(<InferencePanel shell={shell} deployment={deployment} />);
+    renderIn(app, <InferencePanel deployment={deployment} />);
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "New backend" }));
     await user.click(await screen.findByRole("menuitem", { name: "OpenAI" }));
@@ -538,8 +1280,8 @@ describe("configuration panels", () => {
   });
 
   it("requires the agent identity fields and saves editable principal tags", async () => {
-    const { api, shell } = harness();
-    render(<AgentPanel shell={shell} deployment={deployment} />);
+    const { api, app } = harness();
+    renderIn(app, <AgentPanel deployment={deployment} />);
     expectFields(["Display name", "Default behavior", "Enabled", "Tags"]);
 
     const user = await replace("Display name", " ");
@@ -563,8 +1305,8 @@ describe("configuration panels", () => {
   });
 
   it("validates and saves every behavior-owned setting without changing Setup", async () => {
-    const { api, shell } = harness();
-    render(<BehaviorsPanel shell={shell} deployment={deployment} behaviorId="ops" />);
+    const { api, app } = harness();
+    renderIn(app, <BehaviorsPanel deployment={deployment} behaviorId="ops" />);
     expectFields([
       "Display name",
       "Description",
@@ -581,8 +1323,8 @@ describe("configuration panels", () => {
   });
 
   it("opens a new behavior as an unsaved, disabled draft until the operator saves it", async () => {
-    const { api, shell } = harness();
-    render(<BehaviorsPanel shell={shell} deployment={deployment} />);
+    const { api, app } = harness();
+    renderIn(app, <BehaviorsPanel deployment={deployment} />);
     const user = userEvent.setup();
 
     await user.click(screen.getByRole("button", { name: "New behavior" }));
@@ -607,14 +1349,14 @@ describe("configuration panels", () => {
   });
 
   it("keeps a new behavior's draft open on a failed save and retries the same context", async () => {
-    const { api, shell } = harness();
+    const { api, app } = harness();
     api.applyConfigComponents
       .mockRejectedValueOnce(new Error("bridge offline"))
       .mockResolvedValueOnce({});
     const onSaved = vi.fn();
-    render(
+    renderIn(
+      app,
       <BehaviorEditor
-        shell={shell}
         deployment={deployment}
         behavior={newBehaviorView(deployment)}
         draft={{ onSaved, onCancel: vi.fn() }}
@@ -637,7 +1379,7 @@ describe("configuration panels", () => {
   });
 
   it("creates a prefilled new profile as it stands, and closes only on success", async () => {
-    const { api, shell } = harness();
+    const { api, app } = harness();
     api.applyConfigComponents
       .mockRejectedValueOnce(new Error("write refused"))
       .mockResolvedValueOnce({});
@@ -648,9 +1390,9 @@ describe("configuration panels", () => {
       model_name: deployment.inferenceProfiles[0]!.model_name,
       backend_id: deployment.inferenceProfiles[0]!.backend_id,
     };
-    render(
+    renderIn(
+      app,
       <ProfileEditor
-        shell={shell}
         deployment={deployment}
         profile={profile}
         draft={{ onSaved, onCancel: vi.fn() }}
@@ -681,8 +1423,8 @@ describe("configuration panels", () => {
   });
 
   it("turns a behavior on or off from its row with a patch of enabled alone", async () => {
-    const { api, shell } = harness();
-    render(<BehaviorsPanel shell={shell} deployment={deployment} />);
+    const { api, app } = harness();
+    renderIn(app, <BehaviorsPanel deployment={deployment} />);
     const ops = deployment.behaviors.find((b) => b.behaviorId === "ops")!;
     const toggle = screen.getAllByRole("switch", {
       name: `${ops.displayName} is ${ops.enabled ? "enabled" : "disabled"}`,
@@ -704,8 +1446,8 @@ describe("configuration panels", () => {
   });
 
   it("makes a behavior the agent's default from its row menu", async () => {
-    const { api, shell } = harness();
-    render(<BehaviorsPanel shell={shell} deployment={deployment} />);
+    const { api, app } = harness();
+    renderIn(app, <BehaviorsPanel deployment={deployment} />);
     const user = userEvent.setup();
     const ops = deployment.behaviors.find((b) => b.behaviorId === "ops")!;
     await user.click(
@@ -730,8 +1472,8 @@ describe("configuration panels", () => {
     });
 
     it("makes a disabled behavior the default and enables it in one call", async () => {
-      const { api, shell } = harness();
-      render(<BehaviorsPanel shell={shell} deployment={withOps({ enabled: false })} />);
+      const { api, app } = harness();
+      renderIn(app, <BehaviorsPanel deployment={withOps({ enabled: false })} />);
       const user = userEvent.setup();
       await user.click(screen.getAllByRole("button", { name: "More for Ops" })[0]!);
       const item = await screen.findByRole("menuitem", { name: /^Make default/ });
@@ -748,12 +1490,10 @@ describe("configuration panels", () => {
     });
 
     it("offers Default to a disabled behavior with no instructions", async () => {
-      const { api, shell } = harness();
-      render(
-        <BehaviorsPanel
-          shell={shell}
-          deployment={withOps({ enabled: false, contextId: null })}
-        />,
+      const { api, app } = harness();
+      renderIn(
+        app,
+        <BehaviorsPanel deployment={withOps({ enabled: false, contextId: null })} />,
       );
       const user = userEvent.setup();
       await user.click(screen.getAllByRole("button", { name: "More for Ops" })[0]!);
@@ -769,8 +1509,8 @@ describe("configuration panels", () => {
     });
 
     it("refuses to turn off the current default and explains why", async () => {
-      const { api, shell } = harness();
-      render(<BehaviorsPanel shell={shell} deployment={deployment} />);
+      const { api, app } = harness();
+      renderIn(app, <BehaviorsPanel deployment={deployment} />);
       const toggle = screen.getAllByRole("switch", { name: "Default is enabled" })[0]!;
       expect(toggle).toHaveAttribute("aria-disabled", "true");
       expect(toggle).toHaveAttribute(
@@ -786,8 +1526,8 @@ describe("configuration panels", () => {
     });
 
     it("sets a new agent default in one call before saving the other fields", async () => {
-      const { api, shell } = harness();
-      render(<AgentPanel shell={shell} deployment={withOps({ enabled: false })} />);
+      const { api, app } = harness();
+      renderIn(app, <AgentPanel deployment={withOps({ enabled: false })} />);
       const user = userEvent.setup();
       await user.click(screen.getByRole("combobox", { name: "Default behavior" }));
       await user.click(await screen.findByRole("option", { name: /^Ops/ }));
@@ -804,13 +1544,13 @@ describe("configuration panels", () => {
     });
 
     it("shows the publication refusal when a default cannot be set", async () => {
-      const { api, shell } = harness();
+      const { api, app } = harness();
       api.setDefaultBehavior.mockRejectedValue(
         new Error(
           'AgentBehavior ops field context_id references missing AgentContext "gone"',
         ),
       );
-      render(<AgentPanel shell={shell} deployment={withOps({ enabled: false })} />);
+      renderIn(app, <AgentPanel deployment={withOps({ enabled: false })} />);
       const user = userEvent.setup();
       await user.click(screen.getByRole("combobox", { name: "Default behavior" }));
       await user.click(await screen.findByRole("option", { name: /^Ops/ }));
@@ -823,8 +1563,8 @@ describe("configuration panels", () => {
   });
 
   it("patches only the changed context field and the behavior in one call", async () => {
-    const { api, shell } = harness();
-    render(<BehaviorsPanel shell={shell} deployment={deployment} behaviorId="ops" />);
+    const { api, app } = harness();
+    renderIn(app, <BehaviorsPanel deployment={deployment} behaviorId="ops" />);
     const user = userEvent.setup();
     const prompt = screen.getByLabelText("System prompt");
     await user.clear(prompt);
@@ -845,9 +1585,9 @@ describe("configuration panels", () => {
   });
 
   it("says when the runtime's execution defaults cannot be read", async () => {
-    const { api, shell } = harness();
+    const { api, app } = harness();
     api.getInferenceSetupCatalog = vi.fn().mockRejectedValue(new Error("no catalog"));
-    render(<ProfilesPanel shell={shell} deployment={deployment} item="profile-a" />);
+    renderIn(app, <ProfilesPanel deployment={deployment} item="profile-a" />);
     expect(
       await screen.findByText(
         /Couldn’t read the runtime’s execution defaults: no catalog/,
@@ -856,7 +1596,7 @@ describe("configuration panels", () => {
   });
 
   it("creates an automation off when the bridge says its behavior cannot run", async () => {
-    const { shell } = harness();
+    const { app } = harness();
     const blocked = {
       ...deployment,
       behaviorReadiness: {
@@ -871,7 +1611,7 @@ describe("configuration panels", () => {
         ],
       },
     } as typeof deployment;
-    render(<TasksPanel shell={shell} deployment={blocked} item="task-a" />);
+    renderIn(app, <TasksPanel deployment={blocked} item="task-a" />);
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Schedule" }));
     const dialog = await screen.findByRole("dialog", { name: "When it runs" });
@@ -881,7 +1621,7 @@ describe("configuration panels", () => {
   });
 
   it("coalesces repeated create activation while the operator write is pending", async () => {
-    const { api, shell } = harness();
+    const { api, app } = harness();
     let finish: (() => void) | undefined;
     api.saveSkillConfig.mockImplementation(
       () =>
@@ -889,7 +1629,7 @@ describe("configuration panels", () => {
           finish = resolve;
         }),
     );
-    render(<SkillsPanel shell={shell} deployment={deployment} />);
+    renderIn(app, <SkillsPanel deployment={deployment} />);
     const button = screen.getByRole("button", { name: "New skill" });
 
     act(() => {
@@ -906,8 +1646,8 @@ describe("configuration panels", () => {
   });
 
   it("uses the real context delete command and never a replacement-list apply", async () => {
-    const { api, shell } = harness();
-    render(<ContextsPanel shell={shell} deployment={deployment} item="context-b" />);
+    const { api, app } = harness();
+    renderIn(app, <ContextsPanel deployment={deployment} item="context-b" />);
     expectFields([
       "Display name",
       "Description",
@@ -939,8 +1679,8 @@ describe("configuration panels", () => {
   });
 
   it("creates only the new behavior's context and represents empty lists as null", async () => {
-    const { api, shell } = harness();
-    render(<BehaviorsPanel shell={shell} deployment={deployment} />);
+    const { api, app } = harness();
+    renderIn(app, <BehaviorsPanel deployment={deployment} />);
     const user = userEvent.setup();
 
     await user.click(screen.getByRole("button", { name: "New behavior" }));
@@ -956,8 +1696,8 @@ describe("configuration panels", () => {
   });
 
   it("rejects invalid backend endpoints and capacity before writing", async () => {
-    const { api, shell } = harness();
-    render(<InferencePanel shell={shell} deployment={deployment} item="backend-a" />);
+    const { api, app } = harness();
+    renderIn(app, <InferencePanel deployment={deployment} item="backend-a" />);
     expectFields([
       "Name",
       "Provider kind",
@@ -975,14 +1715,18 @@ describe("configuration panels", () => {
     const user = await replace("Endpoint", "file:///tmp/model");
     await replace("Max concurrent", "0");
     await user.click(screen.getByRole("button", { name: "Save" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent(
+    /* each problem at its own field, and Save at the first of them */
+    const alerts = screen.getAllByRole("alert").map((alert) => alert.textContent);
+    expect(alerts).toEqual([
       "Endpoint must use http or https",
-    );
+      "Max concurrent must be 1 or more",
+    ]);
+    expect(screen.getByLabelText("Endpoint")).toHaveFocus();
     expect(api.patchConfigComponents).not.toHaveBeenCalled();
   });
 
   it("requires an inline second action before disconnecting a subscription", async () => {
-    const { api, shell } = harness();
+    const { api, app } = harness();
     api.listProviderAccounts.mockResolvedValue([
       {
         credentialId: "credential-a",
@@ -1003,12 +1747,9 @@ describe("configuration panels", () => {
           : backend,
       ),
     };
-    render(
-      <InferencePanel
-        shell={shell}
-        deployment={subscriptionDeployment}
-        item="backend-a"
-      />,
+    renderIn(
+      app,
+      <InferencePanel deployment={subscriptionDeployment} item="backend-a" />,
     );
 
     const user = userEvent.setup();
@@ -1026,8 +1767,8 @@ describe("configuration panels", () => {
   });
 
   it("validates model-supported profile defaults and execution settings", async () => {
-    const { api, shell } = harness();
-    render(<ProfilesPanel shell={shell} deployment={deployment} item="profile-a" />);
+    const { api, app } = harness();
+    renderIn(app, <ProfilesPanel deployment={deployment} item="profile-a" />);
     await screen.findByLabelText("Temperature");
     expect(screen.queryByText("Gents recommends balanced sampling.")).toBeNull();
     const user = userEvent.setup();
@@ -1061,8 +1802,8 @@ describe("configuration panels", () => {
   });
 
   it("rejects relative roots and malformed advanced tool configuration", async () => {
-    const { api, shell } = harness();
-    render(<ToolsPanel shell={shell} deployment={deployment} item="tools-a" />);
+    const { api, app } = harness();
+    renderIn(app, <ToolsPanel deployment={deployment} item="tools-a" />);
     expectFields([
       "Display name",
       "Workspace root",
@@ -1080,10 +1821,8 @@ describe("configuration panels", () => {
   });
 
   it("validates and tests the complete MCP service address", async () => {
-    const { api, shell } = harness();
-    render(
-      <ToolServicesPanel shell={shell} deployment={deployment} item="service-a" />,
-    );
+    const { api, app } = harness();
+    renderIn(app, <ToolServicesPanel deployment={deployment} item="service-a" />);
     expectFields([
       "Display name",
       "Description",
@@ -1111,8 +1850,8 @@ describe("configuration panels", () => {
   });
 
   it("preserves and validates skill interface metadata", async () => {
-    const { api, shell } = harness();
-    render(<SkillsPanel shell={shell} deployment={deployment} item="skill-a" />);
+    const { api, app } = harness();
+    renderIn(app, <SkillsPanel deployment={deployment} item="skill-a" />);
     expectFields([
       "Name",
       "Display name",
@@ -1132,8 +1871,8 @@ describe("configuration panels", () => {
   });
 
   it("validates task prompts, goal budgets, hooks, and manual-run args", async () => {
-    const { api, shell } = harness();
-    render(<TasksPanel shell={shell} deployment={deployment} item="task-a" />);
+    const { api, app } = harness();
+    renderIn(app, <TasksPanel deployment={deployment} item="task-a" />);
     expectFields([
       "Name",
       "Behavior",
@@ -1156,11 +1895,11 @@ describe("configuration panels", () => {
   });
 
   it("adds a schedule to a task only on Create, as one apply with the trigger off", async () => {
-    const { api, shell } = harness();
+    const { api, app } = harness();
     api.applyConfigComponents
       .mockRejectedValueOnce(new Error("offline"))
       .mockResolvedValueOnce({});
-    render(<TasksPanel shell={shell} deployment={deployment} item="task-a" />);
+    renderIn(app, <TasksPanel deployment={deployment} item="task-a" />);
     const user = userEvent.setup();
 
     await user.click(screen.getByRole("button", { name: "Schedule" }));
@@ -1194,8 +1933,8 @@ describe("configuration panels", () => {
   });
 
   it("asks which collection an event watches instead of defaulting to requests", async () => {
-    const { api, shell } = harness();
-    render(<TasksPanel shell={shell} deployment={deployment} item="task-a" />);
+    const { api, app } = harness();
+    renderIn(app, <TasksPanel deployment={deployment} item="task-a" />);
     const user = userEvent.setup();
 
     await user.click(screen.getByRole("button", { name: "Event" }));
@@ -1226,29 +1965,25 @@ describe("configuration panels", () => {
   });
 
   it("does not publish a task result after the user changes compose intent", async () => {
-    const { shell } = harness();
-    let generation = 0;
+    const { api, app } = harness();
     let resolve!: (result: { requestId: string; sessionId: string }) => void;
     const pending = new Promise<{ requestId: string; sessionId: string }>((next) => {
       resolve = next;
     });
-    Object.assign(shell, {
-      runTask: vi.fn(() => pending),
-      captureComposeIntent: () => generation,
-      acceptsComposeIntent: (captured: number) => captured === generation,
-    });
-    render(<TasksPanel shell={shell} deployment={deployment} item="task-a" />);
+    api.runTask.mockReturnValueOnce(pending);
+    renderIn(app, <TasksPanel deployment={deployment} item="task-a" />);
 
     await act(async () => {
       screen.getByRole("button", { name: "Run task" }).click();
       await Promise.resolve();
     });
-    expect(shell.runTask).toHaveBeenCalledWith({
+    expect(api.runTask).toHaveBeenCalledWith({
       taskId: "task-a",
       agentDid: deployment.agentDid,
       args: {},
     });
-    generation += 1;
+    /* the person navigates while the run is in flight */
+    act(() => selection.advanceIntent(app.stores.selection));
     await act(async () => {
       resolve({ requestId: "stale-request", sessionId: "stale-session" });
       await pending;
@@ -1259,8 +1994,8 @@ describe("configuration panels", () => {
   });
 
   it("preserves interval cadence and rejects non-positive intervals", async () => {
-    const { api, shell } = harness();
-    render(<SchedulesPanel shell={shell} deployment={deployment} item="timer-a" />);
+    const { api, app } = harness();
+    renderIn(app, <SchedulesPanel deployment={deployment} item="timer-a" />);
     expectFields(["Display name", "Cadence", "Interval seconds", "Tags"]);
     const user = await replace("Interval seconds", "0");
     await user.click(screen.getByRole("button", { name: "Save" }));
@@ -1280,9 +2015,27 @@ describe("configuration panels", () => {
     );
   });
 
+  it("says a schedule's problem at its field, and Save goes there instead of saving", async () => {
+    const { api, app } = harness();
+    renderIn(app, <SchedulesPanel deployment={deployment} item="timer-a" />);
+    const user = await replace("Interval seconds", "ninety");
+
+    /* said where it is, before any Save */
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Interval seconds must be a whole number",
+    );
+    expect(screen.getByLabelText("Interval seconds")).toHaveAttribute(
+      "aria-invalid",
+      "true",
+    );
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(screen.getByLabelText("Interval seconds")).toHaveFocus();
+    expect(api.saveScheduleConfig).not.toHaveBeenCalled();
+  });
+
   it("runs a configured schedule through the typed bridge command", async () => {
-    const { api, shell } = harness();
-    render(<SchedulesPanel shell={shell} deployment={deployment} item="timer-a" />);
+    const { api, app } = harness();
+    renderIn(app, <SchedulesPanel deployment={deployment} item="timer-a" />);
 
     await userEvent
       .setup()
@@ -1293,12 +2046,13 @@ describe("configuration panels", () => {
       agentDid: deployment.agentDid,
     });
     expect(await screen.findByText("request-schedule")).toBeInTheDocument();
-    expect(shell.refreshSnapshot).toHaveBeenCalledTimes(1);
+    /* the accepted run is observed with one fresh read */
+    expect(api.fetchDesktopSnapshot).toHaveBeenCalledTimes(1);
   });
 
   it("validates grouped event invariants before persistence", async () => {
-    const { api, shell } = harness();
-    render(<EventSourcesPanel shell={shell} deployment={deployment} item="source-a" />);
+    const { api, app } = harness();
+    renderIn(app, <EventSourcesPanel deployment={deployment} item="source-a" />);
     expectFields([
       "Display name",
       "Source collection",
@@ -1321,8 +2075,8 @@ describe("configuration panels", () => {
   });
 
   it("shows every trigger field and requires existing task/source references", () => {
-    const { shell } = harness();
-    render(<TriggersPanel shell={shell} deployment={deployment} item="trigger-a" />);
+    const { app } = harness();
+    renderIn(app, <TriggersPanel deployment={deployment} item="trigger-a" />);
     expectFields([
       "Display name",
       "Description",
@@ -1337,87 +2091,71 @@ describe("configuration panels", () => {
 
   describe("routes valid edits through each panel's canonical save command", () => {
     const cases: Array<{
-      renderPanel: (shell: Shell) => React.ReactElement;
+      renderPanel: () => React.ReactElement;
       field: string;
       value: string;
       method: string;
     }> = [
       {
-        renderPanel: (shell) => (
-          <BehaviorsPanel shell={shell} deployment={deployment} behaviorId="ops" />
-        ),
+        renderPanel: () => <BehaviorsPanel deployment={deployment} behaviorId="ops" />,
         field: "Display name",
         value: "Ops edited",
         method: "saveBehaviorConfig",
       },
       {
-        renderPanel: (shell) => (
-          <ContextsPanel shell={shell} deployment={deployment} item="context-b" />
-        ),
+        renderPanel: () => <ContextsPanel deployment={deployment} item="context-b" />,
         field: "Description",
         value: "Edited context",
         method: "patchConfigComponents",
       },
       {
-        renderPanel: (shell) => (
-          <InferencePanel shell={shell} deployment={deployment} item="backend-a" />
-        ),
+        renderPanel: () => <InferencePanel deployment={deployment} item="backend-a" />,
         field: "Name",
         value: "Backend edited",
         method: "patchConfigComponents",
       },
       {
-        renderPanel: (shell) => (
-          <ProfilesPanel shell={shell} deployment={deployment} item="profile-a" />
-        ),
+        renderPanel: () => <ProfilesPanel deployment={deployment} item="profile-a" />,
         field: "Display name",
         value: "Profile edited",
         method: "applyConfigComponents",
       },
       {
-        renderPanel: (shell) => (
-          <ToolsPanel shell={shell} deployment={deployment} item="tools-a" />
-        ),
+        renderPanel: () => <ToolsPanel deployment={deployment} item="tools-a" />,
         field: "Display name",
         value: "Tools edited",
         method: "saveToolsConfig",
       },
       {
-        renderPanel: (shell) => (
-          <ToolServicesPanel shell={shell} deployment={deployment} item="service-a" />
+        renderPanel: () => (
+          <ToolServicesPanel deployment={deployment} item="service-a" />
         ),
         field: "Display name",
         value: "Service edited",
         method: "saveToolServiceConfig",
       },
       {
-        renderPanel: (shell) => (
-          <SkillsPanel shell={shell} deployment={deployment} item="skill-a" />
-        ),
+        renderPanel: () => <SkillsPanel deployment={deployment} item="skill-a" />,
         field: "Display name",
         value: "Skill edited",
         method: "saveSkillConfig",
       },
       {
-        renderPanel: (shell) => (
-          <TasksPanel shell={shell} deployment={deployment} item="task-a" />
-        ),
+        renderPanel: () => <TasksPanel deployment={deployment} item="task-a" />,
         field: "Description",
         value: "Task edited",
         method: "saveTaskConfig",
       },
       {
-        renderPanel: (shell) => (
-          <EventSourcesPanel shell={shell} deployment={deployment} item="source-a" />
+        renderPanel: () => (
+          <EventSourcesPanel deployment={deployment} item="source-a" />
         ),
         field: "Display name",
         value: "Source edited",
         method: "saveEventSourceConfig",
       },
       {
-        renderPanel: (shell) => (
-          <TriggersPanel shell={shell} deployment={deployment} item="trigger-a" />
-        ),
+        renderPanel: () => <TriggersPanel deployment={deployment} item="trigger-a" />,
         field: "Display name",
         value: "Trigger edited",
         method: "saveTriggerConfig",
@@ -1426,8 +2164,8 @@ describe("configuration panels", () => {
 
     for (const testCase of cases) {
       it(testCase.value, async () => {
-        const { api, shell } = harness();
-        const view = render(testCase.renderPanel(shell));
+        const { api, app } = harness();
+        const view = renderIn(app, testCase.renderPanel());
         if (testCase.method === "applyConfigComponents") {
           await screen.findByLabelText("Temperature");
         }
@@ -1450,26 +2188,19 @@ describe("configuration panels", () => {
 
   it("names the documents a delete leaves without their reference", async () => {
     const user = userEvent.setup();
+    const { app } = harness();
     const cases: Array<[React.ReactElement, RegExp]> = [
       [
-        <ProfilesPanel
-          shell={harness().shell}
-          deployment={deployment}
-          item="profile-a"
-        />,
+        <ProfilesPanel deployment={deployment} item="profile-a" />,
         /Used by \d+ behaviors?; they lose this reference\./,
       ],
       [
-        <SchedulesPanel
-          shell={harness().shell}
-          deployment={deployment}
-          item="timer-a"
-        />,
+        <SchedulesPanel deployment={deployment} item="timer-a" />,
         /Used by 1 trigger; they lose this reference\./,
       ],
     ];
     for (const [panel, warning] of cases) {
-      const view = render(panel);
+      const view = renderIn(app, panel);
       await user.click(
         screen.getByTestId("danger-zone").getElementsByTagName("button")[0]!,
       );
@@ -1479,9 +2210,9 @@ describe("configuration panels", () => {
   });
 
   it("asks for the name before a list row's delete runs", async () => {
-    const { api, shell } = harness();
+    const { api, app } = harness();
     const user = userEvent.setup();
-    render(<TasksPanel shell={shell} deployment={deployment} />);
+    renderIn(app, <TasksPanel deployment={deployment} />);
     const name = deployment.tasks[0]!.name ?? deployment.tasks[0]!.taskId;
     await user.click(screen.getAllByRole("button", { name: `More for ${name}` })[0]!);
     await user.click(await screen.findByRole("menuitem", { name: /Delete/ }));
@@ -1502,85 +2233,69 @@ describe("configuration panels", () => {
 
   it("routes every destructive panel action through its typed delete command", async () => {
     const cases: Array<{
-      renderPanel: (shell: Shell) => React.ReactElement;
+      renderPanel: () => React.ReactElement;
       method: string;
       request: Record<string, string>;
     }> = [
       {
-        renderPanel: (shell) => (
-          <BehaviorsPanel shell={shell} deployment={deployment} behaviorId="ops" />
-        ),
+        renderPanel: () => <BehaviorsPanel deployment={deployment} behaviorId="ops" />,
         method: "deleteBehaviorConfig",
         request: { behaviorId: "ops", agentDid: deployment.agentDid },
       },
       {
-        renderPanel: (shell) => (
-          <InferencePanel shell={shell} deployment={deployment} item="backend-a" />
-        ),
+        renderPanel: () => <InferencePanel deployment={deployment} item="backend-a" />,
         method: "deleteBackendConfig",
         request: { backendId: "backend-a", agentDid: deployment.agentDid },
       },
       {
-        renderPanel: (shell) => (
-          <ProfilesPanel shell={shell} deployment={deployment} item="profile-a" />
-        ),
+        renderPanel: () => <ProfilesPanel deployment={deployment} item="profile-a" />,
         method: "deleteInferenceProfileConfig",
         request: { profileId: "profile-a", agentDid: deployment.agentDid },
       },
       {
-        renderPanel: (shell) => (
-          <ToolsPanel shell={shell} deployment={deployment} item="tools-b" />
-        ),
+        renderPanel: () => <ToolsPanel deployment={deployment} item="tools-b" />,
         method: "deleteToolsConfig",
         request: { toolsId: "tools-b", agentDid: deployment.agentDid },
       },
       {
-        renderPanel: (shell) => (
-          <ToolServicesPanel shell={shell} deployment={deployment} item="service-a" />
+        renderPanel: () => (
+          <ToolServicesPanel deployment={deployment} item="service-a" />
         ),
         method: "deleteToolServiceConfig",
         request: { serviceId: "service-a", agentDid: deployment.agentDid },
       },
       {
-        renderPanel: (shell) => (
-          <SkillsPanel shell={shell} deployment={deployment} item="skill-a" />
-        ),
+        renderPanel: () => <SkillsPanel deployment={deployment} item="skill-a" />,
         method: "deleteSkillConfig",
         request: { skillId: "skill-a", agentDid: deployment.agentDid },
       },
       {
-        renderPanel: (shell) => (
-          <TasksPanel shell={shell} deployment={deployment} item="task-b" />
-        ),
+        renderPanel: () => <TasksPanel deployment={deployment} item="task-b" />,
         method: "deleteTaskConfig",
         request: { taskId: "task-b", agentDid: deployment.agentDid },
       },
       {
-        renderPanel: (shell) => (
-          <SchedulesPanel shell={shell} deployment={deployment} item="timer-a" />
-        ),
+        renderPanel: () => <SchedulesPanel deployment={deployment} item="timer-a" />,
         method: "deleteScheduleConfig",
         request: { scheduleId: "timer-a", agentDid: deployment.agentDid },
       },
       {
-        renderPanel: (shell) => (
-          <EventSourcesPanel shell={shell} deployment={deployment} item="source-a" />
+        renderPanel: () => (
+          <EventSourcesPanel deployment={deployment} item="source-a" />
         ),
         method: "deleteEventSourceConfig",
         request: { eventSourceId: "source-a", agentDid: deployment.agentDid },
       },
       {
-        renderPanel: (shell) => (
-          <TriggersPanel shell={shell} deployment={deployment} item="trigger-a" />
-        ),
+        renderPanel: () => <TriggersPanel deployment={deployment} item="trigger-a" />,
         method: "deleteTriggerConfig",
         request: { triggerId: "trigger-a", agentDid: deployment.agentDid },
       },
     ];
 
     for (const testCase of cases) {
-      const { api, shell } = harness();
-      const view = render(testCase.renderPanel(shell));
+      const { api, app } = harness();
+      const view = renderIn(app, testCase.renderPanel());
       const user = userEvent.setup();
       await user.click(
         screen.getByTestId("danger-zone").getElementsByTagName("button")[0]!,

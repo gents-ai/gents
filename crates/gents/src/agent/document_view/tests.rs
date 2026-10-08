@@ -57,6 +57,48 @@ async fn bind_default_behavior_backend(
 }
 
 #[tokio::test]
+async fn existing_document_runtime_view_does_not_wait_for_mutation_gate() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let owner = "did:key:runtime-view-reader";
+    let principal = crate::document_config::ensure_agent_principal(node.as_ref(), owner)
+        .await
+        .unwrap();
+    let response = crate::config_client::ConfigAccess::write_local_response(
+        node.as_ref(),
+        "test.runtime_view_skill",
+        &format!(
+            r#"mutation {{ create_Skill(input: {{
+            skill_id: "runtime-skill", agent_did: "{}",
+            name: "Runtime skill", instructions: "Loaded through the snapshot.", enabled: true
+        }}) {{ _docID }} }}"#,
+            escape_graphql_string(owner)
+        ),
+    )
+    .await
+    .unwrap();
+    let skill_doc_id = created_skill_doc_id(response.data.as_ref()).unwrap();
+    let held = crate::config_client::ConfigApplyTxn::begin_local(node.as_ref(), None)
+        .await
+        .unwrap();
+    let view = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        load_document_runtime_view(node.as_ref(), owner),
+    )
+    .await
+    .expect("runtime configuration reads must not wait for the mutation gate")
+    .expect("existing principal runtime view");
+    assert_eq!(view.principal.value, principal);
+    assert_eq!(view.skills["runtime-skill"].doc_id, skill_doc_id);
+    assert_eq!(
+        view.skills["runtime-skill"].value.name.as_deref(),
+        Some("Runtime skill")
+    );
+    held.discard().await.unwrap();
+    node.shutdown().await;
+}
+
+#[tokio::test]
 async fn load_document_runtime_view_includes_referenced_documents() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
@@ -718,6 +760,37 @@ async fn apply_control_update_full_reloads_reserved_graph_triggers() {
     .await
     .unwrap();
     assert_eq!(outcome, ControlUpdateOutcome::FullReload);
+
+    node.shutdown().await;
+}
+
+/// Usage observations are written on every provider response; they must
+/// never reload the runtime view.
+#[tokio::test]
+async fn usage_collection_write_never_reloads_the_runtime_view() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("document-view-usage"));
+    bind_default_behavior_backend(
+        node.as_ref(),
+        identity.did(),
+        &crate::default_behavior_id_for_agent(identity.did()),
+    )
+    .await;
+    let mut view = load_document_runtime_view(node.as_ref(), identity.did())
+        .await
+        .expect("initial document view");
+
+    let outcome = apply_control_update(
+        node.as_ref(),
+        identity.did(),
+        "ProviderAccountUsage",
+        "opaque-usage-doc-id",
+        &mut view,
+    )
+    .await
+    .unwrap();
+    assert_eq!(outcome, ControlUpdateOutcome::Irrelevant);
 
     node.shutdown().await;
 }
@@ -1395,6 +1468,10 @@ async fn insert_enabled_oauth_credential(node: &defra_node::EmbeddedNode, agent_
         access_token_expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
         last_refresh: None,
         enabled: true,
+        account_ref: None,
+        connected_at: None,
+        provider_account_key: None,
+        label: None,
     };
     let mutation = crate::oauth_credential::oauth_credential_upsert_mutation(&credential);
     let response = node.execute(&mutation).await;
@@ -1537,6 +1614,297 @@ async fn chatgpt_codex_behavior_with_enabled_credential_is_runnable() {
     );
 }
 
+#[tokio::test]
+async fn readiness_follows_the_backend_account_reference() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("document-view-account-ref"));
+    let default_behavior_id = crate::default_behavior_id_for_agent(identity.did());
+    bind_default_behavior_chatgpt_backend(node.as_ref(), identity.did(), &default_behavior_id)
+        .await;
+    insert_enabled_oauth_credential(node.as_ref(), identity.did()).await;
+    let resolve_context = DocumentResolveContext {
+        identity: identity.clone(),
+        tool_ceiling: ToolCeiling::readonly(),
+        backend_health: crate::backend_health::BackendHealthMap::new(),
+    };
+    let mut view = load_document_runtime_view(node.as_ref(), identity.did())
+        .await
+        .expect("document view");
+    for backend in view.backends.values_mut() {
+        backend.value.auth = crate::document_config::BackendAuth::PrincipalOAuth {
+            account_ref: Some("acct-x".to_string()),
+        };
+    }
+    let ready = |view: DocumentRuntimeView| {
+        let node = node.clone();
+        let resolve_context = &resolve_context;
+        let default_behavior_id = default_behavior_id.clone();
+        async move {
+            let snapshot =
+                resolve_document_runtime_snapshot_from_view(node.as_ref(), resolve_context, &view)
+                    .await
+                    .expect("snapshot");
+            match snapshot.unavailable_behaviors.get(&default_behavior_id) {
+                None => true,
+                Some(reason) => {
+                    assert_eq!(
+                        reason.public_reason,
+                        gents_protocol::row::BehaviorReadinessUnavailableReason::CredentialsRequired
+                    );
+                    false
+                }
+            }
+        }
+    };
+
+    assert!(
+        !ready(view.clone()).await,
+        "only the original account is stored, so acct-x does not resolve"
+    );
+
+    let original = view
+        .oauth_credentials
+        .values()
+        .next()
+        .expect("original row")
+        .clone();
+    let mut account = original.clone();
+    account.value.credential_id = format!("{}:acct-x", original.value.credential_id);
+    account.value.account_ref = Some("acct-x".to_string());
+    view.oauth_credentials
+        .insert(account.value.credential_id.clone(), account.clone());
+    assert!(ready(view.clone()).await, "an enabled acct-x row resolves");
+
+    account.value.enabled = false;
+    view.oauth_credentials
+        .insert(account.value.credential_id.clone(), account);
+    assert!(!ready(view).await, "a disabled acct-x row never resolves");
+}
+
+#[tokio::test]
+async fn disabling_or_removing_an_account_stops_only_its_behaviors() {
+    use crate::config_client::ConfigAccess;
+    use crate::oauth_credential::{set_account_enabled, store_sign_in};
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("document-view-account-lifecycle"));
+    let did = identity.did().to_string();
+    let default_behavior_id = crate::default_behavior_id_for_agent(&did);
+    bind_default_behavior_claude_backend(node.as_ref(), &did, &default_behavior_id).await;
+    let access = ConfigAccess::Local(node.clone());
+    let sign_in = |who: &str| {
+        crate::claude_oauth::credential_from_login_tokens(
+            did.clone(),
+            crate::claude_oauth::CLAUDE_OAUTH_PROVIDER,
+            &crate::claude_oauth::ClaudeLoginTokens {
+                access_token: format!("access-{who}"),
+                refresh_token: format!("refresh-{who}"),
+                expires_in: Some(3600),
+                scope: None,
+                account_id: Some(format!("label-{who}")),
+                organization_uuid: Some("org-1".into()),
+                account_uuid: Some(format!("account-{who}")),
+            },
+            chrono::Utc::now(),
+        )
+    };
+    store_sign_in(&access, sign_in("a"), None).await.unwrap();
+    let b = store_sign_in(&access, sign_in("b"), None).await.unwrap();
+    let b_ref = b.credential.account_ref.clone().expect("b has a reference");
+    let resolve_context = DocumentResolveContext {
+        identity: identity.clone(),
+        tool_ceiling: ToolCeiling::readonly(),
+        backend_health: crate::backend_health::BackendHealthMap::new(),
+    };
+    // One behavior, its backend pointed at A (no reference) or at B.
+    let ready_on = |account_ref: Option<String>| {
+        let node = node.clone();
+        let did = did.clone();
+        let resolve_context = &resolve_context;
+        let default_behavior_id = default_behavior_id.clone();
+        async move {
+            let mut view = load_document_runtime_view(node.as_ref(), &did)
+                .await
+                .expect("document view");
+            for backend in view.backends.values_mut() {
+                backend.value.auth = crate::document_config::BackendAuth::PrincipalOAuth {
+                    account_ref: account_ref.clone(),
+                };
+            }
+            let snapshot =
+                resolve_document_runtime_snapshot_from_view(node.as_ref(), resolve_context, &view)
+                    .await
+                    .expect("snapshot");
+            !snapshot
+                .unavailable_behaviors
+                .contains_key(&default_behavior_id)
+        }
+    };
+    assert!(ready_on(None).await && ready_on(Some(b_ref.clone())).await);
+
+    set_account_enabled(&access, &did, &b.credential.credential_id, false)
+        .await
+        .unwrap();
+    assert!(
+        !ready_on(Some(b_ref.clone())).await,
+        "a disabled account stops"
+    );
+    assert!(ready_on(None).await, "the other account keeps running");
+
+    access
+        .transact("test.remove_account", |txn| {
+            let did = did.clone();
+            let credential_id = b.credential.credential_id.clone();
+            Box::pin(async move {
+                crate::oauth_credential::remove_account_in_txn(txn, &did, &credential_id).await
+            })
+        })
+        .await
+        .unwrap();
+    assert!(!ready_on(Some(b_ref)).await, "a removed account stops");
+    assert!(ready_on(None).await, "the other account keeps running");
+}
+
+#[tokio::test]
+async fn an_unavailable_account_is_a_behavior_unavailable_rejection() {
+    use crate::config_client::ConfigAccess;
+    use crate::oauth_credential::{set_account_enabled, store_sign_in};
+    use gents_protocol::behavior_readiness::is_behavior_unavailable_rejection;
+    use gents_protocol::row::BehaviorReadinessUnavailableReason as Reason;
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("document-view-account-rejection"));
+    let did = identity.did().to_string();
+    let x = crate::default_behavior_id_for_agent(&did);
+    bind_default_behavior_claude_backend(node.as_ref(), &did, &x).await;
+    let access = ConfigAccess::Local(node.clone());
+    let sign_in = |who: &str| {
+        crate::claude_oauth::credential_from_login_tokens(
+            did.clone(),
+            crate::claude_oauth::CLAUDE_OAUTH_PROVIDER,
+            &crate::claude_oauth::ClaudeLoginTokens {
+                access_token: format!("access-{who}"),
+                refresh_token: format!("refresh-{who}"),
+                expires_in: Some(3600),
+                scope: None,
+                account_id: Some(format!("label-{who}")),
+                organization_uuid: Some("org-1".into()),
+                account_uuid: Some(format!("account-{who}")),
+            },
+            chrono::Utc::now(),
+        )
+    };
+    store_sign_in(&access, sign_in("a"), None).await.unwrap();
+    let b = store_sign_in(&access, sign_in("b"), None).await.unwrap();
+    let b_backend = format!(
+        "{}-{}",
+        crate::claude_oauth::CLAUDE_OAUTH_PROVIDER,
+        b.credential
+            .account_ref
+            .as_deref()
+            .expect("b has a reference")
+    );
+    crate::backend_registry::set_backend_probe_status(node.as_ref(), &did, &b_backend, "healthy")
+        .await
+        .unwrap();
+    let resolve_context = DocumentResolveContext {
+        identity: identity.clone(),
+        tool_ceiling: ToolCeiling::readonly(),
+        backend_health: crate::backend_health::BackendHealthMap::new(),
+    };
+    let on_a = format!("{x}:inference");
+    let on_b = format!("{x}:inference-b");
+    let y = "behavior-y".to_string();
+    // X runs on B's backend, or on A with its compaction profile on B; Y runs on A.
+    let reasons = |compaction_on_b: bool| {
+        let node = node.clone();
+        let did = did.clone();
+        let resolve_context = &resolve_context;
+        let (x, y, on_a, on_b, b_backend) = (
+            x.clone(),
+            y.clone(),
+            on_a.clone(),
+            on_b.clone(),
+            b_backend.clone(),
+        );
+        async move {
+            let mut view = load_document_runtime_view(node.as_ref(), &did)
+                .await
+                .expect("document view");
+            let mut b_profile = view.inference_profiles[&on_a].clone();
+            b_profile.value.profile_id = on_b.clone();
+            b_profile.value.backend_id = b_backend;
+            view.inference_profiles.insert(on_b.clone(), b_profile);
+            let mut y_record = view.behaviors[&x].clone();
+            y_record.value.behavior_id = y.clone();
+            view.behaviors.insert(y.clone(), y_record);
+            let x_record = view.behaviors.get_mut(&x).unwrap();
+            if compaction_on_b {
+                let compaction: crate::document_config::CompactionConfig =
+                    serde_json::from_value(serde_json::json!({
+                        "compaction_id": "compaction-b", "agent_did": did,
+                        "inference_profile_id": on_b,
+                    }))
+                    .unwrap();
+                view.compactions.insert(
+                    "compaction-b".into(),
+                    DocumentRecord {
+                        doc_id: "compaction-b".into(),
+                        value: compaction,
+                    },
+                );
+                let mut context =
+                    view.contexts[x_record.value.context_id.as_deref().unwrap()].clone();
+                context.value.context_id = "context-x".into();
+                context.value.compaction_id = Some("compaction-b".into());
+                view.contexts.insert("context-x".into(), context);
+                x_record.value.context_id = Some("context-x".into());
+            } else {
+                x_record.value.inference_profile_id = on_b;
+            }
+            let snapshot =
+                resolve_document_runtime_snapshot_from_view(node.as_ref(), resolve_context, &view)
+                    .await
+                    .expect("snapshot");
+            let reason = |id: &str| {
+                snapshot
+                    .unavailable_behaviors
+                    .get(id)
+                    .map(|unavailable| unavailable.public_reason)
+            };
+            (reason(&x), reason(&y))
+        }
+    };
+    assert_eq!(reasons(false).await, (None, None));
+    assert_eq!(reasons(true).await, (None, None));
+
+    let rejected_only_x = |(x_reason, y_reason): (Option<Reason>, Option<Reason>),
+                           expected: Reason| {
+        assert_eq!(x_reason, Some(expected));
+        assert!(is_behavior_unavailable_rejection(expected.public_message()));
+        assert_eq!(y_reason, None, "Y on A keeps running");
+    };
+    set_account_enabled(&access, &did, &b.credential.credential_id, false)
+        .await
+        .unwrap();
+    rejected_only_x(reasons(false).await, Reason::CredentialsRequired);
+    rejected_only_x(reasons(true).await, Reason::ToolConfigurationInvalid);
+
+    access
+        .transact("test.remove_account", |txn| {
+            let did = did.clone();
+            let credential_id = b.credential.credential_id.clone();
+            Box::pin(async move {
+                crate::oauth_credential::remove_account_in_txn(txn, &did, &credential_id).await
+            })
+        })
+        .await
+        .unwrap();
+    rejected_only_x(reasons(false).await, Reason::CredentialsRequired);
+    rejected_only_x(reasons(true).await, Reason::ToolConfigurationInvalid);
+}
+
 /// Install the canonical chain for `behavior_id` and bind it as the principal's
 /// explicit default, then swap the chain's InferenceBackend to the
 /// ClaudeCliSubscription provider so resolution requires a Claude
@@ -1611,6 +1979,8 @@ async fn claude_subscription_behavior_requires_enabled_credential() {
             expires_in: Some(3600),
             scope: None,
             account_id: None,
+            organization_uuid: None,
+            account_uuid: None,
         },
         chrono::Utc::now(),
     );
@@ -1680,6 +2050,10 @@ async fn apply_control_update_admits_chatgpt_behavior_when_credential_added() {
         access_token_expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
         last_refresh: None,
         enabled: true,
+        account_ref: None,
+        connected_at: None,
+        provider_account_key: None,
+        label: None,
     };
     let doc_id = crate::oauth_credential::upsert_oauth_credential(node.as_ref(), &credential)
         .await

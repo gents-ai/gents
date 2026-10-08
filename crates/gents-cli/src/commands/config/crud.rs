@@ -98,6 +98,13 @@ pub(super) async fn config_show(spec: ConfigDocumentSpec, args: ConfigShowArgs) 
     )
     .await?;
     let row = load_one(&access, spec, &agent_did, &id).await?;
+    if spec.collection == Collection::InferenceProfile {
+        if let Some(warning) =
+            super::profile::profile_effort_warning(&access, &agent_did, &row).await
+        {
+            eprintln!("warning: {warning}");
+        }
+    }
 
     match args
         .output
@@ -196,7 +203,7 @@ async fn live_manifest_for_delete(
     desired_state::manifest_from_export_bundle(&bundle)
 }
 
-async fn query_collection(
+pub(super) async fn query_collection(
     access: &ConfigAccess,
     spec: ConfigDocumentSpec,
     agent_did: &str,
@@ -246,7 +253,7 @@ async fn query_collection(
     Ok(rows)
 }
 
-async fn load_one(
+pub(super) async fn load_one(
     access: &ConfigAccess,
     spec: ConfigDocumentSpec,
     agent_did: &str,

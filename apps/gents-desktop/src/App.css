@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @import "@gents/ui/styles.css";
+@import "./ui/app/window-bar.css";
 @source "./**/*.{ts,tsx}";
 @source inline("max-h-[calc(100dvh-2rem)]");
 
@@ -7,6 +8,19 @@
   button:not(:disabled),
   [role="button"]:not([aria-disabled="true"]) {
     cursor: pointer;
+  }
+}
+
+/* The kit's spinner swaps a braille glyph every 100 ms, and monospace fonts
+   lack braille: each glyph comes from a fallback font, and in WebKit every
+   swap laid the page out again and stepped a scroller following its foot
+   back 2 px. Contained, a swap cannot reach the layout around it. A
+   spinner's own size utilities still apply over this. */
+@layer components {
+  [data-slot="ascii-loader"] {
+    height: 1em;
+    overflow: hidden;
+    contain: strict;
   }
 }
 

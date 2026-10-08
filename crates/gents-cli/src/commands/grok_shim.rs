@@ -18,13 +18,16 @@
 //!    submission via [`crate::create_agent_request`], deferred responses until
 //!    terminalization, and interruption via [`gents::interrupt_request`];
 //! 5. [`projection`] owns the bounded, request-id-scoped read-only projection
-//!    of durable rows into fresh Grok `session/update` notification payloads.
+//!    of durable rows into fresh Grok `session/update` notification payloads;
+//! 6. [`graph_runs`] projects the graph runs a session started, found through
+//!    its durable `run_graph` replies, as `workflow_updated`.
 //!
-//! Every projection query runs in-process (`node.execute(&query).await`) with
-//! every interpolated value escaped by
-//! [`gents::graphql::escape_graphql_string`]; no HTTP GraphQL helper and no
-//! stock Grok import is used anywhere in the shim. All diagnostics go through
-//! `tracing` — never `println!`/`eprintln!`.
+//! Every query runs in-process through the
+//! [`gents::graphql::graphql_with_transaction_retry`] and
+//! [`gents::config_client::ConfigAccess`] owners with every interpolated
+//! value escaped by [`gents::graphql::escape_graphql_string`]; no HTTP
+//! GraphQL helper and no stock Grok import is used anywhere in the shim. All
+//! diagnostics go through `tracing` — never `println!`/`eprintln!`.
 
 use std::sync::Arc;
 
@@ -34,6 +37,7 @@ use defra_node::EmbeddedNode;
 pub(crate) mod acp;
 mod binding;
 mod goals;
+mod graph_runs;
 pub(crate) mod projection;
 pub(crate) mod protocol;
 pub(crate) mod server;
@@ -565,6 +569,126 @@ mod tests {
         fresh.on_disconnect().await;
     }
 
+    /// Stock Grok sends its built-in agents' own `agent_type` family
+    /// (`grok-build`, `grok-build-*`) as `_meta.agentProfile` even without
+    /// `--agent`. Those names are Grok's, not Gents behavior ids: they must
+    /// resolve to the shim's bound default behavior, on a fresh connection
+    /// and on one already bound to that default, both when selected on
+    /// `session/new` and when stock Grok re-sends the profile on
+    /// `session/load`, while every name outside
+    /// the family stays strictly validated against a registered, enabled,
+    /// same-principal behavior and cannot switch an already-bound
+    /// connection.
+    #[tokio::test]
+    async fn built_in_grok_agent_profiles_select_the_default_behavior_and_other_names_stay_validated(
+    ) {
+        use serde_json::{json, Value};
+        async fn send(delegate: &Arc<dyn AcpDelegate>, request: Value) -> Value {
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            delegate
+                .handle_acp(&request.to_string(), server::AcpOutbound::for_frames(tx))
+                .await
+                .unwrap();
+            split_response(drain_outbound(&mut rx).await).1
+        }
+        let (_dir, node, inputs) = factory_fixture().await;
+        seed_test_behavior_configuration(
+            node.as_ref(),
+            &inputs.agent_did,
+            "reviewer",
+            &inputs.behavior_id,
+            "review-model",
+            true,
+        )
+        .await;
+        let factory = production_acp_delegate_factory(inputs.clone());
+        let registration = production_registration();
+        for (index, built_in) in ["grok-build", "grok-build-plan"].iter().enumerate() {
+            let delegate = factory(index as u64, &registration).unwrap();
+            let opened = send(
+                &delegate,
+                json!({"jsonrpc":"2.0","id":1,"method":"session/new",
+                "params":{"_meta":{"sessionId":format!("built-in-{index}"),"agentProfile":built_in}}}),
+            )
+            .await;
+            assert!(
+                opened.get("error").is_none(),
+                "built-in profile {built_in} must open a session on the default behavior: {opened}"
+            );
+            assert_eq!(
+                opened["result"]["models"]["currentModelId"], "GLM-5.3-NVFP4",
+                "built-in profile {built_in} must serve the default behavior's bound model"
+            );
+            let reopened = send(
+                &delegate,
+                json!({"jsonrpc":"2.0","id":2,"method":"session/new",
+                "params":{"_meta":{"sessionId":format!("built-in-{index}-again"),"agentProfile":built_in}}}),
+            )
+            .await;
+            assert!(
+                reopened.get("error").is_none(),
+                "re-selecting built-in profile {built_in} on a connection already bound to the \
+                 default behavior must keep serving it: {reopened}"
+            );
+            let resuming = factory(index as u64 + 4, &registration).unwrap();
+            let resumed = send(
+                &resuming,
+                json!({"jsonrpc":"2.0","id":3,"method":"session/load",
+                "params":{"sessionId":format!("built-in-{index}"),"_meta":{"agentProfile":built_in}}}),
+            )
+            .await;
+            assert!(
+                resumed.get("error").is_none(),
+                "stock Grok re-sends the built-in profile {built_in} on session/load; the \
+                 alias must select the default behavior there too: {resumed}"
+            );
+            assert_eq!(
+                resumed["result"]["models"]["currentModelId"], "GLM-5.3-NVFP4",
+                "the resumed built-in session must serve the default behavior's bound model"
+            );
+            resuming.on_disconnect().await;
+            delegate.on_disconnect().await;
+        }
+        let rejecting = factory(2, &registration).unwrap();
+        let denied = send(
+            &rejecting,
+            json!({"jsonrpc":"2.0","id":3,"method":"session/new",
+            "params":{"_meta":{"sessionId":"outside-the-family","agentProfile":"grok-builder"}}}),
+        )
+        .await;
+        assert!(
+            denied.get("error").is_some(),
+            "a name outside the grok-build family must stay a literal behavior id: {denied}"
+        );
+        assert!(
+            denied["error"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("grok-builder")),
+            "the rejection must come from behavior validation, not the family predicate: {denied}"
+        );
+        rejecting.on_disconnect().await;
+        let bound = factory(3, &registration).unwrap();
+        let reviewer = send(
+            &bound,
+            json!({"jsonrpc":"2.0","id":4,"method":"session/new",
+            "params":{"_meta":{"sessionId":"bound-to-reviewer","agentProfile":"reviewer"}}}),
+        )
+        .await;
+        assert!(reviewer.get("error").is_none(), "{reviewer}");
+        let switched = send(
+            &bound,
+            json!({"jsonrpc":"2.0","id":5,"method":"session/new",
+            "params":{"_meta":{"sessionId":"cannot-switch","agentProfile":"grok-build-plan"}}}),
+        )
+        .await;
+        assert!(
+            switched.get("error").is_some(),
+            "a built-in profile on a connection bound to another behavior must not silently \
+             serve the bound behavior: {switched}"
+        );
+        bound.on_disconnect().await;
+    }
+
     /// Invoke the exact production factory with the given registration, then
     /// drive one JSON-RPC ACP request through the returned delegate over a
     /// real [`AcpOutbound`], returning every outbound line in wire order.
@@ -968,6 +1092,24 @@ mod tests {
             explicit_behavior_override(Some("behavior-a")).as_deref(),
             Some("behavior-a")
         );
+    }
+
+    #[test]
+    fn grok_built_in_agent_profile_matches_the_grok_build_family_only() {
+        assert!(
+            super::binding::grok_built_in_agent_profile("grok-build"),
+            "the bare built-in agent_type is part of the family"
+        );
+        assert!(
+            super::binding::grok_built_in_agent_profile("grok-build-plan"),
+            "the built-in agent_type variants are part of the family"
+        );
+        for outside in ["grok-builder", "default", "grok", ""] {
+            assert!(
+                !super::binding::grok_built_in_agent_profile(outside),
+                "{outside:?} shares no delimiter with the family and must stay a literal behavior id"
+            );
+        }
     }
 
     #[test]

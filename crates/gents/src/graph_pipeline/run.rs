@@ -148,14 +148,70 @@ pub struct GraphRunView {
     pub failure_evidence: Option<Value>,
 }
 
+/// A graph run view load that fails on durable facts, so repeating the same
+/// load by the same actor fails the same way. Other load errors may be
+/// transient.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum GraphRunUnobservable {
+    #[error("GraphRun {run_id:?} does not exist")]
+    Missing { run_id: String },
+    #[error("actor is not authorized to observe this graph run")]
+    Unauthorized,
+    #[error("invalid persisted graph failure evidence")]
+    InvalidFailureEvidence,
+}
+
+/// The persisted `GraphRun.status` vocabulary: Lean `RunStatus`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GraphRunStatus {
+    Running,
+    Succeeded,
+    Failed,
+    Cancelled,
+}
+
+impl GraphRunStatus {
+    pub const ALL: [Self; 4] = [
+        Self::Running,
+        Self::Succeeded,
+        Self::Failed,
+        Self::Cancelled,
+    ];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Succeeded => "succeeded",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+        }
+    }
+
+    pub const fn is_terminal(self) -> bool {
+        !matches!(self, Self::Running)
+    }
+}
+
 /// A run in one of these statuses is done and will never change again.
 /// Shared by `is_terminal` and `gents pack remove`'s unfinished-run check,
 /// so the two cannot disagree about what "done" means.
-pub(crate) const GRAPH_RUN_TERMINAL_STATUSES: [&str; 3] = ["succeeded", "failed", "cancelled"];
+pub(crate) const GRAPH_RUN_TERMINAL_STATUSES: [&str; 3] = [
+    GraphRunStatus::Succeeded.as_str(),
+    GraphRunStatus::Failed.as_str(),
+    GraphRunStatus::Cancelled.as_str(),
+];
 
 impl GraphRunView {
     pub fn is_terminal(&self) -> bool {
         GRAPH_RUN_TERMINAL_STATUSES.contains(&self.status.as_str())
+    }
+
+    /// The run's status; a value outside the vocabulary is an error.
+    pub fn status(&self) -> Result<GraphRunStatus> {
+        GraphRunStatus::ALL
+            .into_iter()
+            .find(|status| status.as_str() == self.status)
+            .with_context(|| format!("unrecognized persisted graph run status {:?}", self.status))
     }
 
     fn successful_result_refs(&self) -> Vec<GraphResultRef> {
@@ -245,10 +301,12 @@ async fn query_run(executor: &(impl GraphRunQuery + ?Sized), run_id: &str) -> Re
     if found.len() > 1 {
         anyhow::bail!("multiple GraphRun rows share run_id {run_id:?}");
     }
-    found
-        .into_iter()
-        .next()
-        .with_context(|| format!("GraphRun {run_id:?} does not exist"))
+    found.into_iter().next().ok_or_else(|| {
+        GraphRunUnobservable::Missing {
+            run_id: run_id.to_owned(),
+        }
+        .into()
+    })
 }
 
 async fn load_plan(
@@ -462,7 +520,7 @@ async fn load_graph_run_view_with(
     let owner_did = required_string(&run, "owner_did")?;
     let caller_did = required_string(&run, "caller_did")?;
     if actor_did != owner_did && actor_did != caller_did {
-        anyhow::bail!("actor is not authorized to observe this graph run");
+        return Err(GraphRunUnobservable::Unauthorized.into());
     }
     let revision_digest = required_string(&run, "revision_digest")?;
     let plan = load_plan(executor, revision_digest, owner_did).await?;
@@ -633,15 +691,15 @@ async fn load_graph_run_view_with(
         .map(serde_json::from_str)
         .transpose()?;
     if let Some(primary) = &error {
-        anyhow::ensure!(
-            primary.get("version").and_then(Value::as_u64) == Some(1)
-                && primary.get("message").and_then(Value::as_str).is_some()
-                && primary
-                    .get("code")
-                    .and_then(Value::as_str)
-                    .is_some_and(|code| !code.trim().is_empty()),
-            "invalid persisted graph failure evidence"
-        );
+        let valid = primary.get("version").and_then(Value::as_u64) == Some(1)
+            && primary.get("message").and_then(Value::as_str).is_some()
+            && primary
+                .get("code")
+                .and_then(Value::as_str)
+                .is_some_and(|code| !code.trim().is_empty());
+        if !valid {
+            return Err(GraphRunUnobservable::InvalidFailureEvidence.into());
+        }
     }
     // The first committed failure is durable even while siblings drain.
     // Later observations cannot replace it or turn the run into a success.
@@ -1433,6 +1491,50 @@ mod tests {
             result_contract_satisfied: false,
             failure_evidence,
         }
+    }
+
+    #[test]
+    fn run_status_vocabulary_is_the_lean_run_status() {
+        let lean = include_str!("../../proofs/Proofs/GraphPipeline.lean");
+        let (_, model) = lean
+            .split_once("inductive RunStatus where")
+            .expect("Lean RunStatus");
+        let (constructors, terminal) = model
+            .split_once("def RunStatus.terminal")
+            .expect("Lean RunStatus.terminal");
+        let constructors = constructors
+            .lines()
+            .skip(1)
+            .map_while(|line| line.trim().strip_prefix("| "))
+            .collect::<Vec<_>>();
+        let (terminal, _) = terminal
+            .split_once("=> true")
+            .expect("Lean terminal statuses");
+        let terminal = terminal
+            .split('|')
+            .skip(1)
+            .map(|status| status.trim().trim_start_matches('.'))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            GraphRunStatus::ALL.map(GraphRunStatus::as_str).to_vec(),
+            constructors
+        );
+        let rust_terminal = GraphRunStatus::ALL
+            .into_iter()
+            .filter(|status| status.is_terminal())
+            .map(GraphRunStatus::as_str)
+            .collect::<Vec<_>>();
+        assert_eq!(rust_terminal, terminal);
+        assert_eq!(GRAPH_RUN_TERMINAL_STATUSES.to_vec(), terminal);
+
+        let mut view = terminal_view(None);
+        for status in GraphRunStatus::ALL {
+            view.status = status.as_str().to_owned();
+            assert_eq!(view.status().unwrap(), status);
+            assert_eq!(view.is_terminal(), status.is_terminal());
+        }
+        view.status = "paused".to_owned();
+        assert!(view.status().is_err());
     }
 
     #[test]

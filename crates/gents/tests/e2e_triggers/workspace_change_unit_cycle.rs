@@ -1066,7 +1066,7 @@ async fn disable_pack_writer_trigger(access: &ConfigAccess) {
 
 async fn install_failure_inbox_triggers(access: &ConfigAccess, owner: &str) {
     let config = json!({
-        "agent_principal": {"agent_did": owner},
+        "agent_principal": {"agent_did": owner, "default_behavior_id": "change-unit-writer"},
         "agent_behaviors": [
             {
                 "agent_did": owner,

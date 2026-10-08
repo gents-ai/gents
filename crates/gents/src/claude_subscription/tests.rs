@@ -160,7 +160,7 @@ async fn fixture_queue_serves_one_body_per_call_then_asks_the_bearer() {
 #[tokio::test]
 async fn build_without_a_credential_fails_closed_with_the_login_hint() {
     let node = test_node().await;
-    let err = ClaudeSubscriptionClient::build(Arc::new(node), "did:key:z6MkNobody")
+    let err = ClaudeSubscriptionClient::build(Arc::new(node), "did:key:z6MkNobody", None)
         .await
         .expect_err("missing");
     assert!(
@@ -180,10 +180,10 @@ async fn build_with_a_seeded_credential_yields_a_shared_bearer() {
         chrono::Utc::now() + chrono::Duration::hours(8),
     )
     .await;
-    let client = ClaudeSubscriptionClient::build(node.clone(), "did:key:z6MkSeeded")
+    let client = ClaudeSubscriptionClient::build(node.clone(), "did:key:z6MkSeeded", None)
         .await
         .expect("client");
-    let again = ClaudeSubscriptionClient::build(node, "did:key:z6MkSeeded")
+    let again = ClaudeSubscriptionClient::build(node, "did:key:z6MkSeeded", None)
         .await
         .expect("client");
     assert!(
@@ -216,13 +216,17 @@ async fn stale_credential_refreshes_once_through_the_claude_token_endpoint() {
         r#"{"access_token":"access-NEW","refresh_token":"refresh-NEW","expires_in":28800}"#,
     )
     .await;
-    // Process-global, read by the wrapper at refresh time; no other lib test
-    // refreshes a Claude credential, so nothing else observes it.
+    // Process-global, read by the wrapper at refresh time; hold TOKEN_URL_ENV
+    // across the whole set/remove window so lib tests that set this override
+    // cannot interleave with it.
+    let _env = crate::oauth_credential::test_support::TOKEN_URL_ENV
+        .lock()
+        .await;
     std::env::set_var(
         crate::claude_oauth::CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV,
         &url,
     );
-    let client = ClaudeSubscriptionClient::build(node, "did:key:z6MkStaleRefresh")
+    let client = ClaudeSubscriptionClient::build(node, "did:key:z6MkStaleRefresh", None)
         .await
         .expect("client");
     let bearer = client.bearer.current_bearer().await;
@@ -282,5 +286,53 @@ fn anthropic_api_key_is_a_shared_key_kind_on_the_messages_wire() {
             crate::OpenAiWireApi::ChatCompletions
         ),
         gents_loop::provider_input::ProviderInputProfile::ClaudeMessages
+    );
+}
+
+#[tokio::test]
+async fn usage_wiring_claude_built_client_holds_its_account_reporter() {
+    let did = "did:key:z6MkUsageWireClaude";
+    let node = Arc::new(crate::oauth_credential::test_support::test_node().await);
+    let credential = crate::oauth_credential::OAuthCredential {
+        doc_id: None,
+        credential_id: format!(
+            "{}:acct-ref-2",
+            crate::oauth_credential::oauth_credential_id(did, CLAUDE_OAUTH_PROVIDER)
+        ),
+        agent_did: did.to_string(),
+        provider: CLAUDE_OAUTH_PROVIDER.to_string(),
+        access_token: "access-TEST".into(),
+        refresh_token: "refresh-TEST".into(),
+        id_token: None,
+        account_id: None,
+        chatgpt_plan_type: None,
+        is_fedramp: false,
+        access_token_expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+        last_refresh: None,
+        enabled: true,
+        account_ref: Some("acct-ref-2".into()),
+        connected_at: None,
+        provider_account_key: None,
+        label: None,
+    };
+    let doc_id = crate::oauth_credential::upsert_oauth_credential(&node, &credential)
+        .await
+        .unwrap();
+
+    let client = ClaudeSubscriptionClient::build(node, did, Some("acct-ref-2"))
+        .await
+        .expect("client");
+
+    assert_eq!(
+        client
+            .usage
+            .as_ref()
+            .map(|reporter| reporter.account.clone()),
+        Some(crate::usage_observation::UsageAccount::Credential {
+            doc_id: Some(doc_id),
+            agent_did: did.to_string(),
+            provider: CLAUDE_OAUTH_PROVIDER.to_string(),
+            account_ref: Some("acct-ref-2".into()),
+        })
     );
 }

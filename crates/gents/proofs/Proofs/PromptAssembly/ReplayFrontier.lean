@@ -349,4 +349,45 @@ theorem kept_turns_are_suffix [DecidableEq O] [DecidableEq W] (turns : List (Tur
   obtain ⟨dropped, h⟩ := maxAdmissibleSuffix_suffix turnOk turns
   exact ⟨dropped, h.symm⟩
 
+/-- Replacing a nonempty leading run with a single item that is not its first
+member changes the sequence. `hfresh` is the summarizer premise: a produced
+summary is new content, not a copy of a row it stands in for. -/
+theorem summary_prefix_ne_replaced_run (summary : O) (replaced kept : List O)
+    (hreplaced : replaced ≠ []) (hfresh : ∀ item ∈ replaced, summary ≠ item) :
+    summary :: kept ≠ replaced ++ kept := by
+  cases replaced with
+  | nil => exact absurd rfl hreplaced
+  | cons first rest =>
+      intro heq
+      rw [List.cons_append, List.cons.injEq] at heq
+      exact hfresh first (by simp) heq.1
+
+/-- A turn whose assembled ordinary prefix replaced a nonempty leading run with
+a summary item fails the capture check, so its reasoning is dropped. This is why
+a reduction may not summarize at or before a turn whose reasoning the provider
+still requires: the provider rejects such a turn outright rather than accepting
+it without its thinking. -/
+theorem turnOk_false_of_summarized_prefix [DecidableEq O] [DecidableEq W]
+    (before : List (Turn O W)) (x : Turn O W) (captured : List (FlatItem O W))
+    (summary : O) (replaced kept : List O)
+    (hcap : x.captured = some captured)
+    (hords : ords captured = replaced ++ kept)
+    (hprefix : x.prefixOrds = summary :: kept)
+    (hreplaced : replaced ≠ [])
+    (hfresh : ∀ item ∈ replaced, summary ≠ item) :
+    turnOk before x = false := by
+  have hne : ¬ (ords captured = x.prefixOrds) := by
+    rw [hords, hprefix]
+    intro h
+    exact summary_prefix_ne_replaced_run summary replaced kept hreplaced hfresh h.symm
+  simp [turnOk, hcap, hne]
+
+/-- Executable witness: a summary item standing in for the first two ordinary
+items of the producing request drops the turn. -/
+theorem summarized_prefix_turn_is_dropped :
+    turnOk (O := Nat) (W := Nat) []
+      { base := true, prefixOrds := [9, 2], items := [],
+        captured := some [.ordinary 0, .ordinary 1, .ordinary 2] } = false := by
+  decide
+
 end PromptAssembly.ReplayFrontier

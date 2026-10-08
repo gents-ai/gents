@@ -20,8 +20,12 @@ structure Journal where
   entries : List Arrival
   deriving DecidableEq, Repr
 
-/-- Registration seeds the native head even for disabled triggers. Progress is
-node-local, never replicated, and retained across restart and re-enable. -/
+/-- Registration seeds the native head even for disabled consumers. Progress is
+node-local, never replicated, and retained across restart and re-enable. Every
+per-document consumer of a source owns one cursor: a task trigger, whose receipt
+is its `TriggerFire`, and a callback binding, whose receipt is its
+`CallbackInvocation` for the arrival. Each seeds in the configuration
+transaction that registers it, not when an engine first observes the source. -/
 structure Cursor where
   seeded : Bool := false
   after : Nat := 0
@@ -78,6 +82,44 @@ def acknowledge (cursor : Cursor) (committed : State) (journal : Journal)
   if checkpointAccepted cursor committed journal through mode busy eligible checkpointCommitted then
     { cursor with after := through }
   else cursor
+
+/-- Per-document consumers sharing the cursor owner. A task trigger admits under
+its concurrency mode. A callback binding admits like a parallel trigger: every
+eligible arrival needs its receipt. It is enabled only while both its binding
+and its callback are. -/
+inductive Consumer where
+  | trigger (mode : ConcurrencyMode) (enabled : Bool)
+  | callbackBinding (bindingEnabled callbackEnabled : Bool)
+  deriving DecidableEq, Repr
+
+def Consumer.enabled : Consumer → Bool
+  | .trigger _ enabled => enabled
+  | .callbackBinding binding callback => binding && callback
+
+def Consumer.mode : Consumer → ConcurrencyMode
+  | .trigger mode _ => mode
+  | .callbackBinding _ _ => .parallel
+
+/-- A disabled consumer excludes nothing: only receipts certify its arrivals,
+so unadmitted ones stay pending until it is enabled again. -/
+def Consumer.eligible (consumer : Consumer) (eligible : Arrival → Bool) : Arrival → Bool :=
+  if consumer.enabled then eligible else fun _ => true
+
+/-- A callback binding's receipt is its event `CallbackInvocation`, keyed by
+binding, collection and document. `version` is the source version the
+invocation froze; the receipt omits it, so an edit after admission is never a
+second arrival. -/
+structure CallbackAdmission where
+  identity : Identity
+  version : String
+  deriving DecidableEq, Repr
+
+def CallbackAdmission.fire (admission : CallbackAdmission) : Fire :=
+  { identity := admission.identity, session := "", serial := false,
+    emitOutcome := false, goalBacked := false }
+
+def admitCallback (state : State) (admission : CallbackAdmission) : State :=
+  admit state admission.fire
 
 /-- Only history at/before the initial registration seed is exempt. Legacy
 serial's deliberate busy exclusion is outside the reliable-delivery guarantee. -/
@@ -219,5 +261,40 @@ theorem replay_after_admission_crash (committed : State) (fire : Fire) (didCommi
   cases didCommit
   · rfl
   · exact admission_crash_after_commit committed fire
+
+theorem callback_binding_is_reliable (binding callback : Bool) :
+    Reliable (Consumer.callbackBinding binding callback).mode := by
+  simp [Reliable, Consumer.mode]
+
+theorem admit_callback_receipts (state : State) (admission : CallbackAdmission) :
+    admitted (admitCallback state admission) admission.identity = true := by
+  unfold admitCallback admit
+  by_cases h : admission.identity ∈ state.receipts
+  · simp_all [CallbackAdmission.fire, admitted]
+  · simp [h, CallbackAdmission.fire, Triggers.outcomeSourceAllowed, admitted]
+
+/-- Recovery after an edit finds the same receipt instead of admitting again. -/
+theorem edited_source_not_readmitted (state : State) (admission : CallbackAdmission)
+    (version : String) :
+    admitCallback (admitCallback state admission) { admission with version } =
+      admitCallback state admission :=
+  admit_duplicate _ _ (admit_callback_receipts state admission)
+
+/-- Disabling either the binding or its callback holds every unadmitted
+arrival: checkpoints then pass only over receipts. -/
+theorem disabled_consumer_checkpoints_only_receipts (consumer : Consumer)
+    (hdisabled : consumer.enabled = false) (initialSeed : Nat) (cursor : Cursor)
+    (committed : State) (journal : Journal) (through : Nat) (busy : Bool)
+    (eligible : Arrival → Bool) (commit : Bool) (hmode : Reliable consumer.mode)
+    (hprior : DeliveredPrefix initialSeed cursor committed journal fun _ => true) :
+    DeliveredPrefix initialSeed
+      (acknowledge cursor committed journal through consumer.mode busy
+        (consumer.eligible eligible) commit)
+      committed journal (fun _ => true) := by
+  have h : consumer.eligible eligible = fun _ => true := by
+    simp [Consumer.eligible, hdisabled]
+  rw [h]
+  exact acknowledge_preserves_delivered_prefix initialSeed cursor committed journal
+    through consumer.mode busy _ commit hmode hprior
 
 end EventDelivery.Durable

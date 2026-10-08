@@ -1,14 +1,11 @@
 /* Triggers: each read as a sentence, with the task, schedule and event
    source it needs creatable in place. Tasks is the page people start on;
    this is the desktop's own tab. */
+import type { NodeView } from "../../../hooks/fleetStore";
+import { setEnabled } from "./enabled";
 import { useState } from "react";
 import { Timer, Zap } from "lucide-react";
-import type {
-  DeploymentView,
-  Trigger,
-  TriggerView,
-} from "@source-inc/gents-desktop-client";
-import type { Shell } from "@/hooks/useShell";
+import type { Trigger, TriggerView } from "@source-inc/gents-desktop-client";
 import {
   AreaRow,
   ChoiceRow,
@@ -36,23 +33,24 @@ import { TaskEditor } from "./TasksPanel";
 import { ScheduleEditor } from "./SchedulesPanel";
 import { EventSourceEditor } from "./EventSourcesPanel";
 import { RowMenu } from "./RowMenu";
+import { agentOf } from "@/lib/agents";
+import { useApp } from "@/app/AppContext";
 
 const SECTION = "triggers";
 const when = (iso: string | null | undefined) =>
   iso ? new Date(iso).toLocaleString() : "—";
 
 export function TriggerEditor({
-  shell,
   deployment,
   trigger,
   embedded = false,
 }: {
-  shell: Shell;
-  deployment: DeploymentView;
+  deployment: NodeView;
   trigger: TriggerView;
   /* in a sheet beside a task: no Danger zone */
   embedded?: boolean;
 }) {
+  const { changeConfig } = useApp().actions;
   const cfg = trigger.config;
   const base = {
     name: "agent" as const,
@@ -85,56 +83,73 @@ export function TriggerEditor({
   } | null>(null);
   const draftNew = (kind: NewReference["kind"]) =>
     new Promise<string | null>((resolve) => setDrafting({ kind, resolve }));
-  const d = useDraft(saved, async (next) => {
-    const newTask = pending.task?.task_id === next.taskId ? pending.task : undefined;
-    const newSchedule =
+  /* the documents drafted from the fields that the draft points at */
+  const drafted = (next: typeof saved) => ({
+    newTask: pending.task?.task_id === next.taskId ? pending.task : undefined,
+    newSchedule:
       next.sourceKind === "schedule" && pending.schedule?.schedule_id === next.sourceId
         ? pending.schedule
-        : undefined;
-    const newEvent =
+        : undefined,
+    newEvent:
       next.sourceKind === "event" && pending.event?.event_source_id === next.sourceId
         ? pending.event
-        : undefined;
-    if (!newTask && !deployment.tasks.some((task) => task.taskId === next.taskId))
-      throw new Error("Choose an existing task");
-    const sourceExists =
-      next.sourceKind === "schedule"
-        ? Boolean(newSchedule) ||
-          deployment.schedules.some((row) => row.schedule_id === next.sourceId)
-        : Boolean(newEvent) ||
-          deployment.eventSources.some((row) => row.event_source_id === next.sourceId);
-    if (!sourceExists) throw new Error("Choose an existing source");
-    const document: Trigger = {
-      ...cfg,
-      display_name: next.displayName.trim() || null,
-      description: next.description.trim() || null,
-      task_id: next.taskId,
-      enabled: next.enabled,
-      concurrency: (next.concurrency || null) as Trigger["concurrency"],
-      session_id_template: next.sessionIdTemplate.trim() || null,
-      source:
-        next.sourceKind === "schedule"
-          ? { kind: "schedule", schedule_id: next.sourceId }
-          : { kind: "event", event_source_id: next.sourceId },
-      tags: next.tags.length ? next.tags : null,
-    };
-    await shell.applyConfig((api) =>
-      /* anything drafted from the fields lands with the trigger, in one
-         transaction, or not at all */
-      newTask || newSchedule || newEvent
-        ? api.applyConfigComponents({
-            document: {
-              agent_principal: { agent_did: deployment.agentDid },
-              ...(newTask ? { tasks: [newTask] } : {}),
-              ...(newSchedule ? { schedules: [newSchedule] } : {}),
-              ...(newEvent ? { event_sources: [newEvent] } : {}),
-              triggers: [document],
-            },
-          })
-        : api.saveTriggerConfig({ document }),
-    );
-    setPending({});
+        : undefined,
   });
+  const d = useDraft(
+    saved,
+    async (next) => {
+      const { newTask, newSchedule, newEvent } = drafted(next);
+      const document: Trigger = {
+        ...cfg,
+        display_name: next.displayName.trim() || null,
+        description: next.description.trim() || null,
+        task_id: next.taskId,
+        enabled: next.enabled,
+        concurrency: (next.concurrency || null) as Trigger["concurrency"],
+        session_id_template: next.sessionIdTemplate.trim() || null,
+        source:
+          next.sourceKind === "schedule"
+            ? { kind: "schedule", schedule_id: next.sourceId }
+            : { kind: "event", event_source_id: next.sourceId },
+        tags: next.tags.length ? next.tags : null,
+      };
+      /* anything drafted from the fields lands with the trigger, in one
+       transaction, or not at all */
+      if (newTask || newSchedule || newEvent)
+        await changeConfig("applyConfigComponents", {
+          document: {
+            agent_principal: { agent_did: deployment.agentDid },
+            ...(newTask ? { tasks: [newTask] } : {}),
+            ...(newSchedule ? { schedules: [newSchedule] } : {}),
+            ...(newEvent ? { event_sources: [newEvent] } : {}),
+            triggers: [document],
+          },
+        });
+      else await changeConfig("saveTriggerConfig", { document });
+      setPending({});
+    },
+    {
+      /* the task and the source are ones the node lists, or ones just drafted */
+      problems: (next) => {
+        const { newTask, newSchedule, newEvent } = drafted(next);
+        const sourceExists =
+          next.sourceKind === "schedule"
+            ? Boolean(newSchedule) ||
+              deployment.schedules.some((row) => row.schedule_id === next.sourceId)
+            : Boolean(newEvent) ||
+              deployment.eventSources.some(
+                (row) => row.event_source_id === next.sourceId,
+              );
+        return {
+          taskId:
+            newTask || deployment.tasks.some((task) => task.taskId === next.taskId)
+              ? undefined
+              : "Choose an existing task",
+          sourceId: sourceExists ? undefined : "Choose an existing source",
+        };
+      },
+    },
+  );
   const id = (f: string) => `${cfg.trigger_id}-${f}`;
   const readiness = triggerReadiness(deployment, trigger);
   /* a referenced document's full editor, open beside the automation */
@@ -168,7 +183,7 @@ export function TriggerEditor({
         }
         description={
           besideTask
-            ? `Runs with ${deployment.behaviors.find((b) => b.behaviorId === besideTask.behaviorId)?.displayName ?? "no behavior"}`
+            ? `Runs with ${agentOf(deployment, besideTask.behaviorId)?.displayName ?? "no behavior"}`
             : besideSchedule
               ? cadenceInWords(besideSchedule)
               : besideSource
@@ -193,7 +208,6 @@ export function TriggerEditor({
         {besideTask && (
           <TaskEditor
             key={besideTask.taskId}
-            shell={shell}
             deployment={deployment}
             task={besideTask}
             embedded
@@ -202,7 +216,7 @@ export function TriggerEditor({
         {besideSchedule && (
           <ScheduleEditor
             key={besideSchedule.schedule_id}
-            shell={shell}
+
             deployment={deployment}
             schedule={besideSchedule}
             embedded
@@ -211,7 +225,6 @@ export function TriggerEditor({
         {besideSource && (
           <EventSourceEditor
             key={besideSource.event_source_id}
-            shell={shell}
             deployment={deployment}
             source={besideSource}
             embedded
@@ -243,15 +256,12 @@ export function TriggerEditor({
           label="Display name"
           value={d.draft.displayName}
           onChange={(v) => d.set("displayName", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
         <AreaRow
           id={id("description")}
           label="Description"
           value={d.draft.description}
           onChange={(v) => d.set("description", v)}
-          onCommit={d.commit}
           rows={2}
         />
         <RefRow
@@ -259,7 +269,8 @@ export function TriggerEditor({
           label="Task"
           description="The prompt that runs, and the behavior that runs it."
           value={d.draft.taskId}
-          onChange={(v) => d.choose("taskId", v)}
+          error={d.problems.taskId}
+          onChange={(v) => d.set("taskId", v)}
           items={[
             ...deployment.tasks.map((t) => ({
               value: t.taskId,
@@ -302,7 +313,8 @@ export function TriggerEditor({
             id={id("sid")}
             label="Schedule"
             value={d.draft.sourceId}
-            onChange={(v) => d.choose("sourceId", v)}
+            error={d.problems.sourceId}
+            onChange={(v) => d.set("sourceId", v)}
             items={[
               ...deployment.schedules.map((s) => ({
                 value: s.schedule_id,
@@ -326,7 +338,8 @@ export function TriggerEditor({
             id={id("sid")}
             label="Event source"
             value={d.draft.sourceId}
-            onChange={(v) => d.choose("sourceId", v)}
+            error={d.problems.sourceId}
+            onChange={(v) => d.set("sourceId", v)}
             items={[
               ...deployment.eventSources.map((s) => ({
                 value: s.event_source_id,
@@ -350,7 +363,7 @@ export function TriggerEditor({
           id={id("enabled")}
           label="Enabled"
           checked={d.draft.enabled}
-          onChange={(v) => d.choose("enabled", v)}
+          onChange={(v) => d.set("enabled", v)}
         />
         <TextRow
           id={id("session")}
@@ -358,15 +371,13 @@ export function TriggerEditor({
           description="Optional session ID or template such as {{ doc.lead_session_id }}. Busy sessions queue the request. Blank starts a new session."
           value={d.draft.sessionIdTemplate}
           onChange={(v) => d.set("sessionIdTemplate", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
           mono
         />
         <ChoiceRow
           id={id("concurrency")}
           label="Concurrency"
           value={d.draft.concurrency}
-          onChange={(v) => d.choose("concurrency", v)}
+          onChange={(v) => d.set("concurrency", v)}
           items={[
             { value: "parallel", label: "Parallel" },
             { value: "serial", label: "Serial (skip when busy)" },
@@ -392,10 +403,8 @@ export function TriggerEditor({
         />
       </Group>
       <DraftActions
-        dirty={d.dirty}
-        saving={d.saving}
-        error={d.error}
-        onSave={d.save}
+        draft={d}
+        fields={{ taskId: id("task"), sourceId: id("sid") }}
         onCancel={() => {
           d.reset();
           setPending({});
@@ -428,12 +437,10 @@ export function TriggerEditor({
           label={cfg.display_name ?? cfg.trigger_id}
           base={base}
           onDelete={() =>
-            shell.applyConfig((api) =>
-              api.deleteTriggerConfig({
-                triggerId: cfg.trigger_id,
-                agentDid: deployment.agentDid,
-              }),
-            )
+            changeConfig("deleteTriggerConfig", {
+              triggerId: cfg.trigger_id,
+              agentDid: deployment.agentDid,
+            })
           }
         />
       )}
@@ -442,14 +449,13 @@ export function TriggerEditor({
 }
 
 export function TriggersPanel({
-  shell,
   deployment,
   item,
 }: {
-  shell: Shell;
-  deployment: DeploymentView;
+  deployment: NodeView;
   item?: string;
 }) {
+  const { changeConfig } = useApp().actions;
   const base = {
     name: "agent" as const,
     agentDid: deployment.agentDid,
@@ -459,7 +465,6 @@ export function TriggersPanel({
   return (
     <>
       <NewAutomationDialog
-        shell={shell}
         deployment={deployment}
         open={creating}
         onOpenChange={setCreating}
@@ -494,33 +499,33 @@ export function TriggersPanel({
                 enabled={{
                   checked: t.config.enabled !== false,
                   onChange: (enabled) =>
-                    shell.applyConfig((api) =>
-                      api.saveTriggerConfig({ document: { ...t.config, enabled } }),
+                    setEnabled(
+                      changeConfig,
+                      deployment.agentDid,
+                      "Trigger",
+                      t.config.trigger_id,
+                      enabled,
                     ),
                 }}
                 onDuplicate={async () => {
                   const trigger_id = newId("trig");
-                  await shell.applyConfig((api) =>
-                    api.saveTriggerConfig({
-                      document: {
-                        ...t.config,
-                        trigger_id,
-                        display_name: `${t.config.display_name ?? t.config.trigger_id} copy`,
-                        enabled: false,
-                        created_at: null,
-                        updated_at: null,
-                      },
-                    }),
-                  );
+                  await changeConfig("saveTriggerConfig", {
+                    document: {
+                      ...t.config,
+                      trigger_id,
+                      display_name: `${t.config.display_name ?? t.config.trigger_id} copy`,
+                      enabled: false,
+                      created_at: null,
+                      updated_at: null,
+                    },
+                  });
                   return trigger_id;
                 }}
                 onDelete={() =>
-                  shell.applyConfig((api) =>
-                    api.deleteTriggerConfig({
-                      triggerId: t.config.trigger_id,
-                      agentDid: deployment.agentDid,
-                    }),
-                  )
+                  changeConfig("deleteTriggerConfig", {
+                    triggerId: t.config.trigger_id,
+                    agentDid: deployment.agentDid,
+                  })
                 }
               />
             ),
@@ -534,7 +539,6 @@ export function TriggersPanel({
           return (
             <TriggerEditor
               key={trigger.config.trigger_id}
-              shell={shell}
               deployment={deployment}
               trigger={trigger}
             />

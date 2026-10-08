@@ -8,6 +8,10 @@ use super::operations::DerivedCancelCauseView;
 pub struct MessageView {
     pub message_key: String,
     pub request_id: Option<String>,
+    /// Whether this row is the person's own message for its request (the
+    /// authored prompt publication) rather than a row the request also
+    /// authors: workspace context, tool delivery, reminders.
+    pub owns_turn: bool,
     pub sequence: Option<i64>,
     pub role: Option<String>,
     pub display_role: Option<String>,
@@ -262,6 +266,12 @@ pub enum RenderedTimelineItem {
         #[serde(skip_serializing_if = "Option::is_none", default)]
         #[ts(optional = nullable)]
         request_id: Option<String>,
+        /// Whether this row stands for the person's turn of its request.
+        /// A request authors user rows that do not (workspace instructions
+        /// under `authored:{doc}:context`, tool delivery); consumers must
+        /// not let those replace or retire the turn's other stand-ins
+        /// (pending turn, the app's own copy of a sent message).
+        owns_turn: bool,
         sequence: Option<i64>,
         content: Option<String>,
         timestamp: Option<String>,
@@ -424,7 +434,6 @@ pub struct SessionTimelinePageView {
 #[serde(rename_all = "camelCase")]
 pub struct SessionProjectionRevisionView {
     pub store_version: u64,
-    pub reconcile_version: u64,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -440,6 +449,9 @@ pub struct SessionLiveTextPatchView {
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionLiveDeltaView {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub live_cursor: Option<String>,
     /// delta | unchanged | snapshotRequired
     pub outcome: String,
     pub revision: SessionProjectionRevisionView,
@@ -469,6 +481,11 @@ pub struct SessionHydrationView {
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopSessionSnapshot {
+    /// Ephemeral identity of the canonical live source. Full reads still own
+    /// historical reconciliation; this cursor carries no history coverage.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub live_cursor: Option<String>,
     pub session_id: String,
     pub agent_did: Option<String>,
     pub behavior_id: Option<String>,

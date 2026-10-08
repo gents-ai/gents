@@ -1,6 +1,5 @@
+use super::support;
 use super::*;
-#[path = "support.rs"]
-mod support;
 use serde::Deserialize;
 use serde_json::json;
 use support::*;
@@ -187,6 +186,7 @@ async fn generated_goal_config_reactivation_cases_drive_transactional_setter() {
             SESSION,
             None,
             Some(GoalStatus::parse(&case.target).unwrap()),
+            None,
             None,
         )
         .await;

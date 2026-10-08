@@ -71,15 +71,11 @@ def selectedShell
 
 def ctxReady : SubmitContext :=
   { clientAvailable := true
-  , composerNonEmpty := true
   , requestedBehavior := some contractBehavior
   }
 
 def ctxOffline : SubmitContext :=
   { ctxReady with clientAvailable := false }
-
-def ctxEmptyComposer : SubmitContext :=
-  { ctxReady with composerNonEmpty := false }
 
 def optionOr {α : Type} (first second : Option α) : Option α :=
   match first with
@@ -171,13 +167,6 @@ def frontendWorkflowFromProjection
           , turnState := some (clientTurnStateName turn)
           , reason := none
           }
-      | .blocked .composerEmpty =>
-          { kind := "ready"
-          , sessionId := none
-          , requestId := none
-          , turnState := none
-          , reason := none
-          }
       | .blocked reason =>
           { kind := "blocked"
           , sessionId := none
@@ -250,7 +239,6 @@ def clientShellCaseFromStep
   , frontendClientAvailable := ctx.clientAvailable
   , frontendSelectedAgentDid := frontendLocal.selection.agent
   , frontendSelectedSessionId := frontendLocal.selection.session
-  , frontendComposerNonEmpty := ctx.composerNonEmpty
   , frontendSending :=
       match frontendLocal.workflow with
       | .submitting _ _ => true
@@ -360,12 +348,6 @@ def clientShellCases : List ClientShellContractCase :=
       "blocked_submit_agent_not_selected"
       "blocked_submit_gates"
       noAgent input emptyStore .healthy ctxReady noAgent noAgent emptyStore
-  , let pre := selectedShell none
-    let input := ShellInput.user .startSubmit
-    clientShellCaseFromStep
-      "blocked_submit_composer_empty"
-      "blocked_submit_gates"
-      pre input emptyStore .healthy ctxEmptyComposer pre pre emptyStore
   , let pre := selectedShell (some sid1) (.submitting contractAgent (some sid1))
     let input := ShellInput.user .startSubmit
     clientShellCaseFromStep

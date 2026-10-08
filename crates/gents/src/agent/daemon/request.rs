@@ -11,7 +11,7 @@ use gents_loop::loop_stream::{provider_messages, provider_view_tagged, TaggedMes
 
 const CANCELLATION_GRACE_PERIOD: std::time::Duration = std::time::Duration::from_millis(100);
 
-impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
+impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
     /// Size the exact first-turn provider request for session-compaction
     /// admission through the owned loop's assembly owner, including its
     /// reasoning replay selection. The loop rebuilds the request at dispatch
@@ -26,6 +26,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         request_context_message: Option<&crate::llm::message::Message>,
         aggregate_token_budget: Option<crate::agent::loop_stream::AggregateTokenBudget>,
         replay: &gents_loop::loop_stream::LoopReplayInput,
+        resume_from_history: bool,
     ) -> Result<usize> {
         let config = crate::completion_factory::loop_config_for_request(
             &self.behavior,
@@ -34,17 +35,25 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
             aggregate_token_budget,
             self.loop_tools.len(),
         )?;
-        let mut provider_history = skill_reminders
+        let provider_history = skill_reminders
             .iter()
             .cloned()
             .map(TaggedMessage::unassociated)
             .chain(history.iter().cloned())
             .collect::<Vec<_>>();
+        let (mut provider_history, prompt) = super::inference::request_entry(
+            provider_history,
+            &request.content,
+            resume_from_history,
+            request_context_message,
+        )?;
         let mut new_messages = gents_loop::loop_stream::assemble_new_messages(
-            request_context_message.cloned(),
-            TaggedMessage::unassociated(crate::llm::message::Message::user(
-                request.content.clone(),
-            )),
+            if resume_from_history {
+                None
+            } else {
+                request_context_message.cloned()
+            },
+            prompt,
         );
         let provider_request = gents_loop::loop_stream::assemble_provider_request(
             self.model.as_ref(),
@@ -76,6 +85,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         }
         let request_token = tokio_util::sync::CancellationToken::new();
         let request = lifecycle.request().clone();
+        let resume_from_history = session::retry_has_published_input(&self.node, &request).await?;
         let effective_sampling = self.behavior.sampling;
         effective_sampling.validate_for_provider(
             self.behavior.backend_provider_kind,
@@ -311,6 +321,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             request_context_message.as_ref(),
                             aggregate_token_budget.clone(),
                             &replay,
+                            resume_from_history,
                         )
                         .await?;
                     let reduction_admission = compaction::ReductionAdmission::for_input(
@@ -536,6 +547,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     effective_seed,
                     workspace,
                     request_context_message,
+                    resume_from_history,
                 )
                 .instrument(tracing::info_span!(
                     "request.run_inference",

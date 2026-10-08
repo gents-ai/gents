@@ -342,7 +342,10 @@ pub(crate) async fn validate_desired_state_plan(
                 continue;
             }
             let key = (document.collection, id.to_owned());
-            let replacement = if candidate.contains_key(&key) {
+            let replacement = if let Some(current) = candidate.get(&key) {
+                if document.collection == Collection::AgentPrincipal {
+                    validate_principal_replacement(current, &document.update)?;
+                }
                 &document.update
             } else {
                 &document.add
@@ -436,63 +439,119 @@ async fn validate_trigger_document_fields(
         else {
             continue;
         };
-        let templates = [
-            ("prompt_template", Some(task.prompt_template.as_str())),
-            (
-                "goal_objective_template",
-                task.goal_objective_template.as_deref(),
-            ),
-            (
-                "session_id_template",
-                trigger.session_id_template.as_deref(),
-            ),
-        ];
-        for (field, template) in templates {
-            let Some(template) =
-                template.filter(|template| !crate::template::template_guards_undefined(template))
+        validate_event_trigger_document_fields(&trigger, &task, &source, fields)?;
+    }
+    Ok(())
+}
+
+/// The templates a fire of `trigger` renders against the delivered document:
+/// the task's prompt and goal objective, and the trigger's session template.
+fn event_trigger_templates<'a>(
+    trigger: &'a crate::document_config::Trigger,
+    task: &'a crate::document_config::Task,
+) -> [(&'static str, Option<&'a str>); 3] {
+    [
+        ("prompt_template", Some(task.prompt_template.as_str())),
+        (
+            "goal_objective_template",
+            task.goal_objective_template.as_deref(),
+        ),
+        (
+            "session_id_template",
+            trigger.session_id_template.as_deref(),
+        ),
+    ]
+}
+
+/// A fire renders `{{ doc.X }}` against the delivered source document with
+/// strict undefined values, so a field the source collection does not declare
+/// fails every fire (#1970). `_`-prefixed names are engine metadata, a
+/// template that guards an absent value renders it instead of failing, and a
+/// `doc.` reference to an aggregate pseudo-field is refused: it resolves
+/// through the query engine, never the delivered document. A per-document
+/// `emit_outcome` delivery of `CallbackResult` or `WorkspaceReceipt` resolves
+/// `handoff_id`, `reply_session_id` and `attempt` even undeclared: the
+/// trigger engine injects that native-route provenance into the fire's
+/// document (#2341).
+pub fn validate_event_trigger_document_fields(
+    trigger: &crate::document_config::Trigger,
+    task: &crate::document_config::Task,
+    source: &crate::document_config::EventSource,
+    declared: &BTreeMap<String, SchemaField>,
+) -> Result<()> {
+    for (field, template) in event_trigger_templates(trigger, task) {
+        let Some(template) =
+            template.filter(|template| !crate::template::template_guards_undefined(template))
+        else {
+            continue;
+        };
+        for reference in crate::template::parse_template_for_validation(template)? {
+            let Some(name) = reference
+                .path
+                .get(1)
+                .filter(|_| reference.root() == Some("doc"))
             else {
                 continue;
             };
-            for reference in crate::template::parse_template_for_validation(template)? {
-                let Some(name) = reference
-                    .path
-                    .get(1)
-                    .filter(|_| reference.root() == Some("doc"))
-                else {
-                    continue;
-                };
-                let own_field = |name: &String| {
-                    !name.starts_with('_')
-                        && !crate::defra_query::schema::is_aggregate_pseudo_field(name)
-                };
-                let resolved_native_route_field = task.emit_outcome
-                    && source.group.is_none()
-                    && matches!(
-                        source.source_collection.as_str(),
-                        "CallbackResult" | "WorkspaceReceipt"
-                    )
-                    && matches!(name.as_str(), "handoff_id" | "reply_session_id" | "attempt");
-                if name.starts_with('_')
-                    || fields.contains_key(name) && own_field(name)
-                    || resolved_native_route_field
-                {
-                    continue;
-                }
-                anyhow::bail!(
-                    "trigger {} {field} references doc.{name}, but {} has no field {name:?}; its fields are {}",
-                    trigger.trigger_id,
-                    source.source_collection,
-                    fields
-                        .keys()
-                        .filter(|name| own_field(name))
-                        .cloned()
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                );
+            let own_field = |name: &String| {
+                !name.starts_with('_')
+                    && !crate::defra_query::schema::is_aggregate_pseudo_field(name)
+            };
+            let resolved_native_route_field = task.emit_outcome
+                && source.group.is_none()
+                && matches!(
+                    source.source_collection.as_str(),
+                    "CallbackResult" | "WorkspaceReceipt"
+                )
+                && matches!(name.as_str(), "handoff_id" | "reply_session_id" | "attempt");
+            if name.starts_with('_')
+                || declared.contains_key(name) && own_field(name)
+                || resolved_native_route_field
+            {
+                continue;
             }
+            anyhow::bail!(
+                "trigger {} {field} references doc.{name}, but {} has no field {name:?}; its fields are {}",
+                trigger.trigger_id,
+                source.source_collection,
+                declared
+                    .keys()
+                    .filter(|name| own_field(name))
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
         }
     }
     Ok(())
+}
+
+/// The `{{ doc.X }}` field names [`validate_event_trigger_document_fields`]
+/// judges for this trigger and task, so a caller that must decide whether the
+/// source collection's schema is worth introspecting derives that from the
+/// rule instead of re-deriving a template walk.
+pub fn event_trigger_document_field_names(
+    trigger: &crate::document_config::Trigger,
+    task: &crate::document_config::Task,
+) -> Result<BTreeSet<String>> {
+    let mut names = BTreeSet::new();
+    for (_, template) in event_trigger_templates(trigger, task) {
+        let Some(template) =
+            template.filter(|template| !crate::template::template_guards_undefined(template))
+        else {
+            continue;
+        };
+        for reference in crate::template::parse_template_for_validation(template)? {
+            if let Some(name) = reference
+                .path
+                .get(1)
+                .filter(|_| reference.root() == Some("doc"))
+            {
+                names.insert(name.clone());
+            }
+        }
+    }
+    Ok(names)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1179,6 +1238,20 @@ async fn ensure_expectations_hold(
     }
 }
 
+fn validate_principal_replacement(current: &Value, candidate: &Value) -> Result<()> {
+    if let Some(default) = current.get("default_behavior_id").and_then(Value::as_str) {
+        anyhow::ensure!(
+            candidate
+                .get("default_behavior_id")
+                .and_then(Value::as_str)
+                .is_some(),
+            "AgentPrincipal replacement would clear default_behavior_id {default:?}; \
+             include the current default or another enabled behavior in the replacement"
+        );
+    }
+    Ok(())
+}
+
 /// All writes remain in the caller's transaction. Reference checks run after
 /// staged writes so valid cyclic configurations do not depend on write order.
 /// Digest expectations are checked first, in the same transaction; a mismatch
@@ -1202,7 +1275,10 @@ pub async fn apply_desired_state_plan(
             .as_ref()
             .is_none_or(|(_, current)| current != &document.update);
         let name = document.collection.graphql_type();
-        let (mutation, input) = if let Some((doc_id, _)) = existing {
+        let (mutation, input) = if let Some((doc_id, current)) = existing {
+            if document.collection == Collection::AgentPrincipal {
+                validate_principal_replacement(&current, &document.update)?;
+            }
             let mut update = document.update.clone();
             if document.collection == Collection::ChainKeyBinding {
                 crate::document_config::preserve_chain_key_binding_update_fields(&mut update)?;
@@ -1265,7 +1341,7 @@ pub async fn apply_desired_state_plan(
         let (owner, id) = document_identity(document.collection, &document.add)?;
         match document.collection {
             Collection::EventSource => {
-                super::event_source_cursor::seed_referencing_triggers(txn, owner, id).await?;
+                super::event_source_cursor::seed_referencing_consumers(txn, owner, id).await?;
             }
             Collection::Trigger => {
                 let trigger: crate::document_config::Trigger =
@@ -1274,8 +1350,17 @@ pub async fn apply_desired_state_plan(
                     trigger.source,
                     crate::document_config::TriggerSource::Event { .. }
                 ) {
-                    super::event_source_cursor::load_or_seed(txn, owner, id).await?;
+                    let consumer = gents_protocol::event_delivery::EventConsumer::Trigger {
+                        trigger_id: id.to_owned(),
+                    };
+                    super::event_source_cursor::load_or_seed(txn, owner, &consumer).await?;
                 }
+            }
+            Collection::CallbackBinding => {
+                let consumer = gents_protocol::event_delivery::EventConsumer::CallbackBinding {
+                    binding_id: id.to_owned(),
+                };
+                super::event_source_cursor::load_or_seed(txn, owner, &consumer).await?;
             }
             _ => {}
         }

@@ -64,12 +64,9 @@ fn every_subject_is_the_desktop_engineer_on_an_eval_node() {
             panic!("{name}: one behavior, the Engineer");
         };
         assert_eq!(behavior.behavior_id, "engineer", "{name}");
-        // A trial runtime becomes ready only for a principal that names its
-        // default behavior.
         assert_eq!(
-            config.agent_principal.default_behavior_id.as_deref(),
-            Some("engineer"),
-            "{name}"
+            config.agent_principal.default_behavior_id, None,
+            "{name}: the trial selects the cell's behavior as the default"
         );
         assert!(
             behavior

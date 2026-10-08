@@ -3,6 +3,7 @@ import Proofs.Conformance.GraphWorkspaceLineage
 import Proofs.Conformance.OperatorBaseFreeze
 import Proofs.Conformance.LogicalOutputObligation
 import Proofs.Conformance.InvalidToolProgress
+import Proofs.Conformance.SchemaArgumentRepair
 import Proofs.Conformance.RepeatedToolFailure
 import Proofs.Conformance.ToolTimeouts
 import Proofs.Conformance.PluginResources
@@ -28,6 +29,7 @@ import Proofs.Conformance.Contracts.Json.Workspace
 import Proofs.Conformance.Contracts.Json.Callback
 import Proofs.Conformance.Contracts.Json.SelfConfig
 import Proofs.Conformance.Contracts.Json.Goal
+import Proofs.Conformance.GoalClaimedReadiness
 import Proofs.Conformance.Contracts.Json.SessionHydration
 import Proofs.Conformance.Contracts.Json.PairingReconcile
 import Proofs.Conformance.Contracts.Json.Enrollment
@@ -48,6 +50,7 @@ import Proofs.CompletionRetry.Contracts
 import Proofs.Conformance.Triggers.Contracts
 import Proofs.Conformance.EventGroups
 import Proofs.Conformance.ClientShell.Contracts
+import Proofs.Conformance.ClientLiveDelta
 import Proofs.ApplyReconcile.ContractCases
 import Proofs.Conformance.Deviations
 import Proofs.Conformance.CoverageLedger
@@ -57,6 +60,7 @@ import Proofs.Conformance.TriggerDelivery
 import Proofs.Conformance.GraphPipeline
 import Proofs.Conformance.GoalOperatorResume
 import Proofs.Conformance.GoalClaimedPublication
+import Proofs.Conformance.GoalResetResume
 import Proofs.Conformance.GoalRequestHead
 import Proofs.Conformance.GraphFailureAttribution
 import Proofs.Conformance.GraphLogicalInvocation
@@ -107,8 +111,12 @@ def snapshotJson : String :=
       ++ Conformance.GoalClaimedPublicationContracts.casesJson ++ ","
     ++ "\"goal_operator_resume_cases\":"
       ++ Conformance.GoalOperatorResumeContracts.resumeCasesJson ++ ","
+    ++ "\"goal_operator_resume_on_cases\":"
+      ++ Conformance.GoalOperatorResumeContracts.resumeOnCasesJson ++ ","
     ++ "\"goal_config_reactivation_cases\":"
       ++ Conformance.GoalOperatorResumeContracts.configCasesJson ++ ","
+    ++ "\"goal_reset_resume_cases\":"
+      ++ Conformance.GoalResetResumeContracts.casesJson ++ ","
     ++ "\"graph_pipeline_validation_cases\":"
       ++ Conformance.GraphPipelineContracts.validationCasesJson ++ ","
     ++ "\"graph_pipeline_revision_gate_cases\":"
@@ -157,6 +165,8 @@ def snapshotJson : String :=
       ++ goalDecisionCasesJson ++ ","
     ++ "\"goal_readiness_gate_cases\":"
       ++ goalReadinessGateCasesJson ++ ","
+    ++ "\"goal_claimed_readiness_cases\":"
+      ++ Conformance.GoalClaimedReadiness.casesJson ++ ","
     ++ "\"goal_transition_cases\":"
       ++ goalTransitionCasesJson ++ ","
     ++ "\"goal_create_cases\":" ++ goalCreateCasesJson ++ ","
@@ -211,6 +221,8 @@ def snapshotJson : String :=
       ++ Conformance.ClientShellContracts.desktopClientShellCasesJson ++ ","
     ++ "\"request_lifecycle_operator_ui_cases\":"
       ++ Conformance.ClientShellContracts.requestLifecycleOperatorUiCasesJson ++ ","
+    ++ "\"client_live_delta_cases\":"
+      ++ Conformance.ClientLiveDeltaContracts.casesJson ++ ","
     ++ "\"startup_readiness_cases\":"
       ++ startupReadinessCasesJson ++ ","
     ++ "\"readiness_publication_cases\":"
@@ -365,6 +377,8 @@ def snapshotJson : String :=
       ++ Conformance.MailboxReplyContracts.casesJson ++ ","
     ++ "\"mailbox_handoff_cases\":"
       ++ Conformance.MailboxHandoffContracts.casesJson ++ ","
+    ++ "\"schema_argument_repair_cases\":"
+      ++ Conformance.SchemaArgumentRepair.casesJson ++ ","
     ++ "\"invalid_tool_progress_cases\":"
       ++ Conformance.InvalidToolProgressContracts.casesJson ++ ","
     ++ "\"repeated_tool_failure_cases\":"
@@ -413,6 +427,12 @@ def snapshotJson : String :=
     ++ "\"prompt_assembly_claude_wire_start_cases\":" ++
       promptAssemblyClaudeWireStartCasesJson ++ ","
     ++ "\"routing_affinity_cases\":" ++ routingAffinityCasesJson ++ ","
+    ++ "\"prompt_assembly_responses_storage_cases\":" ++
+      promptAssemblyResponsesStorageCasesJson ++ ","
+    ++ "\"prompt_assembly_responses_effort_cases\":" ++
+      promptAssemblyResponsesEffortCasesJson ++ ","
+    ++ "\"retry_frontier_cases\":" ++ retryFrontierCasesJson ++ ","
+    ++ "\"retry_entry_cases\":" ++ retryEntryCasesJson ++ ","
     ++ "\"current_input_cases\":" ++ currentInputCasesJson ++ ","
     ++ "\"prompt_assembly_sanitize_cases\":"
       ++ promptAssemblySanitizeCasesJson ++ ","
@@ -494,6 +514,9 @@ def snapshotJson : String :=
     ++ "\"backend_health_cases\":"
       ++ jsonArray
         (Proofs.BackendHealth.transitionCases.map backendHealthCaseJson) ++ ","
+    ++ "\"backend_probe_schedule_cases\":"
+      ++ jsonArray
+        (Proofs.BackendHealth.scheduleCases.map backendProbeScheduleCaseJson) ++ ","
     ++ "\"follow_up_hooks\":"
       ++ followUpHooksJson ++ ","
     ++ "\"trigger_delivery\":" ++ Conformance.TriggerDelivery.casesJson ++ ","

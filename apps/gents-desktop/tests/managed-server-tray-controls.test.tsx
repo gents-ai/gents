@@ -59,7 +59,7 @@ describe("managed server tray control ownership", () => {
   });
 
   afterEach(() => {
-    delete (window as Record<string, unknown>).__TAURI_INTERNALS__;
+    delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
   });
 
   it("subscribes all controls only in main through window-scoped listeners", async () => {
@@ -119,7 +119,7 @@ describe("managed server tray control ownership", () => {
   });
 
   it("does not subscribe outside Tauri", () => {
-    delete (window as Record<string, unknown>).__TAURI_INTERNALS__;
+    delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
     renderHook(() => useManagedServerTrayControls(apiFixture()));
     expect(view.listen).not.toHaveBeenCalled();
   });

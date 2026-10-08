@@ -595,8 +595,10 @@ async fn seed_rendered_request_rows(node: &EmbeddedNode) -> Result<()> {
     Ok(())
 }
 
+/// Rows stored exactly as a v2 writer left them (#2333 removed the v2 write
+/// path; these keep the CLI's delta decode pinned over immutable history).
 async fn seed_v2_rendered_request_rows(node: &Arc<EmbeddedNode>) -> Result<()> {
-    let sink = gents::rendered_request::DefraRenderedRequestSink::new(Arc::clone(node));
+    let mut first_capture_key = String::new();
     for turn in 0..2usize {
         let capture_scope = "inference.1".to_string();
         let assembly_trace = gents::rendered_request::AssemblyTrace::from_effective_messages(
@@ -650,21 +652,184 @@ async fn seed_v2_rendered_request_rows(node: &Arc<EmbeddedNode>) -> Result<()> {
             provenance_payload_json: payload,
             assembly_trace,
         };
-        sink.capture(rendered).await?;
+        if turn == 0 {
+            first_capture_key = rendered.capture_key.clone();
+        }
+        let canonical_provenance =
+            gents::rendered_request::canonical_json_string(&rendered.provenance_payload_json)?;
+        if turn == 0 {
+            // A v2 writer stored the first turn as full records.
+            let container = json!({
+                "gents_capture_json": 1,
+                "request_body": {"gents_lossless_json": 1, "kind": "full", "value": rendered.request_json},
+                "provenance_payload": {
+                    "gents_lossless_json": 1, "kind": "full", "value": rendered.provenance_payload_json
+                }
+            });
+            exec(
+                node,
+                &format!(
+                    r#"mutation {{ create_RenderedRequest(input: {{
+                        capture_key: "{capture_key}", request_doc_id: "", request_commit_cid: "",
+                        request_id: "{request_id}", session_id: "{session_id}",
+                        agent_did: "did:test:amy", requester_did: "", behavior_id: "amy",
+                        capture_scope: "inference.1", turn_index: {turn}, attempt: 0,
+                        capture_version: 2, model_name: "test-model", source: "openai_chat_completions",
+                        request_json: "{request_json}", provenance_json: "{provenance}",
+                        created_at: "2026-10-07T00:00:0{turn}Z"
+                    }}) {{ _docID }} }}"#,
+                    capture_key = gents::graphql::escape_graphql_string(&rendered.capture_key),
+                    request_id = gents::graphql::escape_graphql_string(&rendered.request_id),
+                    session_id = gents::graphql::escape_graphql_string(&rendered.session_id),
+                    request_json = gents::graphql::escape_graphql_string(&container.to_string()),
+                    provenance = gents::graphql::escape_graphql_string(&canonical_provenance),
+                ),
+            )
+            .await?;
+            continue;
+        }
+        // The second turn is the witnessed delta a v2 writer leaves behind:
+        // both payloads record a base witness pinning the first row and its
+        // exact request_json field commit.
+        let first_row = node
+            .execute(&format!(
+                r#"{{RenderedRequest(filter:{{capture_key:{{_eq:"{}"}}}},limit:1){{_docID}}}}"#,
+                gents::graphql::escape_graphql_string(&first_capture_key)
+            ))
+            .await;
+        anyhow::ensure!(!first_row.has_errors(), "{:?}", first_row.errors);
+        let first_doc_id = first_row.data.expect("data")["RenderedRequest"][0]["_docID"]
+            .as_str()
+            .context("first v2 row doc id")?
+            .to_owned();
+        let base_cid = node
+            .execute(&format!(
+                r#"{{_commits(docID:"{}"){{cid fieldName}}}}"#,
+                gents::graphql::escape_graphql_string(&first_doc_id)
+            ))
+            .await;
+        anyhow::ensure!(!base_cid.has_errors(), "{:?}", base_cid.errors);
+        let base_cid = base_cid.data.expect("data")["_commits"]
+            .as_array()
+            .context("commits")?
+            .iter()
+            .find(|commit| commit["fieldName"].as_str() == Some("request_json"))
+            .and_then(|commit| commit["cid"].as_str())
+            .context("request_json field commit")?
+            .to_owned();
+        let witness = json!({
+            "doc_id": first_doc_id,
+            "field_commit_cid": base_cid,
+            "depth": 0,
+            "agent_did": rendered.agent_did,
+            "requester_did": rendered.requester_did,
+            "session_id": rendered.session_id,
+            "source": "openai_chat_completions",
+            "capture_scope": rendered.capture_scope,
+        });
+        let container = json!({
+            "gents_capture_json": 1,
+            "request_body": {
+                "gents_lossless_json": 1,
+                "kind": "object_delta",
+                "base": witness,
+                "changed": {"messages": {"kind": "full", "value": rendered.request_json["messages"]}},
+                "removed": []
+            },
+            "provenance_payload": {
+                "gents_lossless_json": 1,
+                "kind": "object_delta",
+                "base": witness,
+                "changed": {
+                    "threaded_tool_results": {
+                        "kind": "full",
+                        "value": rendered.provenance_payload_json["threaded_tool_results"]
+                    }
+                },
+                "removed": []
+            }
+        });
+        exec(
+            node,
+            &format!(
+                r#"mutation {{ create_RenderedRequest(input: {{
+                    capture_key: "{capture_key}", request_doc_id: "", request_commit_cid: "",
+                    request_id: "{request_id}", session_id: "{session_id}",
+                    agent_did: "did:test:amy", requester_did: "", behavior_id: "amy",
+                    capture_scope: "inference.1", turn_index: {turn}, attempt: 0,
+                    capture_version: 2, model_name: "test-model", source: "openai_chat_completions",
+                    request_json: "{request_json}", provenance_json: "{provenance}",
+                    created_at: "2026-10-07T00:00:0{turn}Z"
+                }}) {{ _docID }} }}"#,
+                capture_key = gents::graphql::escape_graphql_string(&rendered.capture_key),
+                request_id = gents::graphql::escape_graphql_string(&rendered.request_id),
+                session_id = gents::graphql::escape_graphql_string(&rendered.session_id),
+                request_json = gents::graphql::escape_graphql_string(&container.to_string()),
+                provenance = gents::graphql::escape_graphql_string(&canonical_provenance),
+            ),
+        )
+        .await?;
     }
-    let response = node
-        .execute(r#"{RenderedRequest(filter:{request_id:{_eq:"req-cap-v2"}},order:{created_at:ASC}){request_json}}"#)
-        .await;
-    anyhow::ensure!(!response.has_errors(), "{:?}", response.errors);
-    let rows = response.data.as_ref().unwrap()["RenderedRequest"]
-        .as_array()
-        .unwrap();
-    anyhow::ensure!(rows.len() == 2);
-    let second: Value = serde_json::from_str(rows[1]["request_json"].as_str().unwrap())?;
-    anyhow::ensure!(
-        second["request_body"]["kind"] == "object_delta"
-            && second["provenance_payload"]["kind"] == "object_delta"
+    Ok(())
+}
+
+/// One capture in the current format, written by the production sink: the CLI
+/// reads the same rows the runtime writes.
+async fn seed_manifest_rendered_request_row(node: &Arc<EmbeddedNode>) -> Result<()> {
+    let capture_scope = "inference.1".to_string();
+    let assembly_trace = gents::rendered_request::AssemblyTrace::from_effective_messages(
+        gents::rendered_request::AssemblyBuildPath::Budgeted,
+        Vec::new(),
     );
+    let mut provenance_payload = serde_json::to_value(&assembly_trace)?;
+    provenance_payload["threaded_tool_results"] = json!([{
+        "tool_call_id": "native-result",
+        "native_tool_output": {"ok": true, "exit_code": 3},
+        "padding": "q".repeat(6 * 1024)
+    }]);
+    let sink = gents::rendered_request::DefraRenderedRequestSink::new(Arc::clone(node));
+    sink.capture(RenderedCompletionRequest {
+        capture_key: gents::rendered_request::capture_key(
+            "did:test:amy",
+            "session-cap-manifest",
+            "",
+            &capture_scope,
+            0,
+            0,
+        )?,
+        capture_version: gents::rendered_request::CAPTURE_VERSION,
+        request_doc_id: String::new(),
+        request_commit_cid: String::new(),
+        request_id: "req-cap-manifest".into(),
+        capture_scope: capture_scope.clone(),
+        turn_index: 0,
+        attempt: 0,
+        agent_did: "did:test:amy".into(),
+        requester_did: String::new(),
+        behavior_id: "amy".into(),
+        session_id: "session-cap-manifest".into(),
+        model_name: "test-model".into(),
+        source: gents::rendered_request::RenderedRequestSource::OpenAiChatCompletions,
+        request_json: json!({
+            "model": "test-model",
+            "messages": [{"role": "user", "content": "manifest capture"}]
+        }),
+        messages_json: json!([]),
+        tools_json: json!([]),
+        tool_choice_json: Value::Null,
+        sampling_json: Value::Null,
+        provenance_json: serde_json::to_value(
+            gents::rendered_request::ProvenanceManifest::captured_only(
+                capture_scope,
+                None,
+                None,
+                assembly_trace.clone(),
+            ),
+        )?,
+        provenance_payload_json: provenance_payload,
+        assembly_trace,
+    })
+    .await?;
     Ok(())
 }
 
@@ -678,6 +843,7 @@ async fn trace_capture_fetches_metadata_with_field_commit_cid() -> Result<()> {
         ensure_runtime_schemas(&node).await?;
         seed_rendered_request_rows(&node).await?;
         seed_v2_rendered_request_rows(&node).await?;
+        seed_manifest_rendered_request_row(&node).await?;
     }
     let home = agent_home.to_str().context("agent home utf8")?;
 
@@ -811,6 +977,31 @@ async fn trace_capture_fetches_metadata_with_field_commit_cid() -> Result<()> {
             7
         );
     }
+
+    // The current format decodes through the same body read.
+    let output = run_cli_text(
+        tempdir.path(),
+        &[
+            "trace",
+            "capture",
+            "--home",
+            home,
+            "--request-id",
+            "req-cap-manifest",
+            "--include-body",
+        ],
+    )?;
+    let capture = serde_json::from_str::<Value>(&output)?;
+    let body = capture["request_json"].as_str().context("manifest body")?;
+    assert!(body.contains("manifest capture"), "{body}");
+    let payload = capture["provenance_payload_json"]
+        .as_str()
+        .context("payload")?;
+    let payload: Value = serde_json::from_str(payload)?;
+    assert_eq!(
+        payload["threaded_tool_results"][0]["native_tool_output"]["exit_code"],
+        3
+    );
 
     // Ambiguity without --list fails with a narrowing hint.
     let stderr = run_cli_failure_stderr(
@@ -2139,7 +2330,14 @@ async fn projection_graphql_mock(
     } else if query.contains("RenderedRequest(") {
         json!({ "data": { "RenderedRequest": [] } })
     } else if query.contains("AgentMessage(") {
-        json!({ "data": { "AgentMessage": projection_mock_agent_messages(query) } })
+        if let Some((key_selection, sequence_selection)) = query.split_once("sequence_matches:") {
+            json!({ "data": {
+                "key_matches": projection_mock_agent_messages(key_selection),
+                "sequence_matches": projection_mock_agent_messages(sequence_selection),
+            } })
+        } else {
+            json!({ "data": { "AgentMessage": projection_mock_agent_messages(query) } })
+        }
     } else if query.contains("AgentOutputSegment(") {
         json!({ "data": { "AgentOutputSegment": projection_mock_output_segments(query) } })
     } else if query.contains("AgentToolCall(") {
@@ -2423,6 +2621,19 @@ fn filter_projection_mock_headers(query: &str, rows: Vec<Value>) -> Value {
             query.contains(&format!(r#"message_key: {{ _eq: "{key}" }}"#))
                 || query.contains(&format!(r#"sequence: {{ _eq: {sequence} }}"#))
         });
+    } else {
+        if query.contains("message_key: { _eq:") {
+            rows.retain(|row| {
+                let key = row["message_key"].as_str().unwrap();
+                query.contains(&format!(r#"message_key: {{ _eq: "{key}" }}"#))
+            });
+        }
+        if query.contains("sequence: { _eq:") {
+            rows.retain(|row| {
+                let sequence = row["sequence"].as_u64().unwrap();
+                query.contains(&format!(r#"sequence: {{ _eq: {sequence} }}"#))
+            });
+        }
     }
     Value::Array(rows)
 }

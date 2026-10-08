@@ -50,6 +50,8 @@ struct TitleProvider {
     /// Moves the title request's execution generation before any output is
     /// streamed, so every later auxiliary write is fenced out.
     fence_generation: Option<(Arc<EmbeddedNode>, String, String)>,
+    /// Fails every call with this provider error instead of streaming.
+    error: Option<String>,
 }
 
 #[derive(Default)]
@@ -76,6 +78,7 @@ impl TitleProvider {
             before_second: None,
             third_poll: None,
             fence_generation: None,
+            error: None,
         }
     }
 }
@@ -103,6 +106,9 @@ impl CompletionModel for TitleProvider {
     ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         crate::test_support::capture_scripted_provider_request(&request, "scripted").await?;
+        if let Some(error) = &self.error {
+            return Err(CompletionError::ProviderError(error.clone()));
+        }
         if let Some((node, doc_id, agent_did)) = &self.fence_generation {
             let doc = crate::graphql::escape_graphql_string(doc_id);
             let owner = crate::graphql::escape_graphql_string(agent_did);
@@ -277,12 +283,16 @@ impl TitleFixture {
         }
     }
 
-    fn task(&self, provider: TitleProvider, capture: bool) -> TitleTask<TitleProvider> {
+    fn task<M: crate::llm::rig_compat::ProviderModel>(
+        &self,
+        model: M,
+        capture: bool,
+    ) -> TitleTask<M> {
         TitleTask {
             node: self.node.clone(),
             behavior: self.behavior.clone(),
             provider_family: None,
-            model: Arc::new(provider),
+            model: Arc::new(model),
             verifier: crate::request_admission::AgentRequestAdmissionVerifier::new(
                 self.node.clone(),
                 self.identity.clone(),
@@ -413,12 +423,17 @@ impl TitleFixture {
 }
 
 fn modeled_title_fields(name: &str) -> (Vec<(StreamPayload, String, u32, u32)>, OutputOutcome) {
-    let case = crate::lean_vocab_test::lean_contract_snapshot().canonical_execution_gate_cases.iter().find(|case| matches!(case, LeanCanonicalExecutionCase::ModelExecution { name: found, .. } if found == name)).expect("Lean title script");
-    let LeanCanonicalExecutionCase::ModelExecution {
+    let case = crate::lean_vocab_test::lean_contract_snapshot().canonical_execution_gate_cases.iter().find(|case| matches!(case, LeanCanonicalExecutionCase::NativeExecution { name: found, .. } | LeanCanonicalExecutionCase::ModelExecution { name: found, .. } if found == name)).expect("Lean title script");
+    let (LeanCanonicalExecutionCase::NativeExecution {
         operations,
         expected_observations,
         ..
-    } = case
+    }
+    | LeanCanonicalExecutionCase::ModelExecution {
+        operations,
+        expected_observations,
+        ..
+    }) = case
     else {
         unreachable!()
     };
@@ -795,12 +810,16 @@ async fn crashed_title_recovers_committed_reasoning_without_publication() {
     let model = crate::lean_vocab_test::lean_contract_snapshot()
         .canonical_execution_gate_cases
         .iter()
-        .find(|case| matches!(case, LeanCanonicalExecutionCase::ModelExecution { name, .. } if name == "title_expired_unlatched_recovery_no_message"))
+        .find(|case| matches!(case, LeanCanonicalExecutionCase::NativeExecution { name, .. } | LeanCanonicalExecutionCase::ModelExecution { name, .. } if name == "title_expired_unlatched_recovery_no_message"))
         .expect("modeled title recovery");
-    let LeanCanonicalExecutionCase::ModelExecution {
+    let (LeanCanonicalExecutionCase::NativeExecution {
         expected_observations,
         ..
-    } = model
+    }
+    | LeanCanonicalExecutionCase::ModelExecution {
+        expected_observations,
+        ..
+    }) = model
     else {
         unreachable!()
     };
@@ -1453,6 +1472,111 @@ async fn reasoning_only_title_retains_each_attempt_and_uses_bounded_fallback() {
         warnings.lock().unwrap().len(),
         usize::try_from(super::TITLE_GENERATION_MAX_ATTEMPTS).unwrap(),
         "only the bounded attempt warnings are emitted"
+    );
+}
+
+/// #2121 item 5: a title on a usage-limited account records each limited
+/// call and falls back to the message title; the turn it names is untouched.
+#[tokio::test]
+async fn a_usage_limited_title_falls_back_without_failing_the_turn() {
+    let fixture = TitleFixture::new().await;
+    let backend = fixture.behavior.backend_id.clone().unwrap();
+    let registry = crate::admission::AdmissionRegistry::new(fixture.node.clone());
+    registry.reconcile(
+        1,
+        &std::collections::HashMap::from([(
+            backend.clone(),
+            crate::admission::BackendAdmissionConfig {
+                backend_id: backend.clone(),
+                max_concurrent: 1,
+                max_queue_depth: 1,
+                enabled: true,
+                probe_status: "healthy".into(),
+                measured_unhealthy: false,
+                config_fingerprint: backend.clone(),
+            },
+        )]),
+    );
+    let resets_at = chrono::Utc::now() + chrono::Duration::hours(2);
+    let mut provider = TitleProvider::new(Vec::new(), false);
+    provider.error = Some(format!(
+        r#"Invalid status code 429 Too Many Requests with message: {{"error":{{"type":"usage_limit_reached","message":"The usage limit has been reached","resets_at":{}}}}}"#,
+        resets_at.timestamp()
+    ));
+    let calls = provider.calls.clone();
+    let model = crate::admission::AdmittedCompletionModel::new(
+        provider,
+        registry,
+        format!("{backend}:connection"),
+    );
+    let parent_state = |node: Arc<EmbeddedNode>, doc: String| async move {
+        let doc = crate::graphql::escape_graphql_string(&doc);
+        ConfigAccess::Local(node)
+            .execute(&format!("{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{doc}\" }} }}, limit: 1) {{ lifecycle_state }} }}"))
+            .await
+            .unwrap()["data"]["AgentRequest"][0]["lifecycle_state"]
+            .clone()
+    };
+    let parent_before = parent_state(fixture.node.clone(), fixture.parent.doc_id.clone()).await;
+
+    let (_shutdown, rx) = tokio::sync::watch::channel(false);
+    fixture
+        .task(model, true)
+        .run(fixture.title.clone(), rx)
+        .await
+        .expect("a usage-limited title is an ordinary provider failure");
+
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        usize::try_from(super::TITLE_GENERATION_MAX_ATTEMPTS).unwrap()
+    );
+    let request_id = crate::graphql::escape_graphql_string(&fixture.title.request_id);
+    let response = ConfigAccess::Local(fixture.node.clone())
+        .execute(&format!("{{ InferenceCall(filter: {{ request_id: {{ _eq: \"{request_id}\" }} }}) {{ call_kind call_state failure_reason }} }}"))
+        .await
+        .unwrap();
+    let rows = response["data"]["InferenceCall"].as_array().unwrap();
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    for row in rows {
+        assert_eq!(row["call_kind"], "oneoff", "{row}");
+        assert_eq!(row["call_state"], "failed", "{row}");
+        let reason = row["failure_reason"].as_str().unwrap();
+        assert!(
+            reason.starts_with("provider usage limit reached (resets at "),
+            "{reason}"
+        );
+        let Some(gents_loop::provider_limit::ProviderLimit::UsageExhausted(limit)) =
+            gents_loop::provider_limit::classify_provider_limit(reason, chrono::Utc::now())
+        else {
+            panic!("recorded reason is not a usage limit: {reason}");
+        };
+        assert_eq!(
+            limit.resets_at.map(|at| at.timestamp()),
+            Some(resets_at.timestamp())
+        );
+    }
+
+    assert_eq!(
+        fixture.terminal_row().await,
+        (
+            RequestLifecycleState::Completed,
+            Some(gents_protocol::output::TerminalOutput::NoMessage)
+        )
+    );
+    let session = crate::graphql::escape_graphql_string(&fixture.parent.session_id);
+    let response = ConfigAccess::Local(fixture.node.clone())
+        .execute(&format!(
+            "{{ AgentSession(filter: {{ session_id: {{ _eq: \"{session}\" }} }}) {{ title }} }}"
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        response["data"]["AgentSession"][0]["title"]["text"],
+        super::sanitize_generated_title("", &fixture.parent.content)
+    );
+    assert_eq!(
+        parent_state(fixture.node.clone(), fixture.parent.doc_id.clone()).await,
+        parent_before
     );
 }
 

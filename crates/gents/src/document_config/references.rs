@@ -144,6 +144,44 @@ impl ConfigReferences {
             .collect()
     }
 
+    /// The profiles a behavior's turns use: its own, then its context's
+    /// compaction profile.
+    pub(crate) fn behavior_profiles(&self, behavior_id: &str) -> Vec<String> {
+        let get = |collection: Collection, id: Option<&str>| {
+            self.documents.get(&(collection, id?.to_owned()))
+        };
+        let Some(behavior) = get(Collection::AgentBehavior, Some(behavior_id)) else {
+            return Vec::new();
+        };
+        let compaction = get(Collection::AgentContext, behavior["context_id"].as_str())
+            .and_then(|context| get(Collection::Compaction, context["compaction_id"].as_str()))
+            .and_then(|compaction| compaction["inference_profile_id"].as_str());
+        let mut profiles: Vec<String> = behavior["inference_profile_id"]
+            .as_str()
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        if let Some(compaction) = compaction.filter(|id| !profiles.iter().any(|own| own == id)) {
+            profiles.push(compaction.to_owned());
+        }
+        profiles
+    }
+
+    /// Behaviors that use `profile_id`, directly or as their compaction profile.
+    pub(crate) fn behaviors_on_profile(&self, profile_id: &str) -> Vec<String> {
+        self.documents
+            .keys()
+            .filter(|(collection, id)| {
+                *collection == Collection::AgentBehavior
+                    && self
+                        .behavior_profiles(id)
+                        .iter()
+                        .any(|own| own == profile_id)
+            })
+            .map(|(_, id)| id.clone())
+            .collect()
+    }
+
     /// Event Triggers of this snapshot whose Task opts into `emit_outcome`,
     /// as `(trigger_id, task_id, event_source_id, source_collection, per_document)`.
     /// Unresolvable links are the reference validator's diagnostic and are
