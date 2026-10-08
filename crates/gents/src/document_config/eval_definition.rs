@@ -40,7 +40,7 @@ pub enum EvalReducer {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum EvalSubjectKind {
-    Behavior,
+    Agent,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -56,7 +56,7 @@ pub struct EvalSubject {
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
     pub inference_slots: Vec<String>,
     /// The trial's process ceiling also grants host bash, confined to its
-    /// workspace root, as a desktop node's ceiling does. Behaviors the subject
+    /// workspace root, as a desktop node's ceiling does. Agents the subject
     /// configures at run time (a crew's builds and git reads) need it; the
     /// subject pack's own Tools still may not grant host bash to an embedded
     /// trial.
@@ -501,7 +501,7 @@ mod tests {
             "definition_id": "monitor-findings",
             "agent_did": "did:key:owner",
             "comparability_version": 1,
-            "subject": {"kind": "behavior", "inference_slots": ["primary"]},
+            "subject": {"kind": "agent", "inference_slots": ["primary"]},
             "cases": [{
                 "case_id": "disk-warning",
                 "split": "validation",

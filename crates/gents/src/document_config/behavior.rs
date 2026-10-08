@@ -58,7 +58,7 @@ pub struct Agent {
     pub created_at: Option<String>,
 }
 
-impl AgentBehavior {
+impl Agent {
     pub fn reference_violations(&self, refs: &ConfigReferences) -> Vec<String> {
         self.validate_references(refs)
             .err()
@@ -75,10 +75,7 @@ impl AgentBehavior {
     }
 }
 
-pub async fn load_agent_behavior(
-    node: &EmbeddedNode,
-    behavior_id: &str,
-) -> Result<Option<AgentBehavior>> {
+pub async fn load_agent_behavior(node: &EmbeddedNode, behavior_id: &str) -> Result<Option<Agent>> {
     Ok(load_agent_behavior_record(node, behavior_id)
         .await?
         .map(|(_, behavior)| behavior))
@@ -87,7 +84,7 @@ pub async fn load_agent_behavior(
 pub(crate) async fn load_agent_behavior_record(
     node: &EmbeddedNode,
     behavior_id: &str,
-) -> Result<Option<(String, AgentBehavior)>> {
+) -> Result<Option<(String, Agent)>> {
     let escaped_behavior_id = escape_graphql_string(behavior_id);
     let query = format!(
         r#"{{
@@ -114,10 +111,7 @@ pub(crate) async fn load_agent_behavior_record(
     Ok(first_row_with_doc_id(resp.data.as_ref(), "AgentBehavior"))
 }
 
-pub async fn list_agent_behaviors(
-    node: &EmbeddedNode,
-    agent_did: &str,
-) -> Result<Vec<AgentBehavior>> {
+pub async fn list_agent_behaviors(node: &EmbeddedNode, agent_did: &str) -> Result<Vec<Agent>> {
     Ok(list_agent_behavior_records(node, agent_did)
         .await?
         .into_iter()
@@ -128,7 +122,7 @@ pub async fn list_agent_behaviors(
 pub(crate) async fn list_agent_behavior_records(
     node: &EmbeddedNode,
     agent_did: &str,
-) -> Result<Vec<(String, AgentBehavior)>> {
+) -> Result<Vec<(String, Agent)>> {
     let escaped_agent_did = escape_graphql_string(agent_did);
     let query = format!(
         r#"{{
@@ -155,7 +149,7 @@ pub(crate) async fn list_agent_behavior_records(
     Ok(rows_with_doc_id(resp.data.as_ref(), "AgentBehavior"))
 }
 
-pub async fn upsert_agent_behavior(node: &EmbeddedNode, behavior: &AgentBehavior) -> Result<()> {
+pub async fn upsert_agent_behavior(node: &EmbeddedNode, behavior: &Agent) -> Result<()> {
     crate::config_client::ConfigAccess::transact_local(
         node,
         None,

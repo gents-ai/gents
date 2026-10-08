@@ -50,10 +50,7 @@ pub struct Node {
     pub tags: Vec<String>,
 }
 
-pub async fn load_agent_principal(
-    node: &EmbeddedNode,
-    agent_did: &str,
-) -> Result<Option<AgentPrincipal>> {
+pub async fn load_agent_principal(node: &EmbeddedNode, agent_did: &str) -> Result<Option<Node>> {
     Ok(load_agent_principal_record(node, agent_did)
         .await?
         .map(|(_, principal)| principal))
@@ -62,7 +59,7 @@ pub async fn load_agent_principal(
 pub(crate) async fn load_agent_principal_record(
     node: &EmbeddedNode,
     agent_did: &str,
-) -> Result<Option<(String, AgentPrincipal)>> {
+) -> Result<Option<(String, Node)>> {
     let escaped_agent_did = escape_graphql_string(agent_did);
     let query = format!(
         r#"{{
