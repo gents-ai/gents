@@ -174,5 +174,86 @@ theorem prefix_sibling_rejected (base sibling : String) (tail : List String)
     ¬ contains ⟨"/", [base]⟩ ⟨"/", sibling :: tail⟩ := by
   simp [contains, h]
 
+/-!
+## Field-presence patches
+
+Edit payloads are patches, not replacement documents. `omitted` retains the
+stored value, `clear` removes an optional value, and `set` replaces it. Create
+continues to use the required composer values on `Request`; this type models the
+edit field-presence mask carried by the signed command DTO.
+-/
+
+inductive FieldUpdate where
+  | omitted
+  | clear
+  | set (value : String)
+  deriving DecidableEq, Repr
+
+def FieldUpdate.apply (update : FieldUpdate) (stored : Option String) : Option String :=
+  match update with
+  | .omitted => stored
+  | .clear => none
+  | .set value => some value
+
+theorem omitted_field_preserves (stored : Option String) :
+    FieldUpdate.omitted.apply stored = stored := rfl
+
+theorem explicit_clear_is_distinct (stored : String) :
+    FieldUpdate.clear.apply (some stored) ≠ FieldUpdate.omitted.apply (some stored) := by
+  simp [FieldUpdate.apply]
+
+/-!
+## Root-selection admission
+
+The root-selection contracts belong to the root-admission owner so conformance
+and persona consumers reference this namespace directly.
+-/
+
+/-- Shared create/edit root-selection contract. A blank root may inherit the
+runtime default only when the operator has not authored explicit workspace-root
+policy. If there is neither policy nor a process ceiling (an empty publication),
+a successfully resolved authored root is its own narrowing. Under explicit
+policy, a request must select an admitted root so omission cannot widen to the
+process ceiling. The host execution owner resolves again before use; this
+admission contract does not claim TOCTOU safety. -/
+abbrev rootSelectionOk
+    (policyConfigured : Bool)
+    (published : Finset CanonicalPath)
+    (blank : Bool)
+    (resolved : Option CanonicalPath) : Prop :=
+  (blank = true ∧ policyConfigured = false) ∨
+    (blank = false ∧ policyConfigured = false ∧ published = ∅ ∧ resolved.isSome) ∨
+    admitted published resolved
+
+/-- Root-patch contract shared by the edit gate and generated refinement
+cases. Omission preserves the stored value but must re-admit that value against
+current policy; a stale, blank, or revoked stored root cannot bypass the gate.
+Clear is allowed only without explicit policy, and set follows the same
+blank/admission rule as create. -/
+abbrev rootEditSelectionOk
+    (policyConfigured : Bool)
+    (published : Finset CanonicalPath)
+    (storedRoot : String)
+    (resolvedStored : Option CanonicalPath)
+    (storedRootRequired : Bool)
+    (update : FieldUpdate)
+    (resolved : Option CanonicalPath) : Prop :=
+  match update with
+  | .omitted =>
+      storedRootRequired = false ∨
+        rootSelectionOk policyConfigured published (storedRoot.trim == "") resolvedStored
+  | .clear => policyConfigured = false
+  | .set root =>
+      rootSelectionOk policyConfigured published (root.trim == "") resolved
+
+instance (policyConfigured : Bool) (published : Finset CanonicalPath)
+    (storedRoot : String) (resolvedStored : Option CanonicalPath)
+    (storedRootRequired : Bool) (update : FieldUpdate)
+    (resolved : Option CanonicalPath) :
+    Decidable (rootEditSelectionOk policyConfigured published storedRoot
+      resolvedStored storedRootRequired update resolved) := by
+  unfold rootEditSelectionOk
+  cases update <;> infer_instance
+
 end RootAdmission
 end PeerRegistryDiscovery

@@ -1,4 +1,4 @@
-import Proofs.PeerRegistryDiscovery.PersonaRequest
+import Proofs.PeerRegistryDiscovery.RootAdmission
 import Proofs.Conformance.Contracts.Json.Helpers
 
 /-! Model-generated cases for the canonical descendant-root admission bridge. -/
@@ -6,7 +6,6 @@ import Proofs.Conformance.Contracts.Json.Helpers
 namespace Conformance.RootAdmissionContracts
 
 open PeerRegistryDiscovery.RootAdmission
-open PeerRegistryDiscovery.PersonaRequest
 open Conformance.Contracts
 
 structure Case where
