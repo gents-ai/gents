@@ -21,8 +21,13 @@ Semantics:
   selected message (an early failure, an interrupt) did not answer it: the
   message returns to the head of the queue.
 * A redrive of the same physical request claims again: messages it already
-  published stay superseded into it and are reused, and the claim selects
-  again among those still queued.
+  published stay superseded into it and are reused (`reuseAuthored`), and the
+  claim selects again among those still queued.
+* The turn publishes its admitted input before anything can reduce the
+  provider projection, so a persisted reduction checkpoint always follows the
+  whole accepted batch. A redrive that restores one reuses exactly the
+  consumed messages; any selection made at that claim waits for the next
+  turn.
 * Provider retries inside the turn reuse its fixed input. -/
 namespace SessionQueue
 

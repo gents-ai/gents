@@ -1029,6 +1029,49 @@ theorem reuseAuthored_requires_live_lease (world : World) (current : Generation)
     · contradiction
   · contradiction
 
+/-- Authored key of the selected queued message a publication answers. -/
+def foldedAuthoredKey (requestId : RequestId) : String := "folded:" ++ toString requestId
+
+/-- The authored-publication owner. A fresh entry takes the fenced
+publication path; an accepted entry, from this or an earlier generation of
+the request, is reused under the caller's live lease. Publishing the next
+selected queued message supersedes it in the same commit
+(`SessionQueue.consumeFolded`). -/
+def publishAuthoredComposed (world : World) (generation : Generation) (closing : Segment)
+    (message : MessageEnvelope) : Except Error World :=
+  if authoredPublicationPresent world closing message then
+    reuseAuthored world generation closing message
+  else match publishAuthored world generation closing message with
+    | .error error => .error error
+    | .ok published =>
+        match published.queue.folding with
+        | entry :: rest =>
+            if foldedAuthoredKey entry.requestId == message.key then
+              .ok { published with queue := published.queue.consumeFolded entry rest }
+            else .ok published
+        | [] => .ok published
+
+theorem publishAuthoredComposed_success (world after : World) (generation : Generation)
+    (closing : Segment) (message : MessageEnvelope)
+    (h : publishAuthoredComposed world generation closing message = .ok after) :
+    after = world ∨ ∃ published, publishAuthored world generation closing message = .ok published ∧
+      (after = published ∨ ∃ queue, after = { published with queue := queue }) := by
+  unfold publishAuthoredComposed at h
+  split at h
+  · exact Or.inl (reuseAuthored_writes_nothing world after generation closing message h)
+  · split at h
+    · contradiction
+    · rename_i published h_published
+      refine Or.inr ⟨published, h_published, ?_⟩
+      split at h
+      · split at h
+        · cases h
+          exact Or.inr ⟨_, rfl⟩
+        · cases h
+          exact Or.inl rfl
+      · cases h
+        exact Or.inl rfl
+
 def publishHeaderOnly (world : World) (generation : Generation)
     (message : MessageEnvelope) (admissions : List ToolAdmission) : Except Error World :=
   checked (fun post =>

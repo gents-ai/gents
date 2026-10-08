@@ -28,8 +28,13 @@ theorem Gate.evaluate_preserves_toolProjectionCoherent (operation : Gate.Operati
     exact (accepted_publication_is_composed_atomically before after generation closing
       message admissions (mapError_success Gate.Error.execution _ _ h)).2.2.1
   | authored generation closing message =>
-    exact publishAuthored_preserves_toolProjectionCoherent before after generation closing
-      message coherent (mapError_success Gate.Error.execution _ _ h)
+    rcases publishAuthoredComposed_success before after generation closing message
+      (mapError_success Gate.Error.execution _ _ h) with rfl | ⟨published, hp, rfl | ⟨_, rfl⟩⟩
+    · exact coherent
+    · exact publishAuthored_preserves_toolProjectionCoherent before _ generation closing
+        message coherent hp
+    · exact publishAuthored_preserves_toolProjectionCoherent before published generation closing
+        message coherent hp
   | headerOnly generation message admissions =>
     exact (header_only_publication_is_atomic before after generation message admissions
       (mapError_success Gate.Error.execution _ _ h)).2.2.2
