@@ -221,6 +221,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) fold_turn_input_cases: Vec<LeanFoldTurnInputCase>,
     pub(crate) handover_fold_cases: Vec<LeanHandoverFoldCase>,
     pub(crate) fold_publication_cases: Vec<LeanFoldPublicationCase>,
+    pub(crate) retry_selection_cases: Vec<LeanRetrySelectionCase>,
     pub(crate) canonical_worker_capacity_cases: Vec<LeanWorkerCapacityCase>,
     pub(crate) canonical_payload_presentation_cases: Vec<LeanPayloadPresentationCase>,
     pub(crate) terminal_diagnostic_presentation_cases: Vec<LeanTerminalDiagnosticPresentationCase>,
@@ -1839,6 +1840,22 @@ pub(crate) enum LeanFoldAuthoredKey {
     Context,
     Prompt,
     Folded { request_id: u64 },
+}
+
+pub(crate) fn lean_retry_selection_cases() -> &'static [LeanRetrySelectionCase] {
+    &lean_contract_snapshot().retry_selection_cases
+}
+
+/// `SessionQueue.FoldCases.retrySelectionCases`: whether a user retry resumes
+/// and which of its claim's selected messages it answers.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanRetrySelectionCase {
+    pub(crate) name: String,
+    pub(crate) parent_published: bool,
+    pub(crate) selected: Vec<u64>,
+    pub(crate) resume: bool,
+    pub(crate) answered: Vec<u64>,
 }
 
 pub(crate) fn lean_fold_publication_cases() -> &'static [LeanFoldPublicationCase] {

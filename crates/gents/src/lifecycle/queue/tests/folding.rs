@@ -412,10 +412,6 @@ async fn authored_keys(node: &EmbeddedNode, request_doc_id: &str) -> Vec<String>
         .collect()
 }
 
-/// Lean `reuseAuthored`: a crash between or after the turn's input
-/// publications, then a reclaim under a new generation, republishes that input
-/// by reusing every accepted entry and consuming only what is still queued,
-/// leaving exactly one entry per key.
 /// Durable facts a rejected step must leave unchanged.
 async fn durable_facts(node: &EmbeddedNode, session_id: &str) -> serde_json::Value {
     let session = escape_graphql_string(session_id);
@@ -439,9 +435,13 @@ async fn durable_facts(node: &EmbeddedNode, session_id: &str) -> serde_json::Val
 }
 
 /// Lean `FoldPublication.cases`: each composed script runs through the
-/// native claim, authored publication, provider publication, reclaim and
-/// terminal owners, and every step's acceptance, queue and authored keys
-/// match the model. A rejected step leaves durable state unchanged. A native
+/// native claim, authored publication, provider publication and terminal
+/// owners, and every step's acceptance, queue and authored keys match the
+/// model. Seeded replay: production lease expiry terminalizes the request
+/// (`canonical_recovery`), so a model `recover` step is driven by re-pending
+/// the same physical request directly and claiming it under a fresh
+/// generation; this binds publication reuse and fencing on a replayed
+/// request, not a production reclaim path. A rejected step leaves durable state unchanged. A native
 /// terminal commit is the model's terminalize-then-finish boundary, so queue
 /// facts are compared after `finish`.
 #[tokio::test]
