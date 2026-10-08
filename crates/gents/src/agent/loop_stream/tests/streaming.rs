@@ -262,3 +262,58 @@ async fn threaded_assistant_turn_carries_provider_message_id() {
         histories[1]
     );
 }
+
+#[tokio::test]
+async fn retry_entry_does_not_publish_recorded_prompt_again() {
+    for case in &crate::lean_vocab_test::lean_contract_snapshot().retry_entry_cases {
+        let model = ScriptedModel::new(vec![
+            RawStreamingChoice::Message("continued".into()),
+            RawStreamingChoice::FinalResponse(()),
+        ]);
+        let mut loop_config = config(1);
+        loop_config.resume_from_history = case["resume"].as_bool().unwrap();
+        let context = crate::rendered_request::RenderedRequestContext {
+            request_doc_id: "retry-input-doc".into(),
+            request_commit_cid: "bafy-retry".into(),
+            request_id: "retry-input".into(),
+            agent_did: "did:key:agent".into(),
+            requester_did: String::new(),
+            behavior_id: "general".into(),
+            session_id: "retry-session".into(),
+            model_name: "test-model".into(),
+            provider_family: None,
+        };
+        let scope = crate::rendered_request::scope::test_scope(
+            context,
+            Arc::new(|_| Box::pin(async { Ok(()) })),
+        );
+        loop_config.on_rendered_request =
+            Some(crate::rendered_request::scope::ambient_arming_sink(
+                crate::rendered_request::scope::CaptureScopeKind::Inference,
+            ));
+        let authored = crate::rendered_request::scope::scope_request(scope, async {
+            let stream = run_loop_stream(
+                model,
+                Some(gents_loop::session_hook::NoopSessionHook),
+                TaggedMessage::unassociated(Message::user("durable frontier")),
+                Vec::new(),
+                Arc::new(Vec::new()),
+                loop_config,
+            );
+            futures::pin_mut!(stream);
+            let mut authored = 0;
+            while let Some(item) = stream.next().await {
+                if matches!(item.unwrap(), LoopStreamItem::AuthoredInputReady { .. }) {
+                    authored += 1;
+                }
+            }
+            authored
+        })
+        .await;
+        assert_eq!(
+            authored,
+            usize::from(case["publish"].as_bool().unwrap()),
+            "{case}"
+        );
+    }
+}

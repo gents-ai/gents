@@ -136,13 +136,14 @@ export function useDivider({
   }, [spring, set]);
 
   /* the window changed size: keep the far end at the far end, and a resting
-     width inside the range */
-  useEffect(() => {
-    if (dragging || spring.running() || posRef.current === 0) return;
+     width inside the range. A resize during a drag or a settle is applied
+     when it ends, and before paint, so no frame shows the stale width. */
+  useLayoutEffect(() => {
+    if (dragging || settling || posRef.current === 0) return;
     if (atEnd.current) set(end);
     else if (posRef.current > max || posRef.current < min)
       set(clampOpen(posRef.current));
-  }, [end, max, min, dragging, spring, set, clampOpen]);
+  }, [end, max, min, dragging, settling, set, clampOpen]);
 
   const drag = useRef<{
     startX: number;
@@ -249,6 +250,8 @@ export function useDivider({
     dragging,
     /** a settle is under way */
     settling,
+    /** where a settle under way is heading; null when none is */
+    target: settling ? heading.current : null,
     /** resting at the far end with the pane hidden */
     paneHidden: atEnd.current && !dragging && !settling && pos >= end - 0.5,
     /** 0 inside the range, rising to 1 as the dock takes the pane's last stretch */

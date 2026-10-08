@@ -122,12 +122,13 @@ export function HooksRows({
   id,
   value,
   onChange,
-  onCommit,
+  error,
 }: {
   id: string;
   value: HookDraft[];
   onChange: (v: HookDraft[]) => void;
-  onCommit?: () => void;
+  /** what hooksFromDraft says is wrong with them */
+  error?: string;
 }) {
   const set = (i: number, patch: Partial<HookDraft>) =>
     onChange(value.map((h, j) => (j === i ? { ...h, ...patch } : h)));
@@ -136,6 +137,7 @@ export function HooksRows({
       label="Hooks"
       description="Commands the runtime runs around the task."
       htmlFor={value.length ? `${id}-0-id` : undefined}
+      error={error}
     >
       <div className="grid gap-2">
         {value.map((h, i) => (
@@ -150,14 +152,12 @@ export function HooksRows({
               className="font-mono text-xs"
               value={h.hook_id}
               onChange={(e) => set(i, { hook_id: e.target.value })}
-              onBlur={onCommit}
             />
             <Select
               items={PHASES}
               value={h.phase}
               onValueChange={(v) => {
                 if (v) set(i, { phase: v as TaskHookPhase });
-                onCommit?.();
               }}
             >
               <SelectTrigger aria-label="When" className="w-full">
@@ -177,7 +177,6 @@ export function HooksRows({
               className="font-mono text-xs"
               value={h.command}
               onChange={(e) => set(i, { command: e.target.value })}
-              onBlur={onCommit}
             />
             <Input
               aria-label="Timeout in seconds"
@@ -185,7 +184,6 @@ export function HooksRows({
               inputMode="numeric"
               value={h.timeout}
               onChange={(e) => set(i, { timeout: e.target.value })}
-              onBlur={onCommit}
             />
             <Button
               variant="quiet"
@@ -193,7 +191,6 @@ export function HooksRows({
               aria-label={`Remove hook ${h.hook_id || i + 1}`}
               onClick={() => {
                 onChange(value.filter((_, j) => j !== i));
-                onCommit?.();
               }}
             >
               <Trash2 />
@@ -214,7 +211,6 @@ export function HooksRows({
                 ...value,
                 { hook_id: "", phase: "after_success", command: "", timeout: "" },
               ]);
-              onCommit?.();
             }}
           >
             <Plus /> Add hook

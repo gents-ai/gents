@@ -21,8 +21,10 @@ export function AgentAvatar({
   "name" | "src" | "className"
 >) {
   const picture = src === undefined ? avatarFor(name) : src;
-  const [failed, setFailed] = useState(false);
-  if (!picture || failed) {
+  /* the picture that failed, not a flag: the same avatar drawing another
+     agent gets its own picture a chance */
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  if (!picture || picture === failedSrc) {
     return (
       <span
         {...(props as ComponentProps<"span">)}
@@ -42,7 +44,7 @@ export function AgentAvatar({
       src={picture}
       alt=""
       className={cn("size-8 max-w-none shrink-0 rounded-full object-cover", className)}
-      onError={() => setFailed(true)}
+      onError={() => setFailedSrc(picture)}
     />
   );
 }

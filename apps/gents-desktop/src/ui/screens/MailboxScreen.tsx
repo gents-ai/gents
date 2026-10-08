@@ -14,125 +14,74 @@
    and a search — so the two screens narrow the same way. Cards can be
    selected for one dismissal of many. All of it is over the open items
    the snapshot already carries — nothing here asks the runtime for more. */
-import {
-  ChevronDown,
-  CircleCheck,
-  Clock,
-  CircleHelp,
-  CircleX,
-  CornerDownLeft,
-  Flag,
-  Inbox,
-  ListFilter,
-  OctagonPause,
-  ScrollText,
-  Search,
-  Plus,
-  X,
-} from "lucide-react";
-import type { MailboxItemView } from "@source-inc/gents-desktop-client";
-import { Badge } from "@gents/ui/components/badge";
+import { Inbox, ListFilter, Search, Plus, X } from "lucide-react";
 import { Button } from "@gents/ui/components/button";
-import { ButtonGroup } from "@gents/ui/components/button-group";
 import { Checkbox } from "@gents/ui/components/checkbox";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@gents/ui/components/dropdown-menu";
 import { Input } from "@gents/ui/components/input";
 import { Kbd } from "@gents/ui/components/kbd";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { cn } from "@gents/ui/lib/utils";
-import type { Shell } from "@/hooks/useShell";
 import { href, navigate } from "@/lib/router";
-import { useEffect, useState, type ComponentProps } from "react";
-import { behaviorName } from "./behavior";
+import { useEffect, useLayoutEffect, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import {
   defaultScope,
+  fleetNodes,
   knownNodeIds,
   mailboxInScope,
-  scopeContextOf,
   type Scope,
 } from "@/lib/scope";
-import { useStoredStrings } from "@/lib/stored";
-import { nodeDidOf } from "@/lib/nodes";
+import { useHomeDid, useInScope } from "@/hooks/useClient";
+import { listViews, useListViews } from "@/app/listViews";
 import { NodeAxis } from "./NodeAxis";
-import { NodeBehaviorStack } from "./NodeBehaviorStack";
-import { groupItems, matches } from "./mailbox-triage";
-import { parseQuestion, QuestionAnswer } from "./MailboxQuestion";
-import { Markdown } from "./Markdown";
+import { groupItems, KIND_ORDER, matches } from "./mailbox-triage";
 import { Axis, type Option } from "./SessionFilters";
-import { span, when } from "./time";
+import { useApp } from "@/app/AppContext";
+import { useFleet } from "@/hooks/useFleet";
+import { Item, KEY, KIND, openable, openItem, Primary } from "./MailboxItem";
 
-type BadgeVariant = ComponentProps<typeof Badge>["variant"];
-
-/* the kind glyph on the rail, its word, and its badge */
-const KIND: Record<
-  string,
-  { icon: typeof CircleHelp; label: string; tone?: string; badge: BadgeVariant }
-> = {
-  ask: { icon: CircleHelp, label: "Question", badge: "purple" },
-  gate: { icon: OctagonPause, label: "Gate", badge: "yellow" },
-  finished: { icon: CircleCheck, label: "Finished", badge: "success" },
-  failed: {
-    icon: CircleX,
-    label: "Failed",
-    tone: "text-destructive",
-    badge: "destructive",
-  },
-  flag: { icon: Flag, label: "Flag", badge: "secondary" },
-};
-
-const STATUS: Record<string, { label: string; badge: BadgeVariant }> = {
-  open: { label: "Open", badge: "outline" },
-  acted: { label: "Acted on", badge: "secondary" },
-  dismissed: { label: "Dismissed", badge: "secondary" },
-  expired: { label: "Expired", badge: "destructive" },
-};
-
-/* a body longer than this folds behind "Show more"; counted rather than
-   measured so the fold does not depend on layout having happened */
-const FOLD_CHARS = 600;
-const FOLD_LINES = 10;
-
-/* the kind axis, in the order a person works through them */
-const KINDS: Option<string>[] = ["ask", "gate", "failed", "flag", "finished"].map(
-  (value) => ({
-    value,
-    label: KIND[value]!.label,
-    icon: KIND[value]!.icon,
-    tint: KIND[value]!.tone,
-  }),
-);
+/* the kind axis */
+const KINDS: Option<string>[] = KIND_ORDER.map((value) => ({
+  value,
+  label: KIND[value]!.label,
+  icon: KIND[value]!.icon,
+  tint: KIND[value]!.tone,
+}));
 
 export function MailboxScreen({
-  shell,
   nodeDid,
 }: {
-  shell: Shell;
   /** a node named on the route: the list opens narrowed to it */
   nodeDid?: string;
 }) {
+  const nodes = useFleet(useShallow(fleetNodes));
+  const homeDid = useHomeDid();
+  const { dismissMailboxItem, openMailboxItem } = useApp().actions;
   /* the mailbox is what waits on the person wherever it came from: every
      node to start, then whatever the chips choose */
-  const ctx = scopeContextOf(shell);
-  const [storedNodeIds, setNodeIds] = useStoredStrings("gents-prototype-mailbox-nodes");
-  useEffect(() => {
-    if (nodeDid) setNodeIds([nodeDid]);
-  }, [nodeDid, setNodeIds]);
-  const nodeIds = knownNodeIds(storedNodeIds, ctx);
+  const nodeIds = knownNodeIds(
+    useListViews((v) => v.mailboxNodes),
+    { nodes },
+  );
+  /* a node named on the route narrows the list to it, once per route,
+     before the list is painted */
+  useLayoutEffect(() => {
+    if (nodeDid) listViews.setMailboxNodes([nodeDid]);
+  }, [nodeDid]);
   const scope: Scope = {
     nodes: nodeIds.length ? nodeIds : defaultScope("mailbox").nodes,
     agents: [],
   };
-  const items = mailboxInScope(scope, ctx);
-  const nodeCounts = Object.fromEntries(
-    shell.deployments.map((n) => [
-      nodeDidOf(n),
-      n.mailboxItems.filter((m) => m.status === "open").length,
-    ]),
+  const items = useInScope((ctx) => mailboxInScope(scope, ctx));
+  const nodeCounts = useFleet(
+    useShallow((s) =>
+      Object.fromEntries(
+        s.nodeKeys.map((key) => [
+          key,
+          (s.mailboxOf[key] ?? []).filter((m) => m.status === "open").length,
+        ]),
+      ),
+    ),
   );
   /* "now" is fixed when the screen opens: a countdown does not tick over
      under the reader's eye and reorder the list while they read it */
@@ -140,7 +89,7 @@ export function MailboxScreen({
   /* null: the search is closed, not merely empty — the same two states
      the sessions list keeps */
   const [query, setQuery] = useState<string | null>(null);
-  const [kinds, setKinds] = useStoredStrings("gents-prototype-mailbox-kinds");
+  const kinds = useListViews((v) => v.mailboxKinds);
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
   const [dismissing, setDismissing] = useState(false);
 
@@ -174,7 +123,7 @@ export function MailboxScreen({
       /* one at a time: the contract dismisses one item per call, and a
          failure part-way leaves the rest selected rather than lost */
       for (const id of chosen) {
-        await shell.dismissMailboxItem(id);
+        await dismissMailboxItem(id);
         setSelected((current) => {
           const out = new Set(current);
           out.delete(id);
@@ -182,7 +131,7 @@ export function MailboxScreen({
         });
       }
     } catch {
-      /* reported by the shell's action error */
+      /* reported by the action */
     } finally {
       setDismissing(false);
     }
@@ -205,7 +154,7 @@ export function MailboxScreen({
         return;
       if (e.key === "Enter" && one) {
         e.preventDefault();
-        void openItem(one, shell);
+        void openItem(one, openMailboxItem);
       } else if ((e.key === "Backspace" || e.key === "Delete") && !dismissing) {
         e.preventDefault();
         void dismissChosen();
@@ -218,7 +167,9 @@ export function MailboxScreen({
   return (
     <ScrollArea className="h-full" data-testid="mailbox-screen">
       <div className="mx-auto max-w-page px-6 py-6">
-        {items.length > 0 && (
+        {/* narrowed to nodes with nothing open, the filters stay so the
+            narrowing can be undone */}
+        {(items.length > 0 || nodeIds.length > 0) && (
           <>
             <div className="flex h-10 items-center gap-2">
               <h1 className="font-heading text-lg font-medium text-heading">
@@ -229,12 +180,12 @@ export function MailboxScreen({
                 className="ml-auto flex min-w-0 items-center gap-0.5 text-muted-foreground"
               >
                 <NodeAxis
-                  nodes={shell.deployments}
-                  homeDid={shell.snapshot?.bootstrap.initAgentDid}
+                  nodes={nodes}
+                  homeDid={homeDid}
                   counts={nodeCounts}
                   value={nodeIds}
                   onChange={(next) => {
-                    setNodeIds(next);
+                    listViews.setMailboxNodes(next);
                     if (nodeDid) navigate({ name: "mailbox" });
                   }}
                 />
@@ -244,7 +195,7 @@ export function MailboxScreen({
                   options={KINDS}
                   counts={kindCounts}
                   value={kinds}
-                  onChange={setKinds}
+                  onChange={listViews.setMailboxKinds}
                 />
                 {(kinds.length > 0 || nodeIds.length > 0) && (
                   <Button
@@ -252,8 +203,9 @@ export function MailboxScreen({
                     size="icon-sm"
                     aria-label="Clear filters"
                     onClick={() => {
-                      setKinds([]);
-                      setNodeIds([]);
+                      listViews.setMailboxKinds([]);
+                      listViews.setMailboxNodes([]);
+                      if (nodeDid) navigate({ name: "mailbox" });
                     }}
                   >
                     <X />
@@ -352,7 +304,6 @@ export function MailboxScreen({
                       key={m.itemId}
                       item={m}
                       last={i === groups.length - 1 && j === g.items.length - 1}
-                      shell={shell}
                       now={now}
                       selected={selected.has(m.itemId)}
                       onSelect={(next) => select([m.itemId], next)}
@@ -374,7 +325,7 @@ export function MailboxScreen({
               className="underline decoration-border underline-offset-4 hover:text-foreground"
               onClick={() => {
                 setQuery(null);
-                setKinds([]);
+                listViews.setMailboxKinds([]);
               }}
             >
               Clear the search and filter
@@ -438,366 +389,13 @@ export function MailboxScreen({
                 </Button>
                 {/* one item chosen: its own action leads, since that is what
                   a person picked it out to do */}
-                {one && <Primary item={one} shell={shell} />}
+                {one && <Primary item={one} />}
               </div>
             </div>
           </div>
         )}
       </div>
     </ScrollArea>
-  );
-}
-
-function Item({
-  item: m,
-  shell,
-  now,
-  selected,
-  onSelect,
-  last,
-}: {
-  item: MailboxItemView;
-  shell: Shell;
-  now: number;
-  selected: boolean;
-  onSelect: (next: boolean) => void;
-  last: boolean;
-}) {
-  const kind = KIND[m.kind] ?? {
-    icon: CircleHelp,
-    label: m.kind,
-    badge: "secondary" as BadgeVariant,
-  };
-  const status = STATUS[m.status] ?? {
-    label: m.status,
-    badge: "outline" as BadgeVariant,
-  };
-  const session = m.sessionId
-    ? shell.selectedDeployment?.sessions.find((s) => s.sessionId === m.sessionId)
-    : undefined;
-  /* a kind with its own answer surface renders it; any other item keeps
-     the generic reading view */
-  const question = parseQuestion(m);
-  const body = [m.summary, m.payload && !question ? payloadMarkdown(m.payload) : null]
-    .filter((part): part is string => Boolean(part?.trim()))
-    .join("\n\n");
-  const foldable = body.length > FOLD_CHARS || body.split("\n").length > FOLD_LINES;
-  const [expanded, setExpanded] = useState(false);
-  const Icon = kind.icon;
-  const open = () => openItem(m, shell);
-  const deadline = m.deadlineAt ? Date.parse(m.deadlineAt) : null;
-  /* a deadline that has passed is the runtime's to expire, not a state
-     to show; a countdown never reads below zero */
-  const due = deadline === null ? null : span(Math.max(0, deadline - now));
-  const soon = deadline !== null && deadline - now < SOON_MS;
-  const age = when(m.createdAt);
-  const created = Number.isNaN(Date.parse(m.createdAt))
-    ? undefined
-    : new Date(m.createdAt).toLocaleString();
-  const time = (
-    <time dateTime={m.createdAt} title={created}>
-      {age}
-    </time>
-  );
-  /* a deadline that has passed is still shown as such until the runtime
-     expires the item */
-  const overdue = deadline !== null && deadline < now;
-  /* the sender's behavior, named on the node that filed the item */
-  const behavior = behaviorName(
-    m.targetBehaviorId,
-    shell.deployments.find((n) => nodeDidOf(n) === m.agentDid) ??
-      shell.selectedDeployment,
-  );
-  return (
-    <li
-      className="group/item relative"
-      data-testid="mailbox-item"
-      data-selected={selected || undefined}
-    >
-      {/* the rail is one line for the whole list; the last card covers
-          it below its own glyph so the line ends there */}
-      {last && (
-        <span
-          aria-hidden="true"
-          className="absolute top-6 bottom-0 -left-10 w-6 bg-background"
-        />
-      )}
-      {/* the rail glyph is the card's kind until the pointer is over the
-          card, when it becomes the checkbox; it stays the checkbox while
-          the card is selected or the box has focus, so a keyboard reaches
-          it and a selection never hides itself */}
-      <span
-        className={cn(
-          "absolute top-3 -left-10 grid size-6 place-items-center rounded-full bg-background text-muted-foreground",
-          kind.tone,
-        )}
-        title={kind.label}
-      >
-        <Icon
-          className={cn(
-            "col-start-1 row-start-1 size-4 transition-opacity duration-100 group-hover/item:opacity-0 group-focus-within/item:opacity-0 motion-reduce:transition-none",
-            selected && "opacity-0",
-          )}
-        />
-        <Checkbox
-          checked={selected}
-          onCheckedChange={(checked) => onSelect(Boolean(checked))}
-          aria-label={`Select: ${m.title}`}
-          className={cn(
-            "col-start-1 row-start-1 transition-opacity duration-100 group-hover/item:opacity-100 group-focus-within/item:opacity-100 motion-reduce:transition-none",
-            selected ? "opacity-100" : "opacity-0",
-          )}
-        />
-      </span>
-      {/* the card is its own checkbox: a click on its surface toggles the
-          selection, except on a control inside it or when the click ended
-          a text selection */}
-      <article
-        className={cn(
-          "cursor-default rounded-2xl border bg-raised px-4 pt-3 pb-5 transition-[border-color,box-shadow] duration-150 motion-reduce:transition-none",
-          selected
-            ? "border-brand/60 ring-1 ring-brand/30"
-            : "border-border/60 hover:border-border",
-        )}
-        onClick={(e) => {
-          if ((e.target as Element).closest(CONTROLS)) return;
-          if (!window.getSelection()?.isCollapsed) return;
-          onSelect(!selected);
-        }}
-      >
-        <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-x-3 max-md:gap-y-2">
-          {/* room for a node behind the behavior on every row, so titles
-              line up whether or not this one is remote; the stack keeps
-              to the title's side, the node reaching left */}
-          <div className="col-start-1 row-start-1 flex justify-end max-md:self-center md:mt-0.5 md:w-12">
-            <NodeBehaviorStack
-              nodes={shell.deployments}
-              homeDid={shell.snapshot?.bootstrap.initAgentDid}
-              nodeDid={m.agentDid}
-              behaviorId={m.targetBehaviorId}
-              deployment={shell.selectedDeployment}
-            />
-          </div>
-          <span className="col-start-2 row-start-1 flex items-center gap-3 self-center justify-self-end text-xs leading-5 text-muted-foreground md:hidden">
-            <Due due={due} soon={soon} />
-            {time}
-          </span>
-          <div className="min-w-0 max-md:col-span-full max-md:row-start-2 md:col-start-2 md:row-start-1">
-            <div className="flex items-baseline gap-3">
-              <h2 className="min-w-0 flex-1 font-heading text-sm font-medium text-pretty wrap-break-word text-heading">
-                {m.title}
-              </h2>
-              {/* one centred group, so the chip's icon cannot set the age
-                  off its own baseline */}
-              <span className="flex shrink-0 items-center gap-3 text-xs leading-5 text-muted-foreground max-md:hidden">
-                <Due due={due} soon={soon} />
-                {time}
-              </span>
-            </div>
-            <div
-              className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground"
-              data-testid="mailbox-item-meta"
-            >
-              <Badge variant={kind.badge}>{kind.label}</Badge>
-              <Badge variant={status.badge}>{status.label}</Badge>
-              <span>
-                from <span className="text-foreground">{behavior}</span>
-              </span>
-              {m.sessionId && (
-                <a
-                  href={href({ name: "session", sessionId: m.sessionId })}
-                  className="max-w-64 truncate underline-offset-2 hover:text-foreground hover:underline"
-                >
-                  in {session?.title?.trim() || "session"}
-                </a>
-              )}
-              {due && (
-                <span
-                  className={cn("whitespace-nowrap", overdue && "text-destructive")}
-                >
-                  {due}
-                </span>
-              )}
-            </div>
-            {body && (
-              <div className="mt-2 max-w-prose">
-                <div
-                  data-testid="mailbox-item-body"
-                  className={cn(
-                    "prose-app relative",
-                    foldable && !expanded && "max-h-48 overflow-hidden",
-                  )}
-                >
-                  <Markdown breaks>{body}</Markdown>
-                  {foldable && !expanded && (
-                    <div className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-raised to-transparent" />
-                  )}
-                </div>
-                {foldable && (
-                  <Button
-                    variant="quiet"
-                    size="xs"
-                    className="mt-1 -ml-2"
-                    aria-expanded={expanded}
-                    onClick={() => setExpanded((v) => !v)}
-                  >
-                    {expanded ? "Show less" : "Show more"}
-                  </Button>
-                )}
-              </div>
-            )}
-            {question && (
-              <QuestionAnswer
-                question={question}
-                onAnswer={(answer) => shell.answerMailboxQuestion(m, answer)}
-              />
-            )}
-            {m.action === "write_document" && m.expectedCollection && (
-              <p className="mt-2 text-xs text-muted-foreground">
-                Answer with a{" "}
-                <span className="font-mono text-foreground">
-                  {m.expectedCollection}
-                </span>{" "}
-                document
-              </p>
-            )}
-          </div>
-          {/* open it, where opening means anything */}
-          <div className="col-start-3 row-start-1 -mr-1 flex items-center gap-1 max-md:self-center md:-mt-1 md:self-start">
-            {openable(m) && (
-              <Button
-                size="icon-sm"
-                variant="ghost"
-                aria-label={openLabel(m)}
-                title={openLabel(m)}
-                onClick={() => void open()}
-              >
-                {/* the glyph says which: the reply arrow the composer's
-                    chip carries, or the sessions scroll for an open */}
-                {m.action === "ack" ? <ScrollText /> : <CornerDownLeft />}
-              </Button>
-            )}
-          </div>
-        </div>
-      </article>
-      <Button
-        size="sm"
-        variant="raised"
-        className="-mt-3.5 mr-4 ml-auto flex h-7 w-fit rounded-full px-3 text-xs"
-        onClick={() => shell.dismissMailboxItem(m.itemId)}
-      >
-        <X className="size-3" /> Dismiss
-      </Button>
-    </li>
-  );
-}
-
-/* ack: there is nothing to do but read it, so opening goes to its source;
-   anything else opens a conversation on it (the desktop's "Open compose") */
-const openable = (m: MailboxItemView) => Boolean(m.sessionId) || m.action !== "ack";
-
-/* the label says what happens next, not which part of the app opens */
-const openLabel = (m: MailboxItemView) =>
-  m.action === "ack" ? "Open" : m.sessionId ? "Reply" : "Reply in new session";
-
-type Extra = { key: string; label: string; run: () => void };
-
-/* what else a person can do with an item, beyond its own action and
-   dismissing it: only actions the contract gives us today */
-function extrasOf(m: MailboxItemView): Extra[] {
-  const out: Extra[] = [];
-  if (m.action !== "ack" && m.sessionId) {
-    const sessionId = m.sessionId;
-    out.push({
-      key: "open-session",
-      label: "Open session without replying",
-      run: () => navigate({ name: "session", sessionId }),
-    });
-  }
-  if (m.action === "write_document")
-    out.push({
-      key: "copy-key",
-      label: "Copy item key",
-      run: () => void navigator.clipboard?.writeText(m.itemKey),
-    });
-  if (m.payload) {
-    const payload = m.payload;
-    out.push({
-      key: "copy-payload",
-      label: "Copy payload",
-      run: () => void navigator.clipboard?.writeText(pretty(payload)),
-    });
-  }
-  return out;
-}
-
-async function openItem(m: MailboxItemView, shell: Shell) {
-  if (m.action === "ack") {
-    if (m.sessionId) navigate({ name: "session", sessionId: m.sessionId });
-    return;
-  }
-  try {
-    const item = await shell.openMailboxItem(m.itemId);
-    if (!item) return;
-    navigate(
-      item.sessionId
-        ? { name: "session", sessionId: item.sessionId }
-        : { name: "session", sessionId: null },
-    );
-  } catch {
-    /* reported by the shell's action error */
-  }
-}
-
-/* the key hint inside a pill: a box inside a box read as two outlines,
-   so the hint is a tint of the button's own colour with no edge */
-const KEY =
-  "ml-0.5 h-4 min-w-4 rounded-md border-transparent! bg-current/12! text-[10px] opacity-100!";
-
-/* what a click inside a card reaches for itself, rather than the card */
-const CONTROLS =
-  'button, a, input, textarea, pre, [role="checkbox"], [role="button"], [role="link"]';
-
-/* the one item's action as a split button: the action itself, and a
-   caret for whatever else the item allows, present only when there is
-   something to put in it */
-function Primary({ item, shell }: { item: MailboxItemView; shell: Shell }) {
-  const extras = extrasOf(item);
-  return (
-    <ButtonGroup>
-      <Button
-        size="sm"
-        variant="outline"
-        data-testid="mailbox-selection-open"
-        onClick={() => void openItem(item, shell)}
-      >
-        {openLabel(item)} <Kbd className={KEY}>↵</Kbd>
-      </Button>
-      {extras.length > 0 && (
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            render={
-              <Button
-                size="icon-sm"
-                variant="outline"
-                className="h-7 w-7"
-                aria-label="More actions"
-                data-testid="mailbox-selection-more"
-              />
-            }
-          >
-            <ChevronDown className="size-3.5" />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-60">
-            {extras.map((x) => (
-              <DropdownMenuItem key={x.key} onClick={x.run}>
-                {x.label}
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      )}
-    </ButtonGroup>
   );
 }
 
@@ -833,56 +431,3 @@ function GroupSelect({
     </span>
   );
 }
-
-/* when it expires: a clock and a span, the one fact of the old detail strip
-   a person acted on; within the hour it turns the warm colour */
-const SOON_MS = 60 * 60_000;
-
-function Due({
-  due,
-  soon,
-  className,
-}: {
-  due: string | null;
-  soon: boolean;
-  className?: string;
-}) {
-  if (!due) return null;
-  return (
-    <span
-      className={cn(
-        "inline-flex shrink-0 items-center gap-1 leading-5 tabular-nums",
-        soon ? "text-yellow" : "text-muted-foreground",
-        className,
-      )}
-      title={`Expires in ${due}`}
-    >
-      <Clock className="size-3" />
-      {due}
-    </span>
-  );
-}
-
-const pretty = (value: string) => {
-  try {
-    return JSON.stringify(JSON.parse(value), null, 2);
-  } catch {
-    return value;
-  }
-};
-
-/* a payload that is JSON reads as a fenced block; anything else is the
-   agent's own markdown */
-const payloadMarkdown = (value: string) => {
-  let json: string;
-  try {
-    const parsed: unknown = JSON.parse(value);
-    if (typeof parsed === "string") return parsed;
-    json = JSON.stringify(parsed, null, 2);
-  } catch {
-    return value;
-  }
-  let fence = "```";
-  while (json.includes(fence)) fence += "`";
-  return `${fence}json\n${json}\n${fence}`;
-};

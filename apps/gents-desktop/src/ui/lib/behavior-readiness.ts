@@ -1,7 +1,6 @@
-import {
-  selectedBehaviorReadinessDecision,
-  type DeploymentView,
-} from "@source-inc/gents-desktop-client";
+import { selectedBehaviorReadinessDecision } from "@source-inc/gents-desktop-client";
+
+import type { NodeView } from "../../hooks/fleetStore";
 
 const READINESS_REASON: Record<string, string> = {
   behavior_disabled: "behavior is disabled",
@@ -18,7 +17,7 @@ const READINESS_REASON: Record<string, string> = {
 
 /** Preserve picker copy while delegating the readiness decision to its owner. */
 export function behaviorReadiness(
-  deployment: DeploymentView | null,
+  deployment: NodeView | null,
   behaviorId: string | null,
 ) {
   const decision = selectedBehaviorReadinessDecision(deployment, behaviorId);

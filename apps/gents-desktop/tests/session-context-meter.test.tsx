@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
-import { SessionContext } from "../src/ui/screens/SessionScreen";
+import { SessionContext } from "../src/ui/screens/SessionContextMeter";
 
 type Context = DesktopSessionSnapshot["context"];
 
@@ -11,6 +11,7 @@ const context = (overrides: Partial<Context> = {}): Context => ({
   contextWindow: 500_000,
   compactionThreshold: 0.8,
   compactionThresholdTokens: 400_000,
+  compactionStrategy: "StripThenSummarize",
   durableMessageCount: 1,
   providerMessageCount: 1,
   totalCompactedMessages: 0,

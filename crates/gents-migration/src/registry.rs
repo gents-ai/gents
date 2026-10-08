@@ -355,7 +355,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::EVENT_SOURCE_CURSOR_NAME,
         gents_protocol::schemas::EVENT_SOURCE_CURSOR,
-        "bafyreibmj2c3mvftyp3zj6te24ql5grwbzoxiztuvpxz7idukpoxytvo24"
+        "bafyreichgs26urdud6sk4qualskmzpcodc5o2mlljnswcxmleihz2vo2qq"
     ),
     baseline_entry!(
         gents_protocol::schemas::TRIGGER_FIRE_NAME,
@@ -471,6 +471,11 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
         gents_protocol::schemas::RENDERED_REQUEST_NAME,
         gents_protocol::schemas::RENDERED_REQUEST,
         "bafyreicderii4drvuggodfzo24q5ergcponrix4u6zv6qfo75uvescmwh4"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::RENDERED_REQUEST_BLOCK_NAME,
+        gents_protocol::schemas::RENDERED_REQUEST_BLOCK,
+        "bafyreicl23h6anxhpfmdmomvgpegd42apgmvddtjtcqlteabtcog3d7h5i"
     ),
     baseline_entry!(
         gents_protocol::schemas::PROVIDER_CONTEXT_REDUCTION_NAME,

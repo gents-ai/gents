@@ -6,12 +6,20 @@ import type { RenderedTimelineItem } from "@source-inc/gents-desktop-client";
 import { describe, expect, it } from "vitest";
 import {
   closeOpenFence,
-  createHandoff,
+  drawKey,
+  drawKeys,
   holdLive,
   initialReveal,
+  noDrawKeys,
   revealedText,
   stepReveal,
 } from "@/screens/stream-reveal";
+import {
+  assistantMessage,
+  liveAssistant,
+  pendingUserTurn,
+  userMessage,
+} from "./timeline-fixture";
 
 const FRAME = 16;
 
@@ -123,48 +131,29 @@ describe("what is drawn", () => {
   });
 });
 
-describe("the handoff from live tail to message", () => {
-  it("carries what was on screen to the message that continues it", () => {
-    const h = createHandoff();
-    h.noteShown("The export route reads ");
-    expect(h.claim("m1", "The export route reads from the cache.")).toBe(22);
+const live = (content: string | null): RenderedTimelineItem =>
+  liveAssistant({
+    kind: "liveAssistant",
+    itemKey: "live-r1",
+    content,
+    reasoning: null,
   });
-
-  it("gives the same answer twice, for a render that runs twice", () => {
-    const h = createHandoff();
-    h.noteShown("Hello there");
-    expect(h.claim("m1", "Hello there, friend")).toBe(11);
-    expect(h.claim("m1", "Hello there, friend")).toBe(11);
+const message = (content: string): RenderedTimelineItem =>
+  assistantMessage({
+    kind: "assistantMessage",
+    itemKey: "a-r1",
+    sequence: 2,
+    content,
+    reasoning: null,
+    timestamp: null,
   });
-
-  it("does not claim a message that says something else", () => {
-    const h = createHandoff();
-    h.noteShown("Hello there");
-    expect(h.claim("m2", "Something unrelated")).toBeNull();
-  });
-});
-
-const live = (content: string | null): RenderedTimelineItem => ({
-  kind: "liveAssistant",
-  itemKey: "live-r1",
-  content,
-  reasoning: null,
-});
-const message = (content: string): RenderedTimelineItem => ({
-  kind: "assistantMessage",
-  itemKey: "a-r1",
-  sequence: 2,
-  content,
-  reasoning: null,
-  timestamp: null,
-});
-const person: RenderedTimelineItem = {
+const person: RenderedTimelineItem = userMessage({
   kind: "userMessage",
   itemKey: "u1",
   sequence: 1,
   content: "Explain the export route.",
   timestamp: null,
-};
+});
 
 describe("holding the live text through the gap", () => {
   it("records the live text while it streams", () => {
@@ -175,11 +164,13 @@ describe("holding the live text through the gap", () => {
   it("puts it back under the same key when the tail is dropped first", () => {
     const held = holdLive([person, live("The export route")], null).held;
     const out = holdLive([person], held);
-    expect(out.items.at(-1)).toMatchObject({
-      kind: "liveAssistant",
-      itemKey: "live-r1",
-      content: "The export route",
-    });
+    expect(out.items.at(-1)).toMatchObject(
+      liveAssistant({
+        kind: "liveAssistant",
+        itemKey: "live-r1",
+        content: "The export route",
+      }),
+    );
   });
 
   it("refills a tail whose text was cleared, keeping its key", () => {
@@ -220,6 +211,83 @@ describe("holding the live text through the gap", () => {
       held,
     );
     expect(out.held).toBeNull();
+    expect(out.replacedBy).toBe("a-r1");
     expect(out.items).toHaveLength(2);
+  });
+});
+
+describe("the keys replies are drawn under", () => {
+  it("draws the message that replaces a live tail under the tail's key", () => {
+    const streaming = drawKeys(
+      noDrawKeys("s"),
+      [person, live("The export")],
+      undefined,
+      "s",
+    );
+    const tailKey = drawKey(streaming, live("The export"));
+    const saved = message("The export route reads from the cache.");
+    const replaced = drawKeys(streaming, [person, saved], "a-r1", "s");
+    expect(drawKey(replaced, saved)).toBe(tailKey);
+  });
+
+  it("gives the next turn's tail a key of its own", () => {
+    const first = drawKeys(noDrawKeys("s"), [live("One")], undefined, "s");
+    const saved = drawKeys(first, [message("One")], "a-r1", "s");
+    const next = drawKeys(saved, [message("One"), live("Two")], undefined, "s");
+    expect(drawKey(next, live("Two"))).not.toBe(drawKey(next, message("One")));
+  });
+
+  it("gives the same keys to a render that runs twice", () => {
+    const streaming = drawKeys(noDrawKeys("s"), [live("One")], undefined, "s");
+    const once = drawKeys(streaming, [message("One")], "a-r1", "s");
+    const twice = drawKeys(once, [message("One")], "a-r1", "s");
+    expect(drawKey(twice, message("One"))).toBe(drawKey(once, message("One")));
+  });
+
+  it("draws a saved message under the key of the pending turn it replaces", () => {
+    const pending = pendingUserTurn({
+      itemKey: "pending-r2",
+      requestId: "r2",
+      content: "again",
+    });
+    const saved = userMessage({
+      kind: "userMessage",
+      itemKey: "u2",
+      requestId: "r2",
+      sequence: 3,
+      content: "again",
+      timestamp: null,
+    });
+    const sent = drawKeys(noDrawKeys("s"), [person, pending], undefined, "s");
+    const settled = drawKeys(sent, [person, saved], undefined, "s");
+    expect(drawKey(settled, saved)).toBe(drawKey(sent, pending));
+  });
+
+  it("keeps a saved message's own key while its pending turn is still shown", () => {
+    const pending = pendingUserTurn({
+      itemKey: "pending-r2",
+      requestId: "r2",
+      content: "again",
+    });
+    const saved = userMessage({
+      kind: "userMessage",
+      itemKey: "u2",
+      requestId: "r2",
+      sequence: 3,
+      content: "again",
+      timestamp: null,
+    });
+    const sent = drawKeys(noDrawKeys("s"), [pending], undefined, "s");
+    const both = drawKeys(sent, [pending, saved], undefined, "s");
+    const after = drawKeys(both, [saved], undefined, "s");
+    expect(drawKey(both, saved)).toBe("u2");
+    expect(drawKey(after, saved)).toBe("u2");
+  });
+
+  it("starts again for another session", () => {
+    const streaming = drawKeys(noDrawKeys("a"), [live("One")], undefined, "a");
+    const saved = drawKeys(streaming, [message("One")], "a-r1", "a");
+    const other = drawKeys(saved, [message("One")], undefined, "b");
+    expect(drawKey(other, message("One"))).toBe("a-r1");
   });
 });

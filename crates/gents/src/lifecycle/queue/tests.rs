@@ -74,6 +74,7 @@ fn wake_queue_input(queue: RequestQueue) -> RequestInput {
 
 fn parent_request(agent_did: &str, session_id: &str) -> AgentRequest {
     AgentRequest {
+        retry_parent_request_doc_id: None,
         purpose: gents_protocol::request_admission::RequestPurpose::Normal,
         doc_id: "parent-doc".to_string(),
         request_id: "parent-request".to_string(),

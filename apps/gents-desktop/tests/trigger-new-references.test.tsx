@@ -1,11 +1,11 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import { renderIn, testApp } from "./app-fixture";
 
 vi.mock("@/lib/router", () => ({ href: () => "#", navigate: vi.fn() }));
 
 import { TriggersPanel } from "../src/ui/screens/agent/TriggersPanel";
-import type { Shell } from "../src/ui/hooks/useShell";
 import { deployment } from "./config-panel-wiring/fixtures";
 
 function harness() {
@@ -16,11 +16,10 @@ function harness() {
     saveScheduleConfig: vi.fn().mockResolvedValue({}),
     saveEventSourceConfig: vi.fn().mockResolvedValue({}),
   };
-  const shell = {
-    api,
-    applyConfig: (run: (bridge: typeof api) => Promise<unknown>) => run(api),
-  } as unknown as Shell;
-  render(<TriggersPanel shell={shell} deployment={deployment} item="trigger-a" />);
+  renderIn(
+    testApp({ api }),
+    <TriggersPanel deployment={deployment} item="trigger-a" />,
+  );
   return api;
 }
 

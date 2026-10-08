@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, RwLock as StdRwLock};
 use tokio::sync::watch;
 use tokio::sync::RwLock;
@@ -17,6 +17,7 @@ use super::{p2p_health_materially_changed, ClientPeerStatus, ClientSyncStateSnap
 use crate::client::load_peer_directory_snapshot;
 #[cfg(test)]
 use crate::client::peer_directory::PersistBarrier;
+use crate::client::peer_directory::RemovalCause;
 use crate::client::{PeerDirectory, PeerRecord};
 
 type LastErrorPatch = (Option<String>, Option<String>);
@@ -144,6 +145,20 @@ impl ClientSyncStateOwner {
 
     pub(super) async fn pending_removals(&self) -> Vec<PeerRecord> {
         self.directory.read().await.pending_removals().to_vec()
+    }
+
+    pub(super) async fn retired_enrollment_digests(&self) -> BTreeSet<String> {
+        self.directory.read().await.retired_enrollment_digests()
+    }
+
+    pub(super) async fn prune_retired_enrollments(
+        &self,
+        authority_server_peers: &BTreeSet<String>,
+    ) -> anyhow::Result<()> {
+        let mut directory = self.directory.write().await;
+        directory
+            .prune_retired_enrollments(authority_server_peers)
+            .await
     }
 
     pub(super) async fn clear_ephemeral_pairing_readiness(&self) -> anyhow::Result<()> {
@@ -294,9 +309,10 @@ impl ClientSyncStateOwner {
     pub(super) async fn queue_removal(
         &self,
         expected: &PeerRecord,
+        cause: RemovalCause,
     ) -> anyhow::Result<Option<PeerRecord>> {
         let mut directory = self.directory.write().await;
-        let removed = directory.queue_removal(expected).await?;
+        let removed = directory.queue_removal(expected, cause).await?;
         let records = directory.records().to_vec();
         self.publish_persisted_directory(records);
         Ok(removed)
@@ -960,7 +976,10 @@ mod tests {
             .into_iter()
             .find(|record| record.peer_id == "a")
             .expect("replaced peer is configured");
-        let removed = owner.queue_removal(&configured).await.unwrap();
+        let removed = owner
+            .queue_removal(&configured, RemovalCause::Operator)
+            .await
+            .unwrap();
         assert!(removed.is_some());
         assert!(
             owner.snapshot().peer_schema_skew.is_empty(),
@@ -992,8 +1011,11 @@ mod tests {
         let removal_owner = owner.clone();
         let removal_expected = original;
         let stale_expected = removal_expected.clone();
-        let removal =
-            tokio::spawn(async move { removal_owner.queue_removal(&removal_expected).await });
+        let removal = tokio::spawn(async move {
+            removal_owner
+                .queue_removal(&removal_expected, RemovalCause::Operator)
+                .await
+        });
         tokio::task::yield_now().await;
         assert!(
             !removal.is_finished(),

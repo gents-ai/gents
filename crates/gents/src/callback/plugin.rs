@@ -503,13 +503,8 @@ mod tests {
                 serde_json::to_string(job_path).unwrap()
             ))
             .await;
-        let doc_id = crate::graphql::single_mutation_document(&created, "create_Job")
-            .unwrap()
-            .and_then(|row| row.get("_docID"))
-            .and_then(Value::as_str)
-            .unwrap()
-            .to_owned();
-        engine.handle_created_doc("Job", &doc_id).await;
+        assert!(!created.has_errors(), "{:?}", created.errors);
+        engine.deliver_arrivals(Some("Job")).await;
         (node, home)
     }
 

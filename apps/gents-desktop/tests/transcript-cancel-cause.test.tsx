@@ -3,6 +3,7 @@ import { render, screen } from "@testing-library/react";
 import { MessageList } from "@source-inc/gents-desktop-chat";
 import type { RenderedTimelineItem } from "@source-inc/gents-desktop-client";
 import type { DerivedCancelCauseView } from "@source-inc/gents-desktop-client";
+import { assistantMessage, liveAssistant, userMessage } from "./timeline-fixture";
 
 describe("Transcript cancel cause surfacing", () => {
   it("renders CancelCauseBadge on cancelled tool calls", () => {
@@ -16,7 +17,6 @@ describe("Transcript cancel cause surfacing", () => {
             itemKey: "tool-1",
             toolName: "background_tool",
             statusKind: "error",
-            status: "cancelled",
             presentation: { kind: "generic", summary: null, input: null, output: null },
             reconstruction: { state: "ready" },
             cancelCause: {
@@ -50,7 +50,6 @@ describe("Transcript cancel cause surfacing", () => {
             itemKey: "tool-2",
             toolName: "read_file",
             statusKind: "success",
-            status: "completed",
             presentation: {
               kind: "fileRead",
               operation: "read_file",
@@ -82,7 +81,6 @@ describe("Transcript cancel cause surfacing", () => {
             itemKey: "tool-3",
             toolName: "index_repo",
             statusKind: "error",
-            status: "cancelled",
             presentation: { kind: "generic", summary: null, input: null, output: null },
             reconstruction: { state: "ready" },
             cancelCause: {
@@ -113,21 +111,21 @@ describe("Transcript assistant-turn cancel cause", () => {
 
   it("renders a standalone request cause without attaching it to an assistant message", () => {
     const items: RenderedTimelineItem[] = [
-      {
+      userMessage({
         kind: "userMessage",
         itemKey: "u-1",
         sequence: 1,
         content: "tell me about X",
         reconstruction: { state: "ready" },
-      },
-      {
+      }),
+      assistantMessage({
         kind: "assistantMessage",
         itemKey: "a-1",
         sequence: 2,
         content: "partial response",
         reasoning: null,
         reconstruction: { state: "ready" },
-      },
+      }),
     ];
     render(<MessageList timelineItems={items} requestCancelCause={interruptedCause} />);
     expect(
@@ -137,22 +135,22 @@ describe("Transcript assistant-turn cancel cause", () => {
 
   it("renders one standalone badge when prior assistant messages exist", () => {
     const items: RenderedTimelineItem[] = [
-      {
+      assistantMessage({
         kind: "assistantMessage",
         itemKey: "a-old",
         sequence: 2,
         content: "older completed turn",
         reasoning: null,
         reconstruction: { state: "ready" },
-      },
-      {
+      }),
+      assistantMessage({
         kind: "assistantMessage",
         itemKey: "a-new",
         sequence: 4,
         content: "most recent turn",
         reasoning: null,
         reconstruction: { state: "ready" },
-      },
+      }),
     ];
     render(<MessageList timelineItems={items} requestCancelCause={interruptedCause} />);
     expect(
@@ -162,12 +160,12 @@ describe("Transcript assistant-turn cancel cause", () => {
 
   it("renders a standalone badge while a live assistant overlay is present", () => {
     const items: RenderedTimelineItem[] = [
-      {
+      liveAssistant({
         kind: "liveAssistant",
         itemKey: "live",
         content: "streaming…",
         reasoning: null,
-      },
+      }),
     ];
     render(<MessageList timelineItems={items} requestCancelCause={interruptedCause} />);
     expect(
@@ -177,14 +175,14 @@ describe("Transcript assistant-turn cancel cause", () => {
 
   it("does NOT render badge when requestCancelCause is null", () => {
     const items: RenderedTimelineItem[] = [
-      {
+      assistantMessage({
         kind: "assistantMessage",
         itemKey: "a-1",
         sequence: 2,
         content: "normal turn",
         reasoning: null,
         reconstruction: { state: "ready" },
-      },
+      }),
     ];
     render(<MessageList timelineItems={items} requestCancelCause={null} />);
     expect(screen.queryByText(/interrupted/i)).not.toBeInTheDocument();
@@ -192,13 +190,13 @@ describe("Transcript assistant-turn cancel cause", () => {
 
   it("renders a standalone badge when an interrupted response has no assistant message", () => {
     const items: RenderedTimelineItem[] = [
-      {
+      userMessage({
         kind: "userMessage",
         itemKey: "u-1",
         sequence: 2,
         content: "user prompt",
         reconstruction: { state: "ready" },
-      },
+      }),
     ];
     render(<MessageList timelineItems={items} requestCancelCause={interruptedCause} />);
     expect(

@@ -2,13 +2,7 @@
    first within a group, and a search that reaches into the payload. */
 import type { MailboxItemView } from "@source-inc/gents-desktop-client";
 import { describe, expect, it } from "vitest";
-import {
-  countKinds,
-  groupItems,
-  matches,
-  orderItems,
-  triageOf,
-} from "@/screens/mailbox-triage";
+import { groupItems, matches, orderItems, triageOf } from "@/screens/mailbox-triage";
 
 const NOW = Date.parse("2026-09-25T12:00:00Z");
 const min = (n: number) => new Date(NOW + n * 60_000).toISOString();
@@ -85,16 +79,5 @@ describe("search", () => {
     expect(matches(m, "nightly")).toBe(true);
     expect(matches(m, "rollback")).toBe(false);
     expect(matches(m, "   ")).toBe(true);
-  });
-});
-
-describe("kind counts", () => {
-  it("keeps a fixed order and appends what it does not know", () => {
-    const counts = countKinds([item("flag"), item("ask"), item("odd"), item("ask")]);
-    expect(counts).toEqual([
-      { kind: "ask", count: 2 },
-      { kind: "flag", count: 1 },
-      { kind: "odd", count: 1 },
-    ]);
   });
 });

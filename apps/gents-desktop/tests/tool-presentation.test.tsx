@@ -26,7 +26,6 @@ function baseTool(
   return {
     itemKey: "tool-1",
     toolName: "tool",
-    status: "completed",
     statusKind: "success",
     presentation,
     reconstruction: { state: "ready" },
@@ -122,7 +121,6 @@ describe("unified tool presentation", () => {
         },
         {
           toolName: "spawn_process",
-          status: "running",
           statusKind: "running",
           awaitMode: "background",
         },

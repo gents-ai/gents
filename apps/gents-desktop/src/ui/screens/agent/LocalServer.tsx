@@ -1,6 +1,6 @@
 /* The OS-managed local agent service. The desktop observes and controls it,
    but does not own its process lifetime. */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import type {
   ManagedServerStatus,
@@ -10,7 +10,6 @@ import { Badge } from "@gents/ui/components/badge";
 import { Button } from "@gents/ui/components/button";
 import { Spinner } from "@gents/ui/components/spinner";
 import { Switch } from "@gents/ui/components/switch";
-import type { Shell } from "@/hooks/useShell";
 import {
   ManagedRuntimeAuthorityPicker,
   ManagedRuntimeAuthorityReview,
@@ -24,9 +23,17 @@ import {
   type ManagedServerWait,
 } from "../../../lib/managedServerStartup";
 import { Fact, Group, Row } from "./rows";
+import { useApp } from "@/app/AppContext";
+import { useStartup } from "@/hooks/useClient";
 
-export function LocalServer({ shell }: { shell: Shell }) {
-  const api = shell.api;
+export function LocalServer() {
+  const {
+    api,
+    stores,
+    actions: { refreshSnapshot },
+  } = useApp();
+  const { incompatibleHome } = useStartup();
+  const snapshot = stores.client.use.snapshot();
   const [status, setStatus] = useState<ManagedServerStatus | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -36,34 +43,46 @@ export function LocalServer({ shell }: { shell: Shell }) {
   const [selectedDirectory, setSelectedDirectory] = useState<string | null>(null);
   const [authorityError, setAuthorityError] = useState<string | null>(null);
   const [wait, setWait] = useState<ManagedServerWait | null>(null);
-  const load = () =>
-    api.managedServerStatus?.().then(
+  /* only the newest status asked for is shown: a read begun before a start,
+     stop or restart may answer after it with what it replaced */
+  const asked = useRef(0);
+  const ask = () => {
+    const read = ++asked.current;
+    return () => read === asked.current;
+  };
+  const load = () => {
+    const current = ask();
+    return api.managedServerStatus?.().then(
       (next) => {
+        if (!current()) return;
         setStatus(next);
         setStatusError(null);
       },
       (error: unknown) => {
+        if (!current()) return;
         setStatus(null);
         setStatusError(`Could not check the background agent: ${String(error)}`);
       },
     );
+  };
   useEffect(() => {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shell.snapshot]);
+  }, [snapshot]);
   if (!api.managedServerStatus) return null;
   const act = async (
     label: string,
     run: () => Promise<ManagedServerStatus> | undefined,
   ) => {
     setBusy(true);
+    const current = ask();
     try {
       const next = await run();
-      if (next) setStatus(next);
-      await shell.refreshSnapshot();
+      if (next && current()) setStatus(next);
+      await refreshSnapshot();
       toast(label);
     } catch (e) {
-      if (!(await shell.incompatibleHome?.adopt(e))) {
+      if (!(await incompatibleHome?.adopt(e))) {
         toast(`${label} failed: ${String(e)}`);
       }
     } finally {
@@ -88,6 +107,7 @@ export function LocalServer({ shell }: { shell: Shell }) {
     if (!authority || !api.restartManagedServer) return;
     setBusy(true);
     setAuthorityError(null);
+    const current = ask();
     try {
       const restartManagedServer = api.restartManagedServer;
       let next = await observeManagedServerOperation(
@@ -95,12 +115,12 @@ export function LocalServer({ shell }: { shell: Shell }) {
         () => restartManagedServer(name, authority),
         setWait,
       );
-      setStatus(next);
+      if (current()) setStatus(next);
       const deadline = Date.now() + 30_000;
       while (!next.pairingReady && Date.now() < deadline) {
         await new Promise((resolve) => window.setTimeout(resolve, 250));
         next = (await api.managedServerStatus?.()) ?? next;
-        setStatus(next);
+        if (current()) setStatus(next);
       }
       if (!next.pairingReady) {
         throw new Error("The runtime restarted, but background pairing is not ready.");
@@ -117,11 +137,11 @@ export function LocalServer({ shell }: { shell: Shell }) {
         );
       }
       setEditingAuthority(false);
-      await shell.refreshSnapshot();
+      await refreshSnapshot();
       toast("Managed runtime restarted with the reviewed access");
     } catch (cause) {
       setAuthorityError(cause instanceof Error ? cause.message : String(cause));
-      await shell.incompatibleHome?.adopt(cause);
+      await incompatibleHome?.adopt(cause);
     } finally {
       setBusy(false);
     }
@@ -223,7 +243,7 @@ export function LocalServer({ shell }: { shell: Shell }) {
         label="Native logs"
         description="Agent runtime diagnostics are separate from desktop connectivity and pairing observations."
       >
-        <Fact mono>{shell.snapshot?.bootstrap?.diagnosticsHint ?? "System logs"}</Fact>
+        <Fact mono>{snapshot?.bootstrap?.diagnosticsHint ?? "System logs"}</Fact>
       </Row>
       <Row
         label="Host access"

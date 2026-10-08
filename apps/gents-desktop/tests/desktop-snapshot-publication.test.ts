@@ -1,4 +1,4 @@
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import type {
@@ -7,7 +7,7 @@ import type {
   DesktopClientSnapshot,
 } from "@source-inc/gents-desktop-client";
 import { createDesktopShellConfigActions } from "../src/hooks/desktopShellConfigActions";
-import { useDesktopClientLifecycle } from "../src/hooks/useDesktopClientLifecycle";
+import { lifecycleFor } from "./shell-fixture";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -27,19 +27,6 @@ function snapshot(label: string): DesktopClientSnapshot {
   } as unknown as DesktopClientSnapshot;
 }
 
-function renderLifecycle(api: DesktopApiAdapter) {
-  return renderHook(() =>
-    useDesktopClientLifecycle({
-      api,
-      supportsManagedServer: false,
-      refreshSession: vi.fn(async () => null),
-      selectedSessionIdRef: { current: null },
-      setError: vi.fn(),
-      setSession: vi.fn(),
-    }),
-  );
-}
-
 function configActions(
   api: DesktopApiAdapter,
   mutateSnapshot: <T>(operation: () => Promise<T>) => Promise<T>,
@@ -47,11 +34,7 @@ function configActions(
   return createDesktopShellConfigActions({
     api,
     mutateSnapshot,
-    setError: vi.fn(),
-    setSavingBehaviorConfig: vi.fn(),
-    setSavingConfig: vi.fn(),
-    setSelectedAgentDid: vi.fn(),
-    setSelectedBehaviorId: vi.fn(),
+    reportFailure: vi.fn(),
   });
 }
 
@@ -72,29 +55,25 @@ describe("desktop snapshot publication", () => {
       fetchDesktopSnapshot,
       saveBackendConfig,
     } as unknown as DesktopApiAdapter;
-    const { result } = renderLifecycle(api);
-    await waitFor(() => expect(result.current.loading).toBe(false));
-    const actions = configActions(api, result.current.mutateSnapshot);
+    const lifecycle = lifecycleFor(api);
+    await waitFor(() => expect(lifecycle.snapshot).not.toBeNull());
+    const actions = configActions(api, lifecycle.mutateSnapshot);
 
-    const older = actions.onSaveBackendConfig({} as BackendSaveRequest);
-    const newer = actions.onSaveBackendConfig({} as BackendSaveRequest);
+    const older = actions.changeConfig("saveBackendConfig", {} as BackendSaveRequest);
+    const newer = actions.changeConfig("saveBackendConfig", {} as BackendSaveRequest);
     const newerPayload = snapshot("newer-stale-payload");
     let newerResult: DesktopClientSnapshot | undefined;
-    await act(async () => {
-      secondSave.resolve(newerPayload);
-      newerResult = await newer;
-    });
+    secondSave.resolve(newerPayload);
+    newerResult = await newer;
     expect(newerResult).toBe(newerPayload);
-    expect(result.current.snapshot).toBe(authoritative);
+    expect(lifecycle.snapshot).toEqual(authoritative);
 
     const olderPayload = snapshot("older-stale-payload");
     let olderResult: DesktopClientSnapshot | undefined;
-    await act(async () => {
-      firstSave.resolve(olderPayload);
-      olderResult = await older;
-    });
+    firstSave.resolve(olderPayload);
+    olderResult = await older;
     expect(olderResult).toBe(olderPayload);
-    expect(result.current.snapshot).toBe(authoritative);
+    expect(lifecycle.snapshot).toEqual(authoritative);
     expect(fetchDesktopSnapshot).toHaveBeenCalledTimes(3);
   });
 
@@ -109,21 +88,21 @@ describe("desktop snapshot publication", () => {
       fetchDesktopSnapshot,
       saveBackendConfig: vi.fn(() => failedSave.promise),
     } as unknown as DesktopApiAdapter;
-    const { result } = renderLifecycle(api);
-    await waitFor(() => expect(result.current.loading).toBe(false));
-    const actions = configActions(api, result.current.mutateSnapshot);
+    const lifecycle = lifecycleFor(api);
+    await waitFor(() => expect(lifecycle.snapshot).not.toBeNull());
+    const actions = configActions(api, lifecycle.mutateSnapshot);
 
-    let reading!: Promise<void>;
-    act(() => {
-      reading = result.current.refreshSnapshot();
-    });
-    const mutation = actions.onSaveBackendConfig({} as BackendSaveRequest);
+    const reading = lifecycle.refreshSnapshot();
+    const mutation = actions.changeConfig(
+      "saveBackendConfig",
+      {} as BackendSaveRequest,
+    );
     failedSave.reject(new Error("write rejected"));
     await expect(mutation).rejects.toThrow("write rejected");
 
     const observed = snapshot("read-after-failure");
     pendingRead.resolve(observed);
-    await act(async () => reading);
-    expect(result.current.snapshot).toBe(observed);
+    await reading;
+    expect(lifecycle.snapshot).toEqual(observed);
   });
 });

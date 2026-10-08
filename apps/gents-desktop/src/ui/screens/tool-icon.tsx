@@ -21,8 +21,7 @@ type Glyph = ComponentType<{ className?: string }>;
 /* A tool name is more specific than its kind, where the name is known.
    Kept short on purpose: every entry here is a claim that the contract's
    own kind is not enough, and a name nothing calls is a claim about
-   nothing. reason, plan and delegate were carried over from an older map
-   and are covered by their kinds. */
+   nothing. */
 const BY_NAME: Record<string, Glyph> = {
   grep: Search,
   glob: Search,

@@ -17,7 +17,7 @@ use p2p::iroh::parse_public_peer_addr;
 use tokio::sync::{Mutex, MutexGuard};
 use tokio::time::{sleep, Instant};
 
-use super::super::peer_directory::PeerRecord;
+use super::super::peer_directory::{PeerRecord, RemovalCause};
 use super::super::principal_identity::PrincipalIdentity;
 use super::super::schema::subscribed_collection_names;
 use super::bootstrap::is_connected_peer;
@@ -96,6 +96,7 @@ impl ClientRouteManager {
         &self,
         sync_state: &ClientSyncStateOwner,
         peer_id: &str,
+        cause: RemovalCause,
     ) -> Result<RouteRemoval> {
         let lifecycle = self.lock().await;
         let record = sync_state
@@ -108,7 +109,7 @@ impl ClientRouteManager {
             anyhow::bail!("the local runtime deployment cannot be removed");
         }
         let removed = sync_state
-            .queue_removal(&record)
+            .queue_removal(&record, cause)
             .await
             .with_context(|| format!("queueing peer {peer_id} for durable route teardown"))?
             .with_context(|| format!("peer {peer_id} not found while queueing removal"))?;

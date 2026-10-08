@@ -1087,7 +1087,7 @@ pub(crate) struct PackRunArgs {
     #[arg(
         long,
         default_value_t = false,
-        help = "Allow a prepare-step plugin that declares standing authority (bind_dir alone needs none)"
+        help = "Allow a prepare-step or dependency plugin that declares standing authority (bind_dir alone needs none)"
     )]
     pub(crate) grant_authority: bool,
     #[arg(

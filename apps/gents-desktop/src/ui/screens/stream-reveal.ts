@@ -17,8 +17,12 @@
    Two seams make the same text disappear and come back, and both are
    closed here rather than in the runtime:
      · the live tail and the message it becomes are two items with two
-       keys, so the finished message would mount and print everything at
-       once — `createHandoff` lets it start from what was already on screen;
+       keys. Drawn under them, React removes the tail's rows and inserts
+       the message's in one commit, and the browser lays the page out
+       between the two: a reader inside the reply is clamped to where the
+       page ended without it, and the text would print again from the
+       start. `drawKeys` draws the message under its tail's key instead, so
+       the same rows update in place and the reveal carries on;
      · the live text can be dropped a projection before the message that
        replaces it arrives — `holdLive` keeps it on screen through the gap. */
 import type { RenderedTimelineItem } from "@source-inc/gents-desktop-client";
@@ -51,9 +55,9 @@ export function initialReveal(startFrom = 0, targetLen = startFrom): RevealState
   return {
     shown,
     carry: 0,
-    /* a message that takes over from the live tail mounts with the rest of
-       the answer already owed: pace it like a burst that just arrived, not
-       at the crawl reserved for a lone trailing word */
+    /* a tail first drawn mid-stream mounts with its text already owed:
+       pace it like a burst that just arrived, not at the crawl reserved
+       for a lone trailing word */
     cps: Math.max(MIN_CPS, ((targetLen - shown) / (1_000 * DRAIN_OVER_GAP)) * 1_000),
     targetLen,
     lastGrowthAt: null,
@@ -119,32 +123,6 @@ export function closeOpenFence(text: string): string {
   return fences % 2 === 1 ? `${text}\n\`\`\`` : text;
 }
 
-/* Carries what the live tail had on screen to the message that replaces
-   it. A claim is remembered per key, so a render that runs twice (strict
-   mode, or a memo that re-mounts) gets the same answer. */
-export type Handoff = {
-  noteShown: (text: string) => void;
-  claim: (itemKey: string, content: string) => number | null;
-};
-
-export function createHandoff(): Handoff {
-  let shownText: string | null = null;
-  const claimed = new Map<string, number | null>();
-  return {
-    noteShown: (text) => {
-      shownText = text;
-    },
-    claim: (itemKey, content) => {
-      if (claimed.has(itemKey)) return claimed.get(itemKey)!;
-      const prefix = shownText?.trimEnd() ?? "";
-      const from = prefix && content.startsWith(prefix) ? prefix.length : null;
-      claimed.set(itemKey, from);
-      if (from !== null) shownText = null;
-      return from;
-    },
-  };
-}
-
 /* The live text as it last stood, while nothing has replaced it yet. It
    belongs to one session, and remembers which messages were already there,
    so only a message that arrives afterwards can be the one replacing it. */
@@ -165,7 +143,12 @@ export function holdLive(
   items: RenderedTimelineItem[],
   held: HeldLive | null,
   sessionId: string | null = null,
-): { items: RenderedTimelineItem[]; held: HeldLive | null } {
+): {
+  items: RenderedTimelineItem[];
+  held: HeldLive | null;
+  /** the message that ended the hold, when one did */
+  replacedBy?: string;
+} {
   /* text held for one session is never shown in another */
   if (held && held.sessionId !== sessionId) held = null;
   const live = items.find((i) => i.kind === "liveAssistant");
@@ -189,14 +172,14 @@ export function holdLive(
      one that replaces it: an earlier narration that happens to begin with
      the same words does not end the hold */
   const prefix = held.content.trimEnd();
-  const replaced = items.some(
+  const replaced = items.find(
     (i) =>
       i.kind === "assistantMessage" &&
       !held!.earlier.includes(i.itemKey) &&
       Boolean(i.content) &&
       i.content!.startsWith(prefix),
   );
-  if (replaced) return { items, held: null };
+  if (replaced) return { items, held: null, replacedBy: replaced.itemKey };
   if (live && live.kind === "liveAssistant") {
     return {
       items: items.map((i) => (i === live ? { ...live, content: held.content } : i)),
@@ -216,3 +199,76 @@ export function holdLive(
     held,
   };
 }
+
+/* The keys a transcript draws its turns under. Two items stand in for
+   one another as a turn settles, each under its own key: the live tail and
+   the message that replaces it, and the pending turn and the person's saved
+   message. Drawn under their own keys, React removes one's rows and inserts
+   the other's, and the browser lays the page out between the two. Each is
+   drawn under the key of the item it replaces instead. The bridge names
+   every turn's live tail alike, so each tail gets a key of its own. */
+export type DrawKeys = {
+  sessionId: string | null;
+  tail: string | null;
+  inherited: ReadonlyMap<string, string>;
+  tails: number;
+  /** pending turns seen, by request, until their saved message is */
+  pending: ReadonlyMap<string, string>;
+};
+
+export const noDrawKeys = (sessionId: string | null): DrawKeys => ({
+  sessionId,
+  tail: null,
+  inherited: new Map(),
+  tails: 0,
+  pending: new Map(),
+});
+
+/* `replacedBy` is the message that just ended the hold (`holdLive`). */
+export function drawKeys(
+  keys: DrawKeys,
+  items: RenderedTimelineItem[],
+  replacedBy: string | undefined,
+  sessionId: string | null,
+): DrawKeys {
+  let next = keys.sessionId === sessionId ? keys : noDrawKeys(sessionId);
+  if (replacedBy && next.tail && !next.inherited.has(replacedBy)) {
+    next = {
+      ...next,
+      tail: null,
+      inherited: new Map(next.inherited).set(replacedBy, next.tail),
+    };
+  }
+  if (!next.tail && items.some((i) => i.kind === "liveAssistant")) {
+    next = { ...next, tail: `reply-${next.tails + 1}`, tails: next.tails + 1 };
+  }
+  for (const item of items) {
+    if (item.kind === "pendingUserTurn" && !next.pending.has(item.requestId)) {
+      next = {
+        ...next,
+        pending: new Map(next.pending).set(item.requestId, item.itemKey),
+      };
+    }
+    const requestId = item.kind === "userMessage" ? item.requestId : null;
+    const pendingKey = requestId ? next.pending.get(requestId) : undefined;
+    if (!requestId || pendingKey === undefined) continue;
+    /* decided once, when the saved message first shows: it takes the
+       pending turn's key only if that turn has gone, so two rows never
+       share one key and a row's key never changes after it is drawn */
+    const pending = new Map(next.pending);
+    pending.delete(requestId);
+    const replaced = !items.some((i) => i.itemKey === pendingKey);
+    next = {
+      ...next,
+      pending,
+      inherited: replaced
+        ? new Map(next.inherited).set(item.itemKey, pendingKey)
+        : next.inherited,
+    };
+  }
+  return next;
+}
+
+export const drawKey = (keys: DrawKeys, item: RenderedTimelineItem): string =>
+  keys.inherited.get(item.itemKey) ??
+  (item.kind === "liveAssistant" && keys.tail ? keys.tail : item.itemKey);

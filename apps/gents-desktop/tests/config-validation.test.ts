@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { backendSave } from "../src/ui/screens/agent/InferencePanel";
+import { backendSave } from "../src/ui/screens/agent/BackendEditor";
 import {
   optionalInteger,
   optionalNumber,

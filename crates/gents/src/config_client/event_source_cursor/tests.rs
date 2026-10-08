@@ -82,12 +82,18 @@ async fn create_source(access: &ConfigAccess, collection: &str, label: &str) -> 
         .await
 }
 
+fn trigger_consumer() -> EventConsumer {
+    EventConsumer::Trigger {
+        trigger_id: "trigger".into(),
+    }
+}
+
 async fn cursor(access: &ConfigAccess, collection: &str) -> Result<String> {
     access
         .transact("test.cursor.saved", |txn| {
             Box::pin(async move {
                 Ok(
-                    load_or_seed_for_source(txn, PIN_FIXED_DID, "trigger", collection)
+                    load_or_seed_for_source(txn, PIN_FIXED_DID, &trigger_consumer(), collection)
                         .await?
                         .cursor
                         .after,
@@ -146,7 +152,7 @@ async fn persisted_disable_blocks_stale_admission_and_exclusion_but_not_committe
     );
     assert!(access
         .transact("test.cursor.exclude_disabled", |txn| Box::pin(async move {
-            exclude_arrival(txn, PIN_FIXED_DID, "trigger", "WorkA", "1").await
+            exclude_arrival(txn, PIN_FIXED_DID, &trigger_consumer(), "WorkA", "1").await
         }))
         .await
         .is_err());
@@ -170,7 +176,15 @@ async fn persisted_disable_blocks_stale_admission_and_exclusion_but_not_committe
         .transact("test.cursor.ack_disabled", |txn| {
             let doc_id = &doc_id;
             Box::pin(async move {
-                acknowledge_fire(txn, PIN_FIXED_DID, "trigger", "WorkA", doc_id, "1").await
+                acknowledge_fire(
+                    txn,
+                    PIN_FIXED_DID,
+                    &trigger_consumer(),
+                    "WorkA",
+                    doc_id,
+                    "1",
+                )
+                .await
             })
         })
         .await?;
@@ -195,7 +209,7 @@ async fn source_only_replacement_seeds_disabled_consumers_before_later_arrivals(
     );
     assert!(access
         .transact("test.cursor.stale_source", |txn| Box::pin(async move {
-            exclude_arrival(txn, PIN_FIXED_DID, "trigger", "WorkA", "1").await
+            exclude_arrival(txn, PIN_FIXED_DID, &trigger_consumer(), "WorkA", "1").await
         }))
         .await
         .is_err());
