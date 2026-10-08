@@ -1,8 +1,8 @@
 import { act, fireEvent, renderHook, waitFor } from "@testing-library/react";
 import { useState } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { useFollowTail, useOlderPages } from "../src/ui/lib/scroll";
+import { holdRow, useFollowTail, useOlderPages } from "../src/ui/lib/scroll";
 
 /* jsdom has no ResizeObserver: these stand in for the content box growing */
 const observers = new Set<() => void>();
@@ -243,6 +243,150 @@ describe("transcript streaming follow", () => {
     fixture.setHeight(700);
     rerender({ subject: "b" });
     expect(fixture.viewport.scrollTop).toBe(foot(700));
+  });
+});
+
+/* Rows laid out top to bottom in a 200px view; content above the reader
+   grows by a known height. jsdom has no layout, so each row reports its own
+   place against the view. */
+function readingFixture() {
+  const fixture = transcriptFixture();
+  const area = document.createElement("div");
+  const scrollbar = document.createElement("div");
+  scrollbar.dataset.slot = "scroll-area-scrollbar";
+  area.append(fixture.viewport, scrollbar);
+  document.body.append(area);
+  fixture.viewport.getBoundingClientRect = () =>
+    ({ top: 0, bottom: 200, left: 0, width: 300, height: 200 }) as DOMRect;
+  let above = 300;
+  const rows = [
+    ["above", () => 0, () => above],
+    ["middle", () => above, () => above + 520],
+    ["last", () => above + 520, () => above + 700],
+  ] as const;
+  const content = fixture.viewport.firstElementChild as HTMLElement;
+  const els = rows.map(([key, top, bottom]) => {
+    const row = document.createElement("div");
+    row.dataset.timelineKey = key;
+    row.getBoundingClientRect = () =>
+      ({
+        top: top() - fixture.viewport.scrollTop,
+        bottom: bottom() - fixture.viewport.scrollTop,
+      }) as DOMRect;
+    content.append(row);
+    return row;
+  });
+  fixture.setHeight(1_000);
+  return {
+    ...fixture,
+    area,
+    scrollbar,
+    last: els[2],
+    growAbove(by: number) {
+      above += by;
+      fixture.growTo(1_000 + (above - 300));
+    },
+    /* an animated scroll: one event per frame of its flight */
+    async animate(from: number, to: number, ms: number) {
+      for (let t = 0; t <= ms; t += 50) {
+        act(() => {
+          fixture.viewport.scrollTop = Math.round(from + ((to - from) * t) / ms);
+          fixture.viewport.dispatchEvent(new Event("scroll"));
+        });
+        await act(async () => vi.advanceTimersByTimeAsync(50));
+      }
+    },
+  };
+}
+
+describe("a reader's place through their own scroll", () => {
+  beforeEach(() =>
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] }),
+  );
+  afterEach(() => {
+    vi.useRealTimers();
+    document.body.replaceChildren();
+  });
+
+  /* an input that scrolls nothing in the transcript: at its foot, a key on
+     another control, a wheel a nested box takes */
+  it.each([
+    [
+      "a wheel at the foot",
+      (el: HTMLElement) => el.dispatchEvent(new WheelEvent("wheel", { deltaY: 40 })),
+    ],
+    [
+      "a key elsewhere",
+      () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown" })),
+    ],
+    [
+      "a wheel in a nested box",
+      (el: HTMLElement) => {
+        const box = document.createElement("div");
+        el.firstElementChild!.append(box);
+        box.dispatchEvent(new WheelEvent("wheel", { deltaY: -40, bubbles: true }));
+      },
+    ],
+  ] as const)("still holds a row opened after %s", async (_, input) => {
+    const fixture = readingFixture();
+    renderHook(() => useFollowTail(fixture.viewport, "session-1"));
+    expect(fixture.viewport.scrollTop).toBe(800);
+    act(() => input(fixture.viewport));
+    await act(async () => vi.advanceTimersByTimeAsync(200));
+    act(() => holdRow(fixture.last));
+    fixture.growAbove(100);
+    expect(fixture.viewport.scrollTop).toBe(900);
+  });
+
+  it("holds where an animated scroll that outlasts its input window rests", async () => {
+    const fixture = readingFixture();
+    renderHook(() => useFollowTail(fixture.viewport, "session-1"));
+    act(() => {
+      fixture.viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -400 }));
+    });
+    /* WebKitGTK animates one wheel for 400-600ms */
+    await fixture.animate(800, 450, 600);
+    await act(async () => vi.advanceTimersByTimeAsync(200));
+    expect(fixture.viewport.scrollTop).toBe(450);
+    fixture.growAbove(100);
+    expect(fixture.viewport.scrollTop).toBe(550);
+  });
+
+  /* the reply below streams between the animation's last frames */
+  it("leaves the tail of an animated scroll to the reader when the reply below grows", async () => {
+    const fixture = readingFixture();
+    renderHook(() => useFollowTail(fixture.viewport, "session-1"));
+    act(() => {
+      fixture.viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -400 }));
+    });
+    await fixture.animate(800, 500, 400);
+    /* the view moves on before its scroll event comes */
+    fixture.viewport.scrollTop = 450;
+    await act(async () => {
+      fixture.last.append(document.createElement("span"));
+    });
+    expect(fixture.viewport.scrollTop).toBe(450);
+  });
+
+  it("holds where a scrollbar drag let go after a pause in it", async () => {
+    const fixture = readingFixture();
+    renderHook(() => useFollowTail(fixture.viewport, "session-1"));
+    act(() => {
+      fixture.viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -300 }));
+      fixture.viewport.scrollTop = 500;
+      fixture.viewport.dispatchEvent(new Event("scroll"));
+    });
+    await act(async () => vi.advanceTimersByTimeAsync(200));
+    fireEvent.pointerDown(fixture.scrollbar);
+    act(() => {
+      fixture.viewport.scrollTop = 450;
+      fixture.viewport.dispatchEvent(new Event("scroll"));
+    });
+    /* the reader holds the thumb still before letting go */
+    await act(async () => vi.advanceTimersByTimeAsync(200));
+    fireEvent.pointerUp(window);
+    fixture.growAbove(100);
+    expect(fixture.viewport.scrollTop).toBe(550);
   });
 });
 

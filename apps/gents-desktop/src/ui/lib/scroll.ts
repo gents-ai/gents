@@ -341,6 +341,15 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
       dragging = false;
     };
     const onScroll = () => {
+      /* An animated scroll (WebKitGTK eases one wheel over 400-600 ms) goes
+         on moving the view after its input's window ends: each move of its
+         own carries the reader's intent on, so its tail is theirs too. A
+         position this module wrote is not such a move. */
+      if (
+        performance.now() <= intentUntil &&
+        scroller.scrollTop !== settled.get(scroller)
+      )
+        intend();
       if (!dragging && performance.now() > intentUntil) return;
       setFollowing(!leaving.current && distanceFromFoot(scroller) <= REPIN_PX);
       if (!following.current) capture();

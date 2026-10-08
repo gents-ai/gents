@@ -1,8 +1,6 @@
 import type { Locator, Page } from "@playwright/test";
 import { composer, expect, gotoHarness, sendButton, test } from "./desktopTest";
 
-/* Scrolled up, the reader's row stays where it is on screen whatever
-   changes around it. */
 /* WebKit on Linux animates a wheel scroll for hundreds of ms, so a
    position read at a fixed delay can land mid-flight; read it once the
    view holds still instead. */
@@ -16,9 +14,12 @@ async function restingScrollTop(page: Page, viewport: Locator): Promise<number> 
     still = next === last ? still + 50 : 0;
     last = next;
   }
+  if (still < 150) throw new Error(`the view never came to rest (last at ${last})`);
   return last;
 }
 
+/* Scrolled up, the reader's row stays where it is on screen whatever
+   changes around it. */
 test.describe("a reader scrolled up in a transcript", () => {
   test.beforeEach(async ({ page }, testInfo) => {
     test.skip(
