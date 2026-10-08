@@ -342,66 +342,66 @@ def codexShimThreadStatusCases : List CodexShimThreadStatusCase :=
 def codexShimThreadStatusCasesJson : String :=
   jsonArray (codexShimThreadStatusCases.map codexShimThreadStatusCaseJson)
 
-structure CodexShimBehaviorSelectionCase where
+structure CodexShimAgentSelectionCase where
   witness : String
   leanTheorems : List String
-  rootBehaviorId : String
-  threadBehaviorId : Option String
-  projectedBehaviorId : String
+  rootAgentId : String
+  threadAgentId : Option String
+  projectedAgentId : String
   selectedOwner : String
   actualOwner : String
-  actualBehavior : String
+  actualAgent : String
   resolvedModel : Option String
   projectedModel : Option String
 
-def codexShimBehaviorSelectionCase
+def codexShimAgentSelectionCase
     (witness : String) (leanTheorems : List String)
-    (rootBehaviorId : String) (threadBehaviorId : Option String)
-    (selectedOwner actualOwner actualBehavior : String)
-    (resolvedModel : Option String) : CodexShimBehaviorSelectionCase :=
-  let projectedBehaviorId := CodexShim.projectionBehaviorId rootBehaviorId threadBehaviorId
-  { witness, leanTheorems, rootBehaviorId, threadBehaviorId, projectedBehaviorId
-  , selectedOwner, actualOwner, actualBehavior, resolvedModel
-  , projectedModel := CodexShim.projectedThreadModel selectedOwner projectedBehaviorId
-      actualOwner actualBehavior resolvedModel
+    (rootAgentId : String) (threadAgentId : Option String)
+    (selectedOwner actualOwner actualAgent : String)
+    (resolvedModel : Option String) : CodexShimAgentSelectionCase :=
+  let projectedAgentId := CodexShim.projectionAgentId rootAgentId threadAgentId
+  { witness, leanTheorems, rootAgentId, threadAgentId, projectedAgentId
+  , selectedOwner, actualOwner, actualAgent, resolvedModel
+  , projectedModel := CodexShim.projectedThreadModel selectedOwner projectedAgentId
+      actualOwner actualAgent resolvedModel
   }
 
-def codexShimBehaviorSelectionCaseJson
-    (witness : CodexShimBehaviorSelectionCase) : String :=
+def codexShimAgentSelectionCaseJson
+    (witness : CodexShimAgentSelectionCase) : String :=
   "{"
     ++ "\"witness\":" ++ jsonString witness.witness ++ ","
     ++ "\"lean_theorems\":" ++ jsonStringArray witness.leanTheorems ++ ","
-    ++ "\"root_behavior_id\":" ++ jsonString witness.rootBehaviorId ++ ","
-    ++ "\"thread_behavior_id\":" ++ jsonOptionalString witness.threadBehaviorId ++ ","
-    ++ "\"projected_behavior_id\":" ++ jsonString witness.projectedBehaviorId ++ ","
+    ++ "\"root_agent_id\":" ++ jsonString witness.rootAgentId ++ ","
+    ++ "\"thread_agent_id\":" ++ jsonOptionalString witness.threadAgentId ++ ","
+    ++ "\"projected_agent_id\":" ++ jsonString witness.projectedAgentId ++ ","
     ++ "\"selected_owner\":" ++ jsonString witness.selectedOwner ++ ","
     ++ "\"actual_owner\":" ++ jsonString witness.actualOwner ++ ","
-    ++ "\"actual_behavior\":" ++ jsonString witness.actualBehavior ++ ","
+    ++ "\"actual_agent\":" ++ jsonString witness.actualAgent ++ ","
     ++ "\"resolved_model\":" ++ jsonOptionalString witness.resolvedModel ++ ","
     ++ "\"projected_model\":" ++ jsonOptionalString witness.projectedModel
     ++ "}"
 
-def codexShimBehaviorSelectionCases : List CodexShimBehaviorSelectionCase :=
-  [ codexShimBehaviorSelectionCase "codex_shim.behavior.child"
+def codexShimAgentSelectionCases : List CodexShimAgentSelectionCase :=
+  [ codexShimAgentSelectionCase "codex_shim.agent.child"
       ["CodexShim.exact_binding_supplies_model"]
       "root" (some "child") "child-owner" "child-owner" "child" (some "child-model")
-  , codexShimBehaviorSelectionCase "codex_shim.behavior.root"
-      ["CodexShim.absent_child_behavior_keeps_root_response_metadata"]
+  , codexShimAgentSelectionCase "codex_shim.agent.root"
+      ["CodexShim.absent_child_agent_keeps_root_response_metadata"]
       "root" none "root-owner" "root-owner" "root" (some "root-model")
-  , codexShimBehaviorSelectionCase "codex_shim.behavior.unavailable"
+  , codexShimAgentSelectionCase "codex_shim.agent.unavailable"
       ["CodexShim.unavailable_binding_stays_unavailable"]
       "root" (some "child") "child-owner" "child-owner" "child" none
-  , codexShimBehaviorSelectionCase "codex_shim.behavior.foreign_owner"
+  , codexShimAgentSelectionCase "codex_shim.agent.foreign_owner"
       ["CodexShim.foreign_owner_cannot_supply_model"]
       "root" (some "child") "child-owner" "root-owner" "child" (some "wrong-model")
-  , codexShimBehaviorSelectionCase "codex_shim.behavior.foreign_behavior"
-      ["CodexShim.foreign_behavior_cannot_supply_model"]
+  , codexShimAgentSelectionCase "codex_shim.agent.foreign_agent"
+      ["CodexShim.foreign_agent_cannot_supply_model"]
       "root" (some "child") "child-owner" "child-owner" "root" (some "wrong-model")
   ]
 
-def codexShimBehaviorSelectionCasesJson : String :=
+def codexShimAgentSelectionCasesJson : String :=
   jsonArray
-    (codexShimBehaviorSelectionCases.map codexShimBehaviorSelectionCaseJson)
+    (codexShimAgentSelectionCases.map codexShimAgentSelectionCaseJson)
 
 structure CodexShimToolMetadataCase where
   witness : String
@@ -762,7 +762,7 @@ structure CodexShimBindingCase where
   leanTheorems : List String
   preState : String
   unboundReason : Option String
-  boundBehaviorRunnable : Bool
+  boundAgentRunnable : Bool
   hostCanListen : Bool
   postState : String
   postUnboundReason : Option String
@@ -774,8 +774,8 @@ def codexShimBindingCaseJson (witness : CodexShimBindingCase) : String :=
     ++ "\"lean_theorems\":" ++ jsonStringArray witness.leanTheorems ++ ","
     ++ "\"pre_state\":" ++ jsonString witness.preState ++ ","
     ++ "\"unbound_reason\":" ++ jsonOptionalString witness.unboundReason ++ ","
-    ++ "\"bound_behavior_runnable\":"
-      ++ boolString witness.boundBehaviorRunnable ++ ","
+    ++ "\"bound_agent_runnable\":"
+      ++ boolString witness.boundAgentRunnable ++ ","
     ++ "\"host_can_listen\":" ++ boolString witness.hostCanListen ++ ","
     ++ "\"post_state\":" ++ jsonString witness.postState ++ ","
     ++ "\"post_unbound_reason\":"
@@ -792,7 +792,7 @@ def codexShimBindingCases : List CodexShimBindingCase :=
         ]
     , preState := "unbound"
     , unboundReason := some "dependencyMissing"
-    , boundBehaviorRunnable := true
+    , boundAgentRunnable := true
     , hostCanListen := true
     , postState := "bound"
     , postUnboundReason := none
@@ -804,7 +804,7 @@ def codexShimBindingCases : List CodexShimBindingCase :=
         ]
     , preState := "unbound"
     , unboundReason := some "dependencyMissing"
-    , boundBehaviorRunnable := false
+    , boundAgentRunnable := false
     , hostCanListen := true
     , postState := "unbound"
     , postUnboundReason := some "dependencyMissing"
@@ -817,7 +817,7 @@ def codexShimBindingCases : List CodexShimBindingCase :=
         ]
     , preState := "unbound"
     , unboundReason := some "dependencyMissing"
-    , boundBehaviorRunnable := true
+    , boundAgentRunnable := true
     , hostCanListen := false
     , postState := "unbound"
     , postUnboundReason := some "hostResource"
@@ -829,7 +829,7 @@ def codexShimBindingCases : List CodexShimBindingCase :=
         ]
     , preState := "unbound"
     , unboundReason := some "hostResource"
-    , boundBehaviorRunnable := true
+    , boundAgentRunnable := true
     , hostCanListen := true
     , postState := "unbound"
     , postUnboundReason := some "hostResource"
@@ -843,7 +843,7 @@ def codexShimBindingCases : List CodexShimBindingCase :=
         ]
     , preState := "bound"
     , unboundReason := none
-    , boundBehaviorRunnable := true
+    , boundAgentRunnable := true
     , hostCanListen := true
     , postState := "bound"
     , postUnboundReason := none
