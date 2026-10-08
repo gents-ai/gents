@@ -1,4 +1,4 @@
-//! Canonical runtime-authored agent-readiness wire contract.
+//! Canonical runtime-authored node-readiness wire contract.
 //!
 //! Runtime configuration is never treated as proof that an agent can accept
 //! work. The source projector admits only installed dispatchers not vetoed by
@@ -11,10 +11,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-pub const AGENT_READINESS_FORMAT_VERSION: u32 = 1;
+pub const NODE_READINESS_FORMAT_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum AgentReadinessProcessState {
+pub enum NodeReadinessProcessState {
     #[serde(rename = "uninitialized")]
     Uninitialized,
     #[serde(rename = "recovering")]
@@ -27,7 +27,7 @@ pub enum AgentReadinessProcessState {
     Shutdown,
 }
 
-impl AgentReadinessProcessState {
+impl NodeReadinessProcessState {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Uninitialized => "uninitialized",
@@ -53,7 +53,7 @@ pub enum AgentReadinessState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentReadinessUnavailableReason {
-    BehaviorDisabled,
+    AgentDisabled,
     RuntimeConfigurationInvalid,
     BackendNotConfigured,
     BackendDisabled,
@@ -70,7 +70,7 @@ impl AgentReadinessUnavailableReason {
     /// deliberately excluded from durable request state and client views.
     pub const fn public_message(self) -> &'static str {
         match self {
-            Self::BehaviorDisabled => "behavior is disabled",
+            Self::AgentDisabled => "behavior is disabled",
             Self::RuntimeConfigurationInvalid => "runtime configuration is invalid",
             Self::BackendNotConfigured => "inference backend is not configured",
             Self::BackendDisabled => "inference backend is disabled",
@@ -79,12 +79,12 @@ impl AgentReadinessUnavailableReason {
             Self::InferenceProfileInvalid => "inference profile is invalid",
             Self::ToolConfigurationInvalid => "tool configuration is invalid",
             Self::ToolSurfaceUnavailable => "tool surface is unavailable",
-            Self::ExecutorStartFailed => "behavior executor could not start",
+            Self::ExecutorStartFailed => "agent executor could not start",
         }
     }
 
     pub const ALL: [Self; 10] = [
-        Self::BehaviorDisabled,
+        Self::AgentDisabled,
         Self::RuntimeConfigurationInvalid,
         Self::BackendNotConfigured,
         Self::BackendDisabled,
@@ -105,7 +105,7 @@ pub const BEHAVIOR_NOT_ASSIGNED_MESSAGE: &str = "behavior is not assigned to thi
 /// never resolver diagnostics, so exact comparison identifies the cause.
 pub fn is_behavior_unavailable_rejection(failure_reason: &str) -> bool {
     failure_reason == BEHAVIOR_NOT_ASSIGNED_MESSAGE
-        || BehaviorReadinessUnavailableReason::ALL
+        || AgentReadinessUnavailableReason::ALL
             .iter()
             .any(|reason| reason.public_message() == failure_reason)
 }
@@ -120,9 +120,9 @@ pub struct AgentReadinessEntry {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct AgentReadinessSnapshot {
+pub struct NodeReadinessSnapshot {
     pub format_version: u32,
-    pub process_state: AgentReadinessProcessState,
+    pub process_state: NodeReadinessProcessState,
     pub active_generation: u64,
     pub router_generation: u64,
     pub default_agent_id: String,
@@ -150,82 +150,80 @@ pub fn effective_agent_readiness_admission(
     startup_demoted: bool,
 ) -> EffectiveAgentReadinessAdmission {
     if startup_demoted {
-        EffectiveBehaviorReadinessAdmission::Unavailable(
-            BehaviorReadinessUnavailableReason::ExecutorStartFailed,
+        EffectiveAgentReadinessAdmission::Unavailable(
+            AgentReadinessUnavailableReason::ExecutorStartFailed,
         )
     } else if let Some(reason) = unavailable_reason {
-        EffectiveBehaviorReadinessAdmission::Unavailable(reason)
+        EffectiveAgentReadinessAdmission::Unavailable(reason)
     } else if dispatcher_present {
-        EffectiveBehaviorReadinessAdmission::Ready
+        EffectiveAgentReadinessAdmission::Ready
     } else {
-        EffectiveBehaviorReadinessAdmission::Unassigned
+        EffectiveAgentReadinessAdmission::Unassigned
     }
 }
 
 /// Pure source projector shared by the runtime publisher and Lean-generated
 /// conformance harness. Unavailability and startup demotion veto a dispatcher.
-pub fn project_agent_readiness_source(
-    process_state: AgentReadinessProcessState,
+pub fn project_node_readiness_source(
+    process_state: NodeReadinessProcessState,
     active_generation: u64,
     router_generation: u64,
-    default_behavior_id: impl Into<String>,
+    default_agent_id: impl Into<String>,
     sources: impl IntoIterator<Item = AgentReadinessSourceEntry>,
-) -> Result<AgentReadinessSnapshot, String> {
-    let default_behavior_id = default_behavior_id.into();
-    if !is_canonical_id(&default_behavior_id) {
+) -> Result<NodeReadinessSnapshot, String> {
+    let default_agent_id = default_agent_id.into();
+    if !is_canonical_id(&default_agent_id) {
         return Err(format!(
-            "default behavior {default_behavior_id:?} is not canonical"
+            "default agent {default_agent_id:?} is not canonical"
         ));
     }
 
-    let mut behaviors = BTreeMap::new();
+    let mut agents = BTreeMap::new();
     for source in sources {
-        if !is_canonical_id(&source.behavior_id) {
+        if !is_canonical_id(&source.agent_id) {
             return Err(format!(
-                "behavior identifier {:?} is not canonical",
-                source.behavior_id
+                "agent identifier {:?} is not canonical",
+                source.agent_id
             ));
         }
-        let entry = match effective_behavior_readiness_admission(
+        let entry = match effective_agent_readiness_admission(
             source.dispatcher_present,
             source.unavailable_reason,
             source.startup_demoted,
         ) {
-            EffectiveBehaviorReadinessAdmission::Ready => Some(BehaviorReadinessEntry {
-                behavior_id: source.behavior_id.clone(),
-                state: BehaviorReadinessState::Ready,
+            EffectiveAgentReadinessAdmission::Ready => Some(AgentReadinessEntry {
+                agent_id: source.agent_id.clone(),
+                state: AgentReadinessState::Ready,
                 reason: None,
             }),
-            EffectiveBehaviorReadinessAdmission::Unavailable(reason) => {
-                Some(BehaviorReadinessEntry {
-                    behavior_id: source.behavior_id.clone(),
-                    state: BehaviorReadinessState::Unavailable,
-                    reason: Some(reason),
-                })
-            }
-            EffectiveBehaviorReadinessAdmission::Unassigned => None,
+            EffectiveAgentReadinessAdmission::Unavailable(reason) => Some(AgentReadinessEntry {
+                agent_id: source.agent_id.clone(),
+                state: AgentReadinessState::Unavailable,
+                reason: Some(reason),
+            }),
+            EffectiveAgentReadinessAdmission::Unassigned => None,
         };
-        if behaviors.insert(source.behavior_id, entry).is_some() {
-            return Err("duplicate behavior readiness source".to_string());
+        if agents.insert(source.agent_id, entry).is_some() {
+            return Err("duplicate agent readiness source".to_string());
         }
     }
-    let behaviors = behaviors.into_values().flatten().collect::<Vec<_>>();
-    if !behaviors
+    let agents = agents.into_values().flatten().collect::<Vec<_>>();
+    if !agents
         .iter()
-        .any(|entry| entry.behavior_id == default_behavior_id)
+        .any(|entry| entry.agent_id == default_agent_id)
     {
         return Err(format!(
-            "default behavior {default_behavior_id:?} is not assigned"
+            "default agent {default_agent_id:?} is not assigned"
         ));
     }
 
-    Ok(BehaviorReadinessSnapshot {
-        format_version: BEHAVIOR_READINESS_FORMAT_VERSION,
+    Ok(NodeReadinessSnapshot {
+        format_version: NODE_READINESS_FORMAT_VERSION,
         process_state,
         active_generation,
         router_generation,
-        default_behavior_id,
-        behaviors,
+        default_agent_id,
+        agents,
     })
 }
 
@@ -246,7 +244,7 @@ pub enum AgentReadinessUnknownReason {
     ReadinessStale,
     ProcessNotReady,
     RouterGenerationStale,
-    BehaviorNotAssigned,
+    AgentNotAssigned,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -257,7 +255,7 @@ pub enum ProjectedAgentReadiness {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AgentReadinessProjection {
+pub struct NodeReadinessProjection {
     pub active_generation: Option<u64>,
     pub router_generation: Option<u64>,
     pub default_agent_id: Option<String>,
@@ -267,15 +265,15 @@ pub struct AgentReadinessProjection {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AgentReadinessSummary {
-    pub snapshot: AgentReadinessSnapshot,
+pub struct NodeReadinessSummary {
+    pub snapshot: NodeReadinessSnapshot,
     pub ready_count: usize,
-    pub unavailable_behaviors: BTreeMap<String, AgentReadinessUnavailableReason>,
+    pub unavailable_agents: BTreeMap<String, AgentReadinessUnavailableReason>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ProjectedAgentReadinessSummary {
-    Observed(AgentReadinessSummary),
+pub enum ProjectedNodeReadinessSummary {
+    Observed(NodeReadinessSummary),
     Unknown(AgentReadinessUnknownReason),
 }
 
@@ -284,101 +282,101 @@ fn is_canonical_id(value: &str) -> bool {
 }
 
 fn unknown_projection(
-    behavior_ids: BTreeSet<String>,
-    reason: BehaviorReadinessUnknownReason,
-) -> BehaviorReadinessProjection {
-    BehaviorReadinessProjection {
+    agent_ids: BTreeSet<String>,
+    reason: AgentReadinessUnknownReason,
+) -> NodeReadinessProjection {
+    NodeReadinessProjection {
         active_generation: None,
         router_generation: None,
-        default_behavior_id: None,
+        default_agent_id: None,
         updated_at: None,
         unknown_reason: Some(reason),
-        behaviors: behavior_ids
+        agents: agent_ids
             .into_iter()
-            .map(|behavior_id| (behavior_id, ProjectedBehaviorReadiness::Unknown(reason)))
+            .map(|agent_id| (agent_id, ProjectedAgentReadiness::Unknown(reason)))
             .collect(),
     }
 }
 
 /// Decode and validate the runtime-authored row without imposing admission.
 /// Operational views use this for lifecycle/generation observability while
-/// `project_agent_readiness_summary` additionally requires Ready and an
+/// `project_node_readiness_summary` additionally requires Ready and an
 /// aligned router generation.
-pub fn decode_agent_readiness_snapshot(
+pub fn decode_node_readiness_snapshot(
     row: &NodeReadinessRow,
-    expected_agent_did: &str,
-) -> Result<AgentReadinessSnapshot, AgentReadinessUnknownReason> {
-    if !is_canonical_id(expected_agent_did)
-        || row.agent_did != expected_agent_did
-        || !is_canonical_id(&row.agent_did)
+    expected_node_did: &str,
+) -> Result<NodeReadinessSnapshot, AgentReadinessUnknownReason> {
+    if !is_canonical_id(expected_node_did)
+        || row.node_did != expected_node_did
+        || !is_canonical_id(&row.node_did)
     {
-        return Err(BehaviorReadinessUnknownReason::ReadinessMalformed);
+        return Err(AgentReadinessUnknownReason::ReadinessMalformed);
     }
-    let snapshot = serde_json::from_str::<BehaviorReadinessSnapshot>(&row.snapshot_json)
-        .map_err(|_| BehaviorReadinessUnknownReason::ReadinessMalformed)?;
-    if snapshot.format_version != BEHAVIOR_READINESS_FORMAT_VERSION {
-        return Err(BehaviorReadinessUnknownReason::ReadinessVersionUnsupported);
+    let snapshot = serde_json::from_str::<NodeReadinessSnapshot>(&row.snapshot_json)
+        .map_err(|_| AgentReadinessUnknownReason::ReadinessMalformed)?;
+    if snapshot.format_version != NODE_READINESS_FORMAT_VERSION {
+        return Err(AgentReadinessUnknownReason::ReadinessVersionUnsupported);
     }
-    let entries_are_canonical = snapshot.behaviors.iter().all(|entry| {
-        is_canonical_id(&entry.behavior_id)
+    let entries_are_canonical = snapshot.agents.iter().all(|entry| {
+        is_canonical_id(&entry.agent_id)
             && match entry.state {
-                BehaviorReadinessState::Ready => entry.reason.is_none(),
-                BehaviorReadinessState::Unavailable => entry.reason.is_some(),
+                AgentReadinessState::Ready => entry.reason.is_none(),
+                AgentReadinessState::Unavailable => entry.reason.is_some(),
             }
     }) && snapshot
-        .behaviors
+        .agents
         .windows(2)
-        .all(|pair| pair[0].behavior_id < pair[1].behavior_id);
-    if !entries_are_canonical || !is_canonical_id(&snapshot.default_behavior_id) {
-        return Err(BehaviorReadinessUnknownReason::ReadinessMalformed);
+        .all(|pair| pair[0].agent_id < pair[1].agent_id);
+    if !entries_are_canonical || !is_canonical_id(&snapshot.default_agent_id) {
+        return Err(AgentReadinessUnknownReason::ReadinessMalformed);
     }
     if !snapshot
-        .behaviors
+        .agents
         .iter()
-        .any(|entry| entry.behavior_id == snapshot.default_behavior_id)
+        .any(|entry| entry.agent_id == snapshot.default_agent_id)
     {
-        return Err(BehaviorReadinessUnknownReason::BehaviorNotAssigned);
+        return Err(AgentReadinessUnknownReason::AgentNotAssigned);
     }
     Ok(snapshot)
 }
 
 /// Strict operational summary from the sole durable readiness authority.
 /// Missing, malformed, non-ready, or generation-skewed observations fail
-/// closed and never manufacture behavior counts from configuration rows.
+/// closed and never manufacture agent counts from configuration rows.
 /// The clock argument is retained for source compatibility; document age does
 /// not establish runtime liveness. Transport health has its own database owner.
-pub fn project_agent_readiness_summary(
+pub fn project_node_readiness_summary(
     row: Option<&NodeReadinessRow>,
-    expected_agent_did: &str,
+    expected_node_did: &str,
     _observed_at: DateTime<Utc>,
-) -> ProjectedAgentReadinessSummary {
+) -> ProjectedNodeReadinessSummary {
     let Some(row) = row else {
-        return ProjectedBehaviorReadinessSummary::Unknown(
-            BehaviorReadinessUnknownReason::ReadinessMissing,
+        return ProjectedNodeReadinessSummary::Unknown(
+            AgentReadinessUnknownReason::ReadinessMissing,
         );
     };
-    let snapshot = match decode_behavior_readiness_snapshot(row, expected_agent_did) {
+    let snapshot = match decode_node_readiness_snapshot(row, expected_node_did) {
         Ok(snapshot) => snapshot,
-        Err(reason) => return ProjectedBehaviorReadinessSummary::Unknown(reason),
+        Err(reason) => return ProjectedNodeReadinessSummary::Unknown(reason),
     };
     if !snapshot.process_state.accepts_work() {
-        return ProjectedBehaviorReadinessSummary::Unknown(
-            BehaviorReadinessUnknownReason::ProcessNotReady,
+        return ProjectedNodeReadinessSummary::Unknown(
+            AgentReadinessUnknownReason::ProcessNotReady,
         );
     }
     if snapshot.active_generation == 0 || snapshot.router_generation != snapshot.active_generation {
-        return ProjectedBehaviorReadinessSummary::Unknown(
-            BehaviorReadinessUnknownReason::RouterGenerationStale,
+        return ProjectedNodeReadinessSummary::Unknown(
+            AgentReadinessUnknownReason::RouterGenerationStale,
         );
     }
     let mut ready_count = 0;
-    let mut unavailable_behaviors = BTreeMap::new();
-    for entry in &snapshot.behaviors {
+    let mut unavailable_agents = BTreeMap::new();
+    for entry in &snapshot.agents {
         match entry.state {
-            BehaviorReadinessState::Ready => ready_count += 1,
-            BehaviorReadinessState::Unavailable => {
-                unavailable_behaviors.insert(
-                    entry.behavior_id.clone(),
+            AgentReadinessState::Ready => ready_count += 1,
+            AgentReadinessState::Unavailable => {
+                unavailable_agents.insert(
+                    entry.agent_id.clone(),
                     entry
                         .reason
                         .expect("canonical unavailable entry has reason"),
@@ -386,10 +384,10 @@ pub fn project_agent_readiness_summary(
             }
         }
     }
-    ProjectedBehaviorReadinessSummary::Observed(BehaviorReadinessSummary {
+    ProjectedNodeReadinessSummary::Observed(NodeReadinessSummary {
         snapshot,
         ready_count,
-        unavailable_behaviors,
+        unavailable_agents,
     })
 }
 
@@ -397,96 +395,90 @@ pub fn project_agent_readiness_summary(
 /// states. Configured identifiers are validated exactly, never normalized.
 /// Readiness changes only when the runtime publishes a semantic change.
 /// The clock argument is retained for source compatibility, not a liveness lease.
-pub fn project_agent_readiness<'a>(
+pub fn project_node_readiness<'a>(
     row: Option<&NodeReadinessRow>,
-    expected_agent_did: &str,
-    configured_behavior_ids: impl IntoIterator<Item = &'a str>,
-    configured_default_behavior_id: Option<&str>,
+    expected_node_did: &str,
+    configured_agent_ids: impl IntoIterator<Item = &'a str>,
+    configured_default_agent_id: Option<&str>,
     _observed_at: DateTime<Utc>,
-) -> AgentReadinessProjection {
-    let mut behavior_ids = BTreeSet::new();
+) -> NodeReadinessProjection {
+    let mut agent_ids = BTreeSet::new();
     let mut configured_ids_malformed = false;
-    for behavior_id in configured_behavior_ids {
-        if !is_canonical_id(behavior_id) {
+    for agent_id in configured_agent_ids {
+        if !is_canonical_id(agent_id) {
             configured_ids_malformed = true;
         } else {
-            behavior_ids.insert(behavior_id.to_owned());
+            agent_ids.insert(agent_id.to_owned());
         }
     }
-    if let Some(default_behavior_id) = configured_default_behavior_id {
-        if !is_canonical_id(default_behavior_id) {
+    if let Some(default_agent_id) = configured_default_agent_id {
+        if !is_canonical_id(default_agent_id) {
             configured_ids_malformed = true;
         } else {
-            behavior_ids.insert(default_behavior_id.to_owned());
+            agent_ids.insert(default_agent_id.to_owned());
         }
     }
     if configured_ids_malformed {
-        return unknown_projection(
-            behavior_ids,
-            BehaviorReadinessUnknownReason::ReadinessMalformed,
-        );
+        return unknown_projection(agent_ids, AgentReadinessUnknownReason::ReadinessMalformed);
     }
 
     let Some(row) = row else {
-        return unknown_projection(
-            behavior_ids,
-            BehaviorReadinessUnknownReason::ReadinessMissing,
-        );
+        return unknown_projection(agent_ids, AgentReadinessUnknownReason::ReadinessMissing);
     };
-    let snapshot = match decode_behavior_readiness_snapshot(row, expected_agent_did) {
+    let snapshot = match decode_node_readiness_snapshot(row, expected_node_did) {
         Ok(snapshot) => snapshot,
-        Err(reason) => return unknown_projection(behavior_ids, reason),
+        Err(reason) => return unknown_projection(agent_ids, reason),
     };
 
     let entries = snapshot
-        .behaviors
+        .agents
         .into_iter()
-        .map(|entry| (entry.behavior_id.clone(), entry))
+        .map(|entry| (entry.agent_id.clone(), entry))
         .collect::<BTreeMap<_, _>>();
-    behavior_ids.extend(entries.keys().cloned());
-    debug_assert!(entries.contains_key(&snapshot.default_behavior_id));
+    agent_ids.extend(entries.keys().cloned());
+    debug_assert!(entries.contains_key(&snapshot.default_agent_id));
     let global_unknown = if !snapshot.process_state.accepts_work() {
-        Some(BehaviorReadinessUnknownReason::ProcessNotReady)
+        Some(AgentReadinessUnknownReason::ProcessNotReady)
     } else if snapshot.active_generation == 0
         || snapshot.router_generation != snapshot.active_generation
     {
-        Some(BehaviorReadinessUnknownReason::RouterGenerationStale)
+        Some(AgentReadinessUnknownReason::RouterGenerationStale)
     } else {
         None
     };
-    let behaviors = behavior_ids
+    let agents = agent_ids
         .into_iter()
-        .map(|behavior_id| {
+        .map(|agent_id| {
             let state = if let Some(reason) = global_unknown {
-                ProjectedBehaviorReadiness::Unknown(reason)
+                ProjectedAgentReadiness::Unknown(reason)
             } else {
-                match entries.get(&behavior_id) {
-                    Some(BehaviorReadinessEntry {
-                        state: BehaviorReadinessState::Ready,
+                match entries.get(&agent_id) {
+                    Some(AgentReadinessEntry {
+                        state: AgentReadinessState::Ready,
                         reason: None,
                         ..
-                    }) => ProjectedBehaviorReadiness::Ready,
-                    Some(BehaviorReadinessEntry {
-                        state: BehaviorReadinessState::Unavailable,
+                    }) => ProjectedAgentReadiness::Ready,
+                    Some(AgentReadinessEntry {
+                        state: AgentReadinessState::Unavailable,
                         reason: Some(reason),
                         ..
-                    }) => ProjectedBehaviorReadiness::Unavailable(*reason),
+                    }) => ProjectedAgentReadiness::Unavailable(*reason),
                     Some(_) => unreachable!("canonical readiness entry checked above"),
-                    None => ProjectedBehaviorReadiness::Unknown(
-                        BehaviorReadinessUnknownReason::BehaviorNotAssigned,
+                    None => ProjectedAgentReadiness::Unknown(
+                        AgentReadinessUnknownReason::AgentNotAssigned,
                     ),
                 }
             };
-            (behavior_id, state)
+            (agent_id, state)
         })
         .collect();
-    BehaviorReadinessProjection {
+    NodeReadinessProjection {
         active_generation: Some(snapshot.active_generation),
         router_generation: Some(snapshot.router_generation),
-        default_behavior_id: Some(snapshot.default_behavior_id),
+        default_agent_id: Some(snapshot.default_agent_id),
         updated_at: Some(row.updated_at.clone()),
         unknown_reason: global_unknown,
-        behaviors,
+        agents,
     }
 }
 
