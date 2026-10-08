@@ -6,6 +6,12 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- A scenario pack whose expected trigger's event source has no
+  correlation_field is now refused at load — by `gents pack check` and by
+  `gents pack scenario run`/`seed` — naming the trigger and event source
+  (#2339). A run awaits its stages by the seeded job id, which only a
+  correlation_field puts on the fired request, so such a pack previously
+  ran until its await timeout expired.
 - Per-document callback bindings no longer drop documents written before the
   callback engine starts (#2343). Like event triggers, each binding now
   checkpoints a receiving-node arrival cursor, seeded when its configuration
