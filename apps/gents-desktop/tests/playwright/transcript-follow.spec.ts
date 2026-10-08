@@ -1,21 +1,52 @@
 import type { Locator, Page } from "@playwright/test";
 import { composer, expect, gotoHarness, sendButton, test } from "./desktopTest";
 
-/* WebKit on Linux animates a wheel scroll for hundreds of ms, so a
-   position read at a fixed delay can land mid-flight; read it once the
-   view holds still instead. */
+/* WebKit on Linux animates a wheel scroll for hundreds of ms, and under
+   load starts it late and stalls in it, so a position read at a fixed delay
+   can land mid-flight; read it once the view holds still instead. */
 async function restingScrollTop(page: Page, viewport: Locator): Promise<number> {
+  const STILL_MS = 300;
   let still = 0;
   let last = await viewport.evaluate((scroller) => scroller.scrollTop);
-  const deadline = Date.now() + 3000;
-  while (still < 150 && Date.now() < deadline) {
+  const deadline = Date.now() + 5000;
+  while (still < STILL_MS && Date.now() < deadline) {
     await page.waitForTimeout(50);
     const next = await viewport.evaluate((scroller) => scroller.scrollTop);
     still = next === last ? still + 50 : 0;
     last = next;
   }
-  if (still < 150) throw new Error(`the view never came to rest (last at ${last})`);
+  if (still < STILL_MS)
+    throw new Error(`the view never came to rest (last at ${last})`);
   return last;
+}
+
+/* the reader's wheel up the page from the foot, once the view has taken it
+   (following stops at the wheel itself) and come to rest */
+async function wheelUp(page: Page, viewport: Locator) {
+  await expect(viewport).toHaveAttribute("data-following", "true");
+  await restingScrollTop(page, viewport);
+  await page.getByTestId("transcript-panel").hover();
+  await page.mouse.wheel(0, -1200);
+  await expect(viewport).toHaveAttribute("data-following", "false");
+  await restingScrollTop(page, viewport);
+}
+
+/* the row under the reader, and how far below the view's top it is; an
+   older page landing above moves the position, not the row */
+function readerRow(viewport: Locator, key?: string) {
+  return viewport.evaluate((scroller, key) => {
+    const top = scroller.getBoundingClientRect().top;
+    const rows = Array.from(
+      scroller.querySelectorAll<HTMLElement>("[data-timeline-key]"),
+    );
+    const row = key
+      ? rows.find((row) => row.dataset.timelineKey === key)!
+      : rows.find((row) => row.getBoundingClientRect().bottom > top + 200)!;
+    return {
+      key: row.dataset.timelineKey!,
+      offset: Math.round(row.getBoundingClientRect().top - top),
+    };
+  }, key);
 }
 
 /* Scrolled up, the reader's row stays where it is on screen whatever
@@ -37,11 +68,8 @@ test.describe("a reader scrolled up in a transcript", () => {
 
   test("keeps their row still when a row above it grows", async ({ page }) => {
     /* the reader's own wheel takes them off the foot */
-    await page.getByTestId("transcript-panel").hover();
-    await page.mouse.wheel(0, -1200);
-    await page.waitForTimeout(300);
     const viewport = page.locator('[data-slot="scroll-area-viewport"][data-following]');
-    await expect(viewport).toHaveAttribute("data-following", "false");
+    await wheelUp(page, viewport);
 
     const moved = await viewport.evaluate(async (scroller) => {
       const top = scroller.getBoundingClientRect().top;
@@ -63,7 +91,8 @@ test.describe("a reader scrolled up in a transcript", () => {
       );
       return Math.round(reader.getBoundingClientRect().top - before);
     });
-    expect(moved).toBe(0);
+    /* toBe tells -0 from 0 */
+    expect(Math.abs(moved)).toBe(0);
   });
 
   /* A held arrow key or a trackpad's momentum moves the view a little each
@@ -95,10 +124,9 @@ test.describe("a reader scrolled up in a transcript", () => {
   });
 
   test("keeps their place while the reply below them streams", async ({ page }) => {
-    await page.getByTestId("transcript-panel").hover();
-    await page.mouse.wheel(0, -1200);
     const viewport = page.locator('[data-slot="scroll-area-viewport"][data-following]');
-    const before = await restingScrollTop(page, viewport);
+    await wheelUp(page, viewport);
+    const before = await readerRow(viewport);
     for (let n = 0; n < 8; n += 1) {
       await page.evaluate(
         (n) =>
@@ -110,7 +138,8 @@ test.describe("a reader scrolled up in a transcript", () => {
       await page.waitForTimeout(100);
     }
     await expect(viewport).toHaveAttribute("data-following", "false");
-    expect(await restingScrollTop(page, viewport)).toBe(before);
+    await restingScrollTop(page, viewport);
+    expect(await readerRow(viewport, before.key)).toEqual(before);
   });
 });
 
