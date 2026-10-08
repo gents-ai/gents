@@ -290,7 +290,7 @@ pub struct EvalCase {
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct EvalDefinition {
     pub definition_id: String,
-    pub agent_did: String,
+    pub node_did: String,
     /// Bumped by the author when cases, checks, reducers or judge settings
     /// change. Runs never compare across different values.
     pub comparability_version: i64,
