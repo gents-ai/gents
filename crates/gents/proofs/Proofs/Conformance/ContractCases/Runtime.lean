@@ -81,7 +81,7 @@ def runtimeCaseFromStep
       , trackedRequestBehavior := post.requestBehavior trackedRequestId
       , trackedSessionBehavior :=
           match post.sessionBehavior trackedSessionId with
-          | some behaviorId => behaviorId
+          | some agentId => agentId
           | none => 0
       }
   | none =>
@@ -190,14 +190,14 @@ def runtimeReconcileCases : List RuntimeReconcileCase :=
       (.resolveVisible runtimeResolvedMissingDependency)
   ]
 
-def clientBehaviorReadinessCase
+def clientAgentReadinessCase
     (name : String)
     (observationKind : String)
     (process : ProcessState)
     (activeGeneration routerGeneration : Generation)
     (runnable unavailable startupDemoted : Bool)
-    (runtimeUnavailableReason : RuntimeState.RuntimeUnavailableReason := .backendTemporarilyUnavailable) :
-    ClientBehaviorReadinessCase :=
+    (runtimeUnavailableReason : RuntimeState.AgentUnavailableReason := .backendTemporarilyUnavailable) :
+    ClientAgentReadinessCase :=
   let runnableSet : Finset BehaviorId := if runnable then {20} else ∅
   let unavailableSet : Finset BehaviorId := if unavailable then {20} else ∅
   let demotedSet : Finset BehaviorId := if startupDemoted then {20} else ∅
@@ -217,11 +217,11 @@ def clientBehaviorReadinessCase
     , sessionBehavior := Function.update runtimeBoot.sessionBehavior 100 (some 20) }
   let observation := match observationKind with
     | "observed" =>
-        RuntimeState.ClientBehaviorReadiness.ClientRuntimeObservation.observed process state
+        RuntimeState.ClientAgentReadiness.ClientNodeObservation.observed process state
     | "malformed" => .malformed
     | "unsupported_version" => .unsupportedVersion
     | _ => .missing
-  let projected := RuntimeState.ClientBehaviorReadiness.project
+  let projected := RuntimeState.ClientAgentReadiness.project
     observation 20 runtimeUnavailableReason
   { name
   , observationPresent := observationKind != "missing"
@@ -236,32 +236,32 @@ def clientBehaviorReadinessCase
   , expectedState := projected.stateString
   , expectedReason := projected.reasonCode
   , expectedRuntimeAdmissible :=
-      decide (RuntimeState.BehaviorAdmissible process state 20)
+      decide (RuntimeState.AgentAdmissible process state 20)
   }
 
-def clientBehaviorReadinessCases : List ClientBehaviorReadinessCase :=
-  [ clientBehaviorReadinessCase "runtime_ready_same_generation" "observed" .ready 4 4 true false false
-  , clientBehaviorReadinessCase "runtime_explicitly_unavailable" "observed" .ready 4 4 false true false
-  , clientBehaviorReadinessCase "runtime_unavailable_wins_overlap" "observed" .ready 4 4 true true false
-  , clientBehaviorReadinessCase "startup_demotion_overrides_runnable" "observed" .ready 4 4 true false true
-  , clientBehaviorReadinessCase "missing_runtime_observation" "missing" .ready 4 4 true false false
-  , clientBehaviorReadinessCase "malformed_runtime_observation" "malformed" .ready 4 4 true false false
-  , clientBehaviorReadinessCase "unsupported_runtime_observation" "unsupported_version" .ready 4 4 true false false
-  , clientBehaviorReadinessCase "runtime_process_recovering" "observed" .recovering 4 4 true false false
-  , clientBehaviorReadinessCase "runtime_process_uninitialized" "observed" .uninitialized 4 4 true false false
-  , clientBehaviorReadinessCase "runtime_process_shutting_down" "observed" .shuttingDown 4 4 true false false
-  , clientBehaviorReadinessCase "runtime_process_shutdown" "observed" .shutdown 4 4 true false false
-  , clientBehaviorReadinessCase "router_generation_stale" "observed" .ready 5 4 true false false
-  , clientBehaviorReadinessCase "zero_generation_is_stale" "observed" .ready 0 0 true false false
-  , clientBehaviorReadinessCase "behavior_absent_from_runtime_projection" "observed" .ready 4 4 false false false
-  , clientBehaviorReadinessCase "disabled_behavior_is_unavailable" "observed" .ready 4 4 false true false .behaviorDisabled
-  , clientBehaviorReadinessCase "invalid_runtime_configuration_is_unavailable" "observed" .ready 4 4 false true false .runtimeConfigurationInvalid
-  , clientBehaviorReadinessCase "missing_backend_is_unavailable" "observed" .ready 4 4 false true false .backendNotConfigured
-  , clientBehaviorReadinessCase "disabled_backend_is_unavailable" "observed" .ready 4 4 false true false .backendDisabled
-  , clientBehaviorReadinessCase "missing_credential_is_unavailable" "observed" .ready 4 4 false true false .credentialsRequired
-  , clientBehaviorReadinessCase "invalid_inference_profile_is_unavailable" "observed" .ready 4 4 false true false .inferenceProfileInvalid
-  , clientBehaviorReadinessCase "invalid_tool_configuration_is_unavailable" "observed" .ready 4 4 false true false .toolConfigurationInvalid
-  , clientBehaviorReadinessCase "invalid_tool_surface_is_unavailable" "observed" .ready 4 4 false true false .toolSurfaceUnavailable
+def clientAgentReadinessCases : List ClientAgentReadinessCase :=
+  [ clientAgentReadinessCase "runtime_ready_same_generation" "observed" .ready 4 4 true false false
+  , clientAgentReadinessCase "runtime_explicitly_unavailable" "observed" .ready 4 4 false true false
+  , clientAgentReadinessCase "runtime_unavailable_wins_overlap" "observed" .ready 4 4 true true false
+  , clientAgentReadinessCase "startup_demotion_overrides_runnable" "observed" .ready 4 4 true false true
+  , clientAgentReadinessCase "missing_runtime_observation" "missing" .ready 4 4 true false false
+  , clientAgentReadinessCase "malformed_runtime_observation" "malformed" .ready 4 4 true false false
+  , clientAgentReadinessCase "unsupported_runtime_observation" "unsupported_version" .ready 4 4 true false false
+  , clientAgentReadinessCase "runtime_process_recovering" "observed" .recovering 4 4 true false false
+  , clientAgentReadinessCase "runtime_process_uninitialized" "observed" .uninitialized 4 4 true false false
+  , clientAgentReadinessCase "runtime_process_shutting_down" "observed" .shuttingDown 4 4 true false false
+  , clientAgentReadinessCase "runtime_process_shutdown" "observed" .shutdown 4 4 true false false
+  , clientAgentReadinessCase "router_generation_stale" "observed" .ready 5 4 true false false
+  , clientAgentReadinessCase "zero_generation_is_stale" "observed" .ready 0 0 true false false
+  , clientAgentReadinessCase "agent_absent_from_runtime_projection" "observed" .ready 4 4 false false false
+  , clientAgentReadinessCase "disabled_agent_is_unavailable" "observed" .ready 4 4 false true false .agentDisabled
+  , clientAgentReadinessCase "invalid_runtime_configuration_is_unavailable" "observed" .ready 4 4 false true false .runtimeConfigurationInvalid
+  , clientAgentReadinessCase "missing_backend_is_unavailable" "observed" .ready 4 4 false true false .backendNotConfigured
+  , clientAgentReadinessCase "disabled_backend_is_unavailable" "observed" .ready 4 4 false true false .backendDisabled
+  , clientAgentReadinessCase "missing_credential_is_unavailable" "observed" .ready 4 4 false true false .credentialsRequired
+  , clientAgentReadinessCase "invalid_inference_profile_is_unavailable" "observed" .ready 4 4 false true false .inferenceProfileInvalid
+  , clientAgentReadinessCase "invalid_tool_configuration_is_unavailable" "observed" .ready 4 4 false true false .toolConfigurationInvalid
+  , clientAgentReadinessCase "invalid_tool_surface_is_unavailable" "observed" .ready 4 4 false true false .toolSurfaceUnavailable
   ]
 
 end Conformance.ContractCases

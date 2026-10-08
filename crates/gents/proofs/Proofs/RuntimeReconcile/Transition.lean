@@ -221,7 +221,7 @@ theorem coherent_preserved
                 (s := pre)
                 (sessionId := sessionId)
                 (other := pre.requestSession rid)
-                (behaviorId := requested)
+                (agentId := requested)
                 h_same
             simpa [h_other, Function.update, h_ne, h_same]
               using h_session rid h_old

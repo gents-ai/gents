@@ -33,7 +33,7 @@ structure RuntimeReconcileCase where
   trackedSessionBehavior : BehaviorId
   deriving Repr
 
-structure ClientBehaviorReadinessCase where
+structure ClientAgentReadinessCase where
   name : String
   observationPresent : Bool
   observationKind : String
