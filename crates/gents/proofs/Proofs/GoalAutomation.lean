@@ -134,16 +134,16 @@ def taskFireIdentity (agentDid taskId fireKey : String) : TaskFireIdentity :=
     removed without making an already-published request undiscoverable. -/
 structure TaskGoalRequestBinding where
   agentDid : String
-  behaviorId : String
+  agentId : String
   sessionId : String
   requestId : String
   retryKey : String
   deriving DecidableEq, Repr
 
-def expectedTaskGoalRequestBinding (agentDid behaviorId taskId fireKey : String) :
+def expectedTaskGoalRequestBinding (agentDid agentId taskId fireKey : String) :
     TaskGoalRequestBinding :=
   let identity := taskFireIdentity agentDid taskId fireKey
-  { agentDid, behaviorId
+  { agentDid, agentId
   , sessionId := identity.sessionId
   , requestId := identity.requestId
   , retryKey := identity.retryKey }

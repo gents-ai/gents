@@ -294,7 +294,7 @@ def canonicalCompletion : TerminalCompletion :=
 
 /-- Executable four-stage acceptance result used by generated conformance
 cases. Any guard drift in terminality, transcript append, wake metadata,
-coalescing, or claim behavior flips this value. -/
+coalescing, or claim agent flips this value. -/
 def canonicalContinuationAccepted : Bool :=
   match appendNotification? canonicalCompletion canonicalWaitReservedTranscript with
   | none => false
@@ -409,8 +409,8 @@ def redriveWakeFromRows?
   let nextRows := rows ++ [successor]
   if parent.observed.docId = parentDoc ∧ parent.observed.requestId = wake.requestId ∧
       parent.observed.state = wake.ctx.state ∧ parent.scope = session.scope ∧
-      parent.behavior = session.behavior ∧ wake.queueKey = some session.scope.session ∧
-      successor.scope = session.scope ∧ successor.behavior = session.behavior ∧
+      parent.agent = session.agent ∧ wake.queueKey = some session.scope.session ∧
+      successor.scope = session.scope ∧ successor.agent = session.agent ∧
       successor.observed.state = .pending ∧
       rows.all (fun row => row.observed.docId != successor.observed.docId &&
         row.observed.requestId != successor.observed.requestId) ∧

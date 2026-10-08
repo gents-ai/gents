@@ -10,7 +10,7 @@ open AgentSession
 def scope : Scope := ⟨1, 10, some 2⟩
 def session : Document :=
   { scope := scope
-    behavior := 3
+    agent:= 3
     createdAt := 1
     tags := ["review", "session-test"]
     provenance := some
@@ -19,7 +19,7 @@ def session : Document :=
         parentRequestDoc := some 6
         fork := some ⟨7, 2⟩ } }
 def request (id time : Nat) : RequestFact :=
-  { purpose := .normal, scope, behavior := 3, createdAt := time, observed := ⟨id + 100, id, .failed⟩ }
+  { purpose := .normal, scope, agent:= 3, createdAt := time, observed := ⟨id + 100, id, .failed⟩ }
 def old := request 1 2
 def newerRequest := request 2 2
 
@@ -48,12 +48,12 @@ example : (refresh indexed [completedRequest] processingEvent.observed 4).observ
 example : refresh indexed [] newerRequest.observed 4 = indexed := by decide
 example : refresh indexed [{ completedRequest with scope := { scope with requester := some 99 } }]
     newerRequest.observed 4 = indexed := by decide
-example : refresh indexed [{ completedRequest with behavior := 99 }]
+example : refresh indexed [{ completedRequest with agent:= 99 }]
     newerRequest.observed 4 = indexed := by decide
 
 def retryState : SessionState :=
   { sessionId := 10
-    behaviorId := 3
+    agentId := 3
     requestIds := {1}
     latest := 1
     ctx := fun _ =>

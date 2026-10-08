@@ -46,7 +46,7 @@ structure Observation where
   deriving DecidableEq, Repr
 structure Document where
   scope : Scope
-  behavior : BehaviorId
+  agent : AgentId
   createdAt : Time
   closedAt : Option Time := none
   title : Option Title := none
@@ -58,7 +58,7 @@ structure Document where
 structure RequestFact where
   purpose : RequestPurpose
   scope : Scope
-  behavior : BehaviorId
+  agent : AgentId
   createdAt : Time
   observed : RequestObservation
   deriving DecidableEq, Repr
@@ -238,7 +238,7 @@ including the currently indexed request. `preview` is whitespace-normalized by t
 existing projection adapter before this character-bound operation. -/
 def advance (s : Document) (rows : List RequestFact) (r : RequestFact)
     (preview : String) (now : Time) : Document :=
-  if r.scope = s.scope ∧ r.behavior = s.behavior ∧
+  if r.scope = s.scope ∧ r.agent = s.agent ∧
       r ∈ rows ∧ latest rows s.scope.agent s.scope.session (some s.scope.requester) = some r then
     { s with observation := some {
       activity := max now (s.observation.map (·.activity) |>.getD s.createdAt)
@@ -273,7 +273,7 @@ def refresh (s : Document) (rows : List RequestFact) (event : RequestObservation
   | some o => match o.latest with
     | some old => if old.docId = event.docId ∧ old.requestId = event.requestId then
         match observedRequest rows event with
-        | some current => if current.scope = s.scope ∧ current.behavior = s.behavior then
+        | some current => if current.scope = s.scope ∧ current.agent = s.agent then
             { s with observation := some { o with latest := some current.observed, activity := max now o.activity } }
           else s
         | none => s
@@ -295,7 +295,7 @@ theorem unpublished_tool_activity_noop (s : Document) (rows : List RequestFact)
 theorem published_tool_activity (s : Document) (o : Observation)
     (r : RequestFact) (now : Time)
     (ho : s.observation = some o) (hl : o.latest = some r.observed)
-    (hs : r.scope = s.scope) (hb : r.behavior = s.behavior)
+    (hs : r.scope = s.scope) (hb : r.agent = s.agent)
     (hp : r.purpose = .normal) :
     toolActivity s [r] r.observed now true =
       { s with observation := some { o with latest := some r.observed, activity := max now o.activity } } := by
@@ -317,7 +317,7 @@ def setClosed (s : Document) (closed : Option Time) (now : Time) : Document :=
 theorem advance_preserves_identity (s : Document) (rows : List RequestFact)
     (r : RequestFact) (preview : String) (now : Time) :
     (advance s rows r preview now).scope = s.scope ∧
-    (advance s rows r preview now).behavior = s.behavior ∧
+    (advance s rows r preview now).agent = s.agent ∧
     (advance s rows r preview now).provenance = s.provenance := by
   unfold advance
   split <;> simp

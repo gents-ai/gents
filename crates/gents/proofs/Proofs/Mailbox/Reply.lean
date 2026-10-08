@@ -9,7 +9,7 @@ structure ReplyEvidence where
   sourceDocId : String
   requesterDid : String
   agentDid : String
-  behaviorId : String
+  agentId : String
   sessionId : String
   authenticated : Bool
   interactive : Bool
@@ -19,7 +19,7 @@ structure ReplyEnvelope where
   docId : String
   handling : Handling
   targetAgentDid : String
-  behaviorId : String
+  agentId : String
   sessionId : Option String
   deadlineValid : Bool
   deriving DecidableEq, Repr
@@ -30,7 +30,7 @@ def replyMatches (item : Item) (envelope : ReplyEnvelope) (reply : ReplyEvidence
     (item.status = .acted ∧ item.resolvedDocId = reply.requestDocId)) ∧
   reply.requestDocId ≠ "" ∧ reply.requesterDid ≠ "" ∧
   reply.requesterDid = item.identity.requesterDid ∧ reply.agentDid = envelope.targetAgentDid ∧
-  envelope.behaviorId ≠ "" ∧ reply.behaviorId = envelope.behaviorId ∧
+  envelope.agentId ≠ "" ∧ reply.agentId = envelope.agentId ∧
   (envelope.sessionId = none ∨ envelope.sessionId = some reply.sessionId) ∧
   envelope.docId ≠ "" ∧ reply.sourceDocId = envelope.docId ∧ reply.agentDid ≠ ""
 

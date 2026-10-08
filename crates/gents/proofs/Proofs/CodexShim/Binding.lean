@@ -22,7 +22,7 @@ def isBound : ShimState → Bool
 end ShimState
 
 structure Shim where
-  boundAgent : BehaviorId
+  boundAgent : AgentId
   state : ShimState
   deriving DecidableEq, Repr
 

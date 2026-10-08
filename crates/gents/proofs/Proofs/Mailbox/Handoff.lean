@@ -211,12 +211,12 @@ theorem foreign_agent_cannot_reuse_open_question :
 
 def replyEnvelope : ReplyEnvelope :=
   { docId := "mailbox-doc", handling := .startRequest,
-    targetAgentDid := "agent", behaviorId := "repair",
+    targetAgentDid := "agent", agentId := "repair",
     sessionId := some "session", deadlineValid := true }
 
 def replyEvidence : ReplyEvidence :=
   { requestDocId := "reply-doc", sourceDocId := "mailbox-doc",
-    requesterDid := "owner", agentDid := "agent", behaviorId := "repair",
+    requesterDid := "owner", agentDid := "agent", agentId := "repair",
     sessionId := "session", authenticated := true, interactive := true }
 
 theorem linked_reply_is_a_new_request_in_original_session :
