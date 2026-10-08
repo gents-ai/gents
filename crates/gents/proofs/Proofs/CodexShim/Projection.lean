@@ -222,7 +222,7 @@ def projectionAgentId (rootAgentId : String)
   | some agentId => agentId
   | none => rootAgentId
 
-/-- Display metadata must come from the exact selected principal/agent pair.
+/-- Display metadata must come from the exact selected node/agent pair.
 An unavailable binding stays unavailable; parent metadata is not a substitute. -/
 def projectedThreadModel (selectedOwner selectedAgent actualOwner actualAgent : String)
     (resolvedModel : Option String) : Option String :=

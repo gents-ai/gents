@@ -97,7 +97,7 @@ def operatorConfigCollections : List String :=
   agentConfigCollections ++ ["InferenceBackend"]
 
 /-- Documents carrying credentials. `InferenceBackend` holds API-key material
-and `OAuthCredential` holds principal login/refresh credentials; neither
+and `OAuthCredential` holds node login/refresh credentials; neither
 belongs in ordinary client/conversation replication. -/
 def credentialCollections : List String := ["InferenceBackend", "OAuthCredential"]
 

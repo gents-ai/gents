@@ -197,7 +197,7 @@ def workspaceBindingCases : List WorkspaceBindingCase :=
   , mkBindingCase "integrate_mismatched_seal_hash_illegal" .sealed
       (mkWitness "b-1" .integrate (sealHash := some "other")) false
       (workspaceSealHash := some "seal-1")
-  , mkBindingCase "non_owner_principal_cannot_claim" .ready
+  , mkBindingCase "non_owner_node_cannot_claim" .ready
       (mkWitness "b-1" .readWrite (nodeDid := "dep-other")) false
   , mkBindingCase "git_worktree_diff_read_write_git_metadata_write_illegal" .ready
       (mkWitness "b-1" .readWrite) false

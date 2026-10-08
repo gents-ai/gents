@@ -20,7 +20,7 @@ structure RemoteServiceTools where
 
 abbrev RemoteSelection := String → Option RemoteServiceTools
 /-- Registry enablement and discovery are distinct observations, both scoped to
-principal and logical service name. Selection is already behavior-local. -/
+node and logical service name. Selection is already agent-local. -/
 abbrev RemoteAvailability := (String × String) → Finset String
 abbrev RemoteEnablement := (String × String) → Bool
 
@@ -59,7 +59,7 @@ theorem required_available_admitted (s : RemoteServiceTools) (names : Finset Str
     (hr : s.required = true) (hv : s.valid = true) :
     serviceReady s true (some names) = true := by simp [serviceReady, hr, hv]
 
-/-- Resolve selected names through the same principal-scoped registry gate
+/-- Resolve selected names through the same node-scoped registry gate
 used by readiness. Cached discovery cannot enable a disabled service. -/
 def remoteGrants (selected : RemoteSelection) (available : RemoteAvailability)
     (enabled : RemoteEnablement) (agent service : String) : Finset String :=
@@ -84,8 +84,8 @@ theorem disabled_remote_grants_none (selected : RemoteSelection)
     remoteGrants selected available enabled agent service = ∅ := by
   cases hs : selected service <;> simp [remoteGrants, hs, h]
 
-/-- Grants depend only on the selected principal/service pair; registry or
-health observations for other principals cannot change this invocation. -/
+/-- Grants depend only on the selected node/service pair; registry or
+health observations for other nodes cannot change this invocation. -/
 theorem remote_grants_owner_local (selected : RemoteSelection)
     (a b : RemoteAvailability) (e f : RemoteEnablement) (agent service : String)
     (ha : a (agent, service) = b (agent, service))
