@@ -118,10 +118,7 @@ impl DefraQueryMcp {
                     &args.run_id,
                 )
                 .await
-                .and_then(|view| {
-                    results_in_scope(&self.options.scope, &view)?;
-                    Ok(serde_json::to_value(view)?)
-                })
+                .and_then(|view| result_value_in_scope(&self.options.scope, view))
             }
             other => {
                 return Err(ErrorData::internal_error(
@@ -270,28 +267,19 @@ async fn caller_graph_access(
 /// A result document is rendered only when the MCP read scope admits its
 /// collection; `CollectionScope::ensure_allowed` also refuses the protected
 /// eval and optimization collections under an unrestricted scope.
-fn results_in_scope(
+fn result_value_in_scope(
     scope: &CollectionScope,
-    view: &gents::graph_pipeline::GraphRunView,
-) -> anyhow::Result<()> {
-    result_collections_in_scope(
-        scope,
-        view.results
-            .iter()
-            .flat_map(|result| &result.refs)
-            .chain(&view.persisted_result_refs)
-            .map(|reference| reference.collection.as_str()),
-    )
-}
-
-fn result_collections_in_scope<'a>(
-    scope: &CollectionScope,
-    collections: impl IntoIterator<Item = &'a str>,
-) -> anyhow::Result<()> {
-    for collection in collections {
-        scope.ensure_allowed(collection)?;
+    view: gents::graph_pipeline::GraphRunView,
+) -> anyhow::Result<Value> {
+    for reference in view
+        .results
+        .iter()
+        .flat_map(|result| &result.refs)
+        .chain(&view.persisted_result_refs)
+    {
+        scope.ensure_allowed(&reference.collection)?;
     }
-    Ok(())
+    Ok(serde_json::to_value(view)?)
 }
 
 fn bearer_refusal(rejection: &defra_http::IdentityExtractionError) -> &'static str {
@@ -421,14 +409,45 @@ mod tests {
         }
     }
 
+    fn result_view(result_collection: &str, persisted_collection: &str) -> Value {
+        let reference = |collection: &str| {
+            serde_json::json!({
+                "name": "findings", "collection": collection,
+                "document_id": "bae-1", "commit_cid": "cid-1",
+            })
+        };
+        serde_json::json!({
+            "view_version": 1, "run_id": "run-1", "graph_id": "graph",
+            "revision_digest": "sha256:d", "owner_did": "did:test:owner",
+            "caller_did": "did:test:owner", "entry_name": "entry", "correlation": "corr",
+            "status": "succeeded", "input": {}, "created_at": "2026-10-02T05:30:00Z",
+            "update_generation": 1, "requests": [], "stages": [], "groups": [],
+            "results": [{
+                "name": "findings", "terminal": true, "satisfied": true,
+                "observed_count": 1, "violation": null,
+                "refs": [reference(result_collection)], "documents": [],
+            }],
+            "persisted_result_refs": [reference(persisted_collection)],
+            "active_request_count": 0, "terminal_request_count": 0,
+            "result_contract_satisfied": true, "failure_evidence": null,
+        })
+    }
+
     #[test]
-    fn results_in_scope_refuses_a_protected_collection() {
+    fn graph_result_refuses_a_protected_result_collection() {
         let all = CollectionScope::all();
-        assert!(result_collections_in_scope(&all, ["Finding"]).is_ok());
-        let refused = result_collections_in_scope(&all, ["Finding", "EvalRun"]).unwrap_err();
-        assert!(
-            format!("{refused:#}").contains("\"EvalRun\" is protected"),
-            "{refused:#}"
-        );
+        let admitted = serde_json::from_value(result_view("Finding", "Finding")).unwrap();
+        assert!(result_value_in_scope(&all, admitted).is_ok());
+        for view in [
+            result_view("EvalRun", "Finding"),
+            result_view("Finding", "EvalRun"),
+        ] {
+            let refused =
+                result_value_in_scope(&all, serde_json::from_value(view).unwrap()).unwrap_err();
+            assert!(
+                format!("{refused:#}").contains("\"EvalRun\" is protected"),
+                "{refused:#}"
+            );
+        }
     }
 }
