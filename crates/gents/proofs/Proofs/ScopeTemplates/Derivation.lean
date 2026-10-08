@@ -84,16 +84,12 @@ def clientTranscriptPredicates (requesterDid ownerDid : Did) :
       { collection := collection
       , clauses :=
           [ { field := "requester_did", value := requesterDid }
-          , { field := "agent_did", value := ownerDid } ] })
+          , { field := "node_did", value := ownerDid } ] })
 
 def clientRouteFilters (direction : RouteDirection) (requesterDid ownerDid : Did) :
     List CollectionPredicate :=
   clientTranscriptPredicates requesterDid ownerDid ++
-    [ { collection := "PersonaConfigRequest"
-      , clauses :=
-          [ { field := "requester_did", value := requesterDid }
-          , { field := "agent_did", value := ownerDid } ] }
-    , { collection := "PeerEndpoint"
+    [ { collection := "PeerEndpoint"
       , clauses :=
           [ { field := "did"
             , value :=
@@ -103,12 +99,12 @@ def clientRouteFilters (direction : RouteDirection) (requesterDid ownerDid : Did
     , { collection := "SessionHydrationRequest"
       , clauses :=
           [ { field := "requester_did", value := requesterDid }
-          , { field := "agent_did", value := ownerDid } ] } ] ++
+          , { field := "node_did", value := ownerDid } ] } ] ++
     match direction with
     | .clientToRuntime => []
     | .runtimeToClient =>
-        [ { collection := "AgentBehaviorReadiness"
-          , clauses := [ { field := "agent_did", value := ownerDid } ] } ]
+        [ { collection := "NodeReadiness"
+          , clauses := [ { field := "node_did", value := ownerDid } ] } ]
 
 def directionalScopeFilters (template : Template) (direction : RouteDirection)
     (requesterDid ownerDid : Did) : List CollectionPredicate :=
@@ -123,13 +119,16 @@ def directionalScopeFilters (template : Template) (direction : RouteDirection)
                 , operator := filter.operator
                 , value := filter.value } ] })
 
+/-- The durable client-route transcript row identifies its principal scope by
+the originating requester and the owning node destination, matching the
+immutable `requester_did` / `node_did` fields of the accepted SDL. -/
 structure TranscriptIdentity where
   requesterDid : Did
-  agentDid : Did
+  nodeDid : Did
 
 def clientTranscriptMatches (requesterDid ownerDid : Did)
     (row : TranscriptIdentity) : Bool :=
-  decide (row.requesterDid = requesterDid) && decide (row.agentDid = ownerDid)
+  decide (row.requesterDid = requesterDid) && decide (row.nodeDid = ownerDid)
 
 theorem conversation_filter_eq (peerDid localDid : Did) :
     scopeFilter (.perCollection conversationRules) [] peerDid localDid
@@ -181,7 +180,7 @@ theorem machine_filter_eq (peerDid homeDid : Did) :
         , { collection := "SessionHydrationRequest"
           , field := "requester_did"
           , value := peerDid }
-        , { collection := "AgentDirectoryEntry"
+        , { collection := "NodeDirectoryEntry"
           , field := "source_did"
           , value := homeDid } ] := by
   simp [scopeFilter, machineTemplate, machineRules, conversationTemplate]
@@ -190,14 +189,14 @@ theorem machine_filters_transcript_persona_and_directory (peerDid homeDid : Did)
     ((scopeFilter machineTemplate.scope [] peerDid homeDid).map
         (fun k => k.collection)).toFinset
       = (transcriptCollections ++
-          ["MailboxItem", "SessionHydrationRequest", "AgentDirectoryEntry"]).toFinset := by
+          ["MailboxItem", "SessionHydrationRequest", "NodeDirectoryEntry"]).toFinset := by
   simp [scopeFilter, machineTemplate, machineRules, machineCollections,
     conversationRules, conversationCollections, transcriptCollections]
 
 theorem machine_directory_crossing_is_home_scoped (peerDid homeDid : Did) :
     (scopeFilter machineTemplate.scope [] peerDid homeDid).find?
-        (fun k => k.collection = "AgentDirectoryEntry") =
-          some { collection := "AgentDirectoryEntry"
+        (fun k => k.collection = "NodeDirectoryEntry") =
+          some { collection := "NodeDirectoryEntry"
                , field := "source_did"
                , value := homeDid } := by
   simp [scopeFilter, machineTemplate, machineRules, conversationRules]
@@ -220,20 +219,7 @@ theorem client_request_filter_conjoins_requester_and_destination
         { collection := "AgentRequest"
         , clauses :=
             [ { field := "requester_did", value := requesterDid }
-            , { field := "agent_did", value := ownerDid } ] } := by
-  cases direction <;>
-    simp [clientRouteFilters, clientTranscriptPredicates,
-      clientTranscriptCollections, transcriptCollections]
-
-theorem client_persona_request_filter_conjoins_requester_and_destination
-    (direction : RouteDirection) (requesterDid ownerDid : Did) :
-    (clientRouteFilters direction requesterDid ownerDid).find?
-        (fun predicate => predicate.collection = "PersonaConfigRequest") =
-      some
-        { collection := "PersonaConfigRequest"
-        , clauses :=
-            [ { field := "requester_did", value := requesterDid }
-            , { field := "agent_did", value := ownerDid } ] } := by
+            , { field := "node_did", value := ownerDid } ] } := by
   cases direction <;>
     simp [clientRouteFilters, clientTranscriptPredicates,
       clientTranscriptCollections, transcriptCollections]
@@ -246,7 +232,7 @@ theorem client_hydration_request_conjoins_requester_and_destination
         { collection := "SessionHydrationRequest"
         , clauses :=
             [ { field := "requester_did", value := requesterDid }
-            , { field := "agent_did", value := ownerDid } ] } := by
+            , { field := "node_did", value := ownerDid } ] } := by
   cases direction <;>
     simp [clientRouteFilters, clientTranscriptPredicates,
       clientTranscriptCollections, transcriptCollections]
@@ -254,20 +240,20 @@ theorem client_hydration_request_conjoins_requester_and_destination
 theorem client_transcript_match_iff_requester_and_destination
     (requesterDid ownerDid : Did) (row : TranscriptIdentity) :
     clientTranscriptMatches requesterDid ownerDid row = true ↔
-      row.requesterDid = requesterDid ∧ row.agentDid = ownerDid := by
+      row.requesterDid = requesterDid ∧ row.nodeDid = ownerDid := by
   simp [clientTranscriptMatches]
 
 theorem client_transcript_destination_scoped
     (requesterDid ownerDid : Did) (row : TranscriptIdentity)
     (hmatches : clientTranscriptMatches requesterDid ownerDid row = true) :
-    row.agentDid = ownerDid := by
+    row.nodeDid = ownerDid := by
   exact (client_transcript_match_iff_requester_and_destination
     requesterDid ownerDid row).mp hmatches |>.2
 
 theorem client_transcript_rejects_another_destination
     (requesterDid ownerDid otherDid : Did) (different : otherDid ≠ ownerDid) :
     clientTranscriptMatches requesterDid ownerDid
-      { requesterDid := requesterDid, agentDid := otherDid } = false := by
+      { requesterDid := requesterDid, nodeDid := otherDid } = false := by
   simp [clientTranscriptMatches, different]
 
 theorem clientTranscriptPredicates_collections (requesterDid ownerDid : Did) :
@@ -295,10 +281,10 @@ theorem client_return_adds_exact_bounded_control_plane :
 theorem client_readiness_return_is_owner_scoped
     (requesterDid ownerDid : Did) :
     (clientRouteFilters .runtimeToClient requesterDid ownerDid).find?
-        (fun predicate => predicate.collection = "AgentBehaviorReadiness") =
+        (fun predicate => predicate.collection = "NodeReadiness") =
       some
-        { collection := "AgentBehaviorReadiness"
-        , clauses := [ { field := "agent_did", value := ownerDid } ] } := by
+        { collection := "NodeReadiness"
+        , clauses := [ { field := "node_did", value := ownerDid } ] } := by
   simp [clientRouteFilters, clientTranscriptPredicates, transcriptCollections,
     clientTranscriptCollections]
 
@@ -337,7 +323,7 @@ theorem ordinary_routes_exclude_credentials
 
 theorem subagentCoordinator_filter_eq (peerDid localDid : Did) :
     scopeFilter (.perCollection subagentCoordinatorRules) [] peerDid localDid
-      = [ { collection := "AgentRequest", field := "agent_did", value := peerDid } ] := by
+      = [ { collection := "AgentRequest", field := "node_did", value := peerDid } ] := by
   simp [scopeFilter, subagentCoordinatorRules]
 
 theorem subagentHost_filter_eq (peerDid localDid : Did) :
@@ -354,11 +340,11 @@ theorem subagentHost_filters_requester_lineage (peerDid localDid : Did) :
   simp [scopeFilter, subagentHostTemplate, subagentHostRules]
 
 /-- The caller → host leg carries exactly the Peer AgentRequest a remote
-`agent_new` authors on the caller, selected by the target's `agent_did`. -/
+`agent_new` authors on the caller, selected by the target's `node_did`. -/
 theorem subagentCoordinator_carries_exactly_target_request (peerDid localDid : Did) :
     subagentCoordinatorTemplate.collections = {"AgentRequest"} ∧
     scopeFilter subagentCoordinatorTemplate.scope [] peerDid localDid
-      = [ { collection := "AgentRequest", field := "agent_did", value := peerDid } ] := by
+      = [ { collection := "AgentRequest", field := "node_did", value := peerDid } ] := by
   refine ⟨by decide, ?_⟩
   simp [scopeFilter, subagentCoordinatorTemplate, subagentCoordinatorRules]
 
@@ -392,7 +378,7 @@ theorem subagent_legs_exclude_host_local_execution :
     "AgentToolCall" ∉ subagentCoordinatorTemplate.collections ∧
     "AgentToolResult" ∉ subagentHostTemplate.collections ∧
     "CompactionEntry" ∉ subagentHostTemplate.collections ∧
-    "AgentBehavior" ∉ subagentHostTemplate.collections ∧
+    "Agent" ∉ subagentHostTemplate.collections ∧
     "InferenceBackend" ∉ subagentHostTemplate.collections := by
   decide
 
@@ -405,7 +391,7 @@ def routeSelects (t : Template) (collection field : String)
 
 theorem subagentCoordinator_selects_request_iff_target
     (target peerDid localDid : Did) :
-    routeSelects subagentCoordinatorTemplate "AgentRequest" "agent_did"
+    routeSelects subagentCoordinatorTemplate "AgentRequest" "node_did"
       target peerDid localDid = true ↔ peerDid = target := by
   unfold routeSelects
   rw [show subagentCoordinatorTemplate.scope = .perCollection subagentCoordinatorRules
@@ -439,12 +425,12 @@ private theorem wave_selects_one (peers : List Did) (did : Did)
   exact List.count_eq_one_of_mem hnodup hmem
 
 /-- A request wave over distinct peers reaches one host: of a caller's routes
-to its peers, only the route to the request's target `agent_did` carries it. -/
+to its peers, only the route to the request's target `node_did` carries it. -/
 theorem subagentCoordinator_wave_reaches_one_target
     (peers : List Did) (target localDid : Did)
     (hnodup : peers.Nodup) (hmem : target ∈ peers) :
     (peers.filter (fun p => routeSelects subagentCoordinatorTemplate
-      "AgentRequest" "agent_did" target p localDid)).length = 1 :=
+      "AgentRequest" "node_did" target p localDid)).length = 1 :=
   wave_selects_one peers target _
     (fun p => subagentCoordinator_selects_request_iff_target target p localDid)
     hnodup hmem
