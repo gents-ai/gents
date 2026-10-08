@@ -12,13 +12,13 @@ use serde::{Deserialize, Deserializer, Serialize};
 use crate::request_lifecycle::RequestLifecycleState;
 
 pub use crate::behavior_readiness::{
-    decode_agent_readiness_snapshot, effective_agent_readiness_admission,
-    is_behavior_unavailable_rejection, project_agent_readiness, project_agent_readiness_source,
-    project_agent_readiness_summary, AgentReadinessEntry, AgentReadinessProcessState,
-    AgentReadinessProjection, AgentReadinessSnapshot, AgentReadinessSourceEntry, AgentReadinessState,
-    AgentReadinessSummary, AgentReadinessUnavailableReason, AgentReadinessUnknownReason,
-    EffectiveAgentReadinessAdmission, NodeReadinessRow, ProjectedAgentReadiness,
-    ProjectedAgentReadinessSummary, BEHAVIOR_NOT_ASSIGNED_MESSAGE, AGENT_READINESS_FORMAT_VERSION,
+    decode_node_readiness_snapshot, effective_agent_readiness_admission,
+    is_behavior_unavailable_rejection, project_node_readiness, project_node_readiness_source,
+    project_node_readiness_summary, AgentReadinessEntry, AgentReadinessSourceEntry,
+    AgentReadinessState, AgentReadinessUnavailableReason, AgentReadinessUnknownReason,
+    EffectiveAgentReadinessAdmission, NodeReadinessProcessState, NodeReadinessProjection,
+    NodeReadinessRow, NodeReadinessSnapshot, NodeReadinessSummary, ProjectedAgentReadiness,
+    ProjectedNodeReadinessSummary, BEHAVIOR_NOT_ASSIGNED_MESSAGE, NODE_READINESS_FORMAT_VERSION,
 };
 
 pub(crate) fn deserialize_null_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
@@ -514,8 +514,8 @@ mod tests {
         let json = r#"{
             "_docID": "doc-1",
             "request_id": "req-1",
-            "agent_did": "did:test:amy",
-            "behavior_id": "amy-code",
+            "node_did": "did:test:amy",
+            "agent_id": "amy-code",
             "session_id": "s-1",
             "retry_parent_request": "",
             "retry_root_request": "req-1",
@@ -627,7 +627,7 @@ mod tests {
     }
 
     #[test]
-    fn tool_service_registry_defaults_send_agent_did_to_false() {
+    fn tool_service_registry_defaults_send_node_did_to_false() {
         let json = r#"{
             "service_id": "observability-mcp",
             "hostname": "studio-1",
@@ -635,19 +635,19 @@ mod tests {
             "mcp_path": "/mcp"
         }"#;
         let row: ToolServiceRegistryRow = serde_json::from_str(json).expect("parse");
-        assert!(!row.send_agent_did);
+        assert!(!row.send_node_did);
     }
 
     #[test]
-    fn tool_service_registry_treats_null_send_agent_did_as_false() {
+    fn tool_service_registry_treats_null_send_node_did_as_false() {
         let json = r#"{
             "service_id": "observability-mcp",
             "hostname": "studio-1",
             "mcp_port": 9201,
             "mcp_path": "/mcp",
-            "send_agent_did": null
+            "send_node_did": null
         }"#;
         let row: ToolServiceRegistryRow = serde_json::from_str(json).expect("parse");
-        assert!(!row.send_agent_did);
+        assert!(!row.send_node_did);
     }
 }

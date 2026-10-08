@@ -1,21 +1,21 @@
 use super::*;
 
-fn readiness_row(agent_did: &str, snapshot_json: String) -> AgentBehaviorReadinessRow {
-    AgentBehaviorReadinessRow {
-        agent_did: agent_did.to_string(),
+fn readiness_row(node_did: &str, snapshot_json: String) -> NodeReadinessRow {
+    NodeReadinessRow {
+        node_did: node_did.to_string(),
         snapshot_json,
         updated_at: "2026-08-28T00:00:00Z".to_string(),
     }
 }
 
-fn readiness_snapshot(behaviors: Vec<BehaviorReadinessEntry>) -> BehaviorReadinessSnapshot {
-    BehaviorReadinessSnapshot {
-        format_version: BEHAVIOR_READINESS_FORMAT_VERSION,
-        process_state: BehaviorReadinessProcessState::Ready,
+fn readiness_snapshot(agents: Vec<AgentReadinessEntry>) -> NodeReadinessSnapshot {
+    NodeReadinessSnapshot {
+        format_version: NODE_READINESS_FORMAT_VERSION,
+        process_state: NodeReadinessProcessState::Ready,
         active_generation: 4,
         router_generation: 4,
-        default_behavior_id: "a".to_string(),
-        behaviors,
+        default_agent_id: "a".to_string(),
+        agents,
     }
 }
 
@@ -25,10 +25,10 @@ fn observed_at() -> DateTime<Utc> {
         .with_timezone(&Utc)
 }
 
-fn projected_unknown(row: &AgentBehaviorReadinessRow) -> Option<BehaviorReadinessUnknownReason> {
-    project_behavior_readiness(
+fn projected_unknown(row: &NodeReadinessRow) -> Option<AgentReadinessUnknownReason> {
+    project_node_readiness(
         Some(row),
-        "did:test:agent",
+        "did:test:node",
         ["a", "b"],
         Some("a"),
         observed_at(),
@@ -38,20 +38,20 @@ fn projected_unknown(row: &AgentBehaviorReadinessRow) -> Option<BehaviorReadines
 
 #[test]
 fn source_projection_is_sorted_and_unavailability_wins() {
-    let snapshot = project_behavior_readiness_source(
-        BehaviorReadinessProcessState::Ready,
+    let snapshot = project_node_readiness_source(
+        NodeReadinessProcessState::Ready,
         4,
         4,
         "a",
         [
-            BehaviorReadinessSourceEntry {
-                behavior_id: "b".to_string(),
+            AgentReadinessSourceEntry {
+                agent_id: "b".to_string(),
                 dispatcher_present: true,
-                unavailable_reason: Some(BehaviorReadinessUnavailableReason::BackendDisabled),
+                unavailable_reason: Some(AgentReadinessUnavailableReason::BackendDisabled),
                 startup_demoted: false,
             },
-            BehaviorReadinessSourceEntry {
-                behavior_id: "a".to_string(),
+            AgentReadinessSourceEntry {
+                agent_id: "a".to_string(),
                 dispatcher_present: true,
                 unavailable_reason: None,
                 startup_demoted: false,
@@ -59,52 +59,49 @@ fn source_projection_is_sorted_and_unavailability_wins() {
         ],
     )
     .unwrap();
-    assert_eq!(snapshot.behaviors[0].behavior_id, "a");
-    assert_eq!(
-        snapshot.behaviors[1].state,
-        BehaviorReadinessState::Unavailable
-    );
+    assert_eq!(snapshot.agents[0].agent_id, "a");
+    assert_eq!(snapshot.agents[1].state, AgentReadinessState::Unavailable);
 }
 
 #[test]
 fn ready_snapshot_does_not_expire_without_semantic_changes() {
-    let snapshot = readiness_snapshot(vec![BehaviorReadinessEntry {
-        behavior_id: "a".to_string(),
-        state: BehaviorReadinessState::Ready,
+    let snapshot = readiness_snapshot(vec![AgentReadinessEntry {
+        agent_id: "a".to_string(),
+        state: AgentReadinessState::Ready,
         reason: None,
     }]);
-    let row = readiness_row("did:test:agent", serde_json::to_string(&snapshot).unwrap());
+    let row = readiness_row("did:test:node", serde_json::to_string(&snapshot).unwrap());
     let stale_at = DateTime::parse_from_rfc3339("2027-08-28T00:00:46Z")
         .unwrap()
         .with_timezone(&Utc);
     let projection =
-        project_behavior_readiness(Some(&row), "did:test:agent", ["a"], Some("a"), stale_at);
+        project_node_readiness(Some(&row), "did:test:node", ["a"], Some("a"), stale_at);
     assert_eq!(projection.unknown_reason, None);
     assert_eq!(
-        projection.behaviors.get("a"),
-        Some(&ProjectedBehaviorReadiness::Ready),
+        projection.agents.get("a"),
+        Some(&ProjectedAgentReadiness::Ready),
         "a lagged replica must keep last-known dispatcher readiness"
     );
     assert!(matches!(
-        project_behavior_readiness_summary(Some(&row), "did:test:agent", stale_at),
-        ProjectedBehaviorReadinessSummary::Observed(_)
+        project_node_readiness_summary(Some(&row), "did:test:node", stale_at),
+        ProjectedNodeReadinessSummary::Observed(_)
     ));
 }
 
 #[test]
 fn projection_accepts_only_canonical_bound_payloads_and_process_states() {
-    let ready = BehaviorReadinessEntry {
-        behavior_id: "a".to_string(),
-        state: BehaviorReadinessState::Ready,
+    let ready = AgentReadinessEntry {
+        agent_id: "a".to_string(),
+        state: AgentReadinessState::Ready,
         reason: None,
     };
-    let unavailable = BehaviorReadinessEntry {
-        behavior_id: "b".to_string(),
-        state: BehaviorReadinessState::Unavailable,
-        reason: Some(BehaviorReadinessUnavailableReason::BackendDisabled),
+    let unavailable = AgentReadinessEntry {
+        agent_id: "b".to_string(),
+        state: AgentReadinessState::Unavailable,
+        reason: Some(AgentReadinessUnavailableReason::BackendDisabled),
     };
     let canonical = readiness_row(
-        "did:test:agent",
+        "did:test:node",
         serde_json::to_string(&readiness_snapshot(vec![
             ready.clone(),
             unavailable.clone(),
@@ -116,103 +113,101 @@ fn projection_accepts_only_canonical_bound_payloads_and_process_states() {
     let malformed_snapshots = [
         readiness_snapshot(vec![ready.clone(), ready.clone()]),
         readiness_snapshot(vec![unavailable.clone(), ready.clone()]),
-        readiness_snapshot(vec![BehaviorReadinessEntry {
-            behavior_id: " a".to_string(),
+        readiness_snapshot(vec![AgentReadinessEntry {
+            agent_id: " a".to_string(),
             ..ready.clone()
         }]),
-        readiness_snapshot(vec![BehaviorReadinessEntry {
-            reason: Some(BehaviorReadinessUnavailableReason::BackendDisabled),
+        readiness_snapshot(vec![AgentReadinessEntry {
+            reason: Some(AgentReadinessUnavailableReason::BackendDisabled),
             ..ready.clone()
         }]),
-        readiness_snapshot(vec![BehaviorReadinessEntry {
-            behavior_id: "a".to_string(),
-            state: BehaviorReadinessState::Unavailable,
+        readiness_snapshot(vec![AgentReadinessEntry {
+            agent_id: "a".to_string(),
+            state: AgentReadinessState::Unavailable,
             reason: None,
         }]),
     ];
     for snapshot in malformed_snapshots {
-        let row = readiness_row("did:test:agent", serde_json::to_string(&snapshot).unwrap());
+        let row = readiness_row("did:test:node", serde_json::to_string(&snapshot).unwrap());
         assert_eq!(
             projected_unknown(&row),
-            Some(BehaviorReadinessUnknownReason::ReadinessMalformed)
+            Some(AgentReadinessUnknownReason::ReadinessMalformed)
         );
     }
 
     let unknown_process = readiness_row(
-        "did:test:agent",
+        "did:test:node",
         canonical.snapshot_json.replace("\"ready\"", "\"starting\""),
     );
     assert_eq!(
         projected_unknown(&unknown_process),
-        Some(BehaviorReadinessUnknownReason::ReadinessMalformed)
+        Some(AgentReadinessUnknownReason::ReadinessMalformed)
     );
     assert_eq!(
-        project_behavior_readiness(
+        project_node_readiness(
             Some(&canonical),
-            "did:test:agent",
+            "did:test:node",
             [" a"],
             Some("a"),
             observed_at(),
         )
         .unknown_reason,
-        Some(BehaviorReadinessUnknownReason::ReadinessMalformed)
+        Some(AgentReadinessUnknownReason::ReadinessMalformed)
     );
 
     let mut whitespace_default = readiness_snapshot(vec![ready.clone()]);
-    whitespace_default.default_behavior_id = "a ".to_string();
+    whitespace_default.default_agent_id = "a ".to_string();
     let row = readiness_row(
-        "did:test:agent",
+        "did:test:node",
         serde_json::to_string(&whitespace_default).unwrap(),
     );
     assert_eq!(
         projected_unknown(&row),
-        Some(BehaviorReadinessUnknownReason::ReadinessMalformed)
+        Some(AgentReadinessUnknownReason::ReadinessMalformed)
     );
 
     let mut invalid_default = readiness_snapshot(vec![ready]);
-    invalid_default.default_behavior_id = "missing".to_string();
+    invalid_default.default_agent_id = "missing".to_string();
     let row = readiness_row(
-        "did:test:agent",
+        "did:test:node",
         serde_json::to_string(&invalid_default).unwrap(),
     );
     assert_eq!(
         projected_unknown(&row),
-        Some(BehaviorReadinessUnknownReason::BehaviorNotAssigned)
+        Some(AgentReadinessUnknownReason::AgentNotAssigned)
     );
 
     let foreign = readiness_row("did:test:foreign", canonical.snapshot_json.clone());
     assert_eq!(
         projected_unknown(&foreign),
-        Some(BehaviorReadinessUnknownReason::ReadinessMalformed)
+        Some(AgentReadinessUnknownReason::ReadinessMalformed)
     );
 
     let with_unknown_field = readiness_row(
-        "did:test:agent",
-        r#"{"format_version":1,"process_state":"ready","active_generation":4,"router_generation":4,"default_behavior_id":"a","behaviors":[{"behavior_id":"a","state":"ready","reason":null,"extra":true}]}"#.to_string(),
+        "did:test:node",
+        r#"{"format_version":2,"process_state":"ready","active_generation":4,"router_generation":4,"default_agent_id":"a","agents":[{"agent_id":"a","state":"ready","reason":null,"extra":true}]}"#.to_string(),
     );
     assert_eq!(
         projected_unknown(&with_unknown_field),
-        Some(BehaviorReadinessUnknownReason::ReadinessMalformed)
+        Some(AgentReadinessUnknownReason::ReadinessMalformed)
     );
     let with_unknown_top_level_field = readiness_row(
-        "did:test:agent",
-        r#"{"format_version":1,"process_state":"ready","active_generation":4,"router_generation":4,"default_behavior_id":"a","behaviors":[{"behavior_id":"a","state":"ready","reason":null}],"extra":true}"#.to_string(),
+        "did:test:node",
+        r#"{"format_version":2,"process_state":"ready","active_generation":4,"router_generation":4,"default_agent_id":"a","agents":[{"agent_id":"a","state":"ready","reason":null}],"extra":true}"#.to_string(),
     );
     assert_eq!(
-        project_behavior_readiness_summary(
+        project_node_readiness_summary(
             Some(&with_unknown_top_level_field),
-            "did:test:agent",
+            "did:test:node",
             observed_at(),
         ),
-        ProjectedBehaviorReadinessSummary::Unknown(
-            BehaviorReadinessUnknownReason::ReadinessMalformed
-        )
+        ProjectedNodeReadinessSummary::Unknown(AgentReadinessUnknownReason::ReadinessMalformed)
     );
     assert!(matches!(
-        project_behavior_readiness_summary(Some(&canonical), "did:test:agent", observed_at()),
-        ProjectedBehaviorReadinessSummary::Observed(BehaviorReadinessSummary {
+        project_node_readiness_summary(Some(&canonical), "did:test:node", observed_at()),
+        ProjectedNodeReadinessSummary::Observed(NodeReadinessSummary {
             ready_count: 1,
-            unavailable_behaviors: ref unavailable,
+            unavailable_agents: ref unavailable,
             ..
         }) if unavailable.len() == 1
     ));
@@ -221,30 +216,30 @@ fn projection_accepts_only_canonical_bound_payloads_and_process_states() {
 #[test]
 fn malformed_configured_id_preserves_all_canonical_ids_independent_of_order() {
     for configured in [vec!["bad ", "a", "b"], vec!["a", "bad ", "b"]] {
-        let projection = project_behavior_readiness(
+        let projection = project_node_readiness(
             None,
-            "did:test:agent",
+            "did:test:node",
             configured,
             Some("default"),
             observed_at(),
         );
         assert_eq!(
             projection.unknown_reason,
-            Some(BehaviorReadinessUnknownReason::ReadinessMalformed)
+            Some(AgentReadinessUnknownReason::ReadinessMalformed)
         );
         assert_eq!(
-            projection.behaviors.keys().cloned().collect::<Vec<_>>(),
+            projection.agents.keys().cloned().collect::<Vec<_>>(),
             vec!["a".to_string(), "b".to_string(), "default".to_string()]
         );
     }
 }
 
 #[test]
-fn behavior_unavailable_rejections_are_exactly_routing_messages() {
-    use BehaviorReadinessUnavailableReason as Reason;
+fn agent_unavailable_rejections_are_exactly_routing_messages() {
+    use AgentReadinessUnavailableReason as Reason;
     // Exhaustive: a new reason fails to compile here until `ALL` lists it.
     let ordinal = |reason: Reason| match reason {
-        Reason::BehaviorDisabled => 0,
+        Reason::AgentDisabled => 0,
         Reason::RuntimeConfigurationInvalid => 1,
         Reason::BackendNotConfigured => 2,
         Reason::BackendDisabled => 3,
