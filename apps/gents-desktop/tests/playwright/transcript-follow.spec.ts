@@ -1,4 +1,4 @@
-import { expect, gotoHarness, test } from "./desktopTest";
+import { composer, expect, gotoHarness, sendButton, test } from "./desktopTest";
 
 /* Scrolled up, the reader's row stays where it is on screen whatever
    changes around it. */
@@ -165,4 +165,61 @@ test("only moves down the page through a whole turn", async ({ page }, testInfo)
     .map((frame, i) => Math.round(frames[i]!.top - frame.top))
     .filter((by) => by > 0);
   expect({ shrinks, stepsBack }).toEqual({ shrinks: [], stepsBack: [] });
+});
+
+/* A message the person sends is drawn once from the moment it is sent: the
+   app's own copy, then the bridge's pending turn, then the saved message.
+   The copy and the pending turn name the request by its id and are one row
+   throughout; the saved message names it by its document id, so it is a
+   row of its own, and the copy never comes back beside it. */
+test("a sent message is drawn once from send to saved", async ({ page }, testInfo) => {
+  test.skip(
+    !["webkit-desktop", "chromium-desktop"].includes(testInfo.project.name),
+    "one layout per engine",
+  );
+  await gotoHarness(page, "mobile-performance");
+  await page.locator('[data-testid="session-session-large"]').click();
+  const panel = page.getByTestId("transcript-panel");
+  await panel.getByText("stream-start").last().waitFor();
+  /* the session's last turn ends, so the composer can send */
+  await page.evaluate(() =>
+    window.__GENTS_MOBILE_PERFORMANCE__!.endReply({
+      live: "drop",
+      saved: true,
+      completed: true,
+    }),
+  );
+  await page.evaluate(() => window.__GENTS_MOBILE_PERFORMANCE__!.holdSends());
+  const sent = panel.getByText("again", { exact: true });
+  const row = () => sent.locator("xpath=ancestor::*[@data-timeline-key][1]");
+
+  await composer(page).fill("again");
+  await sendButton(page).click();
+  await expect(sent).toHaveCount(1);
+  await row().evaluate((el) => (el.dataset.probe = "sent"));
+
+  const harness = (step: string, arg?: unknown) =>
+    page.evaluate(
+      ([step, arg]) =>
+        (
+          window.__GENTS_MOBILE_PERFORMANCE__ as unknown as Record<
+            string,
+            (a?: unknown) => void
+          >
+        )[step as string]!(arg),
+      [step, arg] as const,
+    );
+  await harness("userTurn", "pending");
+  await page.waitForTimeout(300);
+  await expect(sent).toHaveCount(1);
+  await expect(row()).toHaveAttribute("data-probe", "sent");
+  for (const [step, arg] of [
+    ["userTurn", "saved"],
+    /* a later read of the session, which once brought the app's copy back */
+    ["streamUpdate"],
+  ] as [string, unknown][]) {
+    await harness(step, arg);
+    await page.waitForTimeout(300);
+    await expect(sent).toHaveCount(1);
+  }
 });

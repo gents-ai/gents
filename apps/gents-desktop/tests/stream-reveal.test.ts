@@ -12,6 +12,8 @@ import {
   initialReveal,
   noDrawKeys,
   revealedText,
+  withSentTurns,
+  type LocalTurn,
   stepReveal,
 } from "@/screens/stream-reveal";
 import {
@@ -244,44 +246,32 @@ describe("the keys replies are drawn under", () => {
     expect(drawKey(twice, message("One"))).toBe(drawKey(once, message("One")));
   });
 
-  it("draws a saved message under the key of the pending turn it replaces", () => {
+  it("draws the app's copy and the pending turn under the request they share", () => {
+    const local = pendingUserTurn({
+      itemKey: "local:r2",
+      requestId: "r2",
+      content: "again",
+    });
     const pending = pendingUserTurn({
       itemKey: "pending-r2",
       requestId: "r2",
       content: "again",
     });
-    const saved = userMessage({
-      kind: "userMessage",
-      itemKey: "u2",
-      requestId: "r2",
-      sequence: 3,
-      content: "again",
-      timestamp: null,
-    });
-    const sent = drawKeys(noDrawKeys("s"), [person, pending], undefined, "s");
-    const settled = drawKeys(sent, [person, saved], undefined, "s");
-    expect(drawKey(settled, saved)).toBe(drawKey(sent, pending));
+    const keys = noDrawKeys("s");
+    expect(drawKey(keys, local)).toBe("turn:r2");
+    expect(drawKey(keys, pending)).toBe("turn:r2");
   });
 
-  it("keeps a saved message's own key while its pending turn is still shown", () => {
-    const pending = pendingUserTurn({
-      itemKey: "pending-r2",
-      requestId: "r2",
-      content: "again",
-    });
+  it("draws a saved message under the request as the bridge names it there", () => {
     const saved = userMessage({
       kind: "userMessage",
       itemKey: "u2",
-      requestId: "r2",
+      requestId: "doc-r2",
       sequence: 3,
       content: "again",
       timestamp: null,
     });
-    const sent = drawKeys(noDrawKeys("s"), [pending], undefined, "s");
-    const both = drawKeys(sent, [pending, saved], undefined, "s");
-    const after = drawKeys(both, [saved], undefined, "s");
-    expect(drawKey(both, saved)).toBe("u2");
-    expect(drawKey(after, saved)).toBe("u2");
+    expect(drawKey(noDrawKeys("s"), saved)).toBe("turn:doc-r2");
   });
 
   it("starts again for another session", () => {
@@ -289,5 +279,45 @@ describe("the keys replies are drawn under", () => {
     const saved = drawKeys(streaming, [message("One")], "a-r1", "a");
     const other = drawKeys(saved, [message("One")], undefined, "b");
     expect(drawKey(other, message("One"))).toBe("a-r1");
+  });
+});
+
+describe("the rows drawn for sent messages", () => {
+  const local: LocalTurn = {
+    sessionId: "s",
+    requestId: "r2",
+    content: "again",
+    selectedSkillIds: [],
+    lifecycleState: "pending",
+    createdAt: null,
+  };
+  const pending = pendingUserTurn({
+    itemKey: "pending-r2",
+    requestId: "r2",
+    content: "again",
+  });
+
+  it("draws the app's own copy of a message the moment it is sent", () => {
+    const rows = withSentTurns([person], local, "s");
+    expect(rows.map((row) => row.itemKey)).toEqual(["u1", "local:r2"]);
+  });
+
+  it("puts the copy before the live reply that follows it", () => {
+    const rows = withSentTurns([person, live("On it")], local, "s");
+    expect(rows.map((row) => row.kind)).toEqual([
+      "userMessage",
+      "pendingUserTurn",
+      "liveAssistant",
+    ]);
+  });
+
+  it("shows the bridge's pending turn in place of the copy", () => {
+    expect(
+      withSentTurns([person, pending], local, "s").map((row) => row.itemKey),
+    ).toEqual(["u1", "pending-r2"]);
+  });
+
+  it("never shows one session's message in another", () => {
+    expect(withSentTurns([person], local, "other")).toEqual([person]);
   });
 });

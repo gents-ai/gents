@@ -155,8 +155,17 @@ export type MobilePerformanceHarnessController = {
   /**
    * A message the person sent, as the bridge shows it: first the pending
    * turn, then the saved message under its own key, before the live tail.
+   * The bridge names the request on the pending turn by its id, as a send
+   * returns it, and on the saved message by its document id.
    */
   userTurn(stage: "pending" | "saved"): void;
+  /**
+   * From now on a send to the large session is accepted, under the request
+   * id `userTurn` uses, but the transcript does not show it until
+   * `userTurn` does: the moment between the bridge accepting a message and
+   * its read holding it.
+   */
+  holdSends(): void;
   /** a step the reply takes, after the live tail: running, then done */
   liveTool(state: "running" | "done"): void;
 };
@@ -176,6 +185,9 @@ type DesktopUiHarness = {
   performance: MobilePerformanceHarnessController | null;
   sessionSync: SessionSyncHarnessController;
 };
+
+/* the request a held send to the large session is accepted under */
+const LARGE_SENT_REQUEST_ID = "6f1c2a7e-large-request-sent";
 
 export const MOBILE_PERFORMANCE_FIXTURE = {
   id: "mobile-interactions-v1",
@@ -210,6 +222,7 @@ export function createDesktopUiHarness(
   const scenario = normalizeScenario(options.scenario);
   const listeners = new Set<DesktopClientUpdatedHandler>();
   const sessions = new Map<string, DesktopSessionSnapshot>();
+  let sendsHeld = false;
   const sessionLineage = new Map<
     string,
     {
@@ -1217,6 +1230,14 @@ export function createDesktopUiHarness(
         throw new Error("message content is required");
       }
 
+      if (sendsHeld && request.sessionId === "session-large") {
+        return {
+          sessionId: request.sessionId,
+          requestId: LARGE_SENT_REQUEST_ID,
+          agentDid: request.agentDid,
+          behaviorId: request.behaviorId ?? null,
+        };
+      }
       if (request.sessionId && sessions.has(request.sessionId)) {
         const existing = sessions.get(request.sessionId)!;
         const nextSequence = existing.timelineItems.length + 1;
@@ -2523,7 +2544,8 @@ export function createDesktopUiHarness(
             if (!session) {
               throw new Error("mobile performance fixture lost session-large");
             }
-            const requestId = "large-request-sent";
+            const requestId = LARGE_SENT_REQUEST_ID;
+            const requestDocId = `bae-${requestId}`;
             const turn =
               stage === "pending"
                 ? {
@@ -2538,23 +2560,32 @@ export function createDesktopUiHarness(
                 : {
                     kind: "userMessage" as const,
                     itemKey: "large-user-sent",
-                    requestId,
+                    requestId: requestDocId,
                     sequence: session.timelineItems.length,
                     content: "again",
                     timestamp: STARTED_AT,
                     reconstruction: HARNESS_READY_RECONSTRUCTION,
                   };
             const without = session.timelineItems.filter(
-              (item) => !("requestId" in item) || item.requestId !== requestId,
+              (item) =>
+                !("requestId" in item) ||
+                (item.requestId !== requestId && item.requestId !== requestDocId),
             );
             const tailAt = without.findIndex((item) => item.kind === "liveAssistant");
             const timelineItems =
               tailAt < 0
                 ? [...without, turn]
                 : [...without.slice(0, tailAt), turn, ...without.slice(tailAt)];
-            sessions.set("session-large", { ...session, timelineItems });
+            sessions.set("session-large", {
+              ...session,
+              latestRequestId: requestId,
+              timelineItems,
+            });
             syncSessions();
             notify("store");
+          },
+          holdSends() {
+            sendsHeld = true;
           },
           liveTool(state) {
             const session = sessions.get("session-large");
