@@ -218,6 +218,120 @@ async fn a_document_the_new_version_drops_is_removed_and_history_is_kept() {
     assert_eq!(row["history"], json!([identity("1").digest]));
 }
 
+/// A plugin-store record is no pack install: the listings skip it, `gents
+/// pack remove` refers it to `gents plugin remove`, and the removal of its
+/// last plugin deletes it.
+#[tokio::test]
+async fn a_plugin_store_record_is_not_a_pack_install() {
+    let access = access().await;
+    let home = tempfile::tempdir().unwrap();
+    record_plugin_store_change(
+        &access,
+        OWNER,
+        home.path(),
+        "acme/demo",
+        Some(&identity("1")),
+    )
+    .await
+    .unwrap();
+    installation_doc_id(&access).await;
+    assert!(list_installed_packs(&access, OWNER)
+        .await
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        read_installed_pack(&access, OWNER, "acme/demo")
+            .await
+            .unwrap(),
+        None
+    );
+    let refused = remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)
+        .await
+        .unwrap_err();
+    assert!(
+        format!("{refused:#}").contains("gents plugin remove"),
+        "{refused:#}"
+    );
+
+    record_plugin_store_change(&access, OWNER, home.path(), "acme/demo", None)
+        .await
+        .unwrap();
+    let rows = access
+        .execute("{ PackInstallation { _docID } }")
+        .await
+        .unwrap();
+    assert_eq!(rows["data"]["PackInstallation"], json!([]));
+}
+
+/// Over a documents install of the same coordinate, a plugin-store change
+/// keeps that install's record: its identity and documents stay, so a
+/// removal still deletes by them, and an installed name joins its plugins.
+#[tokio::test]
+async fn a_plugin_store_change_keeps_a_documents_install_record() {
+    let access = access().await;
+    let home = tempfile::tempdir().unwrap();
+    install(
+        &access,
+        "1",
+        &config(&[("alpha", "Alpha")]),
+        DriftPolicy::Refuse,
+    )
+    .await
+    .unwrap();
+    let extra = InstalledPackPlugin {
+        name: "extra".into(),
+        digest: format!("sha256:{}", "a".repeat(64)),
+    };
+    let plugin_only = PackIdentity {
+        plugins: vec![extra.clone()],
+        ..identity("2")
+    };
+    record_plugin_store_change(&access, OWNER, home.path(), "acme/demo", Some(&plugin_only))
+        .await
+        .unwrap();
+    record_plugin_store_change(&access, OWNER, home.path(), "acme/demo", None)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        read_installed_pack(&access, OWNER, "acme/demo")
+            .await
+            .unwrap(),
+        Some(InstalledPack {
+            coordinate: "acme/demo".into(),
+            version: "1".into(),
+            digest: identity("1").digest,
+        })
+    );
+    let removed = remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)
+        .await
+        .unwrap();
+    assert_eq!(removed.documents.removed, vec!["Tools/alpha"]);
+    assert_eq!(
+        removed.documents.plugins,
+        vec![identity("1").plugins[0].clone(), extra]
+    );
+}
+
+/// A pack whose configuration is only its principal records no documents,
+/// yet is a pack install: listed, removable, and kept by plugin-store
+/// changes, unlike a plugin-store record.
+#[tokio::test]
+async fn a_documentless_pack_install_is_not_a_plugin_store_record() {
+    let access = access().await;
+    let home = tempfile::tempdir().unwrap();
+    install(&access, "1", &config(&[]), DriftPolicy::Refuse)
+        .await
+        .unwrap();
+    record_plugin_store_change(&access, OWNER, home.path(), "acme/demo", None)
+        .await
+        .unwrap();
+    assert_eq!(list_installed_packs(&access, OWNER).await.unwrap().len(), 1);
+    remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)
+        .await
+        .unwrap();
+}
+
 async fn installation_doc_id(access: &ConfigAccess) -> String {
     access
         .execute("{ PackInstallation { _docID } }")

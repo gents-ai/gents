@@ -157,7 +157,8 @@ impl crate::agent::reconcile::SlotFailurePolicy for StartupSlotFailurePolicy {
             error = %error,
             "behavior demoted: its completion client failed to build repeatedly; \
              the process will report Ready without it. Fix the behavior/backend \
-             config — a config change re-admits it with a fresh budget."
+             config, or install a plugin it names that is missing — the runtime \
+             re-admits it on its next reconcile with a fresh budget."
         );
         Ok(true)
     }
@@ -1281,10 +1282,14 @@ async fn validate_startup_snapshot(
 async fn resolve_tool_surfaces(
     node: &defra_node::EmbeddedNode,
     behaviors: &[Arc<crate::config::ResolvedBehavior>],
+    plugins: &crate::plugin::executor::PluginExecutor,
 ) -> Result<HashMap<String, Arc<ToolSurface>>> {
     let mut tool_surfaces = HashMap::with_capacity(behaviors.len());
     for behavior in behaviors {
-        let tool_surface = behavior.tools.resolve(node, behavior.agent_did()).await?;
+        let tool_surface = behavior
+            .tools
+            .resolve(node, behavior.agent_did(), plugins)
+            .await?;
         tool_surfaces.insert(behavior.behavior_id.clone(), Arc::new(tool_surface));
     }
     Ok(tool_surfaces)
@@ -1297,7 +1302,8 @@ async fn resolve_startup_snapshot(agent: &Gents) -> Result<ResolvedRuntimeSnapsh
         }
         None => {
             let tool_surfaces =
-                resolve_tool_surfaces(agent.node.as_ref(), &agent.behaviors).await?;
+                resolve_tool_surfaces(agent.node.as_ref(), &agent.behaviors, agent.plugins())
+                    .await?;
             let backend_admission_configs =
                 resolve_backend_admission_configs(agent.node.as_ref(), &agent.behaviors).await?;
             Ok(ResolvedRuntimeSnapshot::from_parts_with_admission_configs(

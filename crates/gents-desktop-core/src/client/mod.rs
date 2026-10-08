@@ -32,11 +32,12 @@ pub use principal_identity::PrincipalIdentity;
 pub use query::{
     fetch_doc_patch, load_agent_scoped_snapshot, load_request_prompt_ownership,
     load_request_prompt_ownership_on, load_session_context_store, load_session_context_store_on,
-    load_session_diagnostics_store, load_session_tip_store, load_session_tip_store_on,
-    load_session_transcript_page, load_session_transcript_page_on,
-    session_transcript_requester_scope, session_unreadable_reason, CanonicalTranscriptDependencies,
-    RequestPromptFact, RequestPromptOwnership, SessionTranscriptQueryPage,
-    DEFAULT_SESSION_TRANSCRIPT_PAGE_SIZE, MAX_SESSION_TRANSCRIPT_PAGE_SIZE,
+    load_session_diagnostics_store, load_session_live_store, load_session_live_store_on,
+    load_session_tip_store, load_session_tip_store_on, load_session_transcript_page,
+    load_session_transcript_page_on, session_transcript_requester_scope, session_unreadable_reason,
+    CanonicalTranscriptDependencies, RequestPromptFact, RequestPromptOwnership,
+    SessionTranscriptQueryPage, DEFAULT_SESSION_TRANSCRIPT_PAGE_SIZE,
+    MAX_SESSION_TRANSCRIPT_PAGE_SIZE,
 };
 pub use schema::subscribed_collection_names;
 pub use store::{ClientStore, ClientStoreRows, TaskRecentRuns, TranscriptView};

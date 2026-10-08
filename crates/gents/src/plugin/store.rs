@@ -283,13 +283,22 @@ pub fn release_unreferenced_bytes(home: &Path, digests: &BTreeSet<String>) -> Re
 /// this module's own doc for why that is deliberate, not a leak.
 pub fn write_record(home: &Path, record: &InstalledPlugin) -> Result<()> {
     let path = record_path(home, &record.namespace, &record.name)?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("creating {}", parent.display()))?;
-    }
+    let parent = path
+        .parent()
+        .context("installed-plugin record has no parent")?;
+    std::fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
     let bytes =
         serde_json::to_vec_pretty(record).context("encoding the installed-plugin record")?;
-    std::fs::write(&path, bytes).with_context(|| format!("writing {}", path.display()))?;
+    // Readers take no lock and writers may run concurrently: each write
+    // stages its own temporary file and renames it into place, so a reader
+    // only ever observes a complete record.
+    let mut staged = tempfile::NamedTempFile::new_in(parent)
+        .with_context(|| format!("staging a plugin record in {}", parent.display()))?;
+    std::io::Write::write_all(&mut staged, &bytes).context("writing the staged record")?;
+    staged
+        .persist(&path)
+        .map_err(|error| error.error)
+        .with_context(|| format!("writing {}", path.display()))?;
     Ok(())
 }
 

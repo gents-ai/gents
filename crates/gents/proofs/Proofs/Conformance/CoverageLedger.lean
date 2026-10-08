@@ -1053,6 +1053,11 @@ def caseCoverage : List CoverageEntry :=
       "gents_desktop_bridge::snapshot::tests::session_timeline::session_snapshot_consumes_generated_live_overlay_cases")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
+      "client_live_delta_cases"
+      "ClientLiveDeltaCases"
+      "gents_desktop_bridge::snapshot::session::live_delta::tests::generated_live_cursor_contract")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
       "request_lifecycle_operator_ui_cases"
       "RequestLifecycleOperatorUiCases"
       "gents_desktop_bridge::snapshot::tests::session_state::session_snapshot_binds_request_lifecycle_operator_ui_cases")

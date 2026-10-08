@@ -1,7 +1,6 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeMap;
 
 use anyhow::Result;
-use gents::parse_template_for_validation;
 
 use crate::config_writes::ConfigAccess;
 
@@ -9,8 +8,12 @@ use super::super::DesiredStateManifest;
 
 /// Validate live state that cannot be checked from the manifest alone.
 ///
-/// Apply validates trigger filter syntax and top-level `doc.*` template fields.
-/// Resolving fields below the top level remains outside this contract.
+/// Apply validates trigger filter syntax and `doc.*` template fields; the
+/// template rule itself is the publication owner's
+/// (`gents::config_client::validate_event_trigger_document_fields`), called
+/// here against the same introspected schema, so a configuration refused
+/// here is one the publication owner refuses too. Resolving fields below the
+/// top level remains outside this contract.
 pub(crate) async fn validate_manifest_against_live(
     manifest: &DesiredStateManifest,
     access: &ConfigAccess,
@@ -60,7 +63,7 @@ pub(crate) async fn validate_manifest_against_live(
             }
         }
 
-        let mut doc_paths = Vec::new();
+        let mut joined = Vec::new();
         for trigger in &manifest.triggers {
             if trigger.agent_did != source.agent_did
                 || !matches!(&trigger.source,
@@ -74,13 +77,7 @@ pub(crate) async fn validate_manifest_against_live(
             }) else {
                 continue;
             };
-            if let Ok(refs) = parse_template_for_validation(&task.prompt_template) {
-                doc_paths.extend(
-                    refs.into_iter()
-                        .filter(|reference| reference.root() == Some("doc"))
-                        .map(|reference| reference.path),
-                );
-            }
+            joined.push((trigger, task));
         }
         let expected_count_field = source
             .group
@@ -92,11 +89,22 @@ pub(crate) async fn validate_manifest_against_live(
                 }
                 gents::document_config::EventGroupCount::Fixed(_) => None,
             });
-        if doc_paths.is_empty()
-            && source.correlation_field.is_none()
-            && expected_count_field.is_none()
-        {
-            continue;
+        if source.correlation_field.is_none() && expected_count_field.is_none() {
+            let mut walks_templates = false;
+            for (trigger, task) in &joined {
+                match gents::config_client::event_trigger_document_field_names(trigger, task) {
+                    Ok(names) if !names.is_empty() => walks_templates = true,
+                    // A template that does not parse is refused by the same
+                    // static owner apply runs; reporting it here keeps the
+                    // pre-flight's refusal independent of whether an
+                    // unrelated correlation or count field forced a probe.
+                    Err(error) => errors.push(format!("{error:#}")),
+                    Ok(_) => {}
+                }
+            }
+            if !walks_templates {
+                continue;
+            }
         }
 
         let introspect = match gents::defra_query::introspection_query(source_collection) {
@@ -126,26 +134,17 @@ pub(crate) async fn validate_manifest_against_live(
             ));
             continue;
         };
-        let declared: HashMap<&str, &gents::defra_query::SchemaField> = schema
+        let declared: BTreeMap<String, gents::defra_query::SchemaField> = schema
             .fields
-            .iter()
-            .map(|field| (field.name.as_str(), field))
+            .into_iter()
+            .map(|field| (field.name.clone(), field))
             .collect();
-        let mut reported: BTreeSet<String> = BTreeSet::new();
-        for path in &doc_paths {
-            let Some(first) = path.get(1).map(String::as_str) else {
-                continue;
-            };
-            if declared.contains_key(first) {
-                continue;
+        for (trigger, task) in joined {
+            if let Err(error) = gents::config_client::validate_event_trigger_document_fields(
+                trigger, task, source, &declared,
+            ) {
+                errors.push(format!("{error:#}"));
             }
-            if !reported.insert(first.to_string()) {
-                continue;
-            }
-            errors.push(format!(
-                "event source {} template references doc.{} but {} has no such field",
-                source_id, first, source_collection
-            ));
         }
     }
 
@@ -167,6 +166,9 @@ mod tests {
     const PROBE_SDL: &str = r#"
         type LiveProbe {
             batch: String
+        }
+        type WorkspaceReceipt {
+            workspace_id: String
         }
     "#;
 
@@ -208,6 +210,37 @@ mod tests {
         source
     }
 
+    fn receipt_source(id: &str, extra: serde_json::Value) -> serde_json::Value {
+        let mut source = source(id, extra);
+        source["source_collection"] = json!("WorkspaceReceipt");
+        source
+    }
+
+    /// The issue's shape: a per-document `emit_outcome` delivery of
+    /// WorkspaceReceipt whose prompt reads the native-route provenance fields
+    /// no schema declares, because the runtime injects them into every fire.
+    fn receipt_manifest(
+        source_extra: serde_json::Value,
+        emit_outcome: bool,
+    ) -> Result<DesiredStateManifest> {
+        manifest(
+            json!([receipt_source("reviewed", source_extra)]),
+            json!([{
+                "agent_did": OWNER,
+                "task_id": "review",
+                "behavior_id": "beh",
+                "prompt_template": "Review attempt {{ doc.attempt }} for {{ doc.workspace_id }}",
+                "emit_outcome": emit_outcome,
+            }]),
+            json!([{
+                "agent_did": OWNER,
+                "trigger_id": "on-review",
+                "task_id": "review",
+                "source": {"kind": "event", "event_source_id": "reviewed"},
+            }]),
+        )
+    }
+
     #[tokio::test]
     async fn refuses_a_filter_the_probe_query_cannot_execute() -> Result<()> {
         let tempdir = tempfile::tempdir()?;
@@ -225,6 +258,44 @@ mod tests {
         assert!(
             errors[0].contains("filter syntax error"),
             "a filter that names no declared field must fail the probe: {errors:?}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn accepts_native_route_template_fields_the_schema_does_not_declare() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let access = probe_access(&tempdir).await?;
+        let manifest = receipt_manifest(json!({"event_kind": "created"}), true)?;
+        let errors = validate_manifest_against_live(&manifest, &access).await?;
+        assert_eq!(errors, Vec::<String>::new(), "{errors:?}");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn refuses_a_template_that_does_not_parse_without_a_correlation_or_count() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let access = probe_access(&tempdir).await?;
+        let manifest = manifest(
+            json!([source("broken", json!({"correlation_field": "batch"}),)]),
+            json!([{
+                "agent_did": OWNER,
+                "task_id": "summarize",
+                "behavior_id": "beh",
+                "prompt_template": "Summarize {{ doc.x",
+            }]),
+            json!([{
+                "agent_did": OWNER,
+                "trigger_id": "on-broken",
+                "task_id": "summarize",
+                "source": {"kind": "event", "event_source_id": "broken"},
+            }]),
+        )?;
+
+        let errors = validate_manifest_against_live(&manifest, &access).await?;
+        assert!(
+            errors.iter().any(|error| error.contains("template parse error")),
+            "an unparsable template must fail the pre-flight without a correlation or count probe: {errors:?}"
         );
         Ok(())
     }
@@ -251,7 +322,66 @@ mod tests {
         let errors = validate_manifest_against_live(&manifest, &access).await?;
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(
-            errors[0].contains("template references doc.nope but LiveProbe has no such field"),
+            errors[0].contains("references doc.nope")
+                && errors[0].contains("LiveProbe has no field \"nope\""),
+            "{errors:?}"
+        );
+        Ok(())
+    }
+
+    /// The pre-flight answers the publication owner, so removing any injection
+    /// precondition returns the owner's refusal, not a CLI-local verdict.
+    #[tokio::test]
+    async fn refuses_native_route_fields_without_the_runtime_preconditions() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let access = probe_access(&tempdir).await?;
+        let grouped = receipt_manifest(
+            json!({"correlation_field": "workspace_id", "group": {"expected_count": 2}}),
+            true,
+        )?;
+        let errors = validate_manifest_against_live(&grouped, &access).await?;
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(
+            errors[0].contains("trigger on-review prompt_template references doc.attempt")
+                && errors[0].contains("WorkspaceReceipt has no field \"attempt\""),
+            "{errors:?}"
+        );
+        let outcome_less = receipt_manifest(json!({"event_kind": "created"}), false)?;
+        let errors = validate_manifest_against_live(&outcome_less, &access).await?;
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(
+            errors[0].contains("trigger on-review prompt_template references doc.attempt")
+                && errors[0].contains("WorkspaceReceipt has no field \"attempt\""),
+            "{errors:?}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn refuses_an_undeclared_session_id_template_field() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let access = probe_access(&tempdir).await?;
+        let manifest = manifest(
+            json!([source("templated", json!({}))]),
+            json!([{
+                "agent_did": OWNER,
+                "task_id": "summarize",
+                "behavior_id": "beh",
+                "prompt_template": "Summarize"
+            }]),
+            json!([{
+                "agent_did": OWNER,
+                "trigger_id": "on-templated",
+                "task_id": "summarize",
+                "session_id_template": "{{ doc.session }}",
+                "source": {"kind": "event", "event_source_id": "templated"}
+            }]),
+        )?;
+        let errors = validate_manifest_against_live(&manifest, &access).await?;
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(
+            errors[0].contains("session_id_template references doc.session")
+                && errors[0].contains("LiveProbe has no field \"session\""),
             "{errors:?}"
         );
         Ok(())

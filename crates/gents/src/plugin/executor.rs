@@ -283,6 +283,11 @@ impl PluginExecutor {
             .and_then(|context| context.workspace_cwd.clone())
             .or_else(|| tool_root.map(Path::to_path_buf));
         let session_id = session.and_then(|context| context.session_id);
+        // Bind against the record the call will run (see `run`).
+        let record = &self.resolve(
+            &format!("{}/{}", record.namespace, record.name),
+            Some(&record.digest),
+        )?;
         let context = BindContext {
             workdir: workdir.as_deref(),
             session_id: session_id.as_deref(),
@@ -347,8 +352,20 @@ impl PluginExecutor {
         input: serde_json::Value,
         bound: Option<BoundDir>,
     ) -> Result<PluginCall> {
-        let admitted = self.admit(record)?;
         let coordinate = format!("{}/{}", record.namespace, record.name);
+        // Callers may hold a record resolved long ago and `admit` serves its
+        // digest from memory, so the call runs the store's current record: a
+        // plugin removed or replaced since fails closed here, and a changed
+        // grant or declaration is admitted again.
+        let current = self.resolve(&coordinate, Some(&record.digest))?;
+        // `bound` was authorized under the caller's record, possibly after an
+        // approval wait; a reinstall since may declare a different binding.
+        anyhow::ensure!(
+            bound.is_none() || current == *record,
+            "plugin {coordinate} was reinstalled while this call was being authorized; call again"
+        );
+        let record = &current;
+        let admitted = self.admit(record)?;
         let (model, binding_note) = self.model_session(record).await?;
         let outcome = drive(
             &coordinate,

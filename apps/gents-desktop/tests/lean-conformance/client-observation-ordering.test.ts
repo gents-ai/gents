@@ -4,7 +4,10 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 
-import { acceptsAsyncResult } from "../../src/hooks/desktopShellRuntime";
+import {
+  acceptsAsyncResult,
+  acceptsLiveCursor,
+} from "../../src/hooks/desktopShellRuntime";
 import {
   projectStartupPhaseAfterSnapshot,
   type DesktopStartupPhase,
@@ -31,7 +34,17 @@ describe("generated client observation ordering", () => {
       ["env", "lean", "--run", "Proofs/Conformance/ClientObservationOrdering.lean"],
       { cwd: proofsDir, encoding: "utf8", timeout: 240_000 },
     );
-    const { fences: cases, startup } = JSON.parse(stdout.trim()) as {
+    const {
+      fences: cases,
+      startup,
+      liveDeltas,
+    } = JSON.parse(stdout.trim()) as {
+      liveDeltas: {
+        base: number | null;
+        current: number | null;
+        terminal: boolean;
+        accepted: boolean;
+      }[];
       fences: ObservationFenceCase[];
       startup: {
         phase: DesktopStartupPhase;
@@ -42,6 +55,12 @@ describe("generated client observation ordering", () => {
     };
 
     expect(cases).toHaveLength(25);
+    expect(liveDeltas).toHaveLength(18);
+    for (const row of liveDeltas) {
+      expect(
+        acceptsLiveCursor(row.base?.toString(), row.current?.toString(), row.terminal),
+      ).toBe(row.accepted);
+    }
     for (const row of cases) {
       expect(acceptsAsyncResult(row.current, row.captured)).toBe(row.accepted);
     }

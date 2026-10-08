@@ -238,6 +238,7 @@ export function SessionScreen() {
      the bottom; a reader who has scrolled up is left where they are */
   const column = useRef<HTMLDivElement | null>(null);
   const [scroller, ownScroller] = useScroller();
+  const [content, setContent] = useState<HTMLDivElement | null>(null);
   const columnRef = useCallback(
     (element: HTMLDivElement | null) => {
       column.current = element;
@@ -465,6 +466,7 @@ export function SessionScreen() {
                   screen wide enough to give the width away. Elsewhere the
                   column keeps its even padding. */}
             <div
+              ref={setContent}
               className={cn(
                 "mx-auto flex min-h-full w-full max-w-page flex-col px-6 pt-4",
                 parentWork.hasSenders && "sm:pr-14",
@@ -588,6 +590,7 @@ export function SessionScreen() {
                 inFlight={inFlight}
                 stopping={stopping}
                 scroller={scroller}
+                content={content}
                 workers={workers}
                 parentWork={parentWork}
                 workerActions={workerActions}

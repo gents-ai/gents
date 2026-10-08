@@ -7,7 +7,9 @@ import type {
 } from "@source-inc/gents-desktop-client";
 
 import { useDesktopRuntime } from "../src/hooks/useDesktopRuntime";
+import { startClientObservation } from "../src/hooks/clientObservation";
 import { node, testApp } from "./app-fixture";
+import { liveAssistant, sessionSnapshot } from "./timeline-fixture";
 
 const AGENT = "did:key:here";
 const running = {
@@ -38,6 +40,61 @@ function bridgeApi(): Record<string, ReturnType<typeof vi.fn>> {
 }
 
 describe("following the client while it runs", () => {
+  it.each([false, true])(
+    "paces polling by live-source availability (%s)",
+    async (hasLive) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+      let stop: (() => void) | undefined;
+      try {
+        const api = bridgeApi();
+        const session = sessionSnapshot({
+          sessionId: "s-1",
+          agentDid: AGENT,
+          turnState: "running",
+          latestRequestId: "r-1",
+          liveCursor: hasLive ? "source" : null,
+          projectionRevision: { storeVersion: 1 },
+          timelineItems: hasLive
+            ? [liveAssistant({ itemKey: "live", content: "hello" })]
+            : [],
+        });
+        api.fetchSessionSnapshot.mockResolvedValue(session);
+        api.fetchSessionLiveDelta.mockResolvedValue({
+          outcome: "unchanged",
+          liveCursor: "source",
+          requestId: "r-1",
+          revision: { storeVersion: 1 },
+          turnState: "running",
+          status: null,
+          content: { mode: "unchanged", value: "", byteLen: 5, hash: "4f9f2cab" },
+          reasoning: { mode: "unchanged", value: "", byteLen: 0, hash: "811c9dc5" },
+        });
+        const app = testApp({ api, snapshot: running, session });
+        expect(app.trackedRequestId()).toBe("r-1");
+        stop = startClientObservation(
+          app,
+          vi.fn(async () => () => {}),
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(1);
+        const interval = hasLive ? 250 : 1_500;
+        await vi.advanceTimersByTimeAsync(interval - 1);
+        expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(1);
+        expect(api.fetchSessionLiveDelta).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(api.fetchSessionLiveDelta).toHaveBeenCalledTimes(hasLive ? 1 : 0);
+        expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(hasLive ? 1 : 2);
+        stop();
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(hasLive ? 1 : 2);
+        expect(api.fetchSessionLiveDelta).toHaveBeenCalledTimes(hasLive ? 1 : 0);
+      } finally {
+        stop?.();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("keeps one bridge listener while the person moves between sessions", async () => {
     const listen = vi.fn<DesktopClientUpdatedListenerFactory>(async () => () => {});
     const app = testApp({

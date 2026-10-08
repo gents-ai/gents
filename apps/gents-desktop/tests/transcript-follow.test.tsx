@@ -1,8 +1,8 @@
-import { act, fireEvent, renderHook } from "@testing-library/react";
+import { act, fireEvent, renderHook, waitFor } from "@testing-library/react";
 import { useState } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { useFollowTail, useOlderPages } from "../src/ui/lib/scroll";
+import { holdRow, useFollowTail, useOlderPages } from "../src/ui/lib/scroll";
 
 /* jsdom has no ResizeObserver: these stand in for the content box growing */
 const observers = new Set<() => void>();
@@ -30,6 +30,7 @@ function transcriptFixture() {
 
   return {
     viewport,
+    content: viewport.firstElementChild as HTMLElement,
     /* the content box grows, by a new row or by text revealed in place */
     growTo(height: number) {
       scrollHeight = height;
@@ -77,6 +78,23 @@ describe("transcript streaming follow", () => {
 
     fixture.growTo(1_500);
     expect(fixture.viewport.scrollTop).toBe(foot(1_500));
+  });
+
+  /* WebKit eases a held arrow key in a few pixels at a time, so its first
+     frames are still within reach of the foot */
+  it("leaves a reader moving up near the foot where they are when the content changes", () => {
+    const fixture = transcriptFixture();
+    renderHook(() => useFollowTail(fixture.viewport, "session-1"));
+    fixture.growTo(600);
+    expect(fixture.viewport.scrollTop).toBe(foot(600));
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp" }));
+      fixture.viewport.scrollTop = foot(600) - 3;
+      fixture.viewport.dispatchEvent(new Event("scroll"));
+    });
+    fixture.growTo(700);
+    expect(fixture.viewport.dataset.following).toBe("false");
+    expect(fixture.viewport.scrollTop).toBe(foot(600) - 3);
   });
 
   it("is not moved off the foot by a scroll the reader did not make", () => {
@@ -137,6 +155,27 @@ describe("transcript streaming follow", () => {
     act(() => result.current.toBottom());
     expect(result.current.atBottom).toBe(true);
     expect(fixture.viewport.scrollTop).toBe(foot(500));
+
+    fixture.growTo(700);
+    expect(fixture.viewport.scrollTop).toBe(foot(700));
+  });
+
+  it("follows from the way back taken just after scrolling up", () => {
+    const fixture = transcriptFixture();
+    const { result } = renderHook(() => useFollowTail(fixture.viewport, "session-1"));
+    act(() => {
+      fixture.viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -40 }));
+      fixture.viewport.scrollTop = 0;
+      fixture.viewport.dispatchEvent(new Event("scroll"));
+    });
+    expect(result.current.atBottom).toBe(false);
+
+    /* the jump's own scroll event lands inside the wheel's intent window */
+    act(() => {
+      result.current.toBottom();
+      fixture.viewport.dispatchEvent(new Event("scroll"));
+    });
+    expect(result.current.atBottom).toBe(true);
 
     fixture.growTo(700);
     expect(fixture.viewport.scrollTop).toBe(foot(700));
@@ -207,11 +246,209 @@ describe("transcript streaming follow", () => {
   });
 });
 
+/* Rows laid out top to bottom in a 200px view; content above the reader
+   grows by a known height. jsdom has no layout, so each row reports its own
+   place against the view. */
+function readingFixture() {
+  const fixture = transcriptFixture();
+  const area = document.createElement("div");
+  const scrollbar = document.createElement("div");
+  scrollbar.dataset.slot = "scroll-area-scrollbar";
+  area.append(fixture.viewport, scrollbar);
+  document.body.append(area);
+  fixture.viewport.getBoundingClientRect = () =>
+    ({ top: 0, bottom: 200, left: 0, width: 300, height: 200 }) as DOMRect;
+  let above = 300;
+  const rows = [
+    ["above", () => 0, () => above],
+    ["middle", () => above, () => above + 520],
+    ["last", () => above + 520, () => above + 700],
+  ] as const;
+  const content = fixture.viewport.firstElementChild as HTMLElement;
+  const els = rows.map(([key, top, bottom]) => {
+    const row = document.createElement("div");
+    row.dataset.timelineKey = key;
+    row.getBoundingClientRect = () =>
+      ({
+        top: top() - fixture.viewport.scrollTop,
+        bottom: bottom() - fixture.viewport.scrollTop,
+      }) as DOMRect;
+    content.append(row);
+    return row;
+  });
+  fixture.setHeight(1_000);
+  return {
+    ...fixture,
+    area,
+    scrollbar,
+    last: els[2],
+    growAbove(by: number) {
+      above += by;
+      fixture.growTo(1_000 + (above - 300));
+    },
+    /* an animated scroll: one event per frame of its flight */
+    async animate(from: number, to: number, ms: number) {
+      for (let t = 0; t <= ms; t += 50) {
+        act(() => {
+          fixture.viewport.scrollTop = Math.round(from + ((to - from) * t) / ms);
+          fixture.viewport.dispatchEvent(new Event("scroll"));
+        });
+        await act(async () => vi.advanceTimersByTimeAsync(50));
+      }
+    },
+  };
+}
+
+describe("a reader's place through their own scroll", () => {
+  beforeEach(() =>
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] }),
+  );
+  afterEach(() => {
+    vi.useRealTimers();
+    document.body.replaceChildren();
+  });
+
+  /* an input that scrolls nothing in the transcript: at its foot, a key on
+     another control, a wheel a nested box takes */
+  it.each([
+    [
+      "a wheel at the foot",
+      (el: HTMLElement) => el.dispatchEvent(new WheelEvent("wheel", { deltaY: 40 })),
+    ],
+    [
+      "a key elsewhere",
+      () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown" })),
+    ],
+    [
+      "a wheel in a nested box",
+      (el: HTMLElement) => {
+        const box = document.createElement("div");
+        el.firstElementChild!.append(box);
+        box.dispatchEvent(new WheelEvent("wheel", { deltaY: -40, bubbles: true }));
+      },
+    ],
+  ] as const)("still holds a row opened after %s", async (_, input) => {
+    const fixture = readingFixture();
+    renderHook(() => useFollowTail(fixture.viewport, "session-1"));
+    expect(fixture.viewport.scrollTop).toBe(800);
+    act(() => input(fixture.viewport));
+    await act(async () => vi.advanceTimersByTimeAsync(200));
+    act(() => holdRow(fixture.last));
+    fixture.growAbove(100);
+    expect(fixture.viewport.scrollTop).toBe(900);
+  });
+
+  it("holds where an animated scroll that outlasts its input window rests", async () => {
+    const fixture = readingFixture();
+    renderHook(() => useFollowTail(fixture.viewport, "session-1"));
+    act(() => {
+      fixture.viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -400 }));
+    });
+    /* WebKitGTK animates one wheel for 400-600ms */
+    await fixture.animate(800, 450, 600);
+    await act(async () => vi.advanceTimersByTimeAsync(200));
+    expect(fixture.viewport.scrollTop).toBe(450);
+    fixture.growAbove(100);
+    expect(fixture.viewport.scrollTop).toBe(550);
+  });
+
+  /* WebKitGTK under load stalls an animation between frames, past the
+     input's window */
+  it("holds where an animated scroll that stalls past its input window rests", async () => {
+    const fixture = readingFixture();
+    renderHook(() => useFollowTail(fixture.viewport, "session-1"));
+    act(() => {
+      fixture.viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -400 }));
+    });
+    await fixture.animate(800, 600, 200);
+    await act(async () => vi.advanceTimersByTimeAsync(500));
+    act(() => {
+      fixture.viewport.scrollTop = 450;
+      fixture.viewport.dispatchEvent(new Event("scroll"));
+    });
+    fixture.growAbove(100);
+    expect(fixture.viewport.scrollTop).toBe(550);
+  });
+
+  /* the stalled animation's next frame moves the view, and the reply
+     changes before that frame's scroll event */
+  it("leaves a stalled animation's resumed move to the reader when the content changes first", async () => {
+    const fixture = readingFixture();
+    renderHook(() => useFollowTail(fixture.viewport, "session-1"));
+    act(() => {
+      fixture.viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -400 }));
+    });
+    await fixture.animate(800, 600, 200);
+    await act(async () => vi.advanceTimersByTimeAsync(500));
+    fixture.viewport.scrollTop = 450;
+    await act(async () => {
+      fixture.last.append(document.createElement("span"));
+    });
+    expect(fixture.viewport.scrollTop).toBe(450);
+  });
+
+  /* content shrinking below clamps the view up onto the foot */
+  it("puts back a clamp onto the foot just after the reader's upward scroll", async () => {
+    const fixture = readingFixture();
+    renderHook(() => useFollowTail(fixture.viewport, "session-1"));
+    act(() => {
+      fixture.viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -400 }));
+    });
+    await fixture.animate(800, 500, 200);
+    await act(async () => vi.advanceTimersByTimeAsync(400));
+    /* the change that shrank the content is seen before the clamp's scroll event */
+    fixture.setHeight(600);
+    fixture.viewport.scrollTop = 400;
+    await act(async () => {
+      fixture.last.append(document.createElement("span"));
+    });
+    expect(fixture.viewport.scrollTop).toBe(500);
+  });
+
+  /* the reply below streams between the animation's last frames */
+  it("leaves the tail of an animated scroll to the reader when the reply below grows", async () => {
+    const fixture = readingFixture();
+    renderHook(() => useFollowTail(fixture.viewport, "session-1"));
+    act(() => {
+      fixture.viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -400 }));
+    });
+    await fixture.animate(800, 500, 400);
+    /* the view moves on before its scroll event comes */
+    fixture.viewport.scrollTop = 450;
+    await act(async () => {
+      fixture.last.append(document.createElement("span"));
+    });
+    expect(fixture.viewport.scrollTop).toBe(450);
+  });
+
+  it("holds where a scrollbar drag let go after a pause in it", async () => {
+    const fixture = readingFixture();
+    renderHook(() => useFollowTail(fixture.viewport, "session-1"));
+    act(() => {
+      fixture.viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -300 }));
+      fixture.viewport.scrollTop = 500;
+      fixture.viewport.dispatchEvent(new Event("scroll"));
+    });
+    await act(async () => vi.advanceTimersByTimeAsync(200));
+    fireEvent.pointerDown(fixture.scrollbar);
+    act(() => {
+      fixture.viewport.scrollTop = 450;
+      fixture.viewport.dispatchEvent(new Event("scroll"));
+    });
+    /* the reader holds the thumb still before letting go */
+    await act(async () => vi.advanceTimersByTimeAsync(200));
+    fireEvent.pointerUp(window);
+    fixture.growAbove(100);
+    expect(fixture.viewport.scrollTop).toBe(550);
+  });
+});
+
 describe("older transcript pages", () => {
   /* the load queues the older rows as React state; they reach the screen in
      a commit before the load resolves (a store's synchronous update) or with
      the commit that ends loading (a batched one). The row is put back in that
-     commit either way. */
+     commit either way: the reader moved just now, so by pulling the content
+     up over the new rows, and once the view is still, by the position. */
   it.each(["before", "with"])(
     "loads on upward navigation only, deduplicates requests and keeps the reader's place when rows land %s the load's end",
     async (order) => {
@@ -233,7 +470,14 @@ describe("older transcript pages", () => {
           fixture.setHeight(900);
           setOldest("row-0");
         };
-        return useOlderPages(fixture.viewport, "session-1", true, load, oldest);
+        return useOlderPages(
+          fixture.viewport,
+          fixture.content,
+          "session-1",
+          true,
+          load,
+          oldest,
+        );
       });
       expect(load).not.toHaveBeenCalled();
       act(() => {
@@ -247,13 +491,14 @@ describe("older transcript pages", () => {
         finish();
         await Promise.resolve();
       });
-      expect(fixture.viewport.scrollTop).toBe(500);
+      const content = fixture.viewport.firstElementChild as HTMLElement;
+      expect(fixture.viewport.scrollTop).toBe(100);
+      expect(content.style.marginTop).toBe("-400px");
+      await waitFor(() => expect(fixture.viewport.scrollTop).toBe(500));
+      expect(content.style.marginTop).toBe("");
       /* still within three views of the top and moving up: the next page
          follows without another scroll */
-      await act(async () => {
-        await Promise.resolve();
-      });
-      expect(load).toHaveBeenCalledTimes(2);
+      await waitFor(() => expect(load).toHaveBeenCalledTimes(2));
       expect(result.current).toBe(true);
       unmount();
     },
@@ -273,19 +518,185 @@ describe("older transcript pages", () => {
         fixture.setHeight(1300);
         setOldest("row-0");
       };
-      return useOlderPages(fixture.viewport, "session-1", true, load, oldest);
+      return useOlderPages(
+        fixture.viewport,
+        fixture.content,
+        "session-1",
+        true,
+        load,
+        oldest,
+      );
     });
     await act(async () => {
       fixture.viewport.scrollTop = 100;
       fixture.viewport.dispatchEvent(new Event("scroll"));
       fixture.viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -20 }));
     });
-    await act(async () => {
-      await Promise.resolve();
-    });
-    expect(fixture.viewport.scrollTop).toBe(900);
+    await waitFor(() => expect(fixture.viewport.scrollTop).toBe(900));
     expect(load).toHaveBeenCalledTimes(1);
     expect(result.current).toBe(false);
+    unmount();
+  });
+
+  /* a trackpad's momentum goes on sending wheel events after it is too slow
+     to move the view; the rows stay hidden until those stop too */
+  it("keeps rows hidden while wheel events still arrive without moving the view", async () => {
+    const fixture = transcriptFixture();
+    fixture.viewport.scrollTop = 300;
+    let landRows!: () => void;
+    const load = vi.fn(async () => {
+      landRows();
+      return true;
+    });
+    const { unmount } = renderHook(() => {
+      const [oldest, setOldest] = useState("row-10");
+      landRows = () => {
+        fixture.setHeight(900);
+        setOldest("row-0");
+      };
+      return useOlderPages(
+        fixture.viewport,
+        fixture.content,
+        "session-1",
+        true,
+        load,
+        oldest,
+      );
+    });
+    await act(async () => {
+      fixture.viewport.scrollTop = 100;
+      fixture.viewport.dispatchEvent(new Event("scroll"));
+    });
+    expect(fixture.content.style.marginTop).toBe("-400px");
+    for (let i = 0; i < 6; i += 1) {
+      await act(async () => {
+        fixture.viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -0.4 }));
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+    }
+    expect(fixture.content.style.marginTop).toBe("-400px");
+    expect(fixture.viewport.scrollTop).toBe(100);
+    await waitFor(() => expect(fixture.viewport.scrollTop).toBe(500));
+    expect(fixture.content.style.marginTop).toBe("");
+    unmount();
+  });
+
+  /* a finger held still on a touchscreen is still scrolling */
+  it("keeps rows hidden while a finger rests on the screen", async () => {
+    const fixture = transcriptFixture();
+    fixture.viewport.scrollTop = 300;
+    let landRows!: () => void;
+    const load = vi.fn(async () => {
+      landRows();
+      return true;
+    });
+    const { unmount } = renderHook(() => {
+      const [oldest, setOldest] = useState("row-10");
+      landRows = () => {
+        fixture.setHeight(900);
+        setOldest("row-0");
+      };
+      return useOlderPages(
+        fixture.viewport,
+        fixture.content,
+        "session-1",
+        true,
+        load,
+        oldest,
+      );
+    });
+    const touch = (type: string, touches: { clientY: number }[]) =>
+      fixture.viewport.dispatchEvent(Object.assign(new Event(type), { touches }));
+    act(() => {
+      touch("touchstart", [{ clientY: 100 }]);
+    });
+    await act(async () => {
+      fixture.viewport.scrollTop = 100;
+      fixture.viewport.dispatchEvent(new Event("scroll"));
+    });
+    expect(fixture.content.style.marginTop).toBe("-400px");
+    await act(() => new Promise((resolve) => setTimeout(resolve, 300)));
+    expect(fixture.content.style.marginTop).toBe("-400px");
+    expect(fixture.viewport.scrollTop).toBe(100);
+    act(() => {
+      touch("touchend", []);
+    });
+    await waitFor(() => expect(fixture.viewport.scrollTop).toBe(500));
+    expect(fixture.content.style.marginTop).toBe("");
+    unmount();
+  });
+
+  /* at the top the view has stopped against the end, so the position can be
+     written while the reader is still scrolling */
+  it("uncovers rows kept out of sight as soon as the reader reaches the top", async () => {
+    const fixture = transcriptFixture();
+    fixture.viewport.scrollTop = 300;
+    let landRows!: () => void;
+    const load = vi.fn(async () => {
+      landRows();
+      return true;
+    });
+    const { unmount } = renderHook(() => {
+      const [oldest, setOldest] = useState("row-10");
+      landRows = () => {
+        fixture.setHeight(900);
+        setOldest("row-0");
+      };
+      return useOlderPages(
+        fixture.viewport,
+        fixture.content,
+        "session-1",
+        true,
+        load,
+        oldest,
+      );
+    });
+    await act(async () => {
+      fixture.viewport.scrollTop = 100;
+      fixture.viewport.dispatchEvent(new Event("scroll"));
+    });
+    const content = fixture.viewport.firstElementChild as HTMLElement;
+    expect(content.style.marginTop).toBe("-400px");
+    act(() => {
+      fixture.viewport.scrollTop = 0;
+      fixture.viewport.dispatchEvent(new Event("scroll"));
+    });
+    expect(fixture.viewport.scrollTop).toBe(400);
+    expect(content.style.marginTop).toBe("");
+    unmount();
+  });
+
+  /* the page was asked for in the session the reader left: neither its
+     landing nor its hidden rows reach the next session's content */
+  it("leaves the next session's content alone when one is opened while a page loads", () => {
+    const fixture = transcriptFixture();
+    fixture.viewport.scrollTop = 300;
+    const load = vi.fn(() => new Promise<boolean>(() => {}));
+    let open!: () => void;
+    const { unmount } = renderHook(() => {
+      const [shown, setShown] = useState({ subject: "a", oldest: "a-10" });
+      open = () => setShown({ subject: "b", oldest: "b-0" });
+      return useOlderPages(
+        fixture.viewport,
+        fixture.content,
+        shown.subject,
+        true,
+        load,
+        shown.oldest,
+      );
+    });
+    act(() => {
+      fixture.viewport.scrollTop = 100;
+      fixture.viewport.dispatchEvent(new Event("scroll"));
+    });
+    expect(load).toHaveBeenCalledTimes(1);
+    fixture.setHeight(2000);
+    fixture.viewport.scrollTop = 1800;
+    const styles = new MutationObserver(() => {});
+    styles.observe(fixture.content, { attributes: true, attributeFilter: ["style"] });
+    act(() => open());
+    expect(styles.takeRecords()).toEqual([]);
+    expect(fixture.viewport.scrollTop).toBe(1800);
     unmount();
   });
 
@@ -306,7 +717,14 @@ describe("older transcript pages", () => {
         page -= 1;
         setOldest(`row-${page}`);
       };
-      return useOlderPages(fixture.viewport, "session-1", true, load, oldest);
+      return useOlderPages(
+        fixture.viewport,
+        fixture.content,
+        "session-1",
+        true,
+        load,
+        oldest,
+      );
     });
     for (const _ of [1, 2]) {
       await act(async () => {
@@ -323,7 +741,14 @@ describe("older transcript pages", () => {
     fixture.viewport.scrollTop = 100;
     const load = vi.fn(async () => false);
     const { result, unmount } = renderHook(() =>
-      useOlderPages(fixture.viewport, "session-1", true, load, "row-10"),
+      useOlderPages(
+        fixture.viewport,
+        fixture.content,
+        "session-1",
+        true,
+        load,
+        "row-10",
+      ),
     );
     await act(async () => {
       fixture.viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -20 }));
@@ -346,7 +771,14 @@ describe("older transcript pages", () => {
     );
     const { rerender, unmount } = renderHook(
       ({ subject, older }) =>
-        useOlderPages(fixture.viewport, subject, older, load, "row-10"),
+        useOlderPages(
+          fixture.viewport,
+          fixture.content,
+          subject,
+          older,
+          load,
+          "row-10",
+        ),
       { initialProps: { subject: "a", older: true } },
     );
     act(() => fixture.viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -20 })));
@@ -371,7 +803,7 @@ describe("short transcript upward intent", () => {
       const fixture = transcriptFixture();
       const load = vi.fn(async () => false);
       const { unmount } = renderHook(() =>
-        useOlderPages(fixture.viewport, "a", true, load, "row-10"),
+        useOlderPages(fixture.viewport, fixture.content, "a", true, load, "row-10"),
       );
       expect(load).not.toHaveBeenCalled();
       await act(async () => {

@@ -11,4 +11,5 @@ type PackInstallation @index(fields: ["agent_did", "coordinate"], unique: true) 
     installed_at: String
     required_by: JSON
     explicit: Boolean
+    plugin_store: Boolean
 }

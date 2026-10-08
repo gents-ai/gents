@@ -107,6 +107,25 @@ pub fn decode_scoped_request_output_segments(
     session_id: Option<&str>,
     requester_did: Option<&str>,
 ) -> Result<Vec<OutputSegmentRow>> {
+    decode_scoped_canonical_rows(
+        rows,
+        agent_did,
+        session_id,
+        requester_did,
+        decode_output_segment_row,
+    )
+}
+
+/// Apply the same exact principal/session scope before either canonical row
+/// decoder. A malformed foreign row must not poison an authorized projection.
+/// ACP remains enforced by the database read supplying these observations.
+pub fn decode_scoped_canonical_rows<T>(
+    rows: &[serde_json::Value],
+    agent_did: &str,
+    session_id: Option<&str>,
+    requester_did: Option<&str>,
+    decode: impl Fn(&serde_json::Value) -> Result<T>,
+) -> Result<Vec<T>> {
     fn text<'a>(row: &'a serde_json::Value, field: &str) -> Option<&'a str> {
         row.get(field).and_then(serde_json::Value::as_str)
     }
@@ -116,7 +135,7 @@ pub fn decode_scoped_request_output_segments(
                 && text(row, "requester_did") == requester_did
                 && session_id.is_none_or(|session| text(row, "session_id") == Some(session))
         })
-        .map(decode_output_segment_row)
+        .map(decode)
         .collect()
 }
 
