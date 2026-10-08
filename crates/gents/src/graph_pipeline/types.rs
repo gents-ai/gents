@@ -138,10 +138,15 @@ pub struct PortRef {
 }
 
 // Graph edges compile into the same event-group configuration used by ordinary
-// triggers. No graph-only count or delivery-policy model. Compilation enforces
-// graph cardinality/count bounds and rejects LatestOnly; it does not widen semantics.
+// triggers. No graph-only count or delivery-policy model.
 pub type GroupCount = crate::document_config::EventGroupCount;
 pub type DeliveryMode = Option<crate::document_config::EventGroup>;
+/// Trigger concurrency on a graph edge. Compilation refuses `latest_only` on
+/// every edge (`DiagnosticCode::InvalidEdgeConcurrency`; Lean
+/// `GraphPipeline.graphEdgeConcurrencyValid`): on a per-document edge a
+/// `latest_only` trigger supersedes the same trigger's in-flight requests,
+/// which would cancel earlier fan-out items; on a grouped edge the trigger
+/// engine never applies the mode.
 pub type DeliveryConcurrency = crate::document_config::ConcurrencyMode;
 
 /// Selects a singleton Task invocation in the same pinned graph correlation.
