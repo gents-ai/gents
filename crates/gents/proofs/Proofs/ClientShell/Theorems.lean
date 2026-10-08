@@ -15,10 +15,10 @@ theorem matching_terminal_snapshot_allows_follow_up
     (hturn : obs.latestTurn = some turn)
     (hterminal : turn.isTerminal = true)
     (hclient : ctx.clientAvailable = true)
-    (hbehavior : behaviorMismatch store sid ctx.requestedBehavior = false) :
+    (hagent_match : agentMismatch store sid ctx.requestedAgent = false) :
     projectSendDecision (step s (.snapshot store) store .healthy ctx) store ctx = .ready := by
   simp [step, snapshotAdvanceWorkflow, hw, hfind, hreq, projectSendDecision,
-    hsel, hagent, hclient, hbehavior, hturn, hterminal]
+    hsel, hagent, hclient, hagent_match, hturn, hterminal]
 
 /-- A terminal observation for another request cannot acknowledge this submit. -/
 theorem unrelated_terminal_does_not_retire_awaiting
@@ -74,10 +74,10 @@ theorem select_session_latches
     (step s (.user (.selectSession sid)) store h ctx).selection.session
       = some sid := rfl
 
-theorem select_principal_route_clears_session
+theorem select_node_route_clears_session
     (s : ShellState) (store : LocalStore) (ctx : SubmitContext)
-    (peer : PeerId) (agent : AgentDid) (h : TransportHealth) :
-    (step s (.user (.selectPrincipalRoute peer agent)) store h ctx).selection.session
+    (peer : PeerId) (agent : NodeDid) (h : TransportHealth) :
+    (step s (.user (.selectNodeRoute peer agent)) store h ctx).selection.session
       = none := rfl
 
 theorem selection_sticky_under_inflight
