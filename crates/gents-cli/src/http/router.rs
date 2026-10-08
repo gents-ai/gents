@@ -130,7 +130,8 @@ pub(crate) fn runtime_contract_router(
     home: Option<String>,
     // `Some` mounts `/mcp`: the read-only `defra_query` tool always (an
     // unauthenticated read surface, same exposure as the GraphQL endpoint),
-    // `write` for granted collections, and the read-only graph tools.
+    // `write` for granted collections, and, with `graph_reads`, the read-only graph
+    // tools.
     mcp: Option<crate::http::mcp_server::McpServiceOptions>,
     backend_health: Option<gents::BackendHealthMap>,
     p2p_admission: Option<P2pAdmissionState>,
