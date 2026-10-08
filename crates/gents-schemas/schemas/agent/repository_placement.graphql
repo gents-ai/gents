@@ -1,4 +1,4 @@
-# Maps a logical repository_id to this node's checkout. Local-only (NOT
+# Maps a logical repository_id to this host's checkout. Local-only (NOT
 # @branchable): never derive repository_id from a credential-bearing remote.
 type RepositoryPlacement @index(fields: ["node_did", "repository_id"], unique: true) {
     repository_id: String @index
