@@ -5,12 +5,12 @@ import Lean
 namespace Conformance.ConfigurationScope
 open Configuration Lean
 
-/-- Two principals reuse every authored label, with different context/model
+/-- Two nodes reuse every authored label, with different context/model
 payloads. The third scope is absent; an ill-owned decoded row remains rejected. -/
 private def registry : Registry :=
   { tasks := fun owner id => if owner ∈ ["alice", "bob"] && id == "task"
       then some ⟨owner, ⟨"coding", true⟩⟩ else none
-    behaviors := fun owner id => if owner ∈ ["alice", "bob"] && id == "coding"
+    agents := fun owner id => if owner ∈ ["alice", "bob"] && id == "coding"
       then some ⟨owner, ⟨some "context", "profile", true⟩⟩ else none
     contexts := fun owner id => if owner ∈ ["alice", "bob"] && id == "context"
       then some ⟨owner, { instructions := owner }⟩ else none
@@ -46,10 +46,10 @@ private def contextBoundsJson : Json := toJson (contextBoundsCases.map fun (sele
     ("maximum", toJson maximum),
     ("allowed", toJson (ConfigDefaults.contextOverrideAllowed selected modelDefault maximum))])
 
-/-- One behavior `coding` stored under scope `alice`: its owner, enabled flag
-and context selection (`context` exists, `gone` does not), with the principal's
+/-- One agent `coding` stored under scope `alice`: its owner, enabled flag
+and context selection (`context` exists, `gone` does not), with the node's
 default selection. -/
-private def defaultBehaviorCases :
+private def defaultAgentCases :
     List (String × String × Bool × Option String × Option String) := [
   ("no_default", "alice", false, some "context", none),
   ("enabled_default", "alice", true, some "context", some "coding"),
@@ -60,16 +60,16 @@ private def defaultBehaviorCases :
   ("missing_default", "alice", true, some "context", some "absent"),
   ("foreign_default", "bob", true, some "context", some "coding")]
 
-private def defaultBehaviorJson : Json := toJson (defaultBehaviorCases.map
+private def defaultAgentJson : Json := toJson (defaultAgentCases.map
   fun (name, owner, enabled, contextId, defaultId) =>
     let reg : Registry := { registry with
-      behaviors := fun scope id => if scope = "alice" ∧ id = "coding"
+      agents := fun scope id => if scope = "alice" ∧ id = "coding"
         then some ⟨owner, ⟨contextId, "profile", enabled⟩⟩ else none }
     Json.mkObj [("name", toJson name), ("scope", toJson "alice"),
-      ("behavior_owner", toJson owner), ("behavior_id", toJson "coding"),
+      ("agent_owner", toJson owner), ("agent_id", toJson "coding"),
       ("enabled", toJson enabled), ("context_id", toJson contextId),
-      ("default_behavior_id", toJson defaultId),
-      ("publishable", toJson (defaultBehaviorPublishable reg "alice" defaultId)),
+      ("default_agent_id", toJson defaultId),
+      ("publishable", toJson (defaultAgentPublishable reg "alice" defaultId)),
       ("context_resolves", toJson (resolveContext reg "alice" contextId).toBool)])
 
 /-- The Rust wire text of a backend auth, in serde field order. -/
@@ -91,14 +91,14 @@ private def oauthRows : List OAuthAccountRow := [
 
 /-- A backend stored under `stored_owner` runs under `scope`: any OAuth account
 reference is looked up under the executing scope, never the stored owner, and
-never resolves another principal's or a disabled row. -/
+never resolves another node's or a disabled row. -/
 private def oauthAccountCases : List (String × String × String × String × BackendAuth) := [
   ("original_none_under_scope", "alice", "alice", "ChatGptCodex", .principalOAuth none),
   ("reference_under_scope", "alice", "alice", "ChatGptCodex", .principalOAuth (some "acct-1")),
   ("foreign_stored_owner_uses_executing_scope", "alice", "bob", "ChatGptCodex",
     .principalOAuth (some "acct-1")),
   ("environment_has_no_owner", "alice", "alice", "OpenAiCompatible", .environment "KEY"),
-  ("foreign_principal_row_rejected", "alice", "alice", "ChatGptCodex",
+  ("foreign_node_row_rejected", "alice", "alice", "ChatGptCodex",
     .principalOAuth (some "acct-2")),
   ("disabled_row_not_picked", "alice", "alice", "ChatGptCodex", .principalOAuth (some "acct-off"))]
 
@@ -124,19 +124,19 @@ private def defaultReplacementJson : Json := toJson (
   ([none, some "coding"] : List (Option String)).flatMap fun current =>
     ([none, some "coding", some "review"] : List (Option String)).map fun candidate =>
       Json.mkObj [("current", toJson current), ("candidate", toJson candidate),
-        ("allowed", toJson (defaultBehaviorReplacementAllowed current candidate))])
+        ("allowed", toJson (defaultAgentReplacementAllowed current candidate))])
 
 /-- Export the actual shared-label input documents as well as computed results. -/
 def casesJson : String := (Json.mkObj
   [("documents", toJson (["alice", "bob"].map fun owner => Json.mkObj
-      [("agent_did", toJson owner), ("task_id", toJson "task"),
-       ("behavior_id", toJson "coding"), ("context_id", toJson "context"),
+      [("node_did", toJson owner), ("task_id", toJson "task"),
+       ("agent_id", toJson "coding"), ("context_id", toJson "context"),
        ("profile_id", toJson "profile"), ("backend_id", toJson "backend"),
        ("instructions", toJson owner), ("model", toJson (owner ++ "-model")),
        ("enabled", toJson true)])),
    ("cases", toJson (["alice", "bob", "absent"].map caseJson)),
    ("context_bounds", contextBoundsJson),
-   ("default_behavior", defaultBehaviorJson),
+   ("default_agent", defaultAgentJson),
    ("oauth_account", oauthAccountJson),
    ("default_replacement", defaultReplacementJson)]).compress
 
@@ -154,7 +154,7 @@ private def discoveryCaseJson (name requestedOwner observedOwner requestedBacken
   let observed := advertisement observedCredentials
   let result := catalogFor requestedOwner requestedBackend requestedCredentials (some ⟨observedOwner, observed⟩)
   let catalogJson := fun (c : DiscoveryObservation) => Json.mkObj
-    [("backend_id", toJson c.backendId), ("credential_principal", toJson c.agentDid),
+    [("backend_id", toJson c.backendId), ("credential_node", toJson c.nodeDid),
      ("model_names_with_unknown_capabilities", toJson (c.models.map (·.modelName)))]
   Json.mkObj [("name", toJson name), ("requested_owner", toJson requestedOwner),
     ("requested_backend", toJson requestedBackend), ("requested_credentials", toJson requestedCredentials),

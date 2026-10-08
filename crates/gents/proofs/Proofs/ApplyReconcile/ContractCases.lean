@@ -26,20 +26,20 @@ private def row (c : Collection) (id : String) (refs : List DocRef := [])
   (⟨c, id, owner⟩, { content := id, refs := refs })
 
 private def chain : List (DocRef × DesiredFields) :=
-  [row .agent "behavior" [⟨.agentContext, "context", "did:owner"⟩],
+  [row .agent "agent" [⟨.agentContext, "context", "did:owner"⟩],
    row .agentContext "context" [⟨.tools, "tools", "did:owner"⟩], row .tools "tools"]
 
 private def cycle : List (DocRef × DesiredFields) :=
-  [row .agent "behavior" [⟨.agentContext, "context", "did:owner"⟩],
+  [row .agent "agent" [⟨.agentContext, "context", "did:owner"⟩],
    row .agentContext "context" [⟨.tools, "tools", "did:owner"⟩],
    row .tools "tools" [⟨.agentTarget, "target", "did:owner"⟩],
-   row .agentTarget "target" [⟨.agent, "behavior", "did:owner"⟩]]
+   row .agentTarget "target" [⟨.agent, "agent", "did:owner"⟩]]
 
 private def missing : List (DocRef × DesiredFields) :=
-  [row .agent "behavior" [⟨.agentContext, "absent", "did:owner"⟩]]
+  [row .agent "agent" [⟨.agentContext, "absent", "did:owner"⟩]]
 
 private def foreign : List (DocRef × DesiredFields) :=
-  [row .agent "behavior" [⟨.agentContext, "foreign", "did:other"⟩],
+  [row .agent "agent" [⟨.agentContext, "foreign", "did:other"⟩],
    row .agentContext "foreign" [] "did:other"]
 
 private def independentOwners : List (DocRef × DesiredFields) :=
@@ -73,7 +73,7 @@ example : (manifestOf sameLabels).support.card = 4 := by decide
 private def docRefJson (d : DocRef) : String :=
   "{\"collection\":" ++ jsonString (ConfigDocuments.Collection.collectionName d.collection)
     ++ ",\"id\":" ++ jsonString d.id
-    ++ ",\"agent_did\":" ++ jsonString d.agentDid ++ "}"
+    ++ ",\"node_did\":" ++ jsonString d.nodeDid ++ "}"
 
 /-- Project fixture keys only; no installer logic is duplicated here. -/
 private def desiredJson (keys : List DocRef) (desired : DocRef → Option DesiredFields) : String :=

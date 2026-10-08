@@ -22,7 +22,7 @@ def eventJson : Event → String
 
 def caseJson (entry : String × List Event) : String :=
   "{\"name\":" ++ jsonString entry.1 ++
-  ",\"agent_id\":" ++ toString queue.scope.agent ++
+  ",\"node_id\":" ++ toString queue.scope.agent ++
   ",\"requester_id\":" ++ jsonOptionalNat queue.scope.requester ++
   ",\"session_id\":" ++ toString queue.scope.session ++
   ",\"active_request_id\":" ++ jsonOptionalNat queue.active ++
