@@ -207,10 +207,10 @@ export function holdLive(
    their own keys, React removes one's rows and inserts the other's, and the
    browser lays the page out between the two. So a person's message is drawn
    under its request, whatever stands for it, and the saved reply under the
-   key its live tail was drawn under. The bridge names a saved message's
-   request by its document id and a pending turn's by its id, so a saved
-   message is drawn under a request key of its own. The bridge names every
-   turn's live tail alike, so each tail gets a key of its own. */
+   key its live tail was drawn under. The bridge names every stand-in for a
+   person's message by its request id, so they are all drawn under one key.
+   The bridge names every turn's live tail alike, so each tail gets a key of
+   its own. */
 export type DrawKeys = {
   sessionId: string | null;
   tail: string | null;

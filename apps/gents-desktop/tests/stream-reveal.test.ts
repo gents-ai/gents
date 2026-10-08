@@ -262,16 +262,23 @@ describe("the keys replies are drawn under", () => {
     expect(drawKey(keys, pending)).toBe("turn:r2");
   });
 
-  it("draws a saved message under the request as the bridge names it there", () => {
+  it("draws a saved message under the request it shares with the app's copy", () => {
+    const keys = noDrawKeys("s");
+    const local = pendingUserTurn({
+      itemKey: "local:r2",
+      requestId: "r2",
+      content: "again",
+    });
     const saved = userMessage({
       kind: "userMessage",
       itemKey: "u2",
-      requestId: "doc-r2",
+      requestId: "r2",
       sequence: 3,
       content: "again",
       timestamp: null,
     });
-    expect(drawKey(noDrawKeys("s"), saved)).toBe("turn:doc-r2");
+    expect(drawKey(keys, saved)).toBe("turn:r2");
+    expect(drawKey(keys, saved)).toBe(drawKey(keys, local));
   });
 
   it("starts again for another session", () => {
@@ -315,6 +322,20 @@ describe("the rows drawn for sent messages", () => {
     expect(
       withSentTurns([person, pending], local, "s").map((row) => row.itemKey),
     ).toEqual(["u1", "pending-r2"]);
+  });
+
+  it("shows the saved message alone once it names the request it shares", () => {
+    const saved = userMessage({
+      kind: "userMessage",
+      itemKey: "u2",
+      requestId: "r2",
+      sequence: 3,
+      content: "again",
+      timestamp: null,
+    });
+    expect(
+      withSentTurns([person, saved], local, "s").map((row) => row.itemKey),
+    ).toEqual(["u1", "u2"]);
   });
 
   it("never shows one session's message in another", () => {

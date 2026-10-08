@@ -169,9 +169,8 @@ test("only moves down the page through a whole turn", async ({ page }, testInfo)
 
 /* A message the person sends is drawn once from the moment it is sent: the
    app's own copy, then the bridge's pending turn, then the saved message.
-   The copy and the pending turn name the request by its id and are one row
-   throughout; the saved message names it by its document id, so it is a
-   row of its own, and the copy never comes back beside it. */
+   Every one of them names the request by its id, so they are one row
+   throughout and the copy never comes back beside it. */
 test("a sent message is drawn once from send to saved", async ({ page }, testInfo) => {
   test.skip(
     !["webkit-desktop", "chromium-desktop"].includes(testInfo.project.name),

@@ -2568,7 +2568,7 @@ export function createDesktopUiHarness(
                 : {
                     kind: "userMessage" as const,
                     itemKey: "large-user-sent",
-                    requestId: requestDocId,
+                    requestId,
                     sequence: session.timelineItems.length,
                     content: "again",
                     timestamp: STARTED_AT,

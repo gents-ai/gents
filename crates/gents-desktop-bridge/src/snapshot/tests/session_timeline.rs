@@ -452,6 +452,118 @@ fn steering_projects_the_authored_input_once() {
 }
 
 #[test]
+fn a_sent_message_keeps_one_logical_request_id_from_pending_to_saved() {
+    let request = AgentRequestRow {
+        purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
+        doc_id: Some("bae-doc-1".into()),
+        request_id: "req-1".into(),
+        agent_did: Some("did:test:amy".into()),
+        session_id: Some("sess-1".into()),
+        lifecycle_state: Some(RequestLifecycleState::Processing),
+        content: Some("inspect the repository".into()),
+        ..Default::default()
+    };
+    let mut rows = ClientStoreRows {
+        sessions: vec![timeline_session()],
+        requests: vec![request],
+        ..ClientStoreRows::default()
+    };
+    let pending = build_session_snapshot_from_store(
+        &ClientStore::from_rows(rows.clone()),
+        "sess-1",
+        Some("req-1"),
+    )
+    .expect("pending snapshot");
+    assert!(pending.messages.is_empty());
+    assert_eq!(
+        pending
+            .pending_turn
+            .as_ref()
+            .expect("pending turn")
+            .request_id,
+        "req-1"
+    );
+
+    push_canonical_text_message(
+        &mut rows,
+        "authored:bae-doc-1:prompt",
+        "sess-1",
+        Some("bae-doc-1"),
+        1,
+        MessageRole::User,
+        "inspect the repository",
+    );
+    let saved =
+        build_session_snapshot_from_store(&ClientStore::from_rows(rows), "sess-1", Some("req-1"))
+            .expect("saved snapshot");
+    assert!(saved.pending_turn.is_none());
+    assert_eq!(saved.messages[0].request_id.as_deref(), Some("req-1"));
+    assert!(matches!(
+        &saved.timeline_items[..],
+        [RenderedTimelineItem::UserMessage {
+            request_id: Some(request_id),
+            ..
+        }] if request_id == "req-1"
+    ));
+}
+
+#[test]
+fn message_request_id_is_never_the_request_doc_id() {
+    let mut rows = ClientStoreRows {
+        sessions: vec![timeline_session()],
+        requests: vec![AgentRequestRow {
+            purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
+            doc_id: Some("bae-doc-1".into()),
+            request_id: "req-1".into(),
+            agent_did: Some("did:test:amy".into()),
+            session_id: Some("sess-1".into()),
+            lifecycle_state: Some(RequestLifecycleState::Completed),
+            ..Default::default()
+        }],
+        ..ClientStoreRows::default()
+    };
+    push_canonical_text_message(
+        &mut rows,
+        "authored:bae-doc-1:prompt",
+        "sess-1",
+        Some("bae-doc-1"),
+        1,
+        MessageRole::User,
+        "inspect the repository",
+    );
+    push_canonical_text_message(
+        &mut rows,
+        "authored:bae-missing:prompt",
+        "sess-1",
+        Some("bae-missing"),
+        2,
+        MessageRole::User,
+        "no request row for this message",
+    );
+    push_canonical_text_message(
+        &mut rows,
+        "fork-placed-history",
+        "sess-1",
+        None,
+        3,
+        MessageRole::User,
+        "fork-placed child history",
+    );
+    let snapshot = build_session_snapshot_from_store(&ClientStore::from_rows(rows), "sess-1", None)
+        .expect("snapshot");
+    let request_ids = snapshot
+        .messages
+        .iter()
+        .map(|message| message.request_id.as_deref())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        request_ids,
+        vec![Some("req-1"), None, None],
+        "a joined request yields the logical id; an absent request row or fork-placed history yields none, and the doc id never appears"
+    );
+}
+
+#[test]
 fn durable_goal_continuation_never_projects_as_user_authored_input() {
     let mut rows = active_store().to_rows();
     rows.requests[0].input = Some(

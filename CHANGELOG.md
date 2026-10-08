@@ -15,6 +15,13 @@ source consistency checks, not a separate runtime compatibility version.
   source version), so an edit after admission is never admitted again.
   `EventSourceCursor` now names its typed `consumer` in place of
   `trigger_id`. Existing homes must be re-initialized.
+- A saved message's `requestId` is the request's logical id, not its
+  document id (#2342). The session snapshot joins the request row the
+  message's `request_doc_id` names, so a pending turn and the message it
+  publishes carry the same id; a message whose request row is not observed
+  reports none. The desktop transcript collapses the app's own copy, the
+  bridge's pending turn and the saved message into one row under the request
+  they share, where the saved message was a row of its own.
 - A runtime that cannot start because a behavior is unavailable now logs each
   blocking behavior's diagnostic; a `--tool-root` that does not admit the
   live `Tools.host.root` names both roots (#2296).

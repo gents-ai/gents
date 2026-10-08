@@ -64,8 +64,8 @@ describe("session facts", () => {
   });
 });
 
-/* A request the app sent, known by its id; the bridge names a saved
-   message's request by its document id instead. */
+/* A request the app sent, known by its id; the bridge names every row for
+   it, pending or saved, by that id. */
 describe("whether the bridge holds a sent request", () => {
   const pending = (requestId: string) =>
     ({
@@ -82,19 +82,23 @@ describe("whether the bridge holds a sent request", () => {
   const sent = { sessionId: "s", requestId: "r2", latestWhenSent: "r1" };
 
   it("not before any read shows it", () => {
-    expect(holdsRequest(read("r1", [user("doc-r1")]), sent)).toBe(false);
+    expect(holdsRequest(read("r1", [user("r1")]), sent)).toBe(false);
   });
 
   it("once its pending turn is in the transcript", () => {
     expect(holdsRequest(read("r1", [pending("r2")]), sent)).toBe(true);
   });
 
-  it("once it is the session's latest request, though its saved message names it otherwise", () => {
-    expect(holdsRequest(read("r2", [user("doc-r2")]), sent)).toBe(true);
+  it("once its saved message is in the transcript", () => {
+    expect(holdsRequest(read("r1", [user("r2")]), sent)).toBe(true);
+  });
+
+  it("once it is the session's latest request, its row outside the window", () => {
+    expect(holdsRequest(read("r2", [user("r1")]), sent)).toBe(true);
   });
 
   it("once the latest request has moved past the one there when it was sent", () => {
-    expect(holdsRequest(read("r3", [user("doc-r2")]), sent)).toBe(true);
+    expect(holdsRequest(read("r3", [user("r1")]), sent)).toBe(true);
   });
 
   it("never in another session", () => {

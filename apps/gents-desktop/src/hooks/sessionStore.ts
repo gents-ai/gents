@@ -153,11 +153,11 @@ function factsOf(
 /**
  * Whether the bridge holds a request the app sent, by the request's id (what
  * a send returns): once it does, the transcript has a row for it, its
- * pending turn or its saved message. A saved message carries the request's
- * document id instead, so the request is known by the session's latest
- * request, which names it by its id; and should no read happen to show it as
- * the latest, by the latest having moved on from `latestWhenSent`, the one
- * the session showed when the request was sent.
+ * pending turn or its saved message, both naming the request by its id.
+ * Should that row sit outside the loaded window, the request is known by the
+ * session's latest request; and should no read happen to show it as the
+ * latest, by the latest having moved on from `latestWhenSent`, the one the
+ * session showed when the request was sent.
  */
 export function holdsRequest(
   state: SessionState,
