@@ -28,6 +28,7 @@ import Proofs.Conformance.Contracts.Json.CodexShim
 import Proofs.Conformance.Contracts.Json.Workspace
 import Proofs.Conformance.Contracts.Json.Callback
 import Proofs.Conformance.Contracts.Json.SelfConfig
+import Proofs.Conformance.Contracts.Json.SelfConfigAgent
 import Proofs.Conformance.Contracts.Json.Goal
 import Proofs.Conformance.GoalClaimedReadiness
 import Proofs.Conformance.Contracts.Json.SessionHydration
@@ -251,6 +252,10 @@ def snapshotJson : String :=
     ++ "\"schema_publication_cases\":" ++ schemaPublicationCasesJson ++ ","
     ++ "\"self_config_cases\":"
       ++ selfConfigCasesJson ++ ","
+    ++ "\"agent_decision_cases\":"
+      ++ agentDecisionCasesJson ++ ","
+    ++ "\"sibling_tools_cases\":"
+      ++ siblingToolsCasesJson ++ ","
     ++ "\"session_recovery_cases\":"
       ++ jsonArray (sessionRecoveryCases.map sessionRecoveryCaseJson) ++ ","
     ++ "\"inference_slot_accounting_cases\":"

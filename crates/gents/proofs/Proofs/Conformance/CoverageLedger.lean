@@ -605,7 +605,7 @@ def caseCoverage : List CoverageEntry :=
       "trigger_cases"
       "TriggerDispatch"
       "trigger_engine::tests::trigger_engine_dispatch_matches_lean_generated_contract_cases"
-      "Dispatch decisions exercise the production engine. Existing materializer tests cover correlation scope, retry exclusion and live-execution supersession. Cross-principal isolation and expired-claim deadline/grace cases still need direct materializer observations. A booted schedule-kind error-writeback observation is also outstanding.")
+      "Dispatch decisions exercise the production engine. Existing materializer tests cover correlation scope, retry exclusion and live-execution supersession. Cross-node isolation and expired-claim deadline/grace cases still need direct materializer observations. A booted schedule-kind error-writeback observation is also outstanding.")
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "trigger_cases"
@@ -898,7 +898,17 @@ def caseCoverage : List CoverageEntry :=
       "self_config_cases"
       "SelfConfigCases"
       "conformance::generated_self_config_cases_fence_patch_merge"
-      "Covers production patch admissibility and accepted merges, and replays guarded rows through the production Tools/Behavior no-lockout guards, the Backend auth fence and the Profile account choice fence. Reference validation and unchanged stored state after rejection require the shared configuration transaction owner.")
+      "Covers production patch admissibility and accepted merges, and replays guarded rows through the production Tools/Agent no-lockout guards, the Backend auth fence and the Profile account choice fence. Reference validation and unchanged stored state after rejection require the shared configuration transaction owner.")
+      "self-config" [Surface.agentFacing]
+  , tagged (followUpCoverage
+      "agent_decision_cases"
+      "AgentDecisionCases"
+      "Model-executed create, edit and disable verdicts over the Agent catalog (protected Engineer, default agent, missing and existing ids). No Rust consumer is bound yet; the self-config agent management owner must replay these rows instead of keeping a parallel policy.")
+      "self-config" [Surface.agentFacing]
+  , tagged (followUpCoverage
+      "sibling_tools_cases"
+      "SiblingToolsCases"
+      "Model-executed omission, narrowing, shared-context, shared-tools, protected and foreign-owner verdicts for the scoped sibling-tools operation. No Rust consumer is bound yet; the focused configurator must replay these rows through the existing Tools self-config write.")
       "self-config" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
       "session_recovery_cases"
@@ -1441,7 +1451,7 @@ def caseCoverage : List CoverageEntry :=
       "identity_permission_cases"
       "IdentityPermissionCases"
       "conformance::identity::resolved_identity_permission_cases_drive_defra_acp"
-      "Checks native Defra ACP after explicit principal resolution. Unknown-owner and same-owner-collision selector rejection require the canonical registry owner; no test-local ID map remains.")
+      "Checks native Defra ACP after explicit node resolution. Unknown-owner and same-owner-collision selector rejection require the canonical registry owner; no test-local ID map remains.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "identity_permission_cases"
@@ -1451,7 +1461,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (followUpCoverage
       "identity_contracts"
       "IdentityContracts"
-      "Route through the canonical principal-scoped registry and exercise rejection before permission checks. The removed synthetic global-ID map did not exercise runtime routing.")
+      "Route through the canonical node-scoped registry and exercise rejection before permission checks. The removed synthetic global-ID map did not exercise runtime routing.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (followUpCoverage
       "canonical_worker_capacity_cases"
@@ -1838,12 +1848,12 @@ def caseCoverage : List CoverageEntry :=
   , tagged (followUpCoverage
       "workspace_cases"
       "WorkspaceCases"
-      "Replay these cases through the production Workspace lifecycle owner after its canonical principal fields migrate; the deleted test-local state table was not implementation coverage.")
+      "Replay these cases through the production Workspace lifecycle owner after its canonical node fields migrate; the deleted test-local state table was not implementation coverage.")
       "isolated-workspaces" [Surface.runtimeInternal]
   , tagged (followUpCoverage
       "workspace_binding_cases"
       "WorkspaceBindingCases"
-      "Replay these cases through the production Workspace binding admission owner after principal-field migration; do not restore the deleted test-local binding predicate.")
+      "Replay these cases through the production Workspace binding admission owner after node-field migration; do not restore the deleted test-local binding predicate.")
       "isolated-workspaces" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "callback_cases"
