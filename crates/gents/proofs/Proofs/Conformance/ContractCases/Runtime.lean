@@ -198,9 +198,9 @@ def clientAgentReadinessCase
     (runnable unavailable startupDemoted : Bool)
     (runtimeUnavailableReason : RuntimeState.AgentUnavailableReason := .backendTemporarilyUnavailable) :
     ClientAgentReadinessCase :=
-  let runnableSet : Finset BehaviorId := if runnable then {20} else ∅
-  let unavailableSet : Finset BehaviorId := if unavailable then {20} else ∅
-  let demotedSet : Finset BehaviorId := if startupDemoted then {20} else ∅
+  let runnableSet : Finset AgentId := if runnable then {20} else ∅
+  let unavailableSet : Finset AgentId := if unavailable then {20} else ∅
+  let demotedSet : Finset AgentId := if startupDemoted then {20} else ∅
   let resolved : ResolvedSnapshot :=
     { defaultBehavior := 20
     , runnable := runnableSet

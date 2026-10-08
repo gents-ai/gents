@@ -4,8 +4,6 @@ abbrev PeerId := Nat
 
 abbrev NodeDid := Nat
 
-abbrev AgentId := String
-
 structure SessionObservation where
   sessionId             : SessionId
   nodeDid               : NodeDid

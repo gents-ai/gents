@@ -247,7 +247,7 @@ instance (request : AgentRequestSemantics) (admission : AgentRequestAdmission)
   unfold exactEnrollmentGeneration; infer_instance
 
 /-- Title is a runtime-authored, parent-only request in the same session and
-behavior. The authenticated parent is provenance; neither its lifecycle state
+agent. The authenticated parent is provenance; neither its lifecycle state
 nor its execution generation grants title write authority. -/
 def titlePurposeAllowed
     (request : AgentRequestSemantics) (admission : AgentRequestAdmission)
@@ -379,7 +379,7 @@ def requestGoalInputAllowed (request : AgentRequestSemantics)
     (evidence.bind RuntimeInternalEvidence.verifiedGoalContinuation)
 
 /-- Composed claim boundary: signatures authenticate input but do not grant
-skills, cwd escape, or runtime queue origins. The observed session behavior is
+skills, cwd escape, or runtime queue origins. The observed session agent is
 resolved by the session owner; blank/mismatched selection cannot be repaired by
 falling back to the principal name. New-session creation passes its selected
 behavior through the same boundary. -/
@@ -585,39 +585,39 @@ theorem available_negative_admission_observation_denies
 
 theorem unavailable_title_pending_preserves
     (s : State) (request : AgentRequestSemantics) (admission : AgentRequestAdmission)
-    (evidence : Option RuntimeInternalEvidence) (behavior : String)
+    (evidence : Option RuntimeInternalEvidence) (agent: String)
     (branchFieldsExact pendingDeadlineAbsent : Bool) (maxRequestHop : Nat)
     (pending : RequestContext)
     (hpurpose : request.purpose = .titleAudit)
     (hstate : pending.state = .pending) (hslot : pending.admission = .released) :
-    titlePendingStep? false s request admission evidence behavior branchFieldsExact
+    titlePendingStep? false s request admission evidence agent branchFieldsExact
       pendingDeadlineAbsent maxRequestHop pending = some pending := by
   simp [titlePendingStep?, titlePendingDisposition, admissionDispositionFromResult,
     hpurpose, hstate, hslot]
 
 theorem admitted_title_pending_awaits_owned_claim
     (s : State) (request : AgentRequestSemantics) (admission : AgentRequestAdmission)
-    (evidence : Option RuntimeInternalEvidence) (behavior : String)
+    (evidence : Option RuntimeInternalEvidence) (agent: String)
     (branchFieldsExact pendingDeadlineAbsent : Bool) (maxRequestHop : Nat)
     (pending : RequestContext)
     (hpurpose : request.purpose = .titleAudit)
     (hstate : pending.state = .pending) (hslot : pending.admission = .released)
-    (hadmit : titlePendingDisposition true s request admission evidence behavior
+    (hadmit : titlePendingDisposition true s request admission evidence agent
       branchFieldsExact pendingDeadlineAbsent maxRequestHop = .admit) :
-    titlePendingStep? true s request admission evidence behavior branchFieldsExact
+    titlePendingStep? true s request admission evidence agent branchFieldsExact
       pendingDeadlineAbsent maxRequestHop pending = some pending := by
   simp [titlePendingStep?, hpurpose, hstate, hslot, hadmit]
 
 theorem denied_title_pending_uses_admission_reject
     (s : State) (request : AgentRequestSemantics) (admission : AgentRequestAdmission)
-    (evidence : Option RuntimeInternalEvidence) (behavior : String)
+    (evidence : Option RuntimeInternalEvidence) (agent: String)
     (branchFieldsExact pendingDeadlineAbsent : Bool) (maxRequestHop : Nat)
     (pending : RequestContext)
     (hpurpose : request.purpose = .titleAudit)
     (hstate : pending.state = .pending) (hslot : pending.admission = .released)
-    (hdeny : titlePendingDisposition true s request admission evidence behavior
+    (hdeny : titlePendingDisposition true s request admission evidence agent
       branchFieldsExact pendingDeadlineAbsent maxRequestHop = .deny) :
-    titlePendingStep? true s request admission evidence behavior branchFieldsExact
+    titlePendingStep? true s request admission evidence agent branchFieldsExact
       pendingDeadlineAbsent maxRequestHop pending =
       pending.step? .admissionReject := by
   simp [titlePendingStep?, hpurpose, hstate, hslot, hdeny]

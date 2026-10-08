@@ -55,13 +55,13 @@ def observe : Observation → Bool → Readiness
   | .unassigned, settled => if settled then .unavailable else .waiting
 
 /-- How the observed terminal request relates to execution.
-`behaviorUnavailable` is a routing admission rejection because the behavior was
+`agentUnavailable` is a routing admission rejection because the behavior was
 unavailable: the request was never claimed and nothing executed. Every other
 terminal, including other admission rejections, keeps the existing bounded
 accounting. -/
 inductive Cause where
   | attempt
-  | behaviorUnavailable
+  | agentUnavailable
   deriving DecidableEq, Repr
 
 structure Input where
@@ -85,7 +85,7 @@ def baseDecision (cause : Cause) (i : Input) : Decision :=
   | .attempt =>
       Goals.decide i.status i.terminal i.sessionIdle i.childExists i.budgetReached
         i.hasActivity i.requestIsWrapup i.retries i.wrapupRequested i.wrapupCompleted
-  | .behaviorUnavailable =>
+  | .agentUnavailable =>
       Goals.decide i.status .completed i.sessionIdle i.childExists i.budgetReached
         true false i.retries i.wrapupRequested i.wrapupCompleted
 
@@ -98,7 +98,7 @@ inductive Gated where
   /-- Publish nothing and change no Goal state; a later scan re-evaluates. -/
   | awaitReadiness
   /-- Settled unavailability: end automatic continuation with that reason. -/
-  | behaviorUnavailable
+  | agentUnavailable
   deriving DecidableEq, Repr
 
 /-- An uncharged re-issue needs readiness written after the rejection it
@@ -108,11 +108,11 @@ def gate (observation : Observation) (settled : Bool) (cause : Cause) (i : Input
   if publishes base then
     match observe observation settled with
     | .ready =>
-        if cause = .behaviorUnavailable ∧ observation.newerThanTerminal = false then
+        if cause = .agentUnavailable ∧ observation.newerThanTerminal = false then
           .awaitReadiness
         else .decided base
     | .waiting => .awaitReadiness
-    | .unavailable => .behaviorUnavailable
+    | .unavailable => .agentUnavailable
   else .decided base
 
 def maxInfrastructureRetries : Nat := 2
@@ -249,7 +249,7 @@ theorem decide_publishes_only_for_open_goals
   · cases requested <;> cases completed <;> cases status <;> simp_all [publishes]
 
 theorem unavailable_behavior_never_retries (i : Input) :
-    baseDecision .behaviorUnavailable i ≠ .retry := by
+    baseDecision .agentUnavailable i ≠ .retry := by
   intro h
   obtain ⟨status, terminal, idle, child, budget, activity, wrapup, retries, requested,
     completed⟩ := i
@@ -296,7 +296,7 @@ theorem publication_requires_ready_behavior
 following it. -/
 theorem stale_readiness_never_reissues_a_rejection
     (settled : Bool) (i : Input) (decision : Decision)
-    (h : gate (.ready false) settled .behaviorUnavailable i = .decided decision) :
+    (h : gate (.ready false) settled .agentUnavailable i = .decided decision) :
     publishes decision = false := by
   have hbase := gate_decided_is_base _ _ _ _ _ h
   cases hp : publishes decision
@@ -314,21 +314,21 @@ theorem unready_behavior_preserves_retry_budget
       · cases decision <;> simp_all [publishes, nextRetries]
       · exact absurd (publication_requires_ready_behavior _ _ _ _ _ hg hp) hready
   | awaitReadiness => simp [nextRetries]
-  | behaviorUnavailable => simp [nextRetries]
+  | agentUnavailable => simp [nextRetries]
 
 /-- A request rejected because its behavior was unavailable never spends the
 retry budget, whatever readiness is observed afterwards. -/
 theorem unavailable_behavior_rejection_is_never_charged
     (observation : Observation) (settled : Bool) (i : Input) :
-    nextRetries .behaviorUnavailable i (gate observation settled .behaviorUnavailable i)
+    nextRetries .agentUnavailable i (gate observation settled .agentUnavailable i)
       = i.retries := by
   have hno := unavailable_behavior_never_retries i
-  cases hg : gate observation settled .behaviorUnavailable i with
+  cases hg : gate observation settled .agentUnavailable i with
   | decided decision =>
       have hbase := gate_decided_is_base _ _ _ _ _ hg
       cases decision <;> simp_all [nextRetries]
   | awaitReadiness => simp [nextRetries]
-  | behaviorUnavailable => simp [nextRetries]
+  | agentUnavailable => simp [nextRetries]
 
 /-- Retries are charged only for an attempt observed against a ready behavior. -/
 theorem charge_requires_ready_attempt
@@ -372,13 +372,13 @@ theorem retry_budget_is_bounded
       | pause => simpa only [nextRetries] using hbound
       | abandonWrapup => simpa only [nextRetries] using hbound
   | awaitReadiness => simpa only [nextRetries] using hbound
-  | behaviorUnavailable => simpa only [nextRetries] using hbound
+  | agentUnavailable => simpa only [nextRetries] using hbound
 
 /-- A settled-unavailable verdict always has a legal Goal transition, so the
 Goal leaves automatic continuation instead of waiting without bound. -/
 theorem settled_unavailable_resolution_is_legal
     (observation : Observation) (settled : Bool) (cause : Cause) (i : Input) (state : State)
-    (h : gate observation settled cause i = .behaviorUnavailable)
+    (h : gate observation settled cause i = .agentUnavailable)
     (hstatus : state.status = i.status)
     (hrequested : state.wrapupRequested = i.wrapupRequested)
     (hcompleted : state.wrapupCompleted = i.wrapupCompleted) :
@@ -425,7 +425,7 @@ def applyScan (retries : Nat) (scan : Scan) : Nat :=
 the retry budget exactly where it was. -/
 theorem readiness_trace_preserves_budget (retries : Nat) (scans : List Scan)
     (h : ∀ scan ∈ scans,
-      observe scan.observation scan.settled ≠ .ready ∨ scan.cause = .behaviorUnavailable) :
+      observe scan.observation scan.settled ≠ .ready ∨ scan.cause = .agentUnavailable) :
     scans.foldl applyScan retries = retries := by
   induction scans generalizing retries with
   | nil => rfl
@@ -487,17 +487,17 @@ def raceStep (s : RaceState) : RaceEvent → RaceState
   | .rejection => { s with rejected := true, fresh := false }
   | .scan observation settled input =>
       if s.rejected ∧
-          publishesGated (gate (stamp observation s.fresh) settled .behaviorUnavailable input)
+          publishesGated (gate (stamp observation s.fresh) settled .agentUnavailable input)
       then { s with reissues := s.reissues + 1, rejected := false }
       else s
 
 theorem reissue_requires_fresh_readiness
     (observation : Observation) (fresh settled : Bool) (i : Input)
-    (h : publishesGated (gate (stamp observation fresh) settled .behaviorUnavailable i) = true) :
+    (h : publishesGated (gate (stamp observation fresh) settled .agentUnavailable i) = true) :
     fresh = true := by
   cases fresh
   · exfalso
-    cases hg : gate (stamp observation false) settled .behaviorUnavailable i with
+    cases hg : gate (stamp observation false) settled .agentUnavailable i with
     | decided decision =>
         rw [hg] at h
         have hready := publication_requires_ready_behavior _ _ _ _ _ hg h
@@ -507,7 +507,7 @@ theorem reissue_requires_fresh_readiness
             simp_all [publishesGated]
         | _ => simp [stamp, observe] at hready <;> split at hready <;> cases hready
     | awaitReadiness => simp [hg, publishesGated] at h
-    | behaviorUnavailable => simp [hg, publishesGated] at h
+    | agentUnavailable => simp [hg, publishesGated] at h
   · rfl
 
 def raceInvariant (s : RaceState) : Prop :=

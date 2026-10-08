@@ -160,15 +160,15 @@ def r6GoalOwnerCase (name : String) (goal : Option Goals.Status) : R6Backgroundi
     redriveAllowed := some redrive.isSome }
 
 def wakeSession : AgentSession.Document :=
-  { scope := ⟨1, 900, some 2⟩, behavior := 3, createdAt := 0 }
+  { scope := ⟨1, 900, some 2⟩, agent := 3, createdAt := 0 }
 def wakeParent (wake : BackgroundCompletion.FailedWake) : AgentSession.RequestFact :=
-  { purpose := .normal, scope := wakeSession.scope, behavior := 3, createdAt := 1,
+  { purpose := .normal, scope := wakeSession.scope, agent := 3, createdAt := 1,
     observed := ⟨101, wake.requestId, wake.ctx.state⟩ }
 def wakeSuccessor : AgentSession.RequestFact :=
-  { purpose := .normal, scope := wakeSession.scope, behavior := 3, createdAt := 3, observed := ⟨102, 902, .pending⟩ }
+  { purpose := .normal, scope := wakeSession.scope, agent := 3, createdAt := 3, observed := ⟨102, 902, .pending⟩ }
 /-- Different requester still blocks stale session-wide recovery. -/
 def newerInteractive : AgentSession.RequestFact :=
-  { purpose := .normal, scope := { wakeSession.scope with requester := some 99 }, behavior := 3,
+  { purpose := .normal, scope := { wakeSession.scope with requester := some 99 }, agent := 3,
     createdAt := 2, observed := ⟨103, 903, .processing⟩ }
 
 def r6FailedWakeRedriveCase
