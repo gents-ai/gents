@@ -46,7 +46,7 @@ def runtimeReconcileCaseJson (witness : RuntimeReconcileCase) : String :=
     ++ "\"tracked_session_behavior\":" ++ toString witness.trackedSessionBehavior
     ++ "}"
 
-def clientBehaviorReadinessCaseJson (witness : ClientBehaviorReadinessCase) : String :=
+def clientAgentReadinessCaseJson (witness : ClientAgentReadinessCase) : String :=
   "{"
     ++ "\"name\":" ++ jsonString witness.name ++ ","
     ++ "\"observation_present\":" ++ boolString witness.observationPresent ++ ","
@@ -287,7 +287,7 @@ def startupReadinessCases : List StartupReadinessCase :=
     , blocksReady := false
     , requiresRestart := false
     }
-  , { witness := "startup_readiness.retirement_releases_a_pending_behavior"
+  , { witness := "startup_readiness.retirement_releases_a_pending_agent"
     , leanTheorems :=
         [ "RuntimeReconcile.StartupReadiness.retire_releases"
         , "RuntimeReconcile.StartupReadiness.retire_never_claims_ready"
