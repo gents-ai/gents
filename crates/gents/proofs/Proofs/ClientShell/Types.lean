@@ -9,8 +9,9 @@ abbrev AgentDid := Nat
 turn and not yet claimed, in queue order. They do not become the current turn
 while it is non-terminal: the runtime claims them after it, and a claim folds
 the queued user messages directly behind it into the claimed turn
-(`SessionQueue.claimFolding`), so a folded message's own request is never a
-turn. -/
+(`SessionQueue.claimFolding`). `foldedRequests` are the requests a claim
+folded; each is answered by its claimed request and is never a turn.
+`SessionTurn.observe` computes all three from the session's request rows. -/
 structure SessionObservation where
   sessionId             : SessionId
   agentDid              : AgentDid
@@ -18,6 +19,7 @@ structure SessionObservation where
   latestObservedRequest : Option RequestId
   latestTurn            : Option ClientTurnState
   queuedRequests        : List RequestId := []
+  foldedRequests        : List RequestId := []
   deriving DecidableEq, Repr
 
 /-- Session observations available to the client shell. Transport selection

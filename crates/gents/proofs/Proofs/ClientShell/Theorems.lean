@@ -25,9 +25,10 @@ theorem unrelated_terminal_does_not_retire_awaiting
     (store : LocalStore) (sid : SessionId) (req : RequestId)
     (obs : SessionObservation) (hfind : store.find sid = some obs)
     (hother : obs.latestObservedRequest ≠ some req)
-    (hunqueued : req ∉ obs.queuedRequests) :
+    (hunqueued : req ∉ obs.queuedRequests)
+    (hunfolded : req ∉ obs.foldedRequests) :
     snapshotAdvanceWorkflow (.awaiting sid req) store = .awaiting sid req := by
-  simp [snapshotAdvanceWorkflow, observesRequest, hfind, hother, hunqueued]
+  simp [snapshotAdvanceWorkflow, observesRequest, hfind, hother, hunqueued, hunfolded]
 
 /-- A locally observed request can precede its mutation acknowledgment. The
 acknowledgment consumes the current observation instead of reinstating a latch
@@ -183,3 +184,14 @@ theorem select_session_preserves_same_session_awaiting
     (h_wf : s.workflow = .awaiting sid req) :
     (step s (.user (.selectSession sid)) store h ctx).workflow = .awaiting sid req := by
   simp [step, workflowAfterSelectSession, h_wf]
+
+/-- A submission folded into a claimed turn before any snapshot showed it
+queued still retires the awaiting latch. -/
+theorem folded_observation_retires_awaiting
+    (s : ShellState) (store store' : LocalStore) (h : TransportHealth)
+    (ctx : SubmitContext) (sid : SessionId) (req : RequestId) (obs : SessionObservation)
+    (h_wf : s.workflow = .awaiting sid req)
+    (h_find : store'.find sid = some obs)
+    (h_folded : req ∈ obs.foldedRequests) :
+    (step s (.snapshot store') store h ctx).workflow = .idle := by
+  simp [step, snapshotAdvanceWorkflow, h_wf, h_find, observesRequest, h_folded]
