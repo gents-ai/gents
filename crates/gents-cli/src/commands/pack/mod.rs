@@ -963,6 +963,19 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
             .await;
             if let Err(error) = recorded {
                 rollback_pack_plugin_records(&home, &rollback);
+                // Bring the node record back in line with the restored store,
+                // so a failed install leaves no record of itself.
+                if !record.plugins.is_empty() {
+                    if let Err(undo) =
+                        record_plugin_store_change(&home, &record.coordinate, None).await
+                    {
+                        tracing::error!(
+                            coordinate = %record.coordinate,
+                            error = %undo,
+                            "failed to undo the plugin-store record of a failed pack install",
+                        );
+                    }
+                }
                 return Err(error);
             }
             crate::print_json(&json!({

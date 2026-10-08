@@ -11,12 +11,14 @@ source consistency checks, not a separate runtime compatibility version.
   tool (#2338). The resolved plugin identity (version and digest) joins the
   runtime configuration fingerprint and the slot comparison. A plugins pack
   install, `gents plugin install` and their removes now write or delete a
-  plugin-store `PackInstallation` record (plugins, no documents) after the
-  plugin store changes, which wakes the reconciler; installed-pack listings
-  and `gents pack outdated`/`update` skip such records, and `gents pack
-  remove` refers them to `gents plugin remove`. An uninitialized home
-  records nothing. The demotion log names installing a missing plugin as
-  the fix.
+  `PackInstallation` record marked by the new `plugin_store` field after
+  the plugin store changes, which wakes the reconciler; a removal with no
+  record still writes one and deletes it. Installed-pack listings and
+  `gents pack outdated`/`update` skip such records, and `gents pack remove`
+  refers them to `gents plugin remove`. An uninitialized home records
+  nothing. The demotion log names installing a missing plugin as the fix.
+  The `PackInstallation` schema changed: existing homes must be
+  re-initialized.
 - `gents config apply` and `gents server --apply-root` no longer refuse
   configurations the runtime serves: the pre-flight's `{{ doc.* }}`
   template-field check is now the publication owner's rule, so a
