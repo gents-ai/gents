@@ -25,7 +25,7 @@ pub mod transcript;
 pub mod trigger_delivery;
 
 /// Shared product instructions consumed by CLI, desktop, and live acceptance.
-pub const SETUP_STEWARD_PROMPT: &str = include_str!("../prompts/setup.md");
+pub const ENGINEER_PROMPT: &str = include_str!("../prompts/engineer.md");
 
 /// Shared first-run configurator grant; decoded using canonical Tools types.
-pub const SETUP_SELF_CONFIG_JSON: &str = include_str!("../presets/setup-self-config.json");
+pub const ENGINEER_SELF_CONFIG_JSON: &str = include_str!("../presets/engineer-self-config.json");
