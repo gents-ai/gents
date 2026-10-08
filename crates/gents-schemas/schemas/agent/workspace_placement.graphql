@@ -1,4 +1,4 @@
-# Local-only placement for an IsolatedWorkspace on this node. NEVER @branchable:
+# Local-only placement for an IsolatedWorkspace on this host. NEVER @branchable:
 # host_path, adapter observation, and dirty-base must not replicate.
 type WorkspacePlacement @index(fields: ["owner_node_did", "workspace_id"], unique: true) {
     workspace_id: String @index
