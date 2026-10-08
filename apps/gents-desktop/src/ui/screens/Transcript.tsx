@@ -335,6 +335,7 @@ export const TranscriptPanel = memo(function TranscriptPanel({
   inFlight,
   stopping = false,
   scroller,
+  content,
   session,
   workers,
   parentWork,
@@ -344,6 +345,8 @@ export const TranscriptPanel = memo(function TranscriptPanel({
   stopping?: boolean;
   /** the transcript's scroller, once mounted */
   scroller: HTMLElement | null;
+  /** everything the scroller scrolls, once mounted */
+  content: HTMLElement | null;
   session: DesktopSessionSnapshot | null;
   workers: Workers;
   parentWork: ParentWork;
@@ -352,6 +355,7 @@ export const TranscriptPanel = memo(function TranscriptPanel({
   const { actions } = useApp();
   const loadingOlder = useOlderPages(
     scroller,
+    content,
     session?.sessionId ?? null,
     session?.timelinePage?.hasOlder ?? false,
     () => actions.loadOlderSessionTimeline(),

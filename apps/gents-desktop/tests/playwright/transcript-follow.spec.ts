@@ -1,4 +1,69 @@
+import type { Locator, Page } from "@playwright/test";
 import { composer, expect, gotoHarness, sendButton, test } from "./desktopTest";
+
+/* WebKit on Linux animates a wheel scroll for hundreds of ms, and under
+   load starts it late and stalls in it, so a position read at a fixed delay
+   can land mid-flight; read it once the view holds still instead. */
+async function restingScrollTop(page: Page, viewport: Locator): Promise<number> {
+  const STILL_MS = 500;
+  let still = 0;
+  let last = await viewport.evaluate((scroller) => scroller.scrollTop);
+  const deadline = Date.now() + 5000;
+  while (still < STILL_MS && Date.now() < deadline) {
+    await page.waitForTimeout(50);
+    const next = await viewport.evaluate((scroller) => scroller.scrollTop);
+    still = next === last ? still + 50 : 0;
+    last = next;
+  }
+  if (still < STILL_MS)
+    throw new Error(`the view never came to rest (last at ${last})`);
+  return last;
+}
+
+/* the row under the reader, and how far below the view's top it is; an
+   older page landing above moves the position, not the row. A row no
+   longer drawn has gone far below the view. */
+function readerRow(viewport: Locator, key?: string) {
+  return viewport.evaluate((scroller, key) => {
+    const top = scroller.getBoundingClientRect().top;
+    const rows = Array.from(
+      scroller.querySelectorAll<HTMLElement>("[data-timeline-key]"),
+    );
+    const row = key
+      ? rows.find((row) => row.dataset.timelineKey === key)
+      : rows.find((row) => row.getBoundingClientRect().bottom > top + 200)!;
+    if (!row) return { key: key!, offset: Number.POSITIVE_INFINITY };
+    return {
+      key: row.dataset.timelineKey!,
+      offset: Math.round(row.getBoundingClientRect().top - top),
+    };
+  }, key);
+}
+
+/* the reader's wheel up the page from the foot, once the view has moved up
+   and come to rest. Following stops at the wheel event itself, before
+   WebKit has begun the scroll, and an older page landing above moves the
+   position down, so the move is read from the row under the reader. Under
+   load WebKitGTK can lose a wheel to a write made before its animation
+   starts (#2389); the reader wheels again. */
+async function wheelUp(page: Page, viewport: Locator) {
+  test.skip(
+    test.info().project.name !== "webkit-desktop",
+    "Chromium scrolls before the wheel event and the view is pinned back (#2388)",
+  );
+  await expect(viewport).toHaveAttribute("data-following", "true");
+  await restingScrollTop(page, viewport);
+  const at = await readerRow(viewport);
+  await page.getByTestId("transcript-panel").hover();
+  await expect(async () => {
+    await page.mouse.wheel(0, -1200);
+    await expect
+      .poll(async () => (await readerRow(viewport, at.key)).offset, { timeout: 2000 })
+      .toBeGreaterThan(at.offset);
+  }).toPass({ timeout: 10_000 });
+  await expect(viewport).toHaveAttribute("data-following", "false");
+  await restingScrollTop(page, viewport);
+}
 
 /* Scrolled up, the reader's row stays where it is on screen whatever
    changes around it. */
@@ -19,11 +84,8 @@ test.describe("a reader scrolled up in a transcript", () => {
 
   test("keeps their row still when a row above it grows", async ({ page }) => {
     /* the reader's own wheel takes them off the foot */
-    await page.getByTestId("transcript-panel").hover();
-    await page.mouse.wheel(0, -1200);
-    await page.waitForTimeout(300);
     const viewport = page.locator('[data-slot="scroll-area-viewport"][data-following]');
-    await expect(viewport).toHaveAttribute("data-following", "false");
+    await wheelUp(page, viewport);
 
     const moved = await viewport.evaluate(async (scroller) => {
       const top = scroller.getBoundingClientRect().top;
@@ -45,26 +107,42 @@ test.describe("a reader scrolled up in a transcript", () => {
       );
       return Math.round(reader.getBoundingClientRect().top - before);
     });
-    expect(moved).toBe(0);
+    /* toBe tells -0 from 0 */
+    expect(Math.abs(moved)).toBe(0);
   });
 
-  /* WebKit on Linux animates a wheel scroll over hundreds of milliseconds,
-     so the starting position read races the animation and the follow
-     corrections it triggers; Chromium on the same image reads it settled.
-     #2363 measures and investigates; the assertion stays covered by
-     Chromium until the follow hold is settled deterministically. */
-  test("keeps their place while the reply below them streams", async ({
+  /* A held arrow key or a trackpad's momentum moves the view a little each
+     frame, and the scroll event saying so comes after; a row swapping or a
+     reply growing in between must not pull the reader back by the move they
+     just made (WebKit stops a keyboard scroll at any such write). */
+  test("does not undo the reader's own move when the content changes before its scroll event", async ({
     page,
-  }, testInfo) => {
-    test.skip(
-      testInfo.project.name === "webkit-desktop",
-      "WebKit on Linux animates the wheel scroll; #2363",
-    );
+  }) => {
     await page.getByTestId("transcript-panel").hover();
     await page.mouse.wheel(0, -1200);
-    await page.waitForTimeout(300);
     const viewport = page.locator('[data-slot="scroll-area-viewport"][data-following]');
-    const before = await viewport.evaluate((scroller) => scroller.scrollTop);
+    await expect(viewport).toHaveAttribute("data-following", "false");
+    await page.waitForTimeout(800);
+    const result = await viewport.evaluate(async (scroller) => {
+      const moved = scroller.scrollTop - 10;
+      /* a held arrow key repeats while its scroll runs */
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowUp", repeat: true }),
+      );
+      /* the view has moved; the content changes before the move's event */
+      scroller.scrollTop = moved;
+      const note = document.createElement("span");
+      scroller.querySelector("[data-timeline-key]")!.append(note);
+      for (let i = 0; i < 3; i += 1) await new Promise((r) => requestAnimationFrame(r));
+      return { moved, now: scroller.scrollTop };
+    });
+    expect(Math.abs(result.now - result.moved)).toBeLessThan(1);
+  });
+
+  test("keeps their place while the reply below them streams", async ({ page }) => {
+    const viewport = page.locator('[data-slot="scroll-area-viewport"][data-following]');
+    await wheelUp(page, viewport);
+    const before = await readerRow(viewport);
     for (let n = 0; n < 8; n += 1) {
       await page.evaluate(
         (n) =>
@@ -76,7 +154,8 @@ test.describe("a reader scrolled up in a transcript", () => {
       await page.waitForTimeout(100);
     }
     await expect(viewport).toHaveAttribute("data-following", "false");
-    expect(await viewport.evaluate((scroller) => scroller.scrollTop)).toBe(before);
+    await restingScrollTop(page, viewport);
+    expect(await readerRow(viewport, before.key)).toEqual(before);
   });
 });
 
@@ -180,8 +259,9 @@ test("only moves down the page through a whole turn", async ({ page }, testInfo)
 
 /* A message the person sends is drawn once from the moment it is sent: the
    app's own copy, then the bridge's pending turn, then the saved message.
-   Every one of them names the request by its id, so they are one row
-   throughout and the copy never comes back beside it. */
+   The copy and the pending turn name the request by its id and are one row
+   throughout; the saved message names it by its document id, so it is a
+   row of its own, and the copy never comes back beside it. */
 test("a sent message is drawn once from send to saved", async ({ page }, testInfo) => {
   test.skip(
     !["webkit-desktop", "chromium-desktop"].includes(testInfo.project.name),
