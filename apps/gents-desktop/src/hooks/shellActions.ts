@@ -5,6 +5,7 @@ import type {
 
 import { createDesktopShellChatActions } from "./desktopShellChatActions";
 import { createDesktopShellConfigActions } from "./desktopShellConfigActions";
+import { createDesktopShellHostActions } from "./desktopShellHostActions";
 import { createDesktopShellMailboxActions } from "./desktopShellMailboxActions";
 import { createDesktopShellPeerActions } from "./desktopShellPeerActions";
 import { createDesktopShellSelectionActions } from "./desktopShellSelectionActions";
@@ -69,6 +70,7 @@ export function createShellActions({
       selectAgent: route.selectAgent,
     }),
     ...createDesktopShellConfigActions({ api, mutateSnapshot, reportFailure }),
+    ...createDesktopShellHostActions({ api }),
     ...createDesktopShellTaskActions({
       api,
       store: stores.selection,

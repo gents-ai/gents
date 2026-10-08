@@ -24,6 +24,8 @@ import type {
 } from "../types.js";
 import type { DesktopOperationsSnapshot } from "../types/operations.js";
 import { createDesktopInvoker } from "./invoke.js";
+import { createHostAccessCommands } from "./hostAccess.js";
+import { createPackCommands } from "./packs.js";
 import { createProviderAccountCommands } from "./providerAccounts.js";
 import type { DesktopApiAdapter, ManagedServerStatus } from "./types.js";
 import type { ManagedServerResetResult } from "../generated/ManagedServerResetResult.js";
@@ -273,6 +275,8 @@ export function createDesktopApiAdapter(
       }),
     cancelClaudeLogin: () => invokeDesktop<void>("desktop_claude_login_cancel"),
     ...createProviderAccountCommands(invokeDesktop),
+    ...createPackCommands(invokeDesktop),
+    ...createHostAccessCommands(invokeDesktop),
     saveInferenceProfileConfig: (request) =>
       invokeDesktop<DesktopClientSnapshot>("desktop_inference_profile_save", {
         request,

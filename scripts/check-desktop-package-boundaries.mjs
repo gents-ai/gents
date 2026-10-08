@@ -642,6 +642,98 @@ for (const [path, maximumLines] of [
   }
 }
 
+/* Screens read stores and call named actions; only the app's owners (in
+   src/hooks and src/lib) reach the native bridge. A component that imports
+   Tauri or holds the bridge's API fails, except the files listed here, which
+   still do and are moving to owners. The list only shrinks: a listed file
+   that no longer reaches the bridge must leave it. */
+const componentsReachingBridge = new Set([
+  "src/components/StartupScreen.tsx",
+  "src/ui/app/platform.ts",
+  "src/ui/app/SettingsMenu.tsx",
+  "src/ui/hooks/useClient.ts",
+  "src/ui/lib/managedRuntimeReadiness.ts",
+  "src/ui/lib/pickDirectory.ts",
+  "src/ui/lib/providerLogin.ts",
+  "src/ui/lib/swipe-nav.ts",
+  "src/ui/screens/agent/AgentCard.tsx",
+  "src/ui/screens/agent/BackendEditor.tsx",
+  "src/ui/screens/agent/LocalServer.tsx",
+  "src/ui/screens/agent/ProfileEditor.tsx",
+  "src/ui/screens/agent/ProviderAccounts.tsx",
+  "src/ui/screens/agent/ToolGroupControls.tsx",
+  "src/ui/screens/agent/ToolServicesPanel.tsx",
+  "src/ui/screens/agent/useModelRecommendation.ts",
+  "src/ui/screens/AgentsScreen.tsx",
+  "src/ui/screens/setup/InferenceSetup.tsx",
+  "src/ui/screens/setup/OnboardingWizard.tsx",
+  "src/ui/screens/workers.ts",
+  "src/ui/theme.ts",
+]);
+const desktopRoot = join(root, "apps/gents-desktop");
+/* whether a `{ … } = useApp()` destructuring, nested braces and all, names
+   `api` */
+function destructuresApi(source) {
+  for (const end of source.matchAll(/\}\s*=\s*useApp\(\)/g)) {
+    let depth = 0;
+    for (let at = end.index; at >= 0; at -= 1) {
+      if (source[at] === "}") depth += 1;
+      else if (source[at] === "{" && --depth === 0) {
+        if (/(?:^|[{,\s])api\s*[,}:]/.test(source.slice(at, end.index + 1)))
+          return true;
+        break;
+      }
+    }
+  }
+  return false;
+}
+const bridgeAccess = [
+  [
+    (source) => /(?:\bfrom\s+|\bimport\(\s*)["']@tauri-apps\//.test(source),
+    "imports @tauri-apps",
+  ],
+  [
+    (source) => /\bbridgeCommand\s*\(/.test(source),
+    "sends a bridge command by name",
+  ],
+  [
+    (source) =>
+      /\buseApp\(\)\s*\.\s*api\b/.test(source) || destructuresApi(source),
+    "takes the bridge API from useApp()",
+  ],
+  [(source) => /\bDesktopApiAdapter\b/.test(source), "holds the bridge API"],
+];
+for (const file of [
+  ...filesUnder(join(desktopRoot, "src/ui"), (path) => /\.tsx?$/.test(path)),
+  ...filesUnder(join(desktopRoot, "src/components"), (path) =>
+    /\.tsx?$/.test(path),
+  ),
+]) {
+  const path = relative(desktopRoot, file);
+  const source = readFileSync(file, "utf8");
+  const reasons = bridgeAccess
+    .filter(([reaches]) => reaches(source))
+    .map(([, reason]) => reason);
+  if (componentsReachingBridge.has(path)) {
+    if (reasons.length === 0) {
+      failures.push(
+        `${path} no longer reaches the native bridge; remove it from componentsReachingBridge`,
+      );
+    }
+  } else if (reasons.length > 0) {
+    failures.push(
+      `${path} ${reasons.join(" and ")}; a component calls actions or an owner in src/hooks or src/lib instead`,
+    );
+  }
+}
+for (const path of componentsReachingBridge) {
+  if (!statSync(join(desktopRoot, path), { throwIfNoEntry: false })) {
+    failures.push(
+      `${path} is listed in componentsReachingBridge but does not exist`,
+    );
+  }
+}
+
 if (failures.length > 0) {
   console.error(failures.map((failure) => `- ${failure}`).join("\n"));
   process.exit(1);

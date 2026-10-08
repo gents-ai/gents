@@ -71,6 +71,20 @@ import type {
   DesktopOperationsSnapshot,
   DesktopOperationsSnapshotRequest,
 } from "../types/operations.js";
+import type {
+  FoundPack,
+  InstalledPack,
+  PackEditedChoice,
+  PackInstallRequest,
+  PackPluginSlot,
+  PackSlotProfile,
+} from "../types/packs.js";
+import type {
+  AllowedFolderAccess,
+  AllowedFolders,
+  PluginApprovalDecision,
+  PluginApprovalRequest,
+} from "../types/hostAccess.js";
 
 export type ManagedServerAuthorityInput = {
   toolCeiling: ManagedServerToolCeiling;
@@ -327,6 +341,53 @@ export type DesktopApiAdapter = {
   interruptRequest: (
     request: DesktopInterruptRequestRequest,
   ) => Promise<InterruptRequestResult>;
+  listInstalledPacks: () => Promise<{ packs: InstalledPack[] }>;
+  listPackPluginSlots: () => Promise<{
+    plugins: PackPluginSlot[];
+    profiles: PackSlotProfile[];
+  }>;
+  /** the registry account signed in, or a failure when none is */
+  readPackAccount: () => Promise<{ account: { username: string } }>;
+  searchPacks: (
+    query: string,
+    page: number,
+  ) => Promise<{ packs: FoundPack[]; has_more: boolean }>;
+  installPack: (request: PackInstallRequest) => Promise<void>;
+  updatePack: (pack: string, edited: PackEditedChoice) => Promise<void>;
+  removePack: (pack: string) => Promise<void>;
+  bindPackPlugin: (plugin: string, profile: string | null) => Promise<void>;
+  signInToPackRegistry: (token: string) => Promise<void>;
+  signOutOfPackRegistry: () => Promise<void>;
+  listAllowedFolders: () => Promise<AllowedFolders>;
+  addAllowedFolder: (
+    path: string,
+    access: AllowedFolderAccess,
+  ) => Promise<AllowedFolders>;
+  removeAllowedFolder: (path: string) => Promise<AllowedFolders>;
+  listPendingPluginApprovals: () => Promise<{ requests: PluginApprovalRequest[] }>;
+  decidePluginApproval: (
+    id: string,
+    decision: PluginApprovalDecision,
+  ) => Promise<void>;
 };
+
+export type PackCommand =
+  | "listInstalledPacks"
+  | "listPackPluginSlots"
+  | "readPackAccount"
+  | "searchPacks"
+  | "installPack"
+  | "updatePack"
+  | "removePack"
+  | "bindPackPlugin"
+  | "signInToPackRegistry"
+  | "signOutOfPackRegistry";
+
+export type HostAccessCommand =
+  | "listAllowedFolders"
+  | "addAllowedFolder"
+  | "removeAllowedFolder"
+  | "listPendingPluginApprovals"
+  | "decidePluginApproval";
 
 export type { HomeResetDisposition, ManagedServerResetResult, ManagedServerStatus };

@@ -145,6 +145,21 @@ export type {
   WorkspaceListingView,
 } from "./types/operations.js";
 export type {
+  FoundPack,
+  InstalledPack,
+  PackEditedChoice,
+  PackInstallRequest,
+  PackPluginSlot,
+  PackSlotProfile,
+} from "./types/packs.js";
+export type {
+  AllowedFolder,
+  AllowedFolderAccess,
+  AllowedFolders,
+  PluginApprovalDecision,
+  PluginApprovalRequest,
+} from "./types/hostAccess.js";
+export type {
   BackendDisplayState,
   BackendHealth,
   InferenceCallSummary,

@@ -6,39 +6,34 @@ import { useCallback, useEffect, useState } from "react";
 import { Button } from "@gents/ui/components/button";
 import { Input } from "@gents/ui/components/input";
 import { toast } from "sonner";
+import type {
+  AllowedFolderAccess,
+  AllowedFolders,
+} from "@source-inc/gents-desktop-client";
+import { useApp } from "@/app/AppContext";
 import { canPickDirectory, pickDirectory } from "../../lib/pickDirectory";
-import { call, message } from "./bridgeCall";
 import { Group, Row } from "./rows";
 
-type Access = "read" | "read_write";
-
-interface Folder {
-  path: string;
-  access: Access;
-}
-
-interface Folders {
-  dirs: Folder[];
-}
-
-const ACCESS_LABEL: Record<Access, string> = {
+const ACCESS_LABEL: Record<AllowedFolderAccess, string> = {
   read: "Read only",
   read_write: "Read and write",
 };
 
 export function AllowedFoldersPanel() {
-  const [folders, setFolders] = useState<Folders | null>(null);
+  const { actions } = useApp();
+  const [folders, setFolders] = useState<AllowedFolders | null>(null);
   const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
 
   const run = useCallback(
-    async (command: string, args: Record<string, unknown> = {}) => {
+    /* each folder command answers with the list as it now stands */
+    async (command: () => Promise<AllowedFolders>) => {
       setBusy(true);
       try {
-        setFolders(await call<Folders>(command, args));
+        setFolders(await command());
         return true;
       } catch (error) {
-        toast.error(message(error));
+        toast.error(error instanceof Error ? error.message : String(error));
         return false;
       } finally {
         setBusy(false);
@@ -48,11 +43,11 @@ export function AllowedFoldersPanel() {
   );
 
   useEffect(() => {
-    void run("desktop_allowed_dirs_list");
-  }, [run]);
+    void run(() => actions.listAllowedFolders());
+  }, [run, actions]);
 
-  const add = (path: string, access: Access) =>
-    run("desktop_allowed_dirs_add", { path, access });
+  const add = (path: string, access: AllowedFolderAccess) =>
+    run(() => actions.addAllowedFolder(path, access));
 
   async function choose() {
     const picked = await pickDirectory({ title: "Allow a folder" });
@@ -86,9 +81,7 @@ export function AllowedFoldersPanel() {
                 size="sm"
                 variant="outline"
                 disabled={busy}
-                onClick={() =>
-                  run("desktop_allowed_dirs_remove", { path: folder.path })
-                }
+                onClick={() => run(() => actions.removeAllowedFolder(folder.path))}
               >
                 Remove
               </Button>
