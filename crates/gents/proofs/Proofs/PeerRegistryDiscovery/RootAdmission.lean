@@ -197,5 +197,27 @@ abbrev rootSelectionOk
     (blank = false ∧ policyConfigured = false ∧ published = ∅ ∧ resolved.isSome) ∨
     admitted published resolved
 
+/-- Root-patch contract: `none` is an omitted edit, `some none` a clear and
+`some (some r)` a set. Omission preserves the stored value but must re-admit it
+against current policy, so a stale, blank or revoked stored root cannot bypass
+the gate; rootless Tools (`storedRootRequired = false`) gain no filesystem
+authority and do not fail an unrelated edit. Clear is allowed only without
+explicit policy, and set follows the create rule. -/
+abbrev rootEditSelectionOk
+    (policyConfigured : Bool)
+    (published : Finset CanonicalPath)
+    (storedRoot : String)
+    (resolvedStored : Option CanonicalPath)
+    (storedRootRequired : Bool)
+    (update : Option (Option String))
+    (resolved : Option CanonicalPath) : Prop :=
+  match update with
+  | none =>
+      storedRootRequired = false ∨
+        rootSelectionOk policyConfigured published (storedRoot.trim == "") resolvedStored
+  | some none => policyConfigured = false
+  | some (some root) =>
+      rootSelectionOk policyConfigured published (root.trim == "") resolved
+
 end RootAdmission
 end PeerRegistryDiscovery
