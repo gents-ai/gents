@@ -57,7 +57,7 @@ def activation? (ids : Identities) (available : Bool) (enrollment : Enrollment.S
             , logicalRequest := ids.encode request.requestId
             , parentPhysical := ids.encode parent.link.documentId
             , parentLogical := ids.encode parent.link.requestId
-            , agent := ids.encode request.targetAgent
+            , node := ids.encode request.targetAgent
             , session := ids.encode request.sessionId
             , authenticated := true }
         , generation, duration, deadline }

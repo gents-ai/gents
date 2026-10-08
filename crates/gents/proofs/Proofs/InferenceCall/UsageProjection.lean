@@ -102,7 +102,7 @@ def titleBelongsTo (observation : Observation) (parent : ParentScope)
       titleSelfBindingValid row binding &&
         decide (binding.parentLogical = parent.logical ∧
           binding.parentPhysical = parent.physical ∧
-          binding.agent = parent.agent ∧
+          binding.node = parent.agent ∧
           binding.session = parent.session)
   | none => false
 
@@ -289,7 +289,7 @@ private def witnessRow (physical : CanonicalOutput.DocId) (logical : RequestId)
 private def witnessTitleBinding : CanonicalOutput.Execution.Handover.TitleBinding :=
   { physicalRequest := 11, logicalRequest := 21,
     parentPhysical := 10, parentLogical := 20,
-    agent := 30, session := 40, authenticated := true }
+    node := 30, session := 40, authenticated := true }
 
 private def witnessObservation (row : UsageRow) : Observation :=
   { callIds := {7}

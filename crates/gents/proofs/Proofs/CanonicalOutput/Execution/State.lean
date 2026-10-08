@@ -28,7 +28,7 @@ namespace Handover
 structure PhysicalRequestAdmission where
   document : DocId
   entry : SessionQueue.QueueEntry
-  agent : Nat
+  node : Nat
   session : SessionId
   requester : Option Nat
   authenticated : Bool
@@ -49,7 +49,7 @@ structure TitleBinding where
   logicalRequest : RequestId
   parentPhysical : DocId
   parentLogical : RequestId
-  agent : Nat
+  node : Nat
   session : SessionId
   authenticated : Bool
   deriving DecidableEq, Repr
@@ -132,7 +132,7 @@ its physical document binding. Logical `entry.requestId` is never substituted
 for `wakeDocument`. -/
 structure WakeDocumentBinding where
   entry : SessionQueue.QueueEntry
-  agent : Nat
+  node : Nat
   session : SessionId
   notificationMessageId : Transcript.MessageId
   notificationSequence : Transcript.Sequence

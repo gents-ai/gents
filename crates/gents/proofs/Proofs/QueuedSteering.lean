@@ -551,7 +551,7 @@ private def entry : SessionQueue.QueueEntry :=
 
 private def activation : Handover.Activation :=
   { request :=
-      { document := 101, entry, agent := 1, session := 7,
+      { document := 101, entry, node := 1, session := 7,
         requester := some 2, authenticated := true }
     evidence := .ordinary,
     generation := 91, duration := 10, deadline := 20 }

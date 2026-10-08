@@ -122,7 +122,7 @@ def hydrationAccessJson (access : CanonicalOutput.Hydration.ProvenanceAccess) : 
     "\"state\":" ++ jsonString (accessStateName access.state) ++ "," ++
     "\"peer\":" ++ jsonString access.scope.peer ++ "," ++
     "\"requester\":" ++ jsonString access.scope.requester ++ "," ++
-    "\"node\":" ++ jsonString access.scope.agent ++ "," ++
+    "\"node\":" ++ jsonString access.scope.node ++ "," ++
     "\"session\":" ++ jsonString access.scope.session ++ "," ++
     "\"native_session\":" ++ toString access.scope.nativeSession ++ "}"
 

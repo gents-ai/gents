@@ -25,8 +25,8 @@ def wakeDocumentBindingValid (world : World) (message : MessageEnvelope)
     (queue : SessionQueue.SessionQueueState)
     (notified : BackgroundCompletion.NotifiedCompletion)
     (wake : SessionQueue.QueueEntry) (binding : WakeDocumentBinding) : Bool :=
-  binding.authenticated && binding.agent == queue.scope.agent &&
-    binding.agent == world.nodeDid && binding.session == queue.sessionId &&
+  binding.authenticated && binding.node == queue.scope.agent &&
+    binding.node == world.nodeDid && binding.session == queue.sessionId &&
     binding.session == world.sessionId && binding.entry == wake &&
     message.header.request == some binding.wakeDocument &&
     binding.notificationMessageId == notified.completion.notificationMessageId &&

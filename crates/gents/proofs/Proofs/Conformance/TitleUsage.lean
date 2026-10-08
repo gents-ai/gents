@@ -66,7 +66,7 @@ private def otherUsage : Usage := { promptTokens := 4, completionTokens := 5 }
 private def binding : CanonicalOutput.Execution.Handover.TitleBinding :=
   { physicalRequest := 11, logicalRequest := 21
   , parentPhysical := 10, parentLogical := 20
-  , agent := 30, session := 40, authenticated := true }
+  , node := 30, session := 40, authenticated := true }
 
 private def bindingFact (b : TitleBinding) : TitleBindingFact :=
   { physical := 11, binding := b }
@@ -108,7 +108,7 @@ private def titleUsageCases : List Case := [
     purposes := [titlePurpose], bindings := [bindingFact { binding with parentLogical := 25 }] },
   { name := "wrong_parent_agent", parent := parent,
     rows := [mkRow 7 11 21 (some usage)],
-    purposes := [titlePurpose], bindings := [bindingFact { binding with agent := 35 }] },
+    purposes := [titlePurpose], bindings := [bindingFact { binding with node := 35 }] },
   { name := "wrong_parent_session", parent := parent,
     rows := [mkRow 7 11 21 (some usage)],
     purposes := [titlePurpose], bindings := [bindingFact { binding with session := 45 }] },
@@ -164,7 +164,7 @@ private def bindingJson (value : CanonicalOutput.Execution.Handover.TitleBinding
      ("logical", toJson value.logicalRequest),
      ("parent_physical", toJson value.parentPhysical),
      ("parent_logical", toJson value.parentLogical),
-     ("agent", toJson value.agent), ("session", toJson value.session),
+     ("node_did", toJson value.node), ("session", toJson value.session),
      ("authenticated", toJson value.authenticated)]
 
 private def bindingFactJson (value : TitleBindingFact) : Json :=

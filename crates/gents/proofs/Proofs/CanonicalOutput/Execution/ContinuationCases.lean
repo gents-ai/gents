@@ -133,7 +133,7 @@ def restartNotification : MessageEnvelope :=
 
 def restartBinding (context : ToolExecution.ToolCallContext)
     (registered : Bool := false) : RestartRecovery.RestartBinding :=
-  { document := 600, agent := 1, session := 1
+  { document := 600, node := 1, session := 1
     observation := restartObservation context registered
     renderedReason := "interrupted_on_restart"
     notification := restartNotification

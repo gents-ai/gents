@@ -22,7 +22,7 @@ structure Binding where
   goalOwner : String
   goalSession : String
   observedStatus : Goals.Status
-  executionAgent : Nat
+  executionNode : Nat
   executionSession : SessionId
   parentDocument : DocId
   parentLogical : RequestId
@@ -38,7 +38,7 @@ structure Binding where
 
 def bindingValid (world : World) (snapshot : Snapshot)
     (request : ClaimedRequest) (binding : Binding) : Bool :=
-  binding.authenticated && binding.executionAgent == world.nodeDid &&
+  binding.authenticated && binding.executionNode == world.nodeDid &&
     binding.executionSession == world.sessionId &&
     binding.goalDocument == request.binding.goal &&
     binding.goalOwner == request.binding.owner &&
@@ -165,7 +165,7 @@ theorem successful_publication_preserves_claim_control
 def childAdmission (result : Result) : Handover.PhysicalRequestAdmission :=
   { document := result.binding.childDocument
   , entry := result.entry
-  , agent := result.binding.executionAgent
+  , node := result.binding.executionNode
   , session := result.binding.executionSession
   , requester := result.binding.childRequester
   , authenticated := result.binding.authenticated }

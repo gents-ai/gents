@@ -117,7 +117,7 @@ private def emittedModelLabels (c : Case) : List Nat :=
   let binding := (activation c).map fun activation =>
     let value := activation.binding
     [value.physicalRequest, value.logicalRequest, value.parentPhysical,
-     value.parentLogical, value.agent, value.session]
+     value.parentLogical, value.node, value.session]
   [start.requestId, start.sessionId, start.nodeDid,
    start.queue.scope.agent, start.queue.scope.session,
    start.queue.active.getD 0] ++ binding.getD []
@@ -147,7 +147,7 @@ private def bindingJson (b : Handover.TitleBinding) : Json :=
     , ("logical_request", symbolJson b.logicalRequest)
     , ("parent_physical", symbolJson b.parentPhysical)
     , ("parent_logical", symbolJson b.parentLogical)
-    , ("agent", symbolJson b.agent)
+    , ("node_did", symbolJson b.node)
     , ("session", symbolJson b.session)
     , ("authenticated", toJson b.authenticated) ]
 
