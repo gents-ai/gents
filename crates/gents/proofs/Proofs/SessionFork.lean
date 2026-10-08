@@ -104,7 +104,7 @@ def publish (source : History) (parent child : AgentSession.Scope)
   let copied := copyPrefix source child childDocumentId childKey cut
   if authorizes authorization parent source && idle && coherent &&
       allInSession source parent.session &&
-      decide (parent.agent = child.agent ∧ parent.requester = child.requester ∧
+      decide (parent.node = child.node ∧ parent.requester = child.requester ∧
         parent.session ≠ child.session) &&
       validChain parent.session 1 none source.compactions &&
       validChain child.session 1 none copied.compactions &&

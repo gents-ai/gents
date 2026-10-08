@@ -274,7 +274,7 @@ def deliveryHeaderValid (world : World) (tool : OwnedTool)
 
 def wakeBindingValid (world : World) (tool : OwnedTool)
     (binding : WakeDocumentBinding) (message : MessageEnvelope) : Bool :=
-  binding.authenticated && binding.agent == world.nodeDid &&
+  binding.authenticated && binding.node == world.nodeDid &&
     binding.session == world.sessionId && binding.session == tool.session &&
     binding.entry.source == .backgroundCompletion &&
     decide (binding.entry.coalesceWellFormed binding.session) &&

@@ -1,6 +1,6 @@
 import Proofs.Goals
 
-/-! Behavior-readiness gate and infrastructure-retry accounting for durable
+/-! Agent-readiness gate and infrastructure-retry accounting for durable
 Goal continuation. The existing `Goals.decide` owner still chooses the
 continuation; this layer only decides whether that choice may publish a child
 now and which terminals may spend the bounded infrastructure retry budget.
@@ -9,7 +9,7 @@ namespace GoalAutomation.ReadinessGate
 
 open Goals
 
-/-- Readiness of the continuation's behavior, projected from the canonical
+/-- Readiness of the continuation's agent, projected from the canonical
 runtime-authored readiness row (`project_behavior_readiness`). The projection
 already folds process state, generation alignment, explicit unavailability and
 startup demotion through the same predicate that request routing uses. -/
@@ -24,7 +24,7 @@ inductive Observation where
   /-- Any other runtime-authored unavailability reason, including startup
   demotion. -/
   | unavailable
-  /-- An aligned, ready readiness row that does not assign this behavior. -/
+  /-- An aligned, ready readiness row that does not assign this agent. -/
   | unassigned
   /-- Missing, malformed or unsupported row, process not ready, or router
   generation skew. -/
@@ -55,7 +55,7 @@ def observe : Observation → Bool → Readiness
   | .unassigned, settled => if settled then .unavailable else .waiting
 
 /-- How the observed terminal request relates to execution.
-`agentUnavailable` is a routing admission rejection because the behavior was
+`agentUnavailable` is a routing admission rejection because the agent was
 unavailable: the request was never claimed and nothing executed. Every other
 terminal, including other admission rejections, keeps the existing bounded
 accounting. -/

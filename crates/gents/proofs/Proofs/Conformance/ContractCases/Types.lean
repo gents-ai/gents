@@ -57,7 +57,7 @@ structure EnrollmentTraceStep where
   offerNetworkId : String
   offerAdminDid : String
   offerServerPeer : String
-  offerOwnerAgent : String
+  offerOwnerNode : String
   offerProfile : String
   challenge : String
   requestId : String
@@ -77,7 +77,7 @@ structure EnrollmentTraceStep where
   observedCandidatePeer : String
   resolvedCandidateDid : String
   candidateTicketPeer : String
-  ownerAgent : String
+  ownerNode : String
   clientNonce : String
   issuedAt : String
   expiresAt : String
@@ -93,7 +93,7 @@ structure EnrollmentTraceStep where
   decisionAdminDid : String
   decisionCandidateDid : String
   decisionCandidatePeer : String
-  decisionOwnerAgent : String
+  decisionOwnerNode : String
   decisionAdminSigned : Bool
   decisionFresh : Bool
   revisionKind : String
@@ -106,7 +106,7 @@ structure EnrollmentTraceStep where
   revisionAdminDid : String
   revisionMemberDid : String
   revisionMemberPeer : String
-  revisionOwnerAgent : String
+  revisionOwnerNode : String
   revisionAdminSigned : Bool
   receiptRequestId : String
   receiptRequestDigest : String
@@ -115,7 +115,7 @@ structure EnrollmentTraceStep where
   receiptMemberDid : String
   receiptMemberPeer : String
   receiptServerPeer : String
-  receiptOwnerAgent : String
+  receiptOwnerNode : String
   receiptAuthorizationSequence : Nat
   receiptAuthorizationExpiresAt : String
   receiptDirection : String

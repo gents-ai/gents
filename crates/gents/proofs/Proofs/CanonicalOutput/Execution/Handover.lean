@@ -18,7 +18,7 @@ def canonicalWakeBindings (world : World) (request : PhysicalRequestAdmission)
       | none => none
       | some tool =>
           let binding : WakeDocumentBinding :=
-            { entry := request.entry, agent := request.agent, session := request.session
+            { entry := request.entry, node := request.node, session := request.session
             , notificationMessageId := message.header.id, notificationSequence := message.sequence
             , wakeDocument := request.document, authenticated := request.authenticated }
           if ToolDelivery.wakeNotificationHeaderValid world tool binding message then
@@ -64,9 +64,9 @@ def claimAndActivate (state : World) (actor : Gate.Actor) (now : Time)
       state.gateOwner != some actor || state.gateSchedule.phase != .storage ||
       !StorageWriteGate.pollable state.gateSchedule || now < old.lease.now then none
   else if !activation.request.authenticated ||
-      activation.request.agent != old.nodeDid ||
+      activation.request.node != old.nodeDid ||
       activation.request.session != old.sessionId ||
-      state.queue.scope.agent != old.nodeDid ||
+      state.queue.scope.node != old.nodeDid ||
       state.queue.sessionId != old.sessionId ||
       activation.request.requester != state.queue.scope.requester ||
       !evidenceValid old activation.request activation.evidence then none
@@ -101,7 +101,7 @@ def claimTitle (state : World) (actor : Gate.Actor) (now : Time)
       !binding.authenticated || binding.physicalRequest != state.requestId ||
       binding.parentPhysical == binding.physicalRequest ||
       binding.parentLogical == binding.logicalRequest ||
-      binding.session != state.sessionId || binding.agent != state.nodeDid ||
+      binding.session != state.sessionId || binding.node != state.nodeDid ||
       state.gateOwner != some actor || state.gateSchedule.phase != .storage ||
       !StorageWriteGate.pollable state.gateSchedule || now < state.lease.now then none
   else
@@ -212,7 +212,7 @@ def claimReady (world : World) (claimed : ClaimedBinding) : Bool :=
         world.purpose == .titleAudit && binding.authenticated &&
           binding.physicalRequest == claimed.physicalRequest &&
           binding.logicalRequest == claimed.logicalRequest &&
-          binding.session == claimed.session && binding.agent == world.nodeDid &&
+          binding.session == claimed.session && binding.node == world.nodeDid &&
           binding.parentPhysical != binding.physicalRequest &&
           binding.parentLogical != binding.logicalRequest
     | _ => world.purpose == .normal &&
