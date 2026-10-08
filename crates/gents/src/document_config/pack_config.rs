@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 /// Canonical authored document bundle for both ordinary and graph packs.
 /// The loader resolves sidecars/environment values before decoding these same
-/// types. The shared loader fills missing root agent_did from PackInstallOptions;
+/// types. The shared loader fills missing root node_did from PackInstallOptions;
 /// explicit owners must match. Foreign delegation/provenance DIDs are never rewritten.
 /// Validate ownership, references, unknown authoring keys, and resource
 /// bounds before persistence. Sparse patches use a separate representation.
@@ -12,14 +12,14 @@ use serde::{Deserialize, Serialize};
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct PackConfig {
-    pub agent_principal: AgentPrincipal,
+    pub node: Node,
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_default_on_null",
         skip_serializing_if = "Vec::is_empty"
     )]
-    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<AgentBehavior>>", optional = nullable))]
-    pub agent_behaviors: Vec<AgentBehavior>,
+    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<Agent>>", optional = nullable))]
+    pub agents: Vec<Agent>,
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_default_on_null",
@@ -46,8 +46,8 @@ pub struct PackConfig {
         deserialize_with = "super::serde_helpers::deserialize_default_on_null",
         skip_serializing_if = "Vec::is_empty"
     )]
-    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<SubagentTargetDocument>>", optional = nullable))]
-    pub subagent_targets: Vec<SubagentTargetDocument>,
+    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<AgentTargetDocument>>", optional = nullable))]
+    pub agent_targets: Vec<AgentTargetDocument>,
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_default_on_null",
