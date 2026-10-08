@@ -42,7 +42,7 @@ def captureCallback (group : EventGroupState) (candidate : Candidate)
     match group.key.consumer with
     | .trigger _ => none
     | .callbackBinding _ => some
-        { invocationId := invocationId, ownerAgentDid := group.key.agentDid,
+        { invocationId := invocationId, ownerNodeDid := group.key.nodeDid,
           input := input, originGroupKey := some group.key,
           state := .pending, journal := [], resultEmitted := false }
   else none
@@ -51,7 +51,7 @@ theorem capture_binds_eligible_group_and_input (group : EventGroupState)
     (candidate : Candidate) (id input : String) (inv : CallbackInvocation)
     (h : captureCallback group candidate id input = some inv) :
     group.quiescedAt = none ∧ candidate.eligible = true ∧ candidate.key = group.key ∧
-      inv.ownerAgentDid = group.key.agentDid ∧ inv.originGroupKey = some group.key ∧
+      inv.ownerNodeDid = group.key.nodeDid ∧ inv.originGroupKey = some group.key ∧
       inv.input = input := by
   unfold captureCallback at h
   split at h

@@ -115,7 +115,7 @@ def EventConsumer.kind : EventConsumer → String
 /-- Durable group identity: owner principal, typed consumer, effective delivery
 configuration key, correlation. -/
 structure EventGroupKey where
-  agentDid : String
+  nodeDid : String
   consumer : EventConsumer
   consumerConfigKey : String
   correlation : String
@@ -124,7 +124,7 @@ structure EventGroupKey where
 /-- Derivation input for the durable `group_key`. The consumer kind precedes
 the raw id, so equal trigger and binding ids derive different keys. -/
 def EventGroupKey.derivation (key : EventGroupKey) : List String :=
-  [key.agentDid, key.consumer.kind, key.consumer.id,
+  [key.nodeDid, key.consumer.kind, key.consumer.id,
     key.consumerConfigKey, key.correlation]
 
 /-- The durable key derivation includes every discriminator, without ambiguous
@@ -140,9 +140,9 @@ theorem derivation_injective (left right : EventGroupKey)
 configuration and correlation name different durable groups. The derivation
 never collapses a binding id into a field whose semantics say trigger id. -/
 theorem equal_raw_ids_different_kinds_do_not_alias
-    (agentDid configKey correlation rawId : String) :
-    EventGroupKey.mk agentDid (.trigger rawId) configKey correlation ≠
-      EventGroupKey.mk agentDid (.callbackBinding rawId) configKey correlation := by
+    (nodeDid configKey correlation rawId : String) :
+    EventGroupKey.mk nodeDid (.trigger rawId) configKey correlation ≠
+      EventGroupKey.mk nodeDid (.callbackBinding rawId) configKey correlation := by
   intro hEq
   exact EventConsumer.noConfusion (congrArg EventGroupKey.consumer hEq)
 
@@ -155,7 +155,7 @@ owner is the whole gate identity.
 -/
 
 structure TriggerWideKey where
-  agentDid : String
+  nodeDid : String
   triggerId : String
   deriving DecidableEq, Repr
 
@@ -169,49 +169,49 @@ inductive ConcurrencyGateKey where
   | correlated (key : EventGroupKey)
   deriving DecidableEq, Repr
 
-def triggerGateKey (mode : FireMode) (agentDid triggerId configKey correlation : String) :
+def triggerGateKey (mode : FireMode) (nodeDid triggerId configKey correlation : String) :
     ConcurrencyGateKey :=
   match mode with
-  | .perDocument => .triggerWide { agentDid := agentDid, triggerId := triggerId }
+  | .perDocument => .triggerWide { nodeDid := nodeDid, triggerId := triggerId }
   | .perGroup =>
       .correlated
-        { agentDid := agentDid
+        { nodeDid := nodeDid
         , consumer := .trigger triggerId
         , consumerConfigKey := configKey
         , correlation := correlation }
 
 /-- Callback-binding delivery is group-scoped through the same gate vocabulary;
 the binding never occupies a trigger-id field. -/
-def bindingGateKey (agentDid bindingId configKey correlation : String) :
+def bindingGateKey (nodeDid bindingId configKey correlation : String) :
     ConcurrencyGateKey :=
   .correlated
-    { agentDid := agentDid
+    { nodeDid := nodeDid
     , consumer := .callbackBinding bindingId
     , consumerConfigKey := configKey
     , correlation := correlation }
 
 theorem per_document_gate_ignores_correlation
-    (agent trigger config a b : String) :
-    triggerGateKey .perDocument agent trigger config a =
-      triggerGateKey .perDocument agent trigger config b := rfl
+    (node trigger config a b : String) :
+    triggerGateKey .perDocument node trigger config a =
+      triggerGateKey .perDocument node trigger config b := rfl
 
 theorem per_group_different_correlation_is_different_gate_scope
-    (agentDid triggerId configKey correlation correlation' : String)
+    (nodeDid triggerId configKey correlation correlation' : String)
     (h : correlation ≠ correlation') :
-    triggerGateKey .perGroup agentDid triggerId configKey correlation ≠
-      triggerGateKey .perGroup agentDid triggerId configKey correlation' := by
+    triggerGateKey .perGroup nodeDid triggerId configKey correlation ≠
+      triggerGateKey .perGroup nodeDid triggerId configKey correlation' := by
   intro hEq
   have hKey := ConcurrencyGateKey.correlated.inj hEq
   exact h (congrArg EventGroupKey.correlation hKey)
 
 /-- Equal raw ids keep distinct concurrency scopes across consumer kinds. -/
 theorem equal_raw_ids_different_gate_scopes
-    (agentDid configKey correlation rawId : String) :
-    triggerGateKey .perGroup agentDid rawId configKey correlation ≠
-      bindingGateKey agentDid rawId configKey correlation := by
+    (nodeDid configKey correlation rawId : String) :
+    triggerGateKey .perGroup nodeDid rawId configKey correlation ≠
+      bindingGateKey nodeDid rawId configKey correlation := by
   intro hEq
   have hKey := ConcurrencyGateKey.correlated.inj hEq
-  exact equal_raw_ids_different_kinds_do_not_alias agentDid configKey correlation rawId hKey
+  exact equal_raw_ids_different_kinds_do_not_alias nodeDid configKey correlation rawId hKey
 
 
 structure Candidate where
@@ -390,7 +390,7 @@ theorem reconcile_idempotent
 theorem different_owner_is_not_suppressed_by_other_owner_marker
     (state : MarkerState) (candidate : Candidate)
     (hEligible : candidate.eligible = true)
-    (hDistinct : ∀ k ∈ state.materialized, k.agentDid ≠ candidate.key.agentDid) :
+    (hDistinct : ∀ k ∈ state.materialized, k.nodeDid ≠ candidate.key.nodeDid) :
     candidate.key ∈ (reconcile state candidate).materialized := by
   have hNot : candidate.key ∉ state.materialized := fun h =>
     hDistinct candidate.key h rfl
