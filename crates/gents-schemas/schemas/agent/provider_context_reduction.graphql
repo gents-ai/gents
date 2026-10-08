@@ -12,13 +12,13 @@
 # collection from participant, desktop, fixture, and bulk-sync routes.
 type ProviderContextReduction @branchable {
     # SHA-256 of the canonical tuple
-    # [agent_did, session_id, request_doc_id, turn_index, reduction_index].
+    # [node_did, session_id, request_doc_id, turn_index, reduction_index].
     # Ordinary indexed, not unique: pinned DefraDB retains remotely-conflicting
     # unique twins but indexes only one deterministic winner. Runtime
     # create-and-compare enumerates every visible ordinary-index twin and fails
     # closed if more than one fact binds this key.
     reduction_key: String @index @immutable
-    agent_did: String @index @immutable
+    node_did: String @index @immutable
     requester_did: String @index @immutable
     session_id: String @index @immutable
     request_id: String @index @immutable
