@@ -66,11 +66,7 @@ async fn snapshot_for_behaviors_with_principal(
     for behavior in &behaviors {
         let tool_surface = behavior
             .tools
-            .resolve(
-                node,
-                behavior.agent_did(),
-                &Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
-            )
+            .resolve(node, behavior.agent_did(), &Default::default())
             .await
             .unwrap();
         tool_surfaces.insert(behavior.behavior_id.clone(), Arc::new(tool_surface));
@@ -94,11 +90,7 @@ async fn snapshot_for_behaviors_with_admission(
     for behavior in &behaviors {
         let tool_surface = behavior
             .tools
-            .resolve(
-                node,
-                behavior.agent_did(),
-                &Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
-            )
+            .resolve(node, behavior.agent_did(), &Default::default())
             .await
             .unwrap();
         tool_surfaces.insert(behavior.behavior_id.clone(), Arc::new(tool_surface));
@@ -373,11 +365,7 @@ async fn slot_panic_restarts_behavior() {
     let tool_surface = Arc::new(
         behavior
             .tools
-            .resolve(
-                node.as_ref(),
-                behavior.agent_did(),
-                &Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
-            )
+            .resolve(node.as_ref(), behavior.agent_did(), &Default::default())
             .await
             .unwrap(),
     );
@@ -463,11 +451,7 @@ async fn dropping_behavior_slot_aborts_a_held_executor() {
     let tool_surface = Arc::new(
         behavior
             .tools
-            .resolve(
-                node.as_ref(),
-                behavior.agent_did(),
-                &Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
-            )
+            .resolve(node.as_ref(), behavior.agent_did(), &Default::default())
             .await
             .unwrap(),
     );

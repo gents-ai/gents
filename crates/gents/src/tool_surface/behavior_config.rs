@@ -486,7 +486,7 @@ impl BehaviorToolConfig {
         &self,
         node: &EmbeddedNode,
         agent_did: &str,
-        plugins: &std::sync::Arc<crate::plugin::executor::PluginExecutor>,
+        plugins: &crate::plugin::executor::PluginExecutor,
     ) -> Result<ToolSurface> {
         self.resolve_with_subagent_tools(node, agent_did, plugins, SubagentToolConfig::default())
             .await
@@ -496,7 +496,7 @@ impl BehaviorToolConfig {
         &self,
         node: &EmbeddedNode,
         agent_did: &str,
-        plugins: &std::sync::Arc<crate::plugin::executor::PluginExecutor>,
+        plugins: &crate::plugin::executor::PluginExecutor,
         subagent_tools: SubagentToolConfig,
     ) -> Result<ToolSurface> {
         let available_service_ids = enabled_mcp_service_ids(node, agent_did).await?;
@@ -519,7 +519,7 @@ impl BehaviorToolConfig {
         let availability = RuntimeToolAvailability::from_online_mcp_services(available_service_ids);
         let mut surface =
             self.resolve_with_subagent_tools_for_runtime_availability(availability, subagent_tools);
-        surface.plugin_resolutions = resolve_plugin_identities(plugins, &surface.plugin_tools)?;
+        surface.plugin_resolutions = resolve_plugin_identities(plugins, &surface.plugin_tools);
         Ok(surface)
     }
 
@@ -678,7 +678,7 @@ impl BehaviorToolConfig {
         node: &EmbeddedNode,
         own_agent_did: &str,
         active_behavior_ids: &HashSet<String>,
-        plugins: &std::sync::Arc<crate::plugin::executor::PluginExecutor>,
+        plugins: &crate::plugin::executor::PluginExecutor,
     ) -> Result<ToolSurface> {
         let mut subagent_tools = self.subagent_tools.clone();
         subagent_tools.targets.retain(|target| {
@@ -723,34 +723,29 @@ impl Default for BehaviorToolConfig {
     }
 }
 
-/// Resolves each surviving plugin reference against the host plugin store.
-/// The resolution outcome is change-detection input only (the
-/// `plugin_resolutions` field on `ToolSurface`); an unresolved plugin stays
-/// `None` and tool building remains the fail-closed gate. A record that
-/// cannot be read fails the resolve with
-/// [`crate::plugin::executor::RecordUnreadable`], which the snapshot treats
-/// as an observation gap, not a behavior unavailability: the watcher keeps
-/// the previous active generation and retries the read.
+/// Resolves each surviving plugin reference against the host plugin store for
+/// change detection only (the `plugin_resolutions` field on `ToolSurface`).
+/// A plugin that does not resolve, for any reason, records `None`: tool
+/// building stays the fail-closed gate, and only the behavior naming it is
+/// affected.
 fn resolve_plugin_identities(
-    plugins: &std::sync::Arc<crate::plugin::executor::PluginExecutor>,
+    plugins: &crate::plugin::executor::PluginExecutor,
     plugin_tools: &[crate::document_config::PluginToolRef],
-) -> anyhow::Result<
-    Vec<(
-        crate::document_config::PluginToolRef,
-        Option<super::PluginRecordIdentity>,
-    )>,
-> {
+) -> Vec<(
+    crate::document_config::PluginToolRef,
+    Option<super::PluginRecordIdentity>,
+)> {
     plugin_tools
         .iter()
         .map(|plugin| {
             let identity = plugins
-                .resolve_observed(&plugin.plugin, plugin.digest.as_deref())
-                .map_err(anyhow::Error::new)?
+                .resolve(&plugin.plugin, plugin.digest.as_deref())
+                .ok()
                 .map(|record| super::PluginRecordIdentity {
                     version: record.version,
                     digest: record.digest,
                 });
-            Ok((plugin.clone(), identity))
+            (plugin.clone(), identity)
         })
         .collect()
 }

@@ -51,7 +51,7 @@ pub async fn run_openai_oneshot_with_tools(
             behavior.agent_did(),
             // The oneshot path has no host plugin store; a plugin tool it
             // names resolves no identity and fails closed at build time.
-            &Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
+            &Default::default(),
         )
         .await?;
     let allowed_targets = tool_surface::resolve_subagent_target_descriptions(&tool_surface);

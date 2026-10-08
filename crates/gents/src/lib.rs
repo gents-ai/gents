@@ -106,7 +106,6 @@ pub(crate) mod test_support {
     const CAPTURED_EVENT_TARGETS: &[&str] = &[
         crate::config_client::write_telemetry::WRITE_ATTEMPT_EVENT_TARGET,
         crate::runtime_status::RECONCILE_PHASE_EVENT_TARGET,
-        crate::agent::BEHAVIOR_DEMOTED_EVENT_TARGET,
     ];
 
     /// Keeps the captured targets enabled so a scoped subscriber observes them.
@@ -118,7 +117,7 @@ pub(crate) mod test_support {
     /// disabled, and a scoped subscriber installed before that first reach then
     /// receives nothing. A global default that admits the captured targets
     /// keeps their callsites enabled; each scoped subscriber still sees only the
-    /// events raised while it is the default.
+    /// events raised while it is the default, and this one discards the rest.
     /// Call this before installing a scoped subscriber a test reads from.
     pub(crate) fn enable_scoped_event_capture() {
         static INSTALLED: std::sync::Once = std::sync::Once::new();
@@ -126,33 +125,6 @@ pub(crate) mod test_support {
             tracing::subscriber::set_global_default(CapturedTargetSubscriber)
                 .expect("no other global tracing default in this test binary");
         });
-    }
-
-    /// Demotion events recorded by the global capture subscriber — the
-    /// behavior, the error that exhausted the budget, and the logged
-    /// message — so concurrent tests pick out their own by behavior: two
-    /// behaviors can fail on the same missing plugin, and error text alone
-    /// cannot tell their demotions apart.
-    static CAPTURED_DEMOTIONS: std::sync::Mutex<Vec<(String, String, String)>> =
-        std::sync::Mutex::new(Vec::new());
-
-    /// Every recorded demotion message of `behavior_id` whose exhausting
-    /// error contains `error_fragment`. A demotion is logged by a
-    /// slot-worker task, which no scoped subscriber can observe, so the
-    /// global capture subscriber records it instead.
-    pub(crate) fn captured_behavior_demotions(
-        behavior_id: &str,
-        error_fragment: &str,
-    ) -> Vec<String> {
-        CAPTURED_DEMOTIONS
-            .lock()
-            .expect("captured demotions mutex poisoned")
-            .iter()
-            .filter(|(behavior, error, _)| {
-                behavior == behavior_id && error.contains(error_fragment)
-            })
-            .map(|(_, _, message)| message.clone())
-            .collect()
     }
 
     struct CapturedTargetSubscriber;
@@ -170,48 +142,11 @@ pub(crate) mod test_support {
 
         fn record_follows_from(&self, _span: &tracing::Id, _follows: &tracing::Id) {}
 
-        fn event(&self, event: &tracing::Event<'_>) {
-            if event.metadata().target() != crate::agent::BEHAVIOR_DEMOTED_EVENT_TARGET {
-                return;
-            }
-            let mut fields = DemotionFields::default();
-            event.record(&mut fields);
-            if let (Some(behavior_id), Some(error), Some(message)) =
-                (fields.behavior_id, fields.error, fields.message)
-            {
-                CAPTURED_DEMOTIONS
-                    .lock()
-                    .expect("captured demotions mutex poisoned")
-                    .push((behavior_id, error, message));
-            }
-        }
+        fn event(&self, _event: &tracing::Event<'_>) {}
 
         fn enter(&self, _span: &tracing::Id) {}
 
         fn exit(&self, _span: &tracing::Id) {}
-    }
-
-    #[derive(Default)]
-    struct DemotionFields {
-        behavior_id: Option<String>,
-        error: Option<String>,
-        message: Option<String>,
-    }
-
-    impl tracing::field::Visit for DemotionFields {
-        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-            match field.name() {
-                "error" => self.error = Some(format!("{value:?}")),
-                "message" => self.message = Some(format!("{value:?}")),
-                _ => {}
-            }
-        }
-
-        fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
-            if field.name() == "behavior_id" {
-                self.behavior_id = Some(value.to_owned());
-            }
-        }
     }
 
     /// Scripted providers have no HTTP transport. Persist their actual request

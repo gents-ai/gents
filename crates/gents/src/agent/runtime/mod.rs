@@ -16,8 +16,6 @@ use router::{resolve_behavior_for_request, wait_for_next_request_with_latest_sna
 #[cfg(test)]
 pub(in crate::agent) use router::{run_router_with_watcher, RuntimeAdmissionGate};
 #[cfg(test)]
-pub(crate) use startup::BEHAVIOR_DEMOTED_EVENT_TARGET;
-#[cfg(test)]
 use std::collections::HashMap;
 #[cfg(test)]
 use std::sync::Arc;

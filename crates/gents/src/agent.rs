@@ -37,8 +37,6 @@ pub mod persona_presets;
 pub(crate) mod principal_assembly;
 mod reconcile;
 mod runtime;
-#[cfg(test)]
-pub(crate) use runtime::BEHAVIOR_DEMOTED_EVENT_TARGET;
 pub(crate) mod stream_processor;
 #[cfg(test)]
 mod supervision;
@@ -205,7 +203,7 @@ impl DocumentResolveContext {
             identity,
             tool_ceiling,
             backend_health,
-            plugins: Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
+            plugins: Arc::default(),
         }
     }
 }

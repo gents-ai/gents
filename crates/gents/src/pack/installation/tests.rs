@@ -218,41 +218,78 @@ async fn a_document_the_new_version_drops_is_removed_and_history_is_kept() {
     assert_eq!(row["history"], json!([identity("1").digest]));
 }
 
-/// A plugin-only install over a documents install of the same coordinate
-/// (`gents plugin install` of a pack already installed as documents) is a
-/// wake, not an upgrade: the record keeps the documents and the identity
-/// the documents install wrote — a later upgrade still drift-checks
-/// against them, a removal still deletes by them — and only the plugins
-/// refresh, so both installs' plugins are released with the pack.
+/// A plugin-store record is no pack install: the listings skip it, `gents
+/// pack remove` refers it to `gents plugin remove`, and the removal of its
+/// last plugin deletes it.
 #[tokio::test]
-async fn a_plugin_only_install_over_a_documents_install_keeps_its_record() {
+async fn a_plugin_store_record_is_not_a_pack_install() {
     let access = access().await;
+    let home = tempfile::tempdir().unwrap();
+    record_plugin_store_change(
+        &access,
+        OWNER,
+        home.path(),
+        "acme/demo",
+        Some(&identity("1")),
+    )
+    .await
+    .unwrap();
+    installation_doc_id(&access).await;
+    assert!(list_installed_packs(&access, OWNER)
+        .await
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        read_installed_pack(&access, OWNER, "acme/demo")
+            .await
+            .unwrap(),
+        None
+    );
+    let refused = remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)
+        .await
+        .unwrap_err();
+    assert!(
+        format!("{refused:#}").contains("gents plugin remove"),
+        "{refused:#}"
+    );
+
+    record_plugin_store_change(&access, OWNER, home.path(), "acme/demo", None)
+        .await
+        .unwrap();
+    let rows = access
+        .execute("{ PackInstallation { _docID } }")
+        .await
+        .unwrap();
+    assert_eq!(rows["data"]["PackInstallation"], json!([]));
+}
+
+/// Over a documents install of the same coordinate, a plugin-store change
+/// keeps that install's record: its identity and documents stay, so a
+/// removal still deletes by them, and an installed name joins its plugins.
+#[tokio::test]
+async fn a_plugin_store_change_keeps_a_documents_install_record() {
+    let access = access().await;
+    let home = tempfile::tempdir().unwrap();
     install(
         &access,
         "1",
-        &config(&[("alpha", "Alpha"), ("beta", "Beta")]),
+        &config(&[("alpha", "Alpha")]),
         DriftPolicy::Refuse,
     )
     .await
     .unwrap();
-
-    // The plugin-only install carries the same coordinate at a newer
-    // version, its `echo` at a new digest and one name the documents
-    // install never recorded.
+    let extra = InstalledPackPlugin {
+        name: "extra".into(),
+        digest: format!("sha256:{}", "a".repeat(64)),
+    };
     let plugin_only = PackIdentity {
-        plugins: vec![
-            InstalledPackPlugin {
-                name: "echo".into(),
-                digest: format!("sha256:{}", "f".repeat(64)),
-            },
-            InstalledPackPlugin {
-                name: "extra".into(),
-                digest: format!("sha256:{}", "a".repeat(64)),
-            },
-        ],
+        plugins: vec![extra.clone()],
         ..identity("2")
     };
-    record_plugin_store_install(&access, OWNER, &plugin_only)
+    record_plugin_store_change(&access, OWNER, home.path(), "acme/demo", Some(&plugin_only))
+        .await
+        .unwrap();
+    record_plugin_store_change(&access, OWNER, home.path(), "acme/demo", None)
         .await
         .unwrap();
 
@@ -264,86 +301,16 @@ async fn a_plugin_only_install_over_a_documents_install_keeps_its_record() {
             coordinate: "acme/demo".into(),
             version: "1".into(),
             digest: identity("1").digest,
-        }),
-        "the wake write must not re-identify the documents install"
-    );
-
-    edit_tools(&access, "alpha", "Alpha, edited by the operator").await;
-    let error = install(
-        &access,
-        "3",
-        &config(&[("alpha", "Alpha 3"), ("beta", "Beta 3")]),
-        DriftPolicy::Refuse,
-    )
-    .await
-    .unwrap_err();
-    let message = format!("{error:#}");
-    assert!(message.contains("Tools/alpha"), "{message}");
-    assert!(!message.contains("Tools/beta"), "{message}");
-
-    let removed = remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Keep)
-        .await
-        .unwrap();
-    assert_eq!(removed.documents.kept, vec!["Tools/alpha"]);
-    assert_eq!(removed.documents.removed, vec!["Tools/beta"]);
-    assert_eq!(
-        removed.documents.plugins,
-        vec![
-            InstalledPackPlugin {
-                name: "echo".into(),
-                digest: format!("sha256:{}", "f".repeat(64)),
-            },
-            InstalledPackPlugin {
-                name: "extra".into(),
-                digest: format!("sha256:{}", "a".repeat(64)),
-            },
-        ],
-        "removal releases the plugins both installs stored, newest digest per name"
-    );
-    assert_eq!(
-        removed.digests,
-        vec![identity("1").digest],
-        "a plugin-only install invents no upgrade digest or history"
-    );
-    assert_eq!(
-        tools_ids(&access).await,
-        vec!["alpha"],
-        "the edited document is kept, the pack's other document is removed"
-    );
-}
-
-/// A plugin-only install over a record with no documents — a plugins
-/// pack's own wake record — is that pack's install path: the recorded
-/// identity advances to what was installed and the superseded digest moves
-/// to history, while the documents stay empty.
-#[tokio::test]
-async fn a_plugin_only_reinstall_over_its_own_wake_record_refreshes_the_identity() {
-    let access = access().await;
-    record_plugin_store_install(&access, OWNER, &identity("1"))
-        .await
-        .unwrap();
-    record_plugin_store_install(&access, OWNER, &identity("2"))
-        .await
-        .unwrap();
-
-    assert_eq!(
-        read_installed_pack(&access, OWNER, "acme/demo")
-            .await
-            .unwrap(),
-        Some(InstalledPack {
-            coordinate: "acme/demo".into(),
-            version: "2".into(),
-            digest: identity("2").digest,
         })
     );
-    let record = access
-        .execute("{ PackInstallation { documents plugins history } }")
+    let removed = remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)
         .await
         .unwrap();
-    let row = &record["data"]["PackInstallation"][0];
-    assert_eq!(row["documents"], json!(null));
-    assert_eq!(row["plugins"], json!(identity("2").plugins));
-    assert_eq!(row["history"], json!([identity("1").digest]));
+    assert_eq!(removed.documents.removed, vec!["Tools/alpha"]);
+    assert_eq!(
+        removed.documents.plugins,
+        vec![identity("1").plugins[0].clone(), extra]
+    );
 }
 
 async fn installation_doc_id(access: &ConfigAccess) -> String {

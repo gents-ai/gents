@@ -564,67 +564,38 @@ pub(crate) fn rollback_pack_plugin_records(
     gents::plugin::install::rollback_pack_plugin_records(home, previous)
 }
 
-/// Puts the home file record back to what a failed install should leave:
-/// the previous record on a failed reinstall (the plugin records it
-/// describes were restored with it), none at all on a failed first
-/// install. Best-effort, like the plugin-record rollback beside it: a
-/// restore that cannot complete is logged, never masking the install
-/// error that triggered it.
-fn restore_home_install(
+/// Records a plugin-store change of `coordinate` in `home`'s node for the
+/// home's principal (`gents::pack::record_plugin_store_change`), after the
+/// store itself changed. An uninitialized home has no node, so no runtime to
+/// wake: the next start resolves the plugin store as it is.
+pub(crate) async fn record_plugin_store_change(
     home: &std::path::Path,
     coordinate: &str,
-    prior: &Option<gents::pack::HomePackInstall>,
-) {
-    let restore = match prior {
-        Some(prior) => gents::pack::write_home_install(home, prior),
-        None => gents::pack::forget_home_install(home, coordinate),
-    };
-    if let Err(error) = restore {
-        tracing::error!(
-            coordinate,
-            error = %error,
-            "failed to restore the pack install record after a failed pack install",
-        );
-    }
-}
-
-/// The one node scope a plugin-store install or remove works through: the
-/// home's store (or its running server), the owner inference-slot bindings
-/// apply for, and the home's principal — the owner whose `PackInstallation`
-/// wake record `gents pack remove` deletes again, since that path takes no
-/// `--agent-did`. One scope per command: the store lock is exclusive, so a
-/// second embedded resolution while one access is held deadlocks on it.
-pub(crate) struct PluginStoreScope {
-    pub(crate) access: crate::CommandAccess,
-    /// An explicit `--agent-did`, else the home's principal.
-    pub(crate) slot_owner: String,
-    pub(crate) wake_owner: String,
-}
-
-/// The scope on its own, for a plugin-store install with no slots to bind
-/// and for `gents pack remove`. `Ok(None)` on a home with no node (not
-/// initialized): there is no watcher to wake, so a plugin install there
-/// records nothing and the next start resolves the fresh plugin store.
-pub(crate) async fn plugin_store_wake_scope(
-    home: &std::path::Path,
-) -> Result<Option<PluginStoreScope>> {
+    installed: Option<&gents::pack::PackIdentity>,
+) -> Result<()> {
     if !gents::home::init_config_path(home).is_file() {
-        return Ok(None);
+        return Ok(());
     }
-    plugin_store_scope(home, None).await.map(Some)
+    let (access, owner) = resolve_scope_owner(&GraphScopeArgs {
+        home: Some(home.to_owned()),
+        graphql: None,
+        agent_did: None,
+    })
+    .await?;
+    gents::pack::record_plugin_store_change(&access, &owner, home, coordinate, installed).await
 }
 
-/// The scope a plugins pack's install resolves, after checking each
-/// requested slot exists and previewing the bindings. Only an install that
-/// changes the plugin store, or binds a slot, opens a node at all: an
-/// uninitialized home is an error with slots requested and a silent `None`
-/// without them (nothing to wake; the next start resolves the fresh store).
-async fn plugin_pack_install_scope(
-    home: &std::path::Path,
-    agent_did: Option<&str>,
+/// The owner whose profiles `requested` names for a plugins pack's model
+/// slots, after checking each slot exists and its profile can serve a plugin;
+/// `None` when nothing is requested, which opens no store.
+async fn resolve_plugin_slot_owner(
+    scope: &GraphScopeArgs,
     manifest: &PackManifest,
     requested: &BTreeMap<String, String>,
-) -> Result<Option<PluginStoreScope>> {
+) -> Result<Option<String>> {
+    if requested.is_empty() {
+        return Ok(None);
+    }
     for slot in requested.keys() {
         anyhow::ensure!(
             manifest
@@ -636,48 +607,9 @@ async fn plugin_pack_install_scope(
             manifest.name
         );
     }
-    let scope = if !requested.is_empty() {
-        Some(plugin_store_scope(home, agent_did).await?)
-    } else if manifest.metadata.plugins.is_empty() {
-        None
-    } else {
-        plugin_store_wake_scope(home).await?
-    };
-    if let Some(scope) = &scope {
-        if !requested.is_empty() {
-            gents::pack::preview_pack_inference_bindings(
-                &scope.access,
-                manifest,
-                &scope.slot_owner,
-                requested,
-            )
-            .await?;
-        }
-    }
-    Ok(scope)
-}
-
-async fn plugin_store_scope(
-    home: &std::path::Path,
-    agent_did: Option<&str>,
-) -> Result<PluginStoreScope> {
-    let (access, _) = crate::resolve_config_access(Some(home), None).await?;
-    let wake_owner = super::config::binding::resolve_target_agent_did(
-        None,
-        Some(ManifestAgentDidBindingArg::Home),
-        Some(home),
-        None,
-        Some(&access),
-    )
-    .await?;
-    let slot_owner = agent_did
-        .map(str::to_owned)
-        .unwrap_or_else(|| wake_owner.clone());
-    Ok(PluginStoreScope {
-        access,
-        slot_owner,
-        wake_owner,
-    })
+    let (access, owner) = resolve_scope_owner(scope).await?;
+    gents::pack::preview_pack_inference_bindings(&access, manifest, &owner, requested).await?;
+    Ok(Some(owner))
 }
 
 /// Binds each plugin's model slot to the profile `requested` names for it;
@@ -970,24 +902,19 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                     "would_write": false,
                 }));
             }
+            let slot_owner =
+                resolve_plugin_slot_owner(&args.scope, pack.manifest(), &requested).await?;
             let home = args
                 .scope
                 .home
                 .context("asset and plugins packs require --home")?;
-            let scope = plugin_pack_install_scope(
-                &home,
-                args.scope.agent_did.as_deref(),
-                pack.manifest(),
-                &requested,
-            )
-            .await?;
             let (root, _cache_lease) = materialize_cached_pack(&home, &pack)?;
             // A pack's plugins travel inside it (pack_archive's own doc),
             // so installing the pack installs each one into the same
             // content-addressed plugin store `gents plugin install` uses:
             // a plugin that arrived bundled in a pack is just as runnable
             // by name (`gents plugin run <name>`) as one installed on its
-            // own. A failure past this point (the record writes) must not
+            // own. A failure past this point (the record write) must not
             // leave the plugins installed above orphaned.
             let rollback = snapshot_pack_plugin_records(&home, pack.manifest());
             let installed_plugins = install_pack_plugins(
@@ -1021,40 +948,21 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                     .collect(),
                 installed_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             };
-            // The plugin store is final; everything past here is bookkeeping
-            // (slot bindings, the home file record, the wake record below),
-            // undone together so the operator never sees a half-recorded
-            // install.
-            let prior_home_record = gents::pack::read_home_install(&home, &record.coordinate)?;
             let recorded = async {
-                bind_plugin_slots(
-                    &home,
-                    pack.manifest(),
-                    scope.as_ref().map(|scope| scope.slot_owner.as_str()),
-                    &requested,
-                )?;
-                gents::pack::write_home_install(&home, &record)?;
+                bind_plugin_slots(&home, pack.manifest(), slot_owner.as_deref(), &requested)?;
                 if !record.plugins.is_empty() {
-                    if let Some(scope) = &scope {
-                        let identity = gents::pack::PackIdentity::new(
-                            pack.manifest(),
-                            pack.digest(),
-                            record.plugins.clone(),
-                        );
-                        gents::pack::record_plugin_store_install(
-                            &scope.access,
-                            &scope.wake_owner,
-                            &identity,
-                        )
-                        .await?;
-                    }
+                    let identity = gents::pack::PackIdentity::new(
+                        pack.manifest(),
+                        pack.digest(),
+                        record.plugins.clone(),
+                    );
+                    record_plugin_store_change(&home, &record.coordinate, Some(&identity)).await?;
                 }
-                anyhow::Ok(())
+                gents::pack::write_home_install(&home, &record)
             }
             .await;
             if let Err(error) = recorded {
                 rollback_pack_plugin_records(&home, &rollback);
-                restore_home_install(&home, &record.coordinate, &prior_home_record);
                 return Err(error);
             }
             crate::print_json(&json!({
@@ -1072,7 +980,6 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clap::Parser;
 
     /// A bare subject spec is a pack name even when a directory of that name
     /// is in the working directory (a test runs in the crate root, which has
@@ -1284,14 +1191,17 @@ mod tests {
             "inference_slots": [{"name": "remote_ocr", "description": "d", "optional": true}],
         }))
         .unwrap();
-        let home = tempfile::tempdir().unwrap();
-        let none = plugin_pack_install_scope(home.path(), None, &manifest, &BTreeMap::new()).await;
-        assert!(none.unwrap().is_none());
+        let scope = GraphScopeArgs {
+            home: Some(tempfile::tempdir().unwrap().path().to_owned()),
+            graphql: None,
+            agent_did: None,
+        };
+        let none = resolve_plugin_slot_owner(&scope, &manifest, &BTreeMap::new()).await;
+        assert_eq!(none.unwrap(), None);
         let unknown = BTreeMap::from([("other".to_owned(), "p".to_owned())]);
-        let error = plugin_pack_install_scope(home.path(), None, &manifest, &unknown)
+        let error = resolve_plugin_slot_owner(&scope, &manifest, &unknown)
             .await
-            .err()
-            .expect("an undeclared slot must be refused before any node is opened");
+            .unwrap_err();
         assert!(
             format!("{error:#}").contains("no inference slot"),
             "{error:#}"
@@ -1399,163 +1309,5 @@ mod tests {
         assert!(super::super::plugin::store::read_record(home.path(), "acme", "brandnew").is_ok());
         rollback_pack_plugin_records(home.path(), &rollback);
         assert!(super::super::plugin::store::read_record(home.path(), "acme", "brandnew").is_err());
-    }
-
-    /// A failed first install leaves no home file record behind, and a
-    /// failed reinstall puts back the record it replaced.
-    #[test]
-    fn restoring_the_home_record_undoes_what_the_failed_install_wrote() {
-        let home = tempfile::tempdir().unwrap();
-        let record = |version: &str| gents::pack::HomePackInstall {
-            coordinate: "acme/widget".to_owned(),
-            version: version.to_owned(),
-            digest: format!("sha256:{version}"),
-            kind: PackKind::Plugins,
-            assets: "packs/.materialized/acme/widget".to_owned(),
-            plugins: Vec::new(),
-            installed_at: version.to_owned(),
-        };
-        gents::pack::write_home_install(home.path(), &record("1.0.0")).unwrap();
-        let prior = gents::pack::read_home_install(home.path(), "acme/widget").unwrap();
-        gents::pack::write_home_install(home.path(), &record("1.1.0")).unwrap();
-        restore_home_install(home.path(), "acme/widget", &prior);
-        assert_eq!(
-            gents::pack::read_home_install(home.path(), "acme/widget").unwrap(),
-            prior
-        );
-        restore_home_install(home.path(), "acme/widget", &None);
-        assert!(gents::pack::read_home_install(home.path(), "acme/widget")
-            .unwrap()
-            .is_none());
-    }
-
-    /// #2338 end to end through the CLI: a plugins pack installed into an
-    /// initialized home records the wake document — the `PackInstallation`
-    /// record a demoted behavior's re-admission waits for — for the home's
-    /// principal, and `gents pack remove` deletes it again after releasing
-    /// the plugin store.
-    #[tokio::test]
-    async fn a_plugins_pack_install_records_and_a_remove_deletes_the_wake_record() {
-        let afb = super::super::plugin::testing::build_plugin_afb(
-            "wake_tool",
-            b"fn main() { println!(\"{{}}\"); }",
-        );
-        let manifest = plugin_manifest("acme", "wake_pack", "wake_tool", "1.0.0");
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join("wake_pack");
-        for path in gents::pack::declared_paths(&manifest) {
-            let target = root.join(&path);
-            std::fs::create_dir_all(target.parent().expect("a parent")).unwrap();
-            let bytes = match path.as_str() {
-                "manifest.json" => serde_json::to_vec(&manifest).unwrap(),
-                "README.md" => b"# wake".to_vec(),
-                _ => afb.clone(),
-            };
-            std::fs::write(&target, bytes).unwrap();
-        }
-        let (bytes, _) = gents::pack_archive::pack_dir(&root).unwrap();
-        let digest = {
-            use sha2::Digest;
-            format!("{:x}", sha2::Sha256::digest(&bytes))
-        };
-        let pack_digest = gents::pack_archive::PackArchive::from_bytes(&bytes)
-            .unwrap()
-            .digest()
-            .to_owned();
-        let (registry, _state) =
-            super::registry::tests::serve_fake_pack("wake_pack", "1.0.0", bytes, digest).await;
-
-        let home = tempfile::tempdir().unwrap();
-        let home_path = home.path().to_path_buf();
-        let cli = crate::cli::Cli::try_parse_from([
-            "gents",
-            "init",
-            "--store-key-custody",
-            "file",
-            "--agent-name",
-            "waker",
-            "--home",
-            home_path.to_str().unwrap(),
-        ])
-        .unwrap();
-        let crate::cli::Command::Init(init_args) = cli.command else {
-            panic!("expected init")
-        };
-        crate::commands::init::init(init_args)
-            .await
-            .expect("identity-only init");
-
-        crate::request_helpers::capture_report(install(PackInstallArgs {
-            package: "acme/wake_pack".to_owned(),
-            bindings: None,
-            inference_slots: Vec::new(),
-            preview: false,
-            scope: crate::cli::GraphScopeArgs {
-                home: Some(home_path.clone()),
-                graphql: None,
-                agent_did: None,
-            },
-            output: crate::output_format::OutputFormat::Json,
-            force_rebind_concrete_did: false,
-            registry: Some(registry),
-            drift: crate::cli::PackDriftArgs::default(),
-            grant_authority: false,
-            explicit: true,
-        }))
-        .await
-        .expect("installing the plugins pack");
-
-        assert!(
-            gents::pack::read_home_install(&home_path, "acme/wake_pack")
-                .unwrap()
-                .is_some(),
-            "the home file record is written as before"
-        );
-        assert!(super::super::plugin::store::read_record(&home_path, "acme", "wake_tool").is_ok());
-        let owner = crate::read_init_config(&home_path)
-            .unwrap()
-            .expect("initialized home")
-            .agent_did;
-        let (access, _) = crate::resolve_config_access(Some(&home_path), None)
-            .await
-            .unwrap();
-        let wake = gents::pack::read_installed_pack(&access, &owner, "acme/wake_pack")
-            .await
-            .unwrap()
-            .expect("the install writes the wake record for the home principal");
-        assert_eq!(wake.version, "1.0.0");
-        assert_eq!(wake.digest, pack_digest);
-        // Release the store before the remove resolves its own access: the
-        // store lock is exclusive even within one process.
-        drop(access);
-
-        crate::request_helpers::capture_report(super::remove(crate::cli::PackRemoveArgs {
-            package: "acme/wake_pack".to_owned(),
-            scope: crate::cli::GraphScopeArgs {
-                home: Some(home_path.clone()),
-                graphql: None,
-                agent_did: None,
-            },
-            drift: crate::cli::PackDriftArgs::default(),
-        }))
-        .await
-        .expect("removing the plugins pack");
-        let (access, _) = crate::resolve_config_access(Some(&home_path), None)
-            .await
-            .unwrap();
-        assert!(
-            gents::pack::read_installed_pack(&access, &owner, "acme/wake_pack")
-                .await
-                .unwrap()
-                .is_none(),
-            "the remove deletes the wake record with the install"
-        );
-        assert!(gents::pack::read_home_install(&home_path, "acme/wake_pack")
-            .unwrap()
-            .is_none());
-        assert!(
-            super::super::plugin::store::read_record(&home_path, "acme", "wake_tool").is_err(),
-            "the remove releases the plugin store record"
-        );
     }
 }

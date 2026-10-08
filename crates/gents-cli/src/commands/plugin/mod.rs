@@ -27,7 +27,7 @@ pub(crate) async fn dispatch(command: PluginCommand) -> Result<()> {
         PluginCommand::Publish(args) => publish(args).await,
         PluginCommand::Install(args) => install::install(args).await,
         PluginCommand::List(args) => list(args),
-        PluginCommand::Remove(args) => remove(args),
+        PluginCommand::Remove(args) => remove(args).await,
         PluginCommand::Run(args) => run::run(args).await,
         PluginCommand::Bind(args) => bind::bind(args).await,
         PluginCommand::Unbind(args) => bind::unbind(args),
@@ -116,7 +116,7 @@ fn list(args: PluginListArgs) -> Result<()> {
     crate::print_json(&json!({ "plugins": records }))
 }
 
-fn remove(args: PluginRemoveArgs) -> Result<()> {
+async fn remove(args: PluginRemoveArgs) -> Result<()> {
     let (namespace, name) = crate::commands::pack::split_namespace(&args.name);
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
     let removed = store::remove_record(&home, namespace, name).with_context(|| {
@@ -125,6 +125,9 @@ fn remove(args: PluginRemoveArgs) -> Result<()> {
             home.display()
         )
     })?;
+    if let Some(coordinate) = &removed.owner_pack_coordinate {
+        crate::commands::pack::record_plugin_store_change(&home, coordinate, None).await?;
+    }
     crate::print_json(&json!({ "removed": removed }))
 }
 

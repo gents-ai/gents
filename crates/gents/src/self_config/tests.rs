@@ -3874,11 +3874,7 @@ async fn persona_create_authors_row_and_applies_after_manual_tick() {
     );
     let names = runtime_behavior
         .tools
-        .resolve(
-            node.as_ref(),
-            &agent_did,
-            &std::sync::Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
-        )
+        .resolve(node.as_ref(), &agent_did, &Default::default())
         .await
         .expect("new behavior tool surface resolves after restart")
         .tool_names();
@@ -4298,11 +4294,7 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
     let surface = Arc::new(
         runtime_behavior
             .tools
-            .resolve(
-                node.as_ref(),
-                &owner,
-                &std::sync::Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
-            )
+            .resolve(node.as_ref(), &owner, &Default::default())
             .await
             .expect("resolve fresh-request tool surface"),
     );

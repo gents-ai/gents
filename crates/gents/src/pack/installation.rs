@@ -8,8 +8,8 @@
 //! it (a document that already existed is adopted, never later deleted).
 //! `documents` and `history` and mutation writers are shared by the
 //! documents installer ([`install_in_txn`]), the graph installer
-//! ([`graph::record_graph_install_in_txn`]) and the plugin-store installer
-//! ([`record_plugin_store_install`]) through [`write_record_in_txn`],
+//! ([`graph::record_graph_install_in_txn`]) and plugin-store changes
+//! ([`record_plugin_store_change`]) through [`write_record_in_txn`],
 //! so the three paths cannot diverge on how a record is written.
 //!
 //! On install, a document the record lists whose live content no longer
@@ -522,118 +522,75 @@ pub(crate) async fn install_in_txn(
     Ok(report)
 }
 
-/// Writes (or refreshes) the installation record for a plugin-store install
-/// that ships no documents of its own: a plugins pack installed into a home,
-/// or `gents plugin install`. The record is what wakes the control watcher
-/// (the `PackInstallation` match in `agent::document_view`) so a behavior
-/// demoted on a missing plugin re-admits on the next reconcile, so it goes
-/// through the same writer as a documents install.
+/// Records a change to `coordinate`'s plugins in the host plugin store under
+/// `home`: `installed` is what an install just stored, `None` a removal. The
+/// write is what wakes the control watcher (the `PackInstallation` match in
+/// `agent::document_view`), so a behavior demoted on a missing plugin
+/// re-admits on the next reconcile; callers change the store first.
 ///
-/// What the write carries is decided by [`plugin_store_wake_write`] against
-/// the record read in the same transaction: over a documents or graph
-/// install of the same coordinate it is a wake that preserves that record
-/// (see that function), otherwise the plugin pack's own identity with no
-/// documents — nothing for a later upgrade to drift-check and nothing for a
-/// removal to delete but the record itself.
-///
-/// Callers write the plugin store first and this record last: the wake it
-/// emits must resolve a store that already holds what the record names.
-pub async fn record_plugin_store_install(
+/// Over a documents or graph install of `coordinate` the record keeps the
+/// documents and identity that install recorded (a later upgrade
+/// drift-checks them, a removal deletes by them); only installed plugin
+/// names join its plugins. Otherwise the record is a plugin-store record — no
+/// documents, the installed plugins — which the installed-pack listings skip
+/// ([`is_plugin_store_row`]), and which goes once the store holds none of
+/// `coordinate`'s plugins.
+pub async fn record_plugin_store_change(
     access: &ConfigAccess,
     owner: &str,
-    pack: &PackIdentity,
+    home: &Path,
+    coordinate: &str,
+    installed: Option<&PackIdentity>,
 ) -> Result<()> {
+    let retained = installed.is_none()
+        && crate::plugin::store::list_records(home)?
+            .iter()
+            .any(|plugin| plugin.owner_pack_coordinate.as_deref() == Some(coordinate));
     access
         .transact("pack.record_plugin_store", |txn| {
             Box::pin(async move {
-                let prior = read_record(txn, owner, &pack.coordinate).await?;
-                let (identity, documents) = plugin_store_wake_write(pack, &prior);
-                write_record_in_txn(txn, owner, &identity, &prior, documents, true).await
-            })
-        })
-        .await
-}
-
-/// What the record write of a plugin-store install carries over `prior`:
-/// the identity to record and the documents to keep listing.
-///
-/// Over a record that lists documents — a documents or graph pack this
-/// coordinate already installed — the write is a wake, not an upgrade:
-/// installing plugins replaced no pack content, so the recorded documents
-/// (a later upgrade drift-checks them and a removal deletes by them) and
-/// the recorded version, digest and history stay what that install wrote.
-/// Only the plugins refresh, as the union of what the record held and what
-/// this install stored: a name this install replaced wins, and a name this
-/// pack no longer carries is still the coordinate's, so it must stay listed
-/// for a removal to release.
-///
-/// Otherwise — no record yet, or one a previous plugin-store install left
-/// with no documents — the write is the plugin pack's own record: this
-/// install's identity and plugins, no documents, so a plugins pack's
-/// reinstalls and updates advance its recorded version like any pack's.
-fn plugin_store_wake_write(
-    pack: &PackIdentity,
-    prior: &Record,
-) -> (PackIdentity, Vec<RecordedDocument>) {
-    let documents: Vec<RecordedDocument> = prior.documents.values().cloned().collect();
-    let mut plugins: BTreeMap<String, String> = prior
-        .plugins
-        .iter()
-        .map(|plugin| (plugin.name.clone(), plugin.digest.clone()))
-        .collect();
-    for plugin in &pack.plugins {
-        plugins.insert(plugin.name.clone(), plugin.digest.clone());
-    }
-    let (version, digest) = if prior.documents.is_empty() {
-        (pack.version.clone(), pack.digest.clone())
-    } else {
-        (
-            prior
-                .version
-                .clone()
-                .unwrap_or_else(|| pack.version.clone()),
-            prior.digest.clone().unwrap_or_else(|| pack.digest.clone()),
-        )
-    };
-    (
-        PackIdentity {
-            coordinate: pack.coordinate.clone(),
-            version,
-            digest,
-            plugins: plugins
-                .into_iter()
-                .map(|(name, digest)| InstalledPackPlugin { name, digest })
-                .collect(),
-            dependencies: Vec::new(),
-        },
-        documents,
-    )
-}
-
-/// Deletes the record a plugin-store install wrote
-/// ([`record_plugin_store_install`]), after the plugin store itself was
-/// released — the removal mirror of install's record-after-store order, so
-/// the wake this deletion emits resolves a store that is already final. A
-/// missing record is not an error: a plugin-store install against a home
-/// with no node scope writes none.
-pub async fn remove_plugin_store_install_record(
-    access: &ConfigAccess,
-    owner: &str,
-    coordinate: &str,
-) -> Result<()> {
-    access
-        .transact("pack.remove_plugin_store_record", |txn| {
-            Box::pin(async move {
-                let record = read_record(txn, owner, coordinate).await?;
-                if record.doc_id.is_none() {
-                    return Ok(());
+                let prior = read_record(txn, owner, coordinate).await?;
+                let documents: Vec<RecordedDocument> = prior.documents.values().cloned().collect();
+                match installed {
+                    Some(pack) if documents.is_empty() => {
+                        write_record_in_txn(txn, owner, pack, &prior, documents, false).await
+                    }
+                    _ if prior.doc_id.is_none() => Ok(()),
+                    None if documents.is_empty() && !retained => {
+                        remove_record_in_txn(txn, owner, coordinate, &prior, DriftPolicy::Refuse)
+                            .await
+                            .map(|_| ())
+                    }
+                    _ => {
+                        // A removal of the coordinate's plugins releases by
+                        // these names, so an install's names join them.
+                        let mut plugins = prior.plugins.clone();
+                        for plugin in installed.map_or(&[][..], |pack| &pack.plugins[..]) {
+                            plugins.retain(|kept| kept.name != plugin.name);
+                            plugins.push(plugin.clone());
+                        }
+                        let unchanged = PackIdentity {
+                            coordinate: coordinate.to_owned(),
+                            version: prior.version.clone().unwrap_or_default(),
+                            digest: prior.digest.clone().unwrap_or_default(),
+                            plugins,
+                            dependencies: Vec::new(),
+                        };
+                        write_record_in_txn(txn, owner, &unchanged, &prior, documents, false).await
+                    }
                 }
-                remove_record_in_txn(txn, owner, coordinate, &record, DriftPolicy::Refuse)
-                    .await
-                    .map(|_| ())
             })
         })
         .await
+}
+
+/// Whether an installation record row is a plugin-store record
+/// ([`record_plugin_store_change`]): plugins and no documents. Such a record
+/// installed nothing in the node, so the installed-pack listings (and
+/// `pack outdated`/`update` through them) skip it, keeping a plugin-only
+/// install from becoming a full-pack update target.
+fn is_plugin_store_row(row: &Value) -> bool {
+    row["documents"].is_null() && !row["plugins"].is_null()
 }
 
 /// Removes what `record` lists for `coordinate`/`owner`: a graph-owned
@@ -781,6 +738,11 @@ pub async fn remove_pack(
                     record.doc_id.is_some(),
                     "{coordinate} is not installed for {owner}"
                 );
+                anyhow::ensure!(
+                    !record.documents.is_empty() || record.plugins.is_empty(),
+                    "{coordinate} is not installed as a pack for {owner}: only its plugins \
+                     are, through gents plugin install; remove them with gents plugin remove"
+                );
                 if !record.required_by.is_empty() {
                     let dependents: Vec<&str> =
                         record.required_by.iter().map(String::as_str).collect();
@@ -815,7 +777,7 @@ pub async fn list_installed_packs(
 ) -> Result<Vec<InstalledPack>> {
     let response = access
         .execute(&format!(
-            r#"{{ {RECORD}(filter: {{ agent_did: {{ _eq: "{}" }} }}, order: {{ coordinate: ASC }}) {{ _docID coordinate version digest }} }}"#,
+            r#"{{ {RECORD}(filter: {{ agent_did: {{ _eq: "{}" }} }}, order: {{ coordinate: ASC }}) {{ _docID coordinate version digest documents plugins }} }}"#,
             escape_graphql_string(owner)
         ))
         .await?;
@@ -823,6 +785,7 @@ pub async fn list_installed_packs(
         .as_array()
         .context("reading the pack installation records")?
         .iter()
+        .filter(|row| !is_plugin_store_row(row))
         .map(|row| {
             Ok(InstalledPack {
                 coordinate: required_record_field_str(row, "coordinate")?.to_owned(),
@@ -843,7 +806,7 @@ pub async fn read_installed_pack(
 ) -> Result<Option<InstalledPack>> {
     let response = access
         .execute(&format!(
-            r#"{{ {RECORD}(filter: {{ agent_did: {{ _eq: "{}" }}, coordinate: {{ _eq: "{}" }} }}, limit: 2) {{ _docID coordinate version digest }} }}"#,
+            r#"{{ {RECORD}(filter: {{ agent_did: {{ _eq: "{}" }}, coordinate: {{ _eq: "{}" }} }}, limit: 2) {{ _docID coordinate version digest documents plugins }} }}"#,
             escape_graphql_string(owner),
             escape_graphql_string(coordinate)
         ))
@@ -856,6 +819,7 @@ pub async fn read_installed_pack(
         "{coordinate} has more than one installation record for its owner"
     );
     rows.first()
+        .filter(|row| !is_plugin_store_row(row))
         .map(|row| {
             Ok(InstalledPack {
                 coordinate: required_record_field_str(row, "coordinate")?.to_owned(),

@@ -781,11 +781,7 @@ async fn installed_review_area_handoff_materializes_bound_goal_scanner() {
             Arc::new(
                 behavior
                     .tools
-                    .resolve(
-                        &fx.node,
-                        behavior.agent_did(),
-                        &std::sync::Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
-                    )
+                    .resolve(&fx.node, behavior.agent_did(), &Default::default())
                     .await
                     .unwrap(),
             ),

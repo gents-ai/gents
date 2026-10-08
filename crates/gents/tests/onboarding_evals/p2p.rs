@@ -431,11 +431,7 @@ async fn engineer_p2p_live_comparison() -> Result<()> {
             })?;
         let surface = behavior
             .tools
-            .resolve(
-                &local.node,
-                &did,
-                &std::sync::Arc::new(gents::plugin::executor::PluginExecutor::new(None)),
-            )
+            .resolve(&local.node, &did, &Default::default())
             .await?;
         let tool_context = ToolRuntimeContext::new_with_agent_did(
             local.node.clone(),

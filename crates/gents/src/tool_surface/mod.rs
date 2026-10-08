@@ -209,8 +209,7 @@ impl ToolSurface {
         &self.allowed_mcp_service_ids
     }
 
-    /// The recorded plugin resolutions change detection saw (see the
-    /// `plugin_resolutions` field); observation only, never tool building.
+    #[cfg(test)]
     pub(crate) fn plugin_resolutions(
         &self,
     ) -> &[(

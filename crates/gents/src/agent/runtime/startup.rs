@@ -81,20 +81,6 @@ struct StartupSlotFailurePolicy {
     budget: u32,
 }
 
-/// The demotion log's target, so tests can capture the operator guidance
-/// without enabling every event in this module.
-pub(crate) const BEHAVIOR_DEMOTED_EVENT_TARGET: &str = "gents.runtime.behavior_demoted";
-
-/// How an operator recovers a demoted behavior: fix the configuration, or
-/// install a plugin the behavior names that is missing — the next reconcile
-/// re-admits the behavior with a fresh build budget.
-pub(crate) const BEHAVIOR_DEMOTION_GUIDANCE: &str = "Fix the behavior/backend config, or install \
-     a plugin it names that is missing — the runtime re-admits it on its next \
-     reconcile with a fresh budget.";
-
-const BEHAVIOR_DEMOTED_MESSAGE: &str = "behavior demoted: its completion client failed to build \
-     repeatedly; the process will report Ready without it. ";
-
 #[async_trait::async_trait]
 impl crate::agent::reconcile::SlotFailurePolicy for StartupSlotFailurePolicy {
     fn build_failure_budget(&self) -> u32 {
@@ -166,12 +152,13 @@ impl crate::agent::reconcile::SlotFailurePolicy for StartupSlotFailurePolicy {
             .mark_behavior_demoted(behavior_id, generation)
             .await;
         tracing::error!(
-            target: BEHAVIOR_DEMOTED_EVENT_TARGET,
-            behavior_id,
+            behavior_id = %behavior_id,
             budget = self.build_failure_budget(),
             error = %error,
-            "{}{BEHAVIOR_DEMOTION_GUIDANCE}",
-            BEHAVIOR_DEMOTED_MESSAGE
+            "behavior demoted: its completion client failed to build repeatedly; \
+             the process will report Ready without it. Fix the behavior/backend \
+             config, or install a plugin it names that is missing — the runtime \
+             re-admits it on its next reconcile with a fresh budget."
         );
         Ok(true)
     }
@@ -1295,7 +1282,7 @@ async fn validate_startup_snapshot(
 async fn resolve_tool_surfaces(
     node: &defra_node::EmbeddedNode,
     behaviors: &[Arc<crate::config::ResolvedBehavior>],
-    plugins: &Arc<crate::plugin::executor::PluginExecutor>,
+    plugins: &crate::plugin::executor::PluginExecutor,
 ) -> Result<HashMap<String, Arc<ToolSurface>>> {
     let mut tool_surfaces = HashMap::with_capacity(behaviors.len());
     for behavior in behaviors {
@@ -1425,20 +1412,6 @@ mod degraded_reason_tests {
         assert!(!is_degraded_startup_unavailable_reason(
             Reason::ToolConfigurationInvalid
         ));
-    }
-
-    #[test]
-    fn demotion_guidance_names_plugin_install_and_next_reconcile_readmission() {
-        assert!(
-            super::BEHAVIOR_DEMOTION_GUIDANCE.contains("install a plugin"),
-            "guidance must tell the operator a missing plugin can be installed: {}",
-            super::BEHAVIOR_DEMOTION_GUIDANCE
-        );
-        assert!(
-            super::BEHAVIOR_DEMOTION_GUIDANCE.contains("next reconcile"),
-            "guidance must name re-admission on the next reconcile: {}",
-            super::BEHAVIOR_DEMOTION_GUIDANCE
-        );
     }
 }
 

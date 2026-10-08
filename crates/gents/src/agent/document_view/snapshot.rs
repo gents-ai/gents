@@ -318,19 +318,6 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
         {
             Ok(tool_surface) => behavior_surfaces.push((behavior, tool_surface)),
             Err(error) => {
-                // An installed plugin record that cannot be read is an
-                // observation gap, not a behavior unavailability: fail the
-                // resolve so the watcher keeps the previous active generation
-                // and retries, instead of admitting a candidate that drops a
-                // healthy behavior over a transient read. Tool building stays
-                // the fail-closed gate (see RecordUnreadable).
-                if error.chain().any(|cause| {
-                    cause
-                        .downcast_ref::<crate::plugin::executor::RecordUnreadable>()
-                        .is_some()
-                }) {
-                    return Err(error);
-                }
                 unavailable_behaviors.insert(
                     behavior.behavior_id.clone(),
                     UnavailableBehavior::new(

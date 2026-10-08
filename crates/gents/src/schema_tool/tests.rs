@@ -138,11 +138,7 @@ async fn schema_publication_matches_executable_lean_contract() {
             Vec::new(),
         )
         .unwrap()
-        .resolve(
-            &node,
-            "did:key:test",
-            &std::sync::Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
-        )
+        .resolve(&node, "did:key:test", &Default::default())
         .await
         .unwrap();
         let mut intent = json!({"argv":["collection","preview","create"],"options":{"sdl":"type Probe { value: String }"}});
@@ -298,11 +294,7 @@ async fn schema_recovery_help_and_grant_are_independent_of_config() {
         Vec::new(),
     )
     .unwrap()
-    .resolve(
-        &node,
-        "did:key:test",
-        &std::sync::Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
-    )
+    .resolve(&node, "did:key:test", &Default::default())
     .await
     .unwrap();
     assert!(!surface.tool_names().contains(&SCHEMA_TOOL_NAME.to_owned()));
