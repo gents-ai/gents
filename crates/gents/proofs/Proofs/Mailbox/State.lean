@@ -100,7 +100,7 @@ end SourceKind
 structure Identity where
   itemKey : String
   requesterDid : String
-  agentDid : String
+  nodeDid : String
   sourceKind : SourceKind
   sourceId : String
   kind : Kind
@@ -132,7 +132,7 @@ def Identity.ownerPrefix (identity : Identity) : OwnerPrefix :=
 /-- Runtime context that must stamp a create. -/
 structure StampContext where
   requesterDid : String
-  agentDid : String
+  nodeDid : String
   deriving DecidableEq, Repr
 
 structure CreateRequest where
