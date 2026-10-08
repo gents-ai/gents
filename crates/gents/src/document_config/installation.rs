@@ -36,7 +36,7 @@ pub struct ToolServiceRegistry {
         skip_serializing_if = "super::serde_helpers::is_disabled"
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional = nullable))]
-    pub send_agent_did: bool,
+    pub send_node_did: bool,
     /// Operator availability gate, distinct from observed connectivity/health.
     #[serde(
         default = "super::serde_helpers::default_enabled",

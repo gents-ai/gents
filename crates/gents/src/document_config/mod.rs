@@ -17,13 +17,13 @@ mod installation;
 mod installation_validation;
 mod projection_acp;
 pub use projection_acp::parse_projection_resource_map;
+mod agent_target;
 mod pack_config;
 mod principal;
 mod references;
 mod schedule;
 mod serde_helpers;
 mod skill;
-mod subagent_target;
 mod surface_tool;
 mod task;
 mod task_validation;
@@ -33,7 +33,7 @@ mod write_tool;
 
 #[cfg(test)]
 pub(crate) use principal::upsert_agent_principal;
-pub use principal::{load_agent_principal, AgentPrincipal, DEFAULT_MAX_REQUEST_HOP};
+pub use principal::{load_agent_principal, Node, DEFAULT_MAX_REQUEST_HOP};
 
 pub use callback::{
     BuiltInCallback, Callback, CallbackBinding, CallbackHandler, CallbackInvocationOrigin,
@@ -55,9 +55,7 @@ pub use references::{ConfigReferences, MissingReference};
 
 #[allow(unused_imports)]
 pub(crate) use behavior::{list_agent_behavior_records, load_agent_behavior_record};
-pub use behavior::{
-    list_agent_behaviors, load_agent_behavior, upsert_agent_behavior, AgentBehavior,
-};
+pub use behavior::{list_agent_behaviors, load_agent_behavior, upsert_agent_behavior, Agent};
 
 pub use inference_backend::{
     AdvertisedModel, BackendAuth, BackendModelCatalog, InferenceBackend,
@@ -71,8 +69,8 @@ pub use inference_sampling::InferenceSampling;
 #[allow(unused_imports)]
 pub(crate) use inference_profile::load_inference_profile_record;
 pub use inference_profile::{
-    default_inference_profile_id_for_behavior, list_inference_profile_records,
-    load_inference_profile, upsert_inference_profile, InferenceProfile,
+    default_inference_profile_id_for_agent, list_inference_profile_records, load_inference_profile,
+    upsert_inference_profile, InferenceProfile,
 };
 
 pub(crate) use serde_helpers::deserialize_default_on_null;
@@ -87,9 +85,9 @@ pub use surface_tool::{
 };
 pub(crate) use tools::load_behavior_tools_in_txn;
 pub use tools::{
-    BashTools, BuiltInTools, CliTool, DatastoreTools, FileTools, HostTools, IntegrationTools,
-    LspTools, PluginToolRef, RemoteServiceTools, RemoteToolStyle, RemoteTools, SelfConfigTools,
-    SubagentTools, Tools,
+    AgentTools, BashTools, BuiltInTools, CliTool, DatastoreTools, FileTools, HostTools,
+    IntegrationTools, LspTools, PluginToolRef, RemoteServiceTools, RemoteToolStyle, RemoteTools,
+    SelfConfigTools, Tools,
 };
 pub use write_tool::{
     is_reserved_builtin_tool_name, runtime_filled_refusal, OutputObligationDecision, WriteToolDecl,
@@ -98,7 +96,7 @@ pub use write_tool::{
 };
 pub(crate) use write_tool::{reject_protected_collection_name, undeclared_field_refusal};
 
-pub use subagent_target::SubagentTargetDocument;
+pub use agent_target::AgentTargetDocument;
 
 pub use chain_key_binding::{
     chain_key_binding_by_id_query, create_chain_key_binding_mutation,
@@ -123,16 +121,13 @@ pub use trigger::{ConcurrencyMode, Trigger, TriggerObservation, TriggerSource};
 use anyhow::Result;
 use defra_node::EmbeddedNode;
 
-pub fn default_behavior_id_for_agent(agent_did: &str) -> String {
-    format!("{agent_did}:default")
+pub fn default_agent_id_for_node(node_did: &str) -> String {
+    format!("{node_did}:default")
 }
 
 /// Ensure the runtime's principal exists without inventing executable configuration.
 /// Packs or explicit configuration select behaviors, contexts and inference.
-pub async fn ensure_agent_principal(
-    node: &EmbeddedNode,
-    agent_did: &str,
-) -> Result<AgentPrincipal> {
+pub async fn ensure_agent_principal(node: &EmbeddedNode, agent_did: &str) -> Result<Node> {
     use crate::collection::Collection;
     use crate::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
     anyhow::ensure!(
