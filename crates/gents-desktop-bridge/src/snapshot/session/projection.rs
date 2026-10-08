@@ -575,7 +575,23 @@ pub(super) fn build_session_snapshot_from_store_for_agent_with_transcript(
 
             MessageView {
                 message_key: row.message.message_key.clone(),
-                request_id: row.message.request_doc_id.clone(),
+                // The transcript repeats only the physical request doc id
+                // (#1425); the view reports the logical request id, and none
+                // when the owning request row is not observed.
+                request_id: row
+                    .message
+                    .request_doc_id
+                    .as_deref()
+                    .and_then(|doc_id| requests_by_doc_id.get(doc_id))
+                    .map(|request| request.request_id.clone()),
+                // The same ownership the pending turn reconciles by
+                // (pending_turn.rs): only the request's authored prompt row
+                // is the person's turn, never the other user rows the
+                // request authors.
+                owns_turn: row.message.role == gents_protocol::output::MessageRole::User
+                    && row.message.request_doc_id.as_deref().is_some_and(|doc_id| {
+                        row.message.message_key == authored_prompt_message_key(doc_id)
+                    }),
                 sequence: Some(i64::from(row.message.sequence)),
                 role: Some(
                     match row.message.role {

@@ -7,10 +7,16 @@ function timelineItemIdentity(item: RenderedTimelineItem) {
   return `${item.kind}:${item.itemKey}`;
 }
 
+/* A pending turn retires only once the request's prompt row is saved
+   (`ownsTurn`, the same ownership the bridge suppresses its pending turn
+   by): a request also authors user rows — workspace instructions, tool
+   delivery — that must not retire it. */
 function removeMaterializedPendingTurns(items: RenderedTimelineItem[]) {
   const materialized = new Set(
     items.flatMap((item) =>
-      item.kind === "userMessage" && item.requestId ? [item.requestId] : [],
+      item.kind === "userMessage" && item.ownsTurn && item.requestId
+        ? [item.requestId]
+        : [],
     ),
   );
   return items.filter(

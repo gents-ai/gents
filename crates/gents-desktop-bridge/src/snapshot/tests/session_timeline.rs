@@ -149,6 +149,7 @@ fn session_timeline_pages_are_bounded_and_cursor_stable() {
         .map(|index| RenderedTimelineItem::UserMessage {
             item_key: format!("message-{index:03}"),
             request_id: Some(format!("request-{index:03}")),
+            owns_turn: true,
             sequence: Some(index),
             content: Some(format!("row {index}")),
             timestamp: None,
@@ -188,6 +189,7 @@ fn queried_timeline_page_reports_database_work_and_does_not_rescan_for_cursor() 
         .map(|index| RenderedTimelineItem::UserMessage {
             item_key: format!("message-{index:03}"),
             request_id: None,
+            owns_turn: true,
             sequence: Some(index),
             content: Some(format!("row {index}")),
             timestamp: None,
@@ -448,6 +450,175 @@ fn steering_projects_the_authored_input_once() {
             .filter(|item| matches!(item, RenderedTimelineItem::UserMessage { .. }))
             .count(),
         1
+    );
+}
+
+#[test]
+fn a_sent_message_keeps_one_logical_request_id_from_pending_to_saved() {
+    let request = AgentRequestRow {
+        purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
+        doc_id: Some("bae-doc-1".into()),
+        request_id: "req-1".into(),
+        agent_did: Some("did:test:amy".into()),
+        session_id: Some("sess-1".into()),
+        lifecycle_state: Some(RequestLifecycleState::Processing),
+        content: Some("inspect the repository".into()),
+        ..Default::default()
+    };
+    let mut rows = ClientStoreRows {
+        sessions: vec![timeline_session()],
+        requests: vec![request],
+        ..ClientStoreRows::default()
+    };
+    let pending = build_session_snapshot_from_store(
+        &ClientStore::from_rows(rows.clone()),
+        "sess-1",
+        Some("req-1"),
+    )
+    .expect("pending snapshot");
+    assert!(pending.messages.is_empty());
+    assert_eq!(
+        pending
+            .pending_turn
+            .as_ref()
+            .expect("pending turn")
+            .request_id,
+        "req-1"
+    );
+
+    push_canonical_text_message(
+        &mut rows,
+        "authored:bae-doc-1:prompt",
+        "sess-1",
+        Some("bae-doc-1"),
+        1,
+        MessageRole::User,
+        "inspect the repository",
+    );
+    let saved =
+        build_session_snapshot_from_store(&ClientStore::from_rows(rows), "sess-1", Some("req-1"))
+            .expect("saved snapshot");
+    assert!(saved.pending_turn.is_none());
+    assert_eq!(saved.messages[0].request_id.as_deref(), Some("req-1"));
+    assert!(matches!(
+        &saved.timeline_items[..],
+        [RenderedTimelineItem::UserMessage {
+            request_id: Some(request_id),
+            ..
+        }] if request_id == "req-1"
+    ));
+}
+
+#[test]
+fn message_request_id_is_never_the_request_doc_id() {
+    let mut rows = ClientStoreRows {
+        sessions: vec![timeline_session()],
+        requests: vec![AgentRequestRow {
+            purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
+            doc_id: Some("bae-doc-1".into()),
+            request_id: "req-1".into(),
+            agent_did: Some("did:test:amy".into()),
+            session_id: Some("sess-1".into()),
+            lifecycle_state: Some(RequestLifecycleState::Completed),
+            ..Default::default()
+        }],
+        ..ClientStoreRows::default()
+    };
+    push_canonical_text_message(
+        &mut rows,
+        "authored:bae-doc-1:prompt",
+        "sess-1",
+        Some("bae-doc-1"),
+        1,
+        MessageRole::User,
+        "inspect the repository",
+    );
+    push_canonical_text_message(
+        &mut rows,
+        "authored:bae-missing:prompt",
+        "sess-1",
+        Some("bae-missing"),
+        2,
+        MessageRole::User,
+        "no request row for this message",
+    );
+    push_canonical_text_message(
+        &mut rows,
+        "fork-placed-history",
+        "sess-1",
+        None,
+        3,
+        MessageRole::User,
+        "fork-placed child history",
+    );
+    let snapshot = build_session_snapshot_from_store(&ClientStore::from_rows(rows), "sess-1", None)
+        .expect("snapshot");
+    let request_ids = snapshot
+        .messages
+        .iter()
+        .map(|message| message.request_id.as_deref())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        request_ids,
+        vec![Some("req-1"), None, None],
+        "a joined request yields the logical id; an absent request row or fork-placed history yields none, and the doc id never appears"
+    );
+}
+
+#[test]
+fn only_the_authored_prompt_row_owns_the_request_turn() {
+    let mut rows = ClientStoreRows {
+        sessions: vec![timeline_session()],
+        requests: vec![AgentRequestRow {
+            purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
+            doc_id: Some("bae-doc-1".into()),
+            request_id: "req-1".into(),
+            agent_did: Some("did:test:amy".into()),
+            session_id: Some("sess-1".into()),
+            lifecycle_state: Some(RequestLifecycleState::Processing),
+            content: Some("inspect the repository".into()),
+            ..Default::default()
+        }],
+        ..ClientStoreRows::default()
+    };
+    push_canonical_text_message(
+        &mut rows,
+        "authored:bae-doc-1:context",
+        "sess-1",
+        Some("bae-doc-1"),
+        1,
+        MessageRole::User,
+        "<context>\nworkspace instructions\n</context>",
+    );
+    push_canonical_text_message(
+        &mut rows,
+        "authored:bae-doc-1:prompt",
+        "sess-1",
+        Some("bae-doc-1"),
+        2,
+        MessageRole::User,
+        "inspect the repository",
+    );
+    let snapshot =
+        build_session_snapshot_from_store(&ClientStore::from_rows(rows), "sess-1", Some("req-1"))
+            .expect("snapshot");
+    assert!(
+        matches!(
+            &snapshot.timeline_items[..],
+            [
+                RenderedTimelineItem::UserMessage {
+                    owns_turn: false,
+                    request_id: Some(context_request),
+                    ..
+                },
+                RenderedTimelineItem::UserMessage {
+                    owns_turn: true,
+                    request_id: Some(prompt_request),
+                    ..
+                },
+            ] if context_request == "req-1" && prompt_request == "req-1"
+        ),
+        "the workspace context row carries the request's id but does not own the turn; the prompt row does"
     );
 }
 
