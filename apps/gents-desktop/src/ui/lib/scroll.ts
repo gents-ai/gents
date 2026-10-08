@@ -252,8 +252,8 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
          has not come yet. That move is theirs, not a shift to undo (WebKit
          stops a held arrow key's scroll at any write). Without the reader's
          input, it is the browser clamping, and is undone. */
-      const since = scroller.scrollTop - (settled.get(scroller) ?? scroller.scrollTop);
-      if (since !== 0 && performance.now() <= intentUntil) {
+      const since = readerMoved();
+      if (since !== 0) {
         anchor.offset -= since;
         settled.set(scroller, scroller.scrollTop);
       }
@@ -264,6 +264,31 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
     /* when and which way (+1 down, -1 up) the reader's own scroll last moved the view */
     let tailAt = -Infinity;
     let tailWay = 0;
+    /* How far the view has moved since this module last set or read it, if
+       the reader moved it, else 0; a reader's move carries their intent on.
+       An animated scroll (WebKitGTK eases one wheel over 400-600 ms, and
+       under load stalls between frames) goes on moving the view after its
+       input's window ends, so past the window a move that carries on the
+       reader's last direction is theirs too; one going up onto the foot is
+       the browser clamping, which an upward scroll never lands on. Asked
+       both by a scroll event and by a content change that comes before it. */
+    const readerMoved = () => {
+      const since = scroller.scrollTop - (settled.get(scroller) ?? scroller.scrollTop);
+      const way = Math.sign(since);
+      const now = performance.now();
+      if (
+        way === 0 ||
+        (now > intentUntil &&
+          (now - tailAt > TAIL_MS ||
+            way !== tailWay ||
+            (way < 0 && distanceFromFoot(scroller) < 0.5)))
+      )
+        return 0;
+      intend();
+      tailAt = now;
+      tailWay = way;
+      return since;
+    };
     leaving.current = false;
     /* holding the scrollbar, the reader is placing the view themselves */
     let dragging = false;
@@ -347,28 +372,7 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
       dragging = false;
     };
     const onScroll = () => {
-      /* An animated scroll (WebKitGTK eases one wheel over 400-600 ms, and
-         under load stalls between frames) goes on moving the view after its
-         input's window ends: each move of its own carries the reader's
-         intent on, so its tail is theirs too. A position this module wrote
-         is not such a move. Past the window, a move that carries on the
-         same way is the tail; one going up onto the foot is the browser
-         clamping, which an upward scroll never lands on. */
-      const now = performance.now();
-      const moved = Math.sign(
-        scroller.scrollTop - (settled.get(scroller) ?? scroller.scrollTop),
-      );
-      if (
-        moved !== 0 &&
-        (now <= intentUntil ||
-          (now - tailAt <= TAIL_MS &&
-            moved === tailWay &&
-            (moved > 0 || distanceFromFoot(scroller) >= 0.5)))
-      ) {
-        intend();
-        tailAt = now;
-        tailWay = moved;
-      }
+      readerMoved();
       if (!dragging && performance.now() > intentUntil) return;
       setFollowing(!leaving.current && distanceFromFoot(scroller) <= REPIN_PX);
       if (!following.current) capture();

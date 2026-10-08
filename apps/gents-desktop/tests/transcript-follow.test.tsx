@@ -370,6 +370,23 @@ describe("a reader's place through their own scroll", () => {
     expect(fixture.viewport.scrollTop).toBe(550);
   });
 
+  /* the stalled animation's next frame moves the view, and the reply
+     changes before that frame's scroll event */
+  it("leaves a stalled animation's resumed move to the reader when the content changes first", async () => {
+    const fixture = readingFixture();
+    renderHook(() => useFollowTail(fixture.viewport, "session-1"));
+    act(() => {
+      fixture.viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -400 }));
+    });
+    await fixture.animate(800, 600, 200);
+    await act(async () => vi.advanceTimersByTimeAsync(500));
+    fixture.viewport.scrollTop = 450;
+    await act(async () => {
+      fixture.last.append(document.createElement("span"));
+    });
+    expect(fixture.viewport.scrollTop).toBe(450);
+  });
+
   /* content shrinking below clamps the view up onto the foot */
   it("puts back a clamp onto the foot just after the reader's upward scroll", async () => {
     const fixture = readingFixture();
@@ -379,12 +396,12 @@ describe("a reader's place through their own scroll", () => {
     });
     await fixture.animate(800, 500, 200);
     await act(async () => vi.advanceTimersByTimeAsync(400));
-    act(() => {
-      fixture.setHeight(600);
-      fixture.viewport.scrollTop = 400;
-      fixture.viewport.dispatchEvent(new Event("scroll"));
+    /* the change that shrank the content is seen before the clamp's scroll event */
+    fixture.setHeight(600);
+    fixture.viewport.scrollTop = 400;
+    await act(async () => {
+      fixture.last.append(document.createElement("span"));
     });
-    fixture.growAbove(0);
     expect(fixture.viewport.scrollTop).toBe(500);
   });
 
