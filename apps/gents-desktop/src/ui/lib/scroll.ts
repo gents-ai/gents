@@ -179,6 +179,12 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
      the moment the view stops coming to the reader */
   const [atBottom, setAtBottom] = useState(true);
   const settleRef = useRef<(() => void) | null>(null);
+  /* The reader's last move was up the page. Near the foot, following
+     resumes only for a reader coming down to it: a scroll that leaves the
+     foot gently (WebKit eases a held arrow key in a few pixels at a time)
+     is still within reach of it for its first frames, and pinning it back
+     there would cancel the scroll the reader is making. */
+  const leaving = useRef(false);
 
   useLayoutEffect(() => {
     following.current = true;
@@ -252,12 +258,7 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
       if (Math.abs(delta) >= 0.5) setScroll(scroller, scroller.scrollTop + delta);
     };
     let intentUntil = 0;
-    /* The reader's last move was up the page. Near the foot, following
-       resumes only for a reader coming down to it: a scroll that leaves the
-       foot gently (WebKit eases a held arrow key in a few pixels at a time)
-       is still within reach of it for its first frames, and pinning it back
-       there would cancel the scroll the reader is making. */
-    let leaving = false;
+    leaving.current = false;
     /* holding the scrollbar, the reader is placing the view themselves */
     let dragging = false;
     const reconcile = () => {
@@ -294,7 +295,7 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
        itself, before a content change can pin the view back down ahead of
        the scroll the input is about to make. */
     const release = () => {
-      leaving = true;
+      leaving.current = true;
       if (following.current) {
         anchor = null;
         setFollowing(false);
@@ -303,7 +304,7 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
     const onWheel = (event: WheelEvent) => {
       intend();
       if (event.deltaY < 0) release();
-      else if (event.deltaY > 0) leaving = false;
+      else if (event.deltaY > 0) leaving.current = false;
     };
     let touchY: number | undefined;
     const onTouchStart = (event: TouchEvent) => {
@@ -313,7 +314,8 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
       intend();
       const y = event.touches[0]?.clientY;
       if (touchY !== undefined && y !== undefined && y > touchY) release();
-      else if (touchY !== undefined && y !== undefined && y < touchY) leaving = false;
+      else if (touchY !== undefined && y !== undefined && y < touchY)
+        leaving.current = false;
       touchY = y;
     };
     const onKey = (event: KeyboardEvent) => {
@@ -322,7 +324,7 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
       if (!NAV_KEYS.has(event.key)) return;
       intend();
       if (UP_KEYS.has(event.key)) release();
-      else leaving = false;
+      else leaving.current = false;
     };
     const area = scroller.parentElement;
     const onPointerDown = (event: PointerEvent) => {
@@ -331,7 +333,7 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
       ) {
         /* a drag has no direction to read: where it lets go decides */
         dragging = true;
-        leaving = false;
+        leaving.current = false;
       }
     };
     const onPointerUp = () => {
@@ -340,7 +342,7 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
     };
     const onScroll = () => {
       if (!dragging && performance.now() > intentUntil) return;
-      setFollowing(!leaving && distanceFromFoot(scroller) <= REPIN_PX);
+      setFollowing(!leaving.current && distanceFromFoot(scroller) <= REPIN_PX);
       if (!following.current) capture();
     };
     /* A row the reader opens or closes says so first. It is held while the
@@ -389,6 +391,7 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
   const toBottom = useCallback(() => {
     if (!scroller) return;
     following.current = true;
+    leaving.current = false;
     scroller.dataset.following = "true";
     setAtBottom(true);
     setScroll(scroller, scroller.scrollHeight - scroller.clientHeight);
@@ -425,8 +428,6 @@ const OLDER_STILL_MS = 150;
 
 /* the row under the reader when an older page was asked for, and where it was */
 type Hold = {
-  /** the subject the page was asked for */
-  subject: string;
   row: HTMLElement | undefined;
   top: number | undefined;
   scrollTop: number;
@@ -484,8 +485,7 @@ export function useOlderPages(
 
   useLayoutEffect(() => {
     const held = hold.current;
-    /* a page asked for in another subject never lands in this one */
-    if (!held || !scroller || held.subject !== subject) return;
+    if (!held || !scroller) return;
     if (!held.landed && oldestKey !== held.oldestKey) {
       land.current(shiftOf(scroller, held));
       held.landed = true;
@@ -497,7 +497,7 @@ export function useOlderPages(
       if (held.landed && scroller.scrollHeight > held.height)
         queueMicrotask(() => again.current());
     }
-  }, [oldestKey, scroller, settles, subject]);
+  }, [oldestKey, scroller, settles]);
 
   /* A layout effect: a subject's cleanup takes the content's offset off
      before the next subject's first layout, where the view is put at its
@@ -560,7 +560,6 @@ export function useOlderPages(
         viewport.querySelectorAll<HTMLElement>("[data-timeline-key]"),
       ).find((node) => node.getBoundingClientRect().bottom > viewportTop);
       const held: Hold = {
-        subject,
         row,
         top: row?.getBoundingClientRect().top,
         scrollTop: viewport.scrollTop,

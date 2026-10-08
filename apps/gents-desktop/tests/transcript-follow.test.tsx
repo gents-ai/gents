@@ -160,6 +160,27 @@ describe("transcript streaming follow", () => {
     expect(fixture.viewport.scrollTop).toBe(foot(700));
   });
 
+  it("follows from the way back taken just after scrolling up", () => {
+    const fixture = transcriptFixture();
+    const { result } = renderHook(() => useFollowTail(fixture.viewport, "session-1"));
+    act(() => {
+      fixture.viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -40 }));
+      fixture.viewport.scrollTop = 0;
+      fixture.viewport.dispatchEvent(new Event("scroll"));
+    });
+    expect(result.current.atBottom).toBe(false);
+
+    /* the jump's own scroll event lands inside the wheel's intent window */
+    act(() => {
+      result.current.toBottom();
+      fixture.viewport.dispatchEvent(new Event("scroll"));
+    });
+    expect(result.current.atBottom).toBe(true);
+
+    fixture.growTo(700);
+    expect(fixture.viewport.scrollTop).toBe(foot(700));
+  });
+
   it.each([
     ["button", false],
     ["button", true],
