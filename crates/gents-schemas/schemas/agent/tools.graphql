@@ -8,7 +8,7 @@ type Tools @branchable @index(fields: ["node_did", "tools_id"], unique: true) {
     display_name: String
     host: JSON
     remote: JSON
-    subagents: JSON
+    agents: JSON
     built_ins: JSON
     datastore: JSON
     integrations: JSON
