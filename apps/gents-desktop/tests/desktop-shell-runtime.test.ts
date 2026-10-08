@@ -66,6 +66,34 @@ describe("live session deltas", () => {
     expect(next?.timelineItems.at(-1)).toMatchObject({ content: "hello world" });
   });
 
+  it("keeps timeline and live item identity for an unchanged delta", () => {
+    const current = session(["k1"], null);
+    current.projectionRevision = { storeVersion: 7 };
+    current.timelineItems.push({
+      kind: "liveAssistant",
+      itemKey: "live-assistant",
+      content: "hello",
+      reasoning: null,
+    });
+    const live = current.timelineItems.at(-1);
+    const unchanged = { mode: "unchanged", value: "", byteLen: 0, hash: "811c9dc5" };
+
+    const next = applySessionLiveDelta(current, {
+      outcome: "unchanged",
+      liveCursor: "cursor",
+      revision: { storeVersion: 8 },
+      requestId: "request-1",
+      turnState: "running",
+      status: null,
+      content: { ...unchanged, byteLen: 5, hash: "4f9f2cab" },
+      reasoning: unchanged,
+    });
+
+    expect(next?.timelineItems).toBe(current.timelineItems);
+    expect(next?.timelineItems.at(-1)).toBe(live);
+    expect(next?.projectionRevision).toEqual({ storeVersion: 8 });
+  });
+
   it("removes a reset live tail between tool-loop assistant turns", () => {
     const current = session(["k1"], null);
     current.projectionRevision = { storeVersion: 7 };

@@ -273,6 +273,7 @@ fn session_snapshot_consumes_generated_live_overlay_cases() {
     });
     let delta = build_session_live_delta_from_store(
         &store,
+        &store,
         gents_desktop_core::client::StoreProjectionRevision { store_version: 7 },
         "sess-1",
         Some("did:test:amy"),
@@ -340,6 +341,7 @@ fn live_delta_requires_a_canonical_source() {
     let revision = gents_desktop_core::client::StoreProjectionRevision { store_version: 9 };
     let current = build_session_live_delta_from_store(
         &store,
+        &store,
         revision,
         "sess-1",
         Some("did:test:amy"),
@@ -352,6 +354,7 @@ fn live_delta_requires_a_canonical_source() {
     );
     assert_eq!(current.outcome, "snapshotRequired");
     let fenced = build_session_live_delta_from_store(
+        &store,
         &store,
         revision,
         "sess-1",

@@ -70,6 +70,7 @@ fn cursor(store: &ClientStore) -> String {
 fn delta(store: &ClientStore, cursor: &str) -> SessionLiveDeltaView {
     build_session_live_delta_from_store(
         store,
+        store,
         StoreProjectionRevision { store_version: 900 },
         "session",
         Some("agent"),
@@ -138,6 +139,38 @@ fn observed_store_can_stay_payload_free_while_scoped_rows_produce_a_verified_suf
 }
 
 #[test]
+fn a_lagging_replica_request_row_binds_the_same_cursor_as_the_full_snapshot() {
+    let mut rows = rows();
+    let observed = ClientStore::from_rows(rows.clone());
+    rows.requests[0].execution_generation = Some("reclaimed".into());
+    rows.output_segments.push(segment(1, " world"));
+    let fresh = ClientStore::from_rows(rows);
+    let snapshot_cursor =
+        canonical_live_text(&observed, &fresh, "session", Some("agent"), "logical")
+            .unwrap()
+            .cursor;
+    let result = build_session_live_delta_from_store(
+        &observed,
+        &fresh,
+        StoreProjectionRevision { store_version: 900 },
+        "session",
+        Some("agent"),
+        "logical",
+        &snapshot_cursor,
+        5,
+        "4f9f2cab",
+        0,
+        "811c9dc5",
+    );
+    assert_eq!(result.outcome, "delta");
+    assert_eq!(
+        result.live_cursor.as_deref(),
+        Some(snapshot_cursor.as_str())
+    );
+    assert_eq!(result.content.unwrap().value, " world");
+}
+
+#[test]
 fn a_new_attempt_cannot_patch_the_previous_source_even_with_identical_text() {
     let mut rows = rows();
     let old = cursor(&ClientStore::from_rows(rows.clone()));
@@ -196,6 +229,7 @@ fn snapshot_and_delta_preserve_the_same_markdown_bytes() {
         .unwrap();
     assert_eq!(content, "hello\r\n\r\n\r\nworld");
     let result = build_session_live_delta_from_store(
+        &store,
         &store,
         StoreProjectionRevision { store_version: 1 },
         "session",

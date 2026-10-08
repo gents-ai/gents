@@ -228,6 +228,7 @@ pub async fn build_session_live_delta(
         }
     }
     let delta = build_session_live_delta_from_store(
+        &observed,
         &live_store,
         revision,
         session_id,
@@ -250,8 +251,12 @@ pub async fn build_session_live_delta(
     Ok(delta)
 }
 
+/// The cursor is bound to `request_store`'s request row, the same row the full
+/// snapshot reads, so a replica lagging the fresh `store` yields the same
+/// cursor on both paths; the fresh row only gates the live turn.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_session_live_delta_from_store(
+    request_store: &ClientStore,
     store: &ClientStore,
     revision: gents_desktop_core::client::StoreProjectionRevision,
     session_id: &str,
@@ -283,7 +288,8 @@ pub(crate) fn build_session_live_delta_from_store(
     if !is_live_turn_state(turn_state) {
         return result;
     }
-    let Some(live) = canonical_live_text(store, store, session_id, agent_did, request_id) else {
+    let Some(live) = canonical_live_text(request_store, store, session_id, agent_did, request_id)
+    else {
         return result;
     };
     if !accepts_live_cursor(Some(base_live_cursor), Some(&live.cursor), false) {

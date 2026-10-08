@@ -163,11 +163,14 @@ export function applySessionLiveDelta(
   ) {
     return null;
   }
-  if (
-    (delta.outcome !== "delta" && delta.outcome !== "unchanged") ||
-    !delta.content ||
-    !delta.reasoning
-  ) {
+  if (delta.outcome === "unchanged") {
+    return {
+      ...current,
+      turnState: delta.turnState,
+      projectionRevision: delta.revision,
+    };
+  }
+  if (delta.outcome !== "delta" || !delta.content || !delta.reasoning) {
     return null;
   }
 
