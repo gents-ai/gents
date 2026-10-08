@@ -49,7 +49,7 @@ structure Binding where
   deriving DecidableEq, Repr
 
 def binding (w : IsolatedWorkspace) (tree : String) : Binding :=
-  ⟨w.workspaceId, w.ownerAgentDid, w.baseSha, w.pathCapability, tree⟩
+  ⟨w.workspaceId, w.ownerNodeDid, w.baseSha, w.pathCapability, tree⟩
 
 inductive Operation where
   | provision | seal | integrate | replaySeal | replayIntegrate
