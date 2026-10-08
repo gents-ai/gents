@@ -248,10 +248,46 @@ describe("older transcript pages", () => {
         await Promise.resolve();
       });
       expect(fixture.viewport.scrollTop).toBe(500);
-      expect(result.current).toBe(false);
+      /* still within three views of the top and moving up: the next page
+         follows without another scroll */
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(load).toHaveBeenCalledTimes(2);
+      expect(result.current).toBe(true);
       unmount();
     },
   );
+
+  it("asks for no further page once the reader is three views below the top", async () => {
+    const fixture = transcriptFixture();
+    fixture.viewport.scrollTop = 300;
+    let landRows!: () => void;
+    const load = vi.fn(async () => {
+      landRows();
+      return true;
+    });
+    const { result, unmount } = renderHook(() => {
+      const [oldest, setOldest] = useState("row-10");
+      landRows = () => {
+        fixture.setHeight(1300);
+        setOldest("row-0");
+      };
+      return useOlderPages(fixture.viewport, "session-1", true, load, oldest);
+    });
+    await act(async () => {
+      fixture.viewport.scrollTop = 100;
+      fixture.viewport.dispatchEvent(new Event("scroll"));
+      fixture.viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -20 }));
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(fixture.viewport.scrollTop).toBe(900);
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(result.current).toBe(false);
+    unmount();
+  });
 
   /* a load that resolves at once can have its start and end batched into
      one commit; the next page must still be asked for */
