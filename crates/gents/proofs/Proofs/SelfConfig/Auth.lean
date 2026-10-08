@@ -7,18 +7,18 @@ open Configuration (BackendAuth)
 
 /-- The OAuth account a backend names; a non-OAuth backend names none. -/
 def oauthRef : BackendAuth → Option String
-  | .principalOAuth a => a
+  | .nodeOAuth a => a
   | _ => none
 
 /-- Preserve the existing raw-secret restriction while allowing environment
 references and the auth kind to be edited as part of the single auth field.
-OAuth account references are operator-managed: a principal-OAuth candidate
+OAuth account references are operator-managed: a node-OAuth candidate
 keeps the stored reference, and a non-OAuth backend counts as the original
 account (`none`), so the model can select OAuth but never name an account. -/
 def authPatchAllowed (stored candidate : BackendAuth) : Bool :=
   match candidate with
   | .apiKey _ => decide (candidate = stored)
-  | .principalOAuth a => decide (a = oauthRef stored)
+  | .nodeOAuth a => decide (a = oauthRef stored)
   | _ => true
 
 /-- Decoding is the canonical typed-validator boundary, not a second parser. -/
@@ -51,7 +51,7 @@ theorem backend_step_cannot_change_oauth_account (decode : Doc → Option Backen
     (validate : Doc → Bool) (stored merged : Doc) (p : Patch) (old : BackendAuth)
     (a : Option String) (hs : decode stored = some old)
     (h : backendStep decode validate stored p = some merged)
-    (hm : decode merged = some (.principalOAuth a)) :
+    (hm : decode merged = some (.nodeOAuth a)) :
     oauthRef old = a := by
   have hg := (step_accept_validates validate (authGuard decode stored)
     .inferenceBackend stored p merged h).2
@@ -59,11 +59,11 @@ theorem backend_step_cannot_change_oauth_account (decode : Doc → Option Backen
   exact hg.symm
 
 theorem oauth_reference_kept_allowed (old : BackendAuth) (a : Option String)
-    (h : oauthRef old = a) : authPatchAllowed old (.principalOAuth a) = true := by
+    (h : oauthRef old = a) : authPatchAllowed old (.nodeOAuth a) = true := by
   simp [authPatchAllowed, h]
 
 theorem oauth_original_introduce_allowed (old : BackendAuth)
-    (h : ∀ a, old ≠ .principalOAuth a) : authPatchAllowed old (.principalOAuth none) = true := by
+    (h : ∀ a, old ≠ .nodeOAuth a) : authPatchAllowed old (.nodeOAuth none) = true := by
   cases old <;> simp_all [authPatchAllowed, oauthRef]
 
 /-- Whether a model selection may move from the `current` backend (absent on
@@ -78,7 +78,7 @@ case rows fix it to the original account, `fun _ => none`. -/
 def backendChoiceAllowed (dflt : String → Option String)
     (current : Option (String × BackendAuth)) (next : String × BackendAuth) : Bool :=
   match next.2 with
-  | .principalOAuth r =>
+  | .nodeOAuth r =>
     match current with
     | some (kind, auth) =>
       if kind = next.1 then decide (auth = next.2) else decide (r = dflt next.1)
@@ -100,14 +100,14 @@ theorem profile_keep_current_allowed (dflt : String → Option String)
 
 theorem profile_same_provider_account_switch_refused (dflt : String → Option String)
     (kind : String) (a a' : Option String) (h : a ≠ a') :
-    backendChoiceAllowed dflt (some (kind, .principalOAuth a)) (kind, .principalOAuth a') =
+    backendChoiceAllowed dflt (some (kind, .nodeOAuth a)) (kind, .nodeOAuth a') =
       false := by
   simp [backendChoiceAllowed, h]
 
 theorem profile_choice_lands_on_current_or_default (dflt : String → Option String)
     (current : Option (String × BackendAuth)) (kind : String) (r : Option String)
-    (h : backendChoiceAllowed dflt current (kind, .principalOAuth r) = true) :
-    current = some (kind, .principalOAuth r) ∨ r = dflt kind := by
+    (h : backendChoiceAllowed dflt current (kind, .nodeOAuth r) = true) :
+    current = some (kind, .nodeOAuth r) ∨ r = dflt kind := by
   cases current with
   | none => simp [backendChoiceAllowed] at h; exact .inr h
   | some c =>

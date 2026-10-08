@@ -450,21 +450,21 @@ theorem omitted_context_capabilities_empty :
 
 /-- Auth is explicit. OAuth lookup uses the executing node and existing
 credential owner; the backend contains no copied OAuth tokens or host identity.
-A principal-OAuth `account` is an opaque, DID-free reference minted when an
+A node-OAuth `account` is an opaque, DID-free reference minted when an
 account is first stored; `none` is the provider's original account. -/
 inductive BackendAuth where
   | unauthenticated
   | apiKey (key : String)
   | environment (name : String)
-  | principalOAuth (account : Option String)
+  | nodeOAuth (account : Option String)
   deriving DecidableEq, Repr
 
 def oauthLookupOwner (scope : String) : BackendAuth → Option String
-  | .principalOAuth _ => some scope
+  | .nodeOAuth _ => some scope
   | _ => none
 
 theorem oauth_uses_execution_scope (scope : String) (account : Option String) :
-    oauthLookupOwner scope (.principalOAuth account) = some scope := rfl
+    oauthLookupOwner scope (.nodeOAuth account) = some scope := rfl
 
 /-- A stored OAuth sign-in: owner DID, provider kind, account reference (`none`
 is the provider's original account) and enabled flag. -/
