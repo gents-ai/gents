@@ -49,6 +49,13 @@ fn store_path(home: &Path, digest_hex: &str) -> Result<PathBuf> {
     Ok(store_dir(home).join(format!("{digest_hex}.afb")))
 }
 
+/// Where the bytes of an installed plugin live, for a caller that names
+/// the artifact to the desktop (a ux plugin produced by it) without
+/// reading it here.
+pub fn artifact_path(home: &Path, digest_hex: &str) -> Result<PathBuf> {
+    store_path(home, digest_hex)
+}
+
 /// A registry coordinate becomes two path components here, so it is
 /// checked before it is joined rather than trusted. A coordinate is
 /// `[A-Za-z0-9_-]+` on both halves in the registry's own grammar; anything

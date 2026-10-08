@@ -1896,6 +1896,32 @@ Denies the desktop_plugin_approvals_pending command without any pre-configured s
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-plugin-call`
+
+</td>
+<td>
+
+Enables the desktop_plugin_call command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-plugin-call`
+
+</td>
+<td>
+
+Denies the desktop_plugin_call command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-probe-inference-endpoint`
 
 </td>
@@ -2019,6 +2045,110 @@ Enables the desktop_provider_accounts_list command without any pre-configured sc
 <td>
 
 Denies the desktop_provider_accounts_list command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-registry-add`
+
+</td>
+<td>
+
+Enables the desktop_registry_add command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-registry-add`
+
+</td>
+<td>
+
+Denies the desktop_registry_add command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-registry-list`
+
+</td>
+<td>
+
+Enables the desktop_registry_list command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-registry-list`
+
+</td>
+<td>
+
+Denies the desktop_registry_list command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-registry-refresh`
+
+</td>
+<td>
+
+Enables the desktop_registry_refresh command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-registry-refresh`
+
+</td>
+<td>
+
+Denies the desktop_registry_refresh command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-registry-remove`
+
+</td>
+<td>
+
+Enables the desktop_registry_remove command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-registry-remove`
+
+</td>
+<td>
+
+Denies the desktop_registry_remove command without any pre-configured scope.
 
 </td>
 </tr>
@@ -2676,6 +2806,58 @@ Denies the desktop_trigger_save command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-ux-plugin-source`
+
+</td>
+<td>
+
+Enables the desktop_ux_plugin_source command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-ux-plugin-source`
+
+</td>
+<td>
+
+Denies the desktop_ux_plugin_source command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-ux-plugins-list`
+
+</td>
+<td>
+
+Enables the desktop_ux_plugins_list command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-ux-plugins-list`
+
+</td>
+<td>
+
+Denies the desktop_ux_plugins_list command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-workspace-list`
 
 </td>
@@ -2877,6 +3059,58 @@ Open a web link in the person's own browser
 <td>
 
 Installed packs, registry search and package pages, the signed-in account, and which plugins can call a model
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:ux-plugins-read`
+
+</td>
+<td>
+
+The ux plugins on disk and each one's module, for the desktop loader
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:ux-plugins-call`
+
+</td>
+<td>
+
+A ux plugin calling one of its own pack's .afb plugins
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:registries-read`
+
+</td>
+<td>
+
+The cached registry index: the master, the vertical registries it lists, and any added by hand
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:registries-admin`
+
+</td>
+<td>
+
+Refresh the registry index from the master, add a registry by hand, remove one
 
 </td>
 </tr>

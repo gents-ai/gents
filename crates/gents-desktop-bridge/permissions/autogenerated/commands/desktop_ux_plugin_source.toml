@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-ux-plugin-source"
+description = "Enables the desktop_ux_plugin_source command without any pre-configured scope."
+commands.allow = ["desktop_ux_plugin_source"]
+
+[[permission]]
+identifier = "deny-desktop-ux-plugin-source"
+description = "Denies the desktop_ux_plugin_source command without any pre-configured scope."
+commands.deny = ["desktop_ux_plugin_source"]

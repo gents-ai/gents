@@ -11,6 +11,7 @@ export default defineConfig(async () => ({
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src/ui", import.meta.url)),
+      "@gents/ux-sdk": fileURLToPath(new URL("./src/ui/sdk/index.ts", import.meta.url)),
     },
   },
   optimizeDeps: {

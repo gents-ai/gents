@@ -662,6 +662,7 @@ mod tests {
                 namespace: "acme".into(),
                 template: Some(template),
                 language: None,
+                ux: false,
             },
         )
         .unwrap();

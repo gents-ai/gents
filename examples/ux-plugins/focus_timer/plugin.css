@@ -1,0 +1,9 @@
+/* dev plugins are not scanned by Tailwind; plugin layout lives here, the
+   SDK's Button and Popover own their own chrome */
+.gents-focus-chip { font-variant-numeric: tabular-nums; min-width: 4.5rem }
+.gents-focus-chip[data-running="true"] { color: var(--color-brand, inherit) }
+.gents-focus-panel { width: 16rem }
+.gents-focus-stack { display: grid; gap: .5rem }
+.gents-focus-title { font-size: 1.25rem; font-variant-numeric: tabular-nums; margin: 0 }
+.gents-focus-presets { display: flex; gap: .25rem }
+.gents-focus-note { font-size: .7rem; color: var(--color-muted-foreground, inherit); margin: 0 }

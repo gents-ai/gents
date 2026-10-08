@@ -50,6 +50,30 @@ pub(crate) async fn run(args: PluginRunArgs) -> Result<()> {
     crate::print_json(&output)
 }
 
+/// Runs the installed `namespace/name` with `input` and returns its own
+/// JSON result: the same path `gents plugin run` takes, for an embedding
+/// caller (the desktop's `ctx.plugin`, a ux module producer) that holds
+/// no argv. The model slot is honored exactly as the CLI honors it.
+pub async fn call_installed(
+    home: &Path,
+    namespace: &str,
+    name: &str,
+    input: serde_json::Value,
+) -> Result<serde_json::Value> {
+    let record = store::read_record(home, namespace, name).with_context(|| {
+        format!(
+            "{namespace}/{name} is not installed under {}",
+            home.display()
+        )
+    })?;
+    let mut executor = PluginExecutor::new(Some(home.to_owned()));
+    if record.declaration.model_slot.is_some() && record.model_binding.is_some() {
+        let (access, _) = crate::resolve_config_access(Some(home), None).await?;
+        executor = executor.with_models(Arc::new(AccessModels(access)));
+    }
+    run_plugin(&executor, &record, input, None).await
+}
+
 /// Admits and calls one installed plugin, returning its own JSON result or
 /// an error naming which bound was hit.
 ///

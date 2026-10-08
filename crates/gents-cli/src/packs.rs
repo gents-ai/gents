@@ -191,6 +191,72 @@ pub async fn whoami(home: PathBuf, registry: Option<String>) -> Result<Value> {
     .await
 }
 
+/* ---- UX plugins: what the desktop's doors read ---- */
+
+/// Every UX plugin on disk under `home` (dev folder and installed packs).
+pub fn ux_list(home: &std::path::Path) -> Result<Vec<gents::ux_plugin::UxListing>> {
+    gents::ux_plugin::list(home)
+}
+
+/// The module for the UX plugin `id`, produced from its file or by running
+/// the pack's own `.afb` producer under the installed plugin's bounds.
+pub async fn ux_module(home: PathBuf, id: String) -> Result<gents::ux_plugin::UxModule> {
+    let listing = gents::ux_plugin::find(&home, &id)?;
+    let home_for_run = home.clone();
+    gents::ux_plugin::resolve_module(&home, &listing, |namespace, plugin| async move {
+        crate::commands::plugin::call_installed(
+            &home_for_run,
+            &namespace,
+            &plugin,
+            gents::ux_plugin::producer_input(),
+        )
+        .await
+    })
+    .await
+}
+
+/// Runs one of pack `coordinate`'s installed `.afb` plugins with `input`,
+/// for a UX plugin's `ctx.plugin`. The plugin must belong to that pack: a
+/// UX plugin may call its own pack's capabilities and nothing else.
+pub async fn plugin_call(
+    home: PathBuf,
+    coordinate: String,
+    name: String,
+    input: Value,
+) -> Result<Value> {
+    let record = gents::pack::read_home_install(&home, &coordinate)?
+        .ok_or_else(|| anyhow::anyhow!("pack {coordinate} is not installed"))?;
+    anyhow::ensure!(
+        record.plugins.iter().any(|p| p.name == name),
+        "pack {coordinate} ships no plugin named {name:?}; a ux plugin may only call its own pack's plugins"
+    );
+    let (namespace, _) = gents::pack_registry::split_pack_coordinate(&coordinate);
+    crate::commands::plugin::call_installed(&home, namespace, &name, input).await
+}
+
+/* ---- registries: the index the Packs panel's picker reads ---- */
+
+pub fn registry_list(home: &std::path::Path) -> Result<Value> {
+    crate::commands::registry::list(home)
+}
+
+pub async fn registry_refresh(home: PathBuf, master: Option<String>) -> Result<Value> {
+    crate::commands::registry::refresh(&home, master.as_deref()).await
+}
+
+pub fn registry_add(
+    home: &std::path::Path,
+    id: &str,
+    url: &str,
+    label: Option<&str>,
+) -> Result<Value> {
+    crate::commands::registry::add(home, id, url, label)
+}
+
+pub fn registry_remove(home: &std::path::Path, id: &str) -> Result<Value> {
+    crate::commands::registry::remove(home, id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

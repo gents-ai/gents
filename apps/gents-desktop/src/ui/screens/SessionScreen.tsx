@@ -82,6 +82,8 @@ import { activityStatus, isStopping } from "./activity-status";
 import { TracePanel } from "./TracePanel";
 import { BehaviorAvatar, BehaviorChip } from "./parts";
 import { BehaviorHoverCard } from "./HoverCards";
+import { Slot } from "@/contrib/react/slot";
+import { SESSION_HEADER_ACTIONS_AREA } from "@/contrib/types";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -1282,6 +1284,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                   </div>
                 </div>
                 <div className="flex gap-1">
+                  <Slot area={SESSION_HEADER_ACTIONS_AREA} />
                   <Hint label="Fork session">
                     <Button
                       variant="ghost"

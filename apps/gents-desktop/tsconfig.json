@@ -20,7 +20,8 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
     "paths": {
-      "@/*": ["./src/ui/*"]
+      "@/*": ["./src/ui/*"],
+      "@gents/ux-sdk": ["./src/ui/sdk/index.ts"]
     }
   },
   "include": ["src"],

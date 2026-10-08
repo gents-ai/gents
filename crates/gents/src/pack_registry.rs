@@ -53,6 +53,317 @@ pub fn resolve_registry_url(explicit: Option<&str>) -> String {
     DEFAULT_REGISTRY_URL.to_owned()
 }
 
+/// [`resolve_registry_url`] that also accepts a registry **id** from the
+/// cached index under `home` (`--registry legal`), so a vertical registry
+/// is named the way the master lists it rather than by URL. A value with a
+/// scheme is a URL and is never looked up; a bare id that the index does
+/// not know is an error naming the known ids, never silently a URL.
+pub fn resolve_registry_url_in(home: &Path, explicit: Option<&str>) -> Result<String> {
+    let candidate = explicit
+        .map(str::to_owned)
+        .or_else(|| std::env::var(REGISTRY_ENV_VAR).ok())
+        .filter(|value| !value.trim().is_empty());
+    let Some(candidate) = candidate else {
+        return Ok(DEFAULT_REGISTRY_URL.to_owned());
+    };
+    let candidate = candidate.trim();
+    if candidate.contains("://") {
+        return Ok(candidate.trim_end_matches('/').to_owned());
+    }
+    let known = index::read(home)?;
+    if let Some(entry) = known.registries.iter().find(|r| r.id == candidate) {
+        return Ok(entry.url.trim_end_matches('/').to_owned());
+    }
+    anyhow::bail!(
+        "{candidate:?} is neither a registry URL nor a registry id in the cached index; known ids: {}; \
+         run `gents registry refresh` to update the index or pass a URL",
+        if known.registries.is_empty() {
+            "none".to_owned()
+        } else {
+            known.registries.iter().map(|r| r.id.as_str()).collect::<Vec<_>>().join(", ")
+        }
+    )
+}
+
+/// The cached registry index: the master registry's list of the vertical
+/// registries it vouches for, plus any the operator added by hand, in
+/// `{home}/registry/index.json`. Refreshed on demand (`gents registry
+/// refresh`, the desktop's Packs panel); an absent cache is the master
+/// alone, so an install never blocks on the index.
+pub mod index {
+    use std::path::{Path, PathBuf};
+
+    use anyhow::{Context, Result};
+    use serde::{Deserialize, Serialize};
+
+    /// One registry the index lists.
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct RegistryEntry {
+        /// Short, stable, snake_case; what `--registry <id>` names.
+        pub id: String,
+        pub label: String,
+        pub url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub description: Option<String>,
+        /// The application verticals this registry serves (`legal`, `finance`).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub verticals: Vec<String>,
+        /// `official` (the master lists it), `partner`, or `user` (added by hand,
+        /// listed by no master: shown as unlisted, allowed).
+        #[serde(default = "default_tier")]
+        pub tier: String,
+    }
+
+    fn default_tier() -> String {
+        "official".to_owned()
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+    #[serde(rename_all = "camelCase")]
+    pub struct RegistryIndex {
+        /// The master this index was fetched from.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub master: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub refreshed_at: Option<String>,
+        #[serde(default)]
+        pub registries: Vec<RegistryEntry>,
+    }
+
+    pub const MASTER_ID: &str = "master";
+
+    fn path(home: &Path) -> PathBuf {
+        home.join(crate::home::REGISTRY_DIR_NAME).join("index.json")
+    }
+
+    /// The master's own entry, always first and never removable.
+    pub fn master_entry(url: &str) -> RegistryEntry {
+        RegistryEntry {
+            id: MASTER_ID.to_owned(),
+            label: "Gents registry".to_owned(),
+            url: url.trim_end_matches('/').to_owned(),
+            description: Some(
+                "The master registry: first-party packs and the index of vertical registries."
+                    .to_owned(),
+            ),
+            verticals: Vec::new(),
+            tier: "official".to_owned(),
+        }
+    }
+
+    /// The cached index, or the master alone when nothing is cached.
+    pub fn read(home: &Path) -> Result<RegistryIndex> {
+        let file = path(home);
+        let mut index = match std::fs::read(&file) {
+            Ok(bytes) => serde_json::from_slice::<RegistryIndex>(&bytes)
+                .with_context(|| format!("{} is not a registry index", file.display()))?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => RegistryIndex::default(),
+            Err(error) => return Err(error).with_context(|| format!("reading {}", file.display())),
+        };
+        let master = index
+            .master
+            .clone()
+            .unwrap_or_else(|| super::resolve_registry_url(None));
+        if !index.registries.iter().any(|r| r.id == MASTER_ID) {
+            index.registries.insert(0, master_entry(&master));
+        }
+        Ok(index)
+    }
+
+    pub fn write(home: &Path, index: &RegistryIndex) -> Result<()> {
+        let file = path(home);
+        let dir = file.parent().context("index path has no parent")?;
+        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+        let bytes = serde_json::to_vec_pretty(index).context("encoding the registry index")?;
+        let mut staged = tempfile::NamedTempFile::new_in(dir)
+            .with_context(|| format!("staging the registry index in {}", dir.display()))?;
+        std::io::Write::write_all(&mut staged, &bytes).context("writing the staged index")?;
+        staged
+            .persist(&file)
+            .map_err(|error| error.error)
+            .with_context(|| format!("writing {}", file.display()))?;
+        Ok(())
+    }
+
+    /// Replaces the listed (non-user) entries with what `master` serves,
+    /// keeping every `user` entry the operator added by hand.
+    pub fn merge_refresh(
+        current: &RegistryIndex,
+        master_url: &str,
+        fetched: Vec<RegistryEntry>,
+        now: &str,
+    ) -> RegistryIndex {
+        let mut registries = vec![master_entry(master_url)];
+        registries.extend(
+            fetched
+                .into_iter()
+                .filter(|r| r.id != MASTER_ID && crate::pack::is_valid_pack_name(&r.id)),
+        );
+        for user in current.registries.iter().filter(|r| r.tier == "user") {
+            if !registries.iter().any(|r| r.id == user.id) {
+                registries.push(user.clone());
+            }
+        }
+        RegistryIndex {
+            master: Some(master_url.trim_end_matches('/').to_owned()),
+            refreshed_at: Some(now.to_owned()),
+            registries,
+        }
+    }
+
+    /// Adds (or replaces) a registry the operator names by hand. It is
+    /// recorded as `user` tier: allowed, and shown as unlisted.
+    pub fn add_user(
+        index: &mut RegistryIndex,
+        id: &str,
+        url: &str,
+        label: Option<&str>,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            crate::pack::is_valid_pack_name(id),
+            "registry id must be snake_case: {id:?}"
+        );
+        anyhow::ensure!(
+            id != MASTER_ID,
+            "{MASTER_ID:?} is the master registry and cannot be replaced"
+        );
+        anyhow::ensure!(
+            url.starts_with("https://") || url.starts_with("http://"),
+            "registry url must be http(s): {url:?}"
+        );
+        index.registries.retain(|r| r.id != id);
+        index.registries.push(RegistryEntry {
+            id: id.to_owned(),
+            label: label.unwrap_or(id).to_owned(),
+            url: url.trim_end_matches('/').to_owned(),
+            description: None,
+            verticals: Vec::new(),
+            tier: "user".to_owned(),
+        });
+        Ok(())
+    }
+
+    /// Removes a user-added registry; a listed one cannot be removed here.
+    pub fn remove_user(index: &mut RegistryIndex, id: &str) -> Result<()> {
+        let entry = index
+            .registries
+            .iter()
+            .find(|r| r.id == id)
+            .with_context(|| format!("no registry {id:?} in the index"))?;
+        anyhow::ensure!(
+            entry.tier == "user",
+            "{id:?} is listed by the master registry; only a registry added by hand can be removed"
+        );
+        index.registries.retain(|r| r.id != id);
+        Ok(())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn entry(id: &str, tier: &str) -> RegistryEntry {
+            RegistryEntry {
+                id: id.into(),
+                label: id.into(),
+                url: format!("https://{id}.example"),
+                description: None,
+                verticals: vec![id.into()],
+                tier: tier.into(),
+            }
+        }
+
+        #[test]
+        fn an_absent_cache_is_the_master_alone() {
+            let home = tempfile::tempdir().unwrap();
+            let index = read(home.path()).unwrap();
+            assert_eq!(index.registries.len(), 1);
+            assert_eq!(index.registries[0].id, MASTER_ID);
+            assert_eq!(index.registries[0].url, super::super::DEFAULT_REGISTRY_URL);
+        }
+
+        #[test]
+        fn refresh_keeps_user_entries_and_drops_stale_listed_ones() {
+            let current = RegistryIndex {
+                master: None,
+                refreshed_at: None,
+                registries: vec![entry("old", "official"), entry("mine", "user")],
+            };
+            let next = merge_refresh(
+                &current,
+                "https://master.example/",
+                vec![entry("legal", "official")],
+                "t",
+            );
+            let ids: Vec<_> = next.registries.iter().map(|r| r.id.as_str()).collect();
+            assert_eq!(ids, vec![MASTER_ID, "legal", "mine"]);
+            assert_eq!(next.master.as_deref(), Some("https://master.example"));
+        }
+
+        #[test]
+        fn user_entries_are_added_replaced_and_removed_but_listed_ones_are_kept() {
+            let mut index = RegistryIndex::default();
+            index.registries.push(entry("legal", "official"));
+            add_user(&mut index, "mine", "https://mine.example/", Some("Mine")).unwrap();
+            add_user(&mut index, "mine", "https://mine2.example", None).unwrap();
+            assert_eq!(
+                index.registries.iter().filter(|r| r.id == "mine").count(),
+                1
+            );
+            assert_eq!(
+                index.registries.last().unwrap().url,
+                "https://mine2.example"
+            );
+            assert!(add_user(&mut index, "Not-Snake", "https://x", None).is_err());
+            assert!(add_user(&mut index, MASTER_ID, "https://x", None).is_err());
+            assert!(add_user(&mut index, "ftp", "ftp://x", None).is_err());
+            assert!(remove_user(&mut index, "legal").is_err());
+            remove_user(&mut index, "mine").unwrap();
+            assert!(remove_user(&mut index, "mine").is_err());
+        }
+
+        #[test]
+        fn the_index_round_trips_through_the_home() {
+            let home = tempfile::tempdir().unwrap();
+            let mut index = RegistryIndex::default();
+            add_user(&mut index, "mine", "https://mine.example", None).unwrap();
+            write(home.path(), &index).unwrap();
+            let back = read(home.path()).unwrap();
+            assert!(back.registries.iter().any(|r| r.id == "mine"));
+            assert_eq!(
+                back.registries[0].id, MASTER_ID,
+                "the master is always first"
+            );
+        }
+
+        #[test]
+        fn an_id_resolves_through_the_index_and_a_url_bypasses_it() {
+            let home = tempfile::tempdir().unwrap();
+            let mut index = RegistryIndex::default();
+            add_user(&mut index, "legal", "https://legal.example/", None).unwrap();
+            write(home.path(), &index).unwrap();
+            assert_eq!(
+                super::super::resolve_registry_url_in(home.path(), Some("legal")).unwrap(),
+                "https://legal.example"
+            );
+            assert_eq!(
+                super::super::resolve_registry_url_in(home.path(), Some("https://direct.example/"))
+                    .unwrap(),
+                "https://direct.example"
+            );
+            assert_eq!(
+                super::super::resolve_registry_url_in(home.path(), Some(MASTER_ID)).unwrap(),
+                super::super::DEFAULT_REGISTRY_URL
+            );
+            let error =
+                super::super::resolve_registry_url_in(home.path(), Some("nope")).unwrap_err();
+            assert!(format!("{error:#}").contains("known ids"), "{error:#}");
+            assert!(format!("{error:#}").contains("legal"), "{error:#}");
+        }
+    }
+}
+
 /// A client for the packs registry. Everything it serves is a pack; a plugin
 /// travels inside one.
 pub struct RegistryClient {
@@ -150,6 +461,29 @@ impl RegistryClient {
 
     pub async fn package(&self, namespace: &str, name: &str) -> Result<Value> {
         self.get_json(&["packs", namespace, name]).await
+    }
+
+    /// The registries this one lists: a master registry's index of the
+    /// vertical registries it vouches for (`GET /api/v1/registries`). Each
+    /// entry is an ordinary pack registry at its own URL; the master adds
+    /// nothing to the protocol but the list. A registry with no index
+    /// answers 404, which is an empty list, not an error.
+    pub async fn registries(&self) -> Result<Vec<index::RegistryEntry>> {
+        match self.get_json(&["registries"]).await {
+            Ok(value) => {
+                let entries = value.get("registries").cloned().unwrap_or(value);
+                serde_json::from_value(entries)
+                    .context("the registry index is not a list of registries")
+            }
+            Err(error)
+                if error
+                    .downcast_ref::<RegistryError>()
+                    .is_some_and(|e| matches!(e, RegistryError::NotFound { .. })) =>
+            {
+                Ok(Vec::new())
+            }
+            Err(error) => Err(error),
+        }
     }
 
     pub async fn version(&self, namespace: &str, name: &str, version: &str) -> Result<Value> {

@@ -82,6 +82,9 @@ pub const EVAL_DIR_NAME: &str = "eval";
 /// File-recorded installs of assets and plugins packs, which write no
 /// database record: `<namespace>/<name>.json` per pack.
 pub const PACK_INSTALLS_DIR_NAME: &str = "pack-installs";
+/// UX plugins dropped in by hand for development (`<id>/plugin.js`); the
+/// desktop's dev door. Installed packs keep theirs in the pack store.
+pub const UX_PLUGINS_DIR_NAME: &str = "ux-plugins";
 
 /// Every top-level entry a gents runtime writes in its home. Writers name
 /// these entries through this module, and retiring a home (after an upgrade
@@ -104,6 +107,7 @@ pub const RUNTIME_HOME_ENTRIES: &[&str] = &[
     CODEX_UI_DIR_NAME,
     EVAL_DIR_NAME,
     PACK_INSTALLS_DIR_NAME,
+    UX_PLUGINS_DIR_NAME,
 ];
 
 /// The default DefraDB data directory under a gents home.

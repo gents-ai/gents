@@ -110,12 +110,24 @@ enum Source {
         name: String,
         version: String,
         artifact_digest: String,
+        /// The registry URL it came from, recorded on the install so an
+        /// update asks the same one.
+        url: String,
     },
 }
 
 impl PackSource {
     pub(crate) fn manifest(&self) -> &PackManifest {
         self.archive.manifest()
+    }
+
+    /// The registry this pack was fetched from, for the install record;
+    /// `None` when it came from a file, the store or an existing install.
+    pub(crate) fn registry_url(&self) -> Option<&str> {
+        match &self.from {
+            Source::Registry { url, .. } => Some(url),
+            _ => None,
+        }
     }
 
     /// The pack's content digest: identical whichever way it arrived, which
@@ -152,6 +164,7 @@ impl PackSource {
                 name,
                 version,
                 artifact_digest,
+                ..
             } => format!(
                 "{} ({namespace}/{name}@{version}, artifact sha256:{artifact_digest})",
                 self.label()
@@ -323,9 +336,10 @@ pub(crate) async fn resolve_pack_source(
         .collect();
     let options = ResolveOptions {
         home: Some(home),
-        registry_url: registry::resolve_registry_url(registry_override),
+        registry_url: gents::pack_registry::resolve_registry_url_in(home, registry_override)?,
         installed: &installed,
     };
+    let registry_url = options.registry_url.clone();
     let resolved = resolve_named(spec, &options).await?;
     let from = match resolved.from {
         ResolvedFrom::Installed => Source::Installed,
@@ -340,6 +354,7 @@ pub(crate) async fn resolve_pack_source(
                 name: parsed.name.to_owned(),
                 version,
                 artifact_digest,
+                url: registry_url,
             }
         }
     };
@@ -877,6 +892,7 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                     "source": pack.label(),
                     "digest": pack.digest(),
                     "installed_plugins": pack.manifest().metadata.plugins,
+                    "ux_plugins": pack.manifest().metadata.ux,
                     "inference_slots": pack.manifest().metadata.inference_slots,
                     "would_write": false,
                 }));
@@ -926,6 +942,8 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                     })
                     .collect(),
                 installed_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                ux: pack.manifest().metadata.ux.clone(),
+                registry: pack.registry_url().map(str::to_owned),
             };
             if let Err(error) =
                 bind_plugin_slots(&home, pack.manifest(), slot_owner.as_deref(), &requested)

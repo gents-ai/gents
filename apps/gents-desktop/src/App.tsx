@@ -36,6 +36,7 @@ import { PluginAccessPrompt } from "./ui/screens/PluginAccessPrompt";
 import { Shortcuts } from "./ui/screens/Shortcuts";
 import { SetupScreen } from "./ui/screens/setup/SetupScreen";
 import { useShell, type ShellBridge } from "./ui/hooks/useShell";
+import { useUxHost } from "./ui/hooks/useUxHost";
 import { isLocalAgent, needsFirstRunSetup } from "./ui/lib/firstRun";
 import { bindNav, interceptNavClicks, navigate, useRoute } from "./ui/lib/router";
 import { initTheme } from "./ui/theme";
@@ -92,6 +93,7 @@ function AppHost({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
     void startNativeSimulatorE2e();
   }, []);
   useManagedServerTrayControls(bridge.api);
+  useUxHost(shell, bridge.listenToUpdates);
   const agent = shell.selectedDeployment?.agentPrincipal.displayName ?? null;
   useEffect(() => {
     if (!isMacTauriShell()) return;

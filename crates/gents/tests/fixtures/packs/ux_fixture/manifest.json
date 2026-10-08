@@ -1,0 +1,48 @@
+{
+  "manifest_version": 1,
+  "name": "ux_fixture",
+  "version": "0.1.0",
+  "description": "Fixture plugins pack for UX plugin tests: one file-produced plugin and one produced by an .afb.",
+  "namespace": "fixture",
+  "authors": ["gents"],
+  "tags": [],
+  "kind": "plugins",
+  "assets": [
+    "README.md",
+    "plugins/report_ui.afb",
+    "ux/badge/plugin.js",
+    "ux/badge/plugin.css"
+  ],
+  "plugins": [
+    {
+      "name": "report_ui",
+      "description": "Produces the report UX plugin's module when called with {\"role\":\"ux\"}; echoes anything else.",
+      "artifact": "plugins/report_ui.afb",
+      "source": "plugins/report_ui",
+      "language": "rust",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "role": {"type": "string"},
+          "surface": {"type": "string"}
+        }
+      }
+    }
+  ],
+  "ux": [
+    {
+      "name": "badge",
+      "description": "A header action from a plain ESM file with a stylesheet beside it.",
+      "entry": "ux/badge/plugin.js",
+      "css": "ux/badge/plugin.css",
+      "contributes": {"areas": ["session.header.actions"]}
+    },
+    {
+      "name": "report",
+      "description": "An agent section whose module is produced by the report_ui plugin.",
+      "plugin": "report_ui",
+      "contributes": {"areas": ["agent.sections", "transcript.directives"], "directives": ["report"]},
+      "default_enabled": false
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+[workspace]
+
+[package]
+name = "report_ui"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "report_ui"
+path = "source/main.rs"

@@ -570,6 +570,7 @@ mod tests {
                 namespace: "acme".into(),
                 template: Some(crate::cli::PackTemplate::PluginTool),
                 language: None,
+                ux: false,
             },
         )
         .unwrap();

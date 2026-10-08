@@ -164,6 +164,18 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: PluginCommand,
     },
+    #[command(about = "List and inspect the UX plugins the desktop loads from this home")]
+    Ux {
+        #[command(subcommand)]
+        command: UxCommand,
+    },
+    #[command(
+        about = "The pack registries this home knows: the master's index of vertical registries plus any added by hand"
+    )]
+    Registry {
+        #[command(subcommand)]
+        command: RegistryCommand,
+    },
     #[command(about = "Run and observe installed graphs")]
     Graph {
         #[command(subcommand)]
@@ -383,6 +395,11 @@ pub(crate) struct PackScaffoldArgs {
         help = "Plugin language for the plugin-tool template; defaults to rust"
     )]
     pub(crate) language: Option<String>,
+    #[arg(
+        long,
+        help = "Also scaffold a UX plugin (ux/<name>/plugin.js): a nav row, an agent section and a ::<name> directive"
+    )]
+    pub(crate) ux: bool,
 }
 
 #[derive(clap::Args)]
@@ -1149,6 +1166,85 @@ pub(crate) enum PluginCommand {
         #[command(subcommand)]
         command: PluginDirsCommand,
     },
+}
+
+#[derive(clap::Subcommand)]
+pub(crate) enum RegistryCommand {
+    /// Show the cached registry index: the master, every registry it lists, and any added by hand.
+    List(RegistryListArgs),
+    /// Fetch the master registry's index of vertical registries and cache it.
+    Refresh(RegistryRefreshArgs),
+    /// Add a registry by hand (shown as unlisted; allowed) or replace one added earlier.
+    Add(RegistryAddArgs),
+    /// Remove a registry added by hand.
+    Remove(RegistryRemoveArgs),
+}
+
+#[derive(clap::Args)]
+pub(crate) struct RegistryListArgs {
+    #[arg(long, help = "Home whose index to show; defaults to ~/.gents")]
+    pub(crate) home: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct RegistryRefreshArgs {
+    #[arg(
+        long,
+        help = "The master registry to fetch the index from; defaults to the configured one"
+    )]
+    pub(crate) master: Option<String>,
+    #[arg(long, help = "Home whose index to refresh; defaults to ~/.gents")]
+    pub(crate) home: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct RegistryAddArgs {
+    #[arg(help = "A short snake_case id, usable as --registry <id>")]
+    pub(crate) id: String,
+    #[arg(help = "The registry's https URL")]
+    pub(crate) url: String,
+    #[arg(long, help = "A display label; defaults to the id")]
+    pub(crate) label: Option<String>,
+    #[arg(long, help = "Home whose index to change; defaults to ~/.gents")]
+    pub(crate) home: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct RegistryRemoveArgs {
+    #[arg(help = "The id of a registry added by hand")]
+    pub(crate) id: String,
+    #[arg(long, help = "Home whose index to change; defaults to ~/.gents")]
+    pub(crate) home: Option<PathBuf>,
+}
+
+#[derive(clap::Subcommand)]
+pub(crate) enum UxCommand {
+    /// List every UX plugin on disk: the dev folder and installed packs.
+    List(UxListArgs),
+    /// Print one UX plugin's module as the desktop would receive it.
+    Module(UxModuleArgs),
+    /// Run the static lint on a plugin.js file, as `gents pack check` does.
+    Lint(UxLintArgs),
+}
+
+#[derive(clap::Args)]
+pub(crate) struct UxListArgs {
+    #[arg(long, help = "Home to list from; defaults to ~/.gents")]
+    pub(crate) home: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct UxModuleArgs {
+    #[arg(help = "A listing id: <name> for a dev plugin, <ns>/<pack>/<name> for a pack one")]
+    pub(crate) id: String,
+    #[arg(long, help = "Home to read from; defaults to ~/.gents")]
+    pub(crate) home: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct UxLintArgs {
+    #[arg(help = "A plugin.js file")]
+    pub(crate) file: PathBuf,
 }
 
 #[derive(clap::Subcommand)]

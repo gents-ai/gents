@@ -33,7 +33,9 @@ import { ToolServicesPanel } from "./ToolServicesPanel";
 import { TriggersPanel } from "./TriggersPanel";
 import { AllowedFoldersPanel } from "./AllowedFoldersPanel";
 import { PacksPanel } from "./PacksPanel";
-import { SECTIONS, type SectionId } from "./sections";
+import { UxPluginsPanel } from "./UxPluginsPanel";
+import { ContribBoundary } from "@/contrib/react/boundary";
+import { useAgentSections, type SectionId } from "./sections";
 
 export function AgentScreen({
   shell,
@@ -54,6 +56,7 @@ export function AgentScreen({
       ?.querySelector("[data-slot=scroll-area-viewport]")
       ?.scrollTo({ top: 0 });
   }, [section, item]);
+  const sections = useAgentSections();
   const deployment = shell.deployments.find((d) => d.agentDid === agentDid) ?? null;
   if (!deployment) {
     return (
@@ -73,13 +76,17 @@ export function AgentScreen({
     "event-sources": deployment.eventSources.length,
     triggers: deployment.triggers.length,
   };
+  const countOf = (id: string) => counts[id as SectionId];
   /* routes that older links still use */
   const ALIASES: Record<string, string> = {
     contexts: "behaviors",
     automations: "triggers",
     inference: "profiles",
   };
-  const groups = [...new Set(SECTIONS.map((s) => s.group))];
+  const groups = [...new Set(sections.map((s) => s.group))];
+  /* a plugin's section renders its own page; nothing else in this screen
+     knows the plugin exists */
+  const contributed = sections.find((s) => s.id === section && s.renderSection);
   return (
     <div
       className="grid h-full min-h-0 grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)] @4xl:grid-cols-[20rem_minmax(0,1fr)]"
@@ -91,22 +98,24 @@ export function AgentScreen({
         <SidebarNav className="w-auto">
           {groups.map((group) => (
             <SidebarGroup key={group} title={group}>
-              {SECTIONS.filter((s) => s.group === group).map((s) => (
-                <SidebarItem
-                  key={s.id}
-                  href={href({ name: "agent", agentDid, section: s.id })}
-                  icon={<s.icon />}
-                  active={
-                    section === s.id ||
-                    (s.id === "behaviors" && section === "contexts") ||
-                    (s.id === "triggers" && section === "automations") ||
-                    (s.id === "profiles" && section === "inference")
-                  }
-                  count={counts[s.id]}
-                >
-                  {s.label}
-                </SidebarItem>
-              ))}
+              {sections
+                .filter((s) => s.group === group)
+                .map((s) => (
+                  <SidebarItem
+                    key={s.id}
+                    href={href({ name: "agent", agentDid, section: s.id })}
+                    icon={s.icon}
+                    active={
+                      section === s.id ||
+                      (s.id === "behaviors" && section === "contexts") ||
+                      (s.id === "triggers" && section === "automations") ||
+                      (s.id === "profiles" && section === "inference")
+                    }
+                    count={countOf(s.id)}
+                  >
+                    {s.label}
+                  </SidebarItem>
+                ))}
             </SidebarGroup>
           ))}
         </SidebarNav>
@@ -116,7 +125,7 @@ export function AgentScreen({
             takes; without it the list becomes a sticky section picker */}
         <div className="sticky top-0 z-10 border-b border-border/60 bg-background/95 px-4 py-2 backdrop-blur @4xl:hidden">
           <Select
-            items={SECTIONS.map((s) => ({ value: s.id, label: s.label }))}
+            items={sections.map((s) => ({ value: s.id, label: s.label }))}
             value={ALIASES[section] ?? section}
             onValueChange={(v) =>
               v && navigate({ name: "agent", agentDid, section: v })
@@ -129,25 +138,32 @@ export function AgentScreen({
               {groups.map((group) => (
                 <SelectGroup key={group}>
                   <SelectLabel>{group}</SelectLabel>
-                  {SECTIONS.filter((s) => s.group === group).map((s) => (
-                    <SelectItem key={s.id} value={s.id}>
-                      <span className="flex items-center gap-2">
-                        <s.icon className="size-4 text-muted-foreground" />
-                        {s.label}
-                        {counts[s.id] ? (
-                          <span className="ml-auto pl-3 text-xs text-muted-foreground">
-                            {counts[s.id]}
-                          </span>
-                        ) : null}
-                      </span>
-                    </SelectItem>
-                  ))}
+                  {sections
+                    .filter((s) => s.group === group)
+                    .map((s) => (
+                      <SelectItem key={s.id} value={s.id}>
+                        <span className="flex items-center gap-2">
+                          <span className="text-muted-foreground">{s.icon}</span>
+                          {s.label}
+                          {countOf(s.id) ? (
+                            <span className="ml-auto pl-3 text-xs text-muted-foreground">
+                              {countOf(s.id)}
+                            </span>
+                          ) : null}
+                        </span>
+                      </SelectItem>
+                    ))}
                 </SelectGroup>
               ))}
             </SelectContent>
           </Select>
         </div>
         <div className="mx-auto max-w-page px-4 py-6 md:px-8 md:py-8">
+          {contributed?.renderSection && (
+            <ContribBoundary id={contributed.id} variant="pane">
+              {contributed.renderSection({ agentDid, item })}
+            </ContribBoundary>
+          )}
           {section === "agent" && (
             <AgentPanel
               key={deployment.agentPrincipal.agentDid}
@@ -190,6 +206,7 @@ export function AgentScreen({
           )}
           {section === "folders" && <AllowedFoldersPanel />}
           {section === "packs" && <PacksPanel />}
+          {section === "ux-plugins" && <UxPluginsPanel />}
         </div>
       </ScrollArea>
     </div>

@@ -3,15 +3,7 @@
    sessions; the content slot on the ground. Chrome and canvas share the
    ground; content that needs a surface brings its own. */
 import type { ReactElement, ReactNode } from "react";
-import {
-  CircleAlert,
-  Inbox,
-  Menu,
-  Plus,
-  ScrollText,
-  SlidersHorizontal,
-  X,
-} from "lucide-react";
+import { CircleAlert, Menu, SlidersHorizontal, X } from "lucide-react";
 import { useState } from "react";
 import {
   DropdownMenu,
@@ -47,6 +39,7 @@ import { Mark } from "./Mark";
 import { SyncHealth } from "./SyncHealth";
 import { WindowControls } from "./WindowControls";
 import { NavPanel, RailFlyout } from "./RailFlyout";
+import { useNavItems } from "./navRegistry";
 import {
   Sheet,
   SheetContent,
@@ -204,6 +197,8 @@ export function AppShell({
 }) {
   const [nav, setNav] = useState<NavMode>(navPreference);
   const [menuOpen, setMenuOpen] = useState(false);
+  const railItems = useNavItems("primary");
+  const navContext = { mailboxCount };
   const wide = useMediaQuery("(min-width: 768px)");
   const roomy = useMediaQuery(ROOMY_WINDOW);
   /* the preference is kept; a narrow window shows the rail in its place */
@@ -386,31 +381,17 @@ export function AppShell({
                 );
               })()}
               <div className="mb-1 h-px w-5 bg-border" />
-              <RailItem
-                label="New session"
-                to={{ name: "session", sessionId: null }}
-                active={route.name === "session" && route.sessionId === null}
-              >
-                <Plus className="size-4" />
-              </RailItem>
-              <RailItem
-                label="Mailbox"
-                to={{ name: "mailbox" }}
-                active={route.name === "mailbox"}
-                count={mailboxCount}
-              >
-                <Inbox className="size-4" />
-              </RailItem>
-              <RailItem
-                label="Sessions"
-                to={{ name: "sessions" }}
-                active={
-                  route.name === "sessions" ||
-                  (route.name === "session" && route.sessionId !== null)
-                }
-              >
-                <ScrollText className="size-4" />
-              </RailItem>
+              {railItems.map((item) => (
+                <RailItem
+                  key={item.id}
+                  label={item.label}
+                  to={item.to}
+                  active={item.active(route)}
+                  count={item.count?.(navContext)}
+                >
+                  {item.icon}
+                </RailItem>
+              ))}
               <div className="mt-auto pb-2">{railSettings}</div>
             </nav>
           </RailFlyout>

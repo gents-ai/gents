@@ -34,10 +34,27 @@ async fn outdated_packs(
             .map(|(access, owner)| (&**access, owner.as_str())),
     )
     .await?;
-    let client = RegistryClient::new(resolve_registry_url(registry));
+    let default_registry = gents::pack_registry::resolve_registry_url_in(&home, registry)?;
+    let client = RegistryClient::new(default_registry.clone());
+    /* a file-recorded install remembers the registry it came from, so a
+    pack from a vertical registry is checked against that one, not the
+    master; DB-recorded packs have no record and use the default */
+    let recorded: std::collections::BTreeMap<String, String> =
+        gents::pack::list_home_installs(&home)?
+            .into_iter()
+            .filter_map(|record| Some((record.coordinate, record.registry?)))
+            .collect();
     let mut report = Vec::new();
     for pack in installed {
         let (namespace, name) = super::split_namespace(&pack.coordinate);
+        let own_client;
+        let (client, registry_url) = match recorded.get(&pack.coordinate) {
+            Some(url) if url != &default_registry => {
+                own_client = RegistryClient::new(url.clone());
+                (&own_client, url.clone())
+            }
+            _ => (&client, default_registry.clone()),
+        };
         let (latest, outdated, error) = match client.package(namespace, name).await {
             Err(error) => (None, None, Some(format!("{error:#}"))),
             Ok(package) => match package["latest"].as_str() {
@@ -64,6 +81,7 @@ async fn outdated_packs(
             "installed": pack.version,
             "latest": latest,
             "outdated": outdated,
+            "registry": registry_url,
             "error": error,
         }));
     }
@@ -151,7 +169,12 @@ pub(crate) async fn update(args: PackUpdateArgs) -> Result<()> {
             scope: args.scope.clone(),
             output: OutputFormat::Json,
             force_rebind_concrete_did: false,
-            registry: args.registry.clone(),
+            // The registry the outdated check used: the install record's
+            // own for a pack from a vertical registry, else the default.
+            registry: pack["registry"]
+                .as_str()
+                .map(str::to_owned)
+                .or_else(|| args.registry.clone()),
             drift: args.drift,
             grant_authority: false,
             // An update never turns a dependency-only install into an

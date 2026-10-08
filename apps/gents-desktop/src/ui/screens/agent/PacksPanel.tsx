@@ -4,6 +4,15 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@gents/ui/components/button";
 import { Input } from "@gents/ui/components/input";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from "@gents/ui/components/select";
 import { toast } from "sonner";
 import { call, message } from "./bridgeCall";
 import { ChoiceRow } from "./editors";
@@ -41,6 +50,39 @@ interface SlotProfile {
   usable: boolean;
 }
 
+/* one registry the cached index lists: the master, a vertical the master
+   vouches for, or one added by hand (`user` tier, shown as unlisted) */
+interface RegistryEntry {
+  id: string;
+  label: string;
+  url: string;
+  description?: string | null;
+  verticals?: string[];
+  tier: string;
+}
+
+const MASTER_ID = "master";
+
+/* the picker's groups: the master first, then each vertical, then unlisted */
+function registryGroups(
+  registries: RegistryEntry[],
+): Array<{ group: string; entries: RegistryEntry[] }> {
+  const groups = new Map<string, RegistryEntry[]>();
+  for (const r of registries) {
+    const group =
+      r.id === MASTER_ID
+        ? "Master"
+        : r.tier === "user"
+          ? "Added by hand"
+          : (r.verticals?.[0] ?? "Other");
+    groups.set(group, [...(groups.get(group) ?? []), r]);
+  }
+  const order = (g: string) => (g === "Master" ? 0 : g === "Added by hand" ? 2 : 1);
+  return [...groups.entries()]
+    .sort((a, b) => order(a[0]) - order(b[0]) || a[0].localeCompare(b[0]))
+    .map(([group, entries]) => ({ group, entries }));
+}
+
 /* An install or update that would replace documents someone edited stops
    and names them; the person chooses to keep or overwrite. */
 function editedChoice(error: unknown): boolean {
@@ -58,6 +100,21 @@ export function PacksPanel() {
   const [busy, setBusy] = useState<string | null>(null);
   const [slots, setSlots] = useState<PluginSlot[]>([]);
   const [profiles, setProfiles] = useState<SlotProfile[]>([]);
+  /* the registry picker: the master's index of vertical registries plus
+     any added by hand; one registry per search and install */
+  const [registries, setRegistries] = useState<RegistryEntry[]>([]);
+  const [registry, setRegistry] = useState<string>(MASTER_ID);
+
+  const loadRegistries = useCallback(async () => {
+    try {
+      const index = await call<{ registries?: RegistryEntry[] }>(
+        "desktop_registry_list",
+      );
+      setRegistries(Array.isArray(index?.registries) ? index.registries : []);
+    } catch {
+      setRegistries([]);
+    }
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
@@ -83,11 +140,29 @@ export function PacksPanel() {
     } catch {
       setAccount(null);
     }
-  }, []);
+    await loadRegistries();
+  }, [loadRegistries]);
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  /* the picked registry's URL, or undefined for the master (the default) */
+  const registryUrl = () =>
+    registry === MASTER_ID ? undefined : registries.find((r) => r.id === registry)?.url;
+
+  async function refreshRegistries() {
+    setBusy("registries");
+    try {
+      await call("desktop_registry_refresh");
+      await loadRegistries();
+      toast.success("Registry index refreshed");
+    } catch (error) {
+      toast.error(message(error));
+    } finally {
+      setBusy(null);
+    }
+  }
 
   async function search(next: number) {
     setBusy("search");
@@ -97,6 +172,7 @@ export function PacksPanel() {
         {
           query,
           page: next,
+          registry: registryUrl(),
         },
       );
       setFound(report.packs);
@@ -117,7 +193,7 @@ export function PacksPanel() {
     setBusy(pack);
     try {
       await call("desktop_pack_install", {
-        request: { package: pack, edited, grantAuthority },
+        request: { package: pack, edited, grantAuthority, registry: registryUrl() },
       });
       toast.success(`Installed ${pack}`);
       await refresh();
@@ -265,7 +341,54 @@ export function PacksPanel() {
         </Group>
       )}
 
-      <Group title="Registry">
+      <Group
+        title="Registry"
+        action={
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={busy !== null}
+            onClick={() => void refreshRegistries()}
+          >
+            Refresh index
+          </Button>
+        }
+      >
+        {registries.length > 1 && (
+          <Row
+            label="Registry"
+            description="One registry per search and install; a vertical registry is listed by the master"
+          >
+            <Select
+              items={registries.map((r) => ({ value: r.id, label: r.label }))}
+              value={registry}
+              onValueChange={(v) => v && setRegistry(v)}
+            >
+              <SelectTrigger aria-label="Registry" className="w-64">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {registryGroups(registries).map(({ group, entries }) => (
+                  <SelectGroup key={group}>
+                    <SelectLabel>{group}</SelectLabel>
+                    {entries.map((r) => (
+                      <SelectItem key={r.id} value={r.id}>
+                        <span className="flex items-center gap-2">
+                          {r.label}
+                          {r.tier === "user" && (
+                            <span className="text-xs text-muted-foreground">
+                              unlisted
+                            </span>
+                          )}
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                ))}
+              </SelectContent>
+            </Select>
+          </Row>
+        )}
         <Row label="Search">
           <form
             className="flex gap-2"

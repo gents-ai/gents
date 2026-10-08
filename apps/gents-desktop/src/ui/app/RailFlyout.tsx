@@ -8,7 +8,7 @@
    after a short rest, closes when the pointer leaves; keyboard focus
    inside keeps it open. */
 import { useRef, useState, type ReactNode } from "react";
-import { ChevronRight, Inbox, Lock, Plus, ScrollText, Users } from "lucide-react";
+import { ChevronRight, Lock } from "lucide-react";
 import type { DeploymentView } from "@source-inc/gents-desktop-client";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { cn } from "@gents/ui/lib/utils";
@@ -16,6 +16,7 @@ import { href, type Route } from "@/lib/router";
 import type { NavMode } from "@/nav";
 import { AgentAvatar } from "@/screens/AgentAvatar";
 import { SessionStatus } from "@/screens/SessionStatus";
+import { useNavItems, type NavItem } from "./navRegistry";
 
 const OPEN_AFTER = 260;
 const CLOSE_AFTER = 180;
@@ -55,6 +56,28 @@ function Item({
   );
 }
 
+/* a registered item as a panel row */
+function NavRow({
+  item,
+  route,
+  mailboxCount,
+}: {
+  item: NavItem;
+  route: Route;
+  mailboxCount: number;
+}) {
+  return (
+    <Item
+      to={href(item.to)}
+      active={item.active(route)}
+      count={item.count?.({ mailboxCount })}
+      icon={item.icon}
+    >
+      {item.label}
+    </Item>
+  );
+}
+
 /* the panel's content, shared by the hover flyout, the expanded column
    and the mobile sheet */
 export function NavPanel({
@@ -81,6 +104,8 @@ export function NavPanel({
     .sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""))
     .slice(0, RECENT);
   const currentSession = route.name === "session" ? route.sessionId : null;
+  const primary = useNavItems("primary");
+  const footer = useNavItems("footer");
   return (
     <>
       {/* the agent, in the same slot as its avatar on the rail */}
@@ -120,28 +145,9 @@ export function NavPanel({
       </a>
       {/* the rail's hairline, in place, then drawn on to the edge */}
       <div className="mb-1 ml-[18px] h-px w-5 bg-border" />
-      <Item
-        to={href({ name: "session", sessionId: null })}
-        active={route.name === "session" && route.sessionId === null}
-        icon={<Plus className="size-4" />}
-      >
-        New session
-      </Item>
-      <Item
-        to={href({ name: "mailbox" })}
-        active={route.name === "mailbox"}
-        count={mailboxCount}
-        icon={<Inbox className="size-4" />}
-      >
-        Mailbox
-      </Item>
-      <Item
-        to={href({ name: "sessions" })}
-        active={route.name === "sessions"}
-        icon={<ScrollText className="size-4" />}
-      >
-        Sessions
-      </Item>
+      {primary.map((item) => (
+        <NavRow key={item.id} item={item} route={route} mailboxCount={mailboxCount} />
+      ))}
       {recent.length > 0 && (
         <>
           <p className="mt-2 mb-0 px-5 font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
@@ -190,13 +196,9 @@ export function NavPanel({
       )}
       <div className="mt-auto">
         <div className="mx-3 mb-2 h-px bg-border" />
-        <Item
-          to={href({ name: "agents" })}
-          active={route.name === "agents"}
-          icon={<Users className="size-4" />}
-        >
-          Agents
-        </Item>
+        {footer.map((item) => (
+          <NavRow key={item.id} item={item} route={route} mailboxCount={mailboxCount} />
+        ))}
         {settings}
       </div>
     </>

@@ -128,8 +128,30 @@ pub(crate) async fn check_dir(dir: &Path) -> CheckReport {
             report.problems.push(format!("{error:#}"));
         }
     }
+    check_ux_plugins(dir, &manifest, &mut report.problems);
     check_readme(dir, &mut report.problems);
     report
+}
+
+/// The static lint every file-produced UX plugin must pass: what the
+/// webview would refuse at load, reported here at the pack instead.
+fn check_ux_plugins(dir: &Path, manifest: &PackManifest, problems: &mut Vec<String>) {
+    if manifest.metadata.ux.is_empty() {
+        return;
+    }
+    match gents::ux_plugin::lint_pack_dir(dir, &manifest.metadata.ux) {
+        Ok(findings) => {
+            for (name, findings) in findings {
+                if !findings.is_empty() {
+                    problems.push(format!(
+                        "ux plugin {name:?} is refused by the static lint:\n{}",
+                        gents::ux_plugin::lint::describe(&findings)
+                    ));
+                }
+            }
+        }
+        Err(error) => problems.push(format!("{error:#}")),
+    }
 }
 
 fn read_manifest(dir: &Path) -> Result<PackManifest> {

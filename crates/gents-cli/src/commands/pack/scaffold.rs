@@ -201,6 +201,20 @@ pub(crate) fn scaffold(dir: &Path, name: &str, args: &PackScaffoldArgs) -> Resul
         }
     }
 
+    if args.ux {
+        let (path, source) = ux_plugin_source(&names);
+        manifest["ux"] = json!([{
+            "name": names.name,
+            "description": format!("{} page, nav row and ::{} directive.", names.title, names.name),
+            "entry": path,
+            "contributes": {
+                "areas": ["nav", "agent.sections", "transcript.directives"],
+                "directives": [names.name.replace('_', "-")],
+            },
+        }]);
+        files.push((path, source));
+    }
+
     for (path, contents) in &files {
         let target = dir.join(path);
         if let Some(parent) = target.parent() {
@@ -238,6 +252,56 @@ pub(crate) fn scaffold(dir: &Path, name: &str, args: &PackScaffoldArgs) -> Resul
         dir: dir.to_path_buf(),
         files: written,
     })
+}
+
+/// The scaffolded UX plugin: a plain ESM file (no build) that lands a nav
+/// row, an agent section page and a transcript directive, each in the
+/// smallest shape that works. Returns its pack-relative path and source.
+pub(crate) fn ux_plugin_source(names: &Names) -> (String, String) {
+    let path = format!("ux/{}/plugin.js", names.name);
+    let directive = names.name.replace('_', "-");
+    let source = format!(
+        r#"// {title}: a UX plugin the desktop loads from this pack. Plain ESM, no
+// build step; only `@gents/ux-sdk`, `react` and `react/jsx-runtime` may be
+// imported. Everything it does goes through `ctx`, so disabling the plugin
+// undoes all of it. Run `gents pack check` to lint, `gents ux module` to
+// see what the desktop receives.
+import {{ AGENT_SECTIONS_AREA, NAV_AREA, TRANSCRIPT_DIRECTIVE_AREA, Group, Row }} from '@gents/ux-sdk'
+import {{ jsx, jsxs }} from 'react/jsx-runtime'
+
+function Page({{ agentDid }}) {{
+  return jsx(Group, {{ title: '{title}', children:
+    jsx(Row, {{ label: 'Agent', description: 'the agent this page was opened for', children:
+      jsx('code', {{ className: 'font-mono text-xs', children: agentDid }}) }}) }})
+}}
+
+function Card({{ attrs }}) {{
+  return jsxs('span', {{ className: 'rounded border border-border px-2 py-0.5 text-xs',
+    children: ['{title}: ', attrs.id ?? '(no id)'] }})
+}}
+
+export default {{
+  id: '{name}',
+  name: '{title}',
+  description: '{title} page, nav row and ::{directive} directive.',
+  register(ctx) {{
+    ctx.registerMany([
+      {{ id: 'nav', area: NAV_AREA, order: 80, data: {{
+        id: '{name}:nav', label: '{title}', icon: null,
+        to: {{ name: 'agents' }}, active: () => false, placement: 'footer', order: 80 }} }},
+      {{ id: 'page', area: AGENT_SECTIONS_AREA, data: {{
+        group: 'Packs', label: '{title}', render: (props) => jsx(Page, props) }} }},
+      {{ id: 'directive', area: TRANSCRIPT_DIRECTIVE_AREA, data: {{
+        name: '{directive}', render: ({{ attrs }}) => jsx(Card, {{ attrs }}) }} }},
+    ])
+  }},
+}}
+"#,
+        title = names.title,
+        name = names.name,
+        directive = directive,
+    );
+    (path, source)
 }
 
 fn list_files(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<()> {
@@ -505,6 +569,7 @@ mod tests {
             namespace: "acme".into(),
             template: Some(template),
             language: None,
+            ux: false,
         }
     }
 

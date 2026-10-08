@@ -7,6 +7,17 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Check, Copy } from "lucide-react";
 import { Button } from "@gents/ui/components/button";
+import { ContribBoundary } from "@/contrib/react/boundary";
+import { useContributions } from "@/contrib/react/use-contributions";
+import {
+  parseTranscriptDirective,
+  resolveDirective,
+  type ParsedTranscriptDirective,
+} from "@/contrib/directives";
+import {
+  TRANSCRIPT_DIRECTIVE_AREA,
+  type TranscriptDirectiveContribution,
+} from "@/contrib/types";
 
 function language(children: ReactNode) {
   if (!isValidElement<{ className?: string }>(children)) return null;
@@ -64,6 +75,56 @@ function Table({ children }: { children?: ReactNode }) {
   );
 }
 
+/* the plain text of a paragraph's children, for the directive check: a
+   directive is a bare `::name{...}` line with no inline markup, so anything
+   but text nodes means it is not one */
+function paragraphText(children: ReactNode): string | null {
+  const parts: string[] = [];
+  for (const child of Array.isArray(children) ? children : [children]) {
+    if (typeof child === "string") parts.push(child);
+    else if (child === null || child === undefined || typeof child === "boolean")
+      continue;
+    else return null;
+  }
+  return parts.join("");
+}
+
+/* a paragraph that is exactly one claimed directive renders as the plugin's
+   component, inside its own boundary; everything else is prose. The
+   `streaming` flag is unknown here, so a directive is rendered as settled.
+   Subscribing to the area means a plugin enabled after the message rendered
+   claims its directives without a re-mount. */
+function Paragraph({ children }: { children?: ReactNode }) {
+  const text = paragraphText(children);
+  const directive = text ? parseTranscriptDirective(text) : null;
+  const area = useContributions(TRANSCRIPT_DIRECTIVE_AREA);
+  const claimed = directive ? resolveDirective(directive.name, area) : null;
+  if (!directive || !claimed) return <p>{children}</p>;
+  return (
+    <ContribBoundary id={`directive:${directive.name}`} variant="chip">
+      <DirectiveRender claimed={claimed} directive={directive} />
+    </ContribBoundary>
+  );
+}
+
+function DirectiveRender({
+  claimed,
+  directive,
+}: {
+  claimed: TranscriptDirectiveContribution;
+  directive: ParsedTranscriptDirective;
+}) {
+  return (
+    <div data-testid="transcript-directive" data-directive={directive.name}>
+      {claimed.render({
+        attrs: directive.attrs,
+        source: directive.source,
+        streaming: false,
+      })}
+    </div>
+  );
+}
+
 type MdNode = { type: string; value?: string; children?: MdNode[] };
 
 /* a single newline in a paragraph ends the line, as it does in a note a
@@ -89,7 +150,7 @@ const remarkSoftBreaks = () => softBreaks;
 
 const PLUGINS = [remarkGfm];
 const PLUGINS_WITH_BREAKS = [remarkGfm, remarkSoftBreaks];
-const COMPONENTS = { pre: CodeBlock, table: Table };
+const COMPONENTS = { pre: CodeBlock, table: Table, p: Paragraph };
 
 export const Markdown = memo(function Markdown({
   children,

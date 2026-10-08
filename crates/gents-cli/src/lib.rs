@@ -437,6 +437,8 @@ async fn async_main() -> Result<()> {
         Command::Graph { command } => commands::graph::dispatch(command).await,
         Command::Pack { command } => commands::pack::dispatch(command).await,
         Command::Plugin { command } => commands::plugin::dispatch(command).await,
+        Command::Ux { command } => commands::ux::dispatch(command).await,
+        Command::Registry { command } => commands::registry::dispatch(command).await,
         Command::Diagnose(args) => commands::diagnose::diagnose(args).await,
         Command::Tools { command } => commands::tools::dispatch(command).await,
         Command::Config { command } => commands::config::dispatch(command).await,

@@ -29,6 +29,7 @@ pub(crate) mod pack;
 pub(crate) mod plugin;
 pub(crate) mod provision;
 pub(crate) mod query;
+pub(crate) mod registry;
 pub(crate) mod request;
 pub(crate) mod reset;
 pub(crate) mod response;
@@ -39,5 +40,6 @@ pub(crate) mod status;
 pub(crate) mod task;
 pub(crate) mod tools;
 pub(crate) mod trace;
+pub(crate) mod ux;
 
 pub(crate) mod write;
