@@ -144,9 +144,9 @@ structure World where
   requestId : DocId
   sessionId : SessionId
   purpose : RequestPurpose
-  /-- Authenticated principal supplied by existing DID/ACP ownership at the
+  /-- Authenticated nodeDid supplied by existing DID/ACP ownership at the
   local gate. It is not inferred from a source. -/
-  principal : Nat
+  nodeDid : Nat
   lease : RequestExecutionLease.World Generation
   segments : List Segment
   messages : List MessageEnvelope

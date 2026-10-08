@@ -76,9 +76,9 @@ theorem tool_write_preserves_request_identity {before after : World}
   obtain ⟨write, _, rfl⟩ := ToolWrite.lift_success h
   exact ⟨rfl, rfl⟩
 
-theorem tool_write_preserves_purpose_principal {before after : World}
+theorem tool_write_preserves_purpose_nodeDid {before after : World}
     {result : Except Error ToolWrite} (h : ToolWrite.lift before result = .ok after) :
-    after.purpose = before.purpose ∧ after.principal = before.principal := by
+    after.purpose = before.purpose ∧ after.nodeDid = before.nodeDid := by
   obtain ⟨write, _, rfl⟩ := ToolWrite.lift_success h
   exact ⟨rfl, rfl⟩
 
@@ -274,7 +274,7 @@ def deliveryHeaderValid (world : World) (tool : OwnedTool)
 
 def wakeBindingValid (world : World) (tool : OwnedTool)
     (binding : WakeDocumentBinding) (message : MessageEnvelope) : Bool :=
-  binding.authenticated && binding.agent == world.principal &&
+  binding.authenticated && binding.agent == world.nodeDid &&
     binding.session == world.sessionId && binding.session == tool.session &&
     binding.entry.source == .backgroundCompletion &&
     decide (binding.entry.coalesceWellFormed binding.session) &&
@@ -943,13 +943,13 @@ theorem wake_notification_preserves_composed_control
   obtain ⟨write, _, rfl⟩ := ToolWrite.lift_success h
   exact ⟨rfl, rfl, rfl, rfl, rfl⟩
 
-theorem wake_notification_preserves_purpose_principal
+theorem wake_notification_preserves_purpose_nodeDid
     (before after : World) (document : DocId) (binding : WakeDocumentBinding)
     (message : MessageEnvelope)
     (h : publishWakeNotification before document binding message = .ok after) :
-    after.purpose = before.purpose ∧ after.principal = before.principal := by
+    after.purpose = before.purpose ∧ after.nodeDid = before.nodeDid := by
   unfold publishWakeNotification publishBackgroundNotificationWith at h
-  exact tool_write_preserves_purpose_principal h
+  exact tool_write_preserves_purpose_nodeDid h
 
 theorem wake_notification_preserves_segments
     (before after : World) (document : DocId) (binding : WakeDocumentBinding)
