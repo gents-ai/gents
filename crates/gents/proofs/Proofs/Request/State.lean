@@ -134,7 +134,7 @@ structure RequestContext where
   persistence  : PersistenceState
   interruptRequestedAt : Option Time := none
   validUntil           : Option Time := none
-  subagentDepth                : Nat := 0
+  requestHop                : Nat := 0
   causedByParentRequestId      : Option RequestId := none
   causedByParentToolCallId     : Option ToolExecution.ToolCallId := none
   deriving Repr

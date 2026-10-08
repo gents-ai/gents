@@ -31,7 +31,7 @@ def RequestInputCase.accepted (c : RequestInputCase) : Bool :=
     requestWorkspaceWithinSource c.workspace c.workspaceSource c.workspaceSourceAuthenticated
 
 private def scopedWorkspace : RequestWorkspace :=
-  { workspaceId := some "workspace", ownerAgentDid := some "did:owner",
+  { workspaceId := some "workspace", ownerNodeDid := some "did:owner",
     authority := some .readOnly, sealHash := some "seal" }
 
 private def workspaceCases : List RequestInputCase :=
@@ -42,10 +42,10 @@ private def workspaceCases : List RequestInputCase :=
   [ base
   , {base with
       name := "workspace-foreign-owner-same-label-denied",
-      workspace := {scopedWorkspace with ownerAgentDid := some "did:foreign"}}
+      workspace := {scopedWorkspace with ownerNodeDid := some "did:foreign"}}
   , {base with
       name := "workspace-missing-owner-denied",
-      workspace := {scopedWorkspace with ownerAgentDid := none}}
+      workspace := {scopedWorkspace with ownerNodeDid := none}}
   , {base with
       name := "workspace-missing-id-denied",
       workspace := {scopedWorkspace with workspaceId := none}}
@@ -62,10 +62,10 @@ private def workspaceCases : List RequestInputCase :=
       workspace := {scopedWorkspace with sealHash := some "forged"}}
   , {base with
       name := "workspace-padded-owner-denied",
-      workspace := {scopedWorkspace with ownerAgentDid := some " did:owner "}}
+      workspace := {scopedWorkspace with ownerNodeDid := some " did:owner "}}
   , {base with
       name := "unbound-owner-injection-denied",
-      workspace := {ownerAgentDid := some "did:owner"}, workspaceSource := {}}
+      workspace := {ownerNodeDid := some "did:owner"}, workspaceSource := {}}
   ]
 
 def requestInputCases : List RequestInputCase :=

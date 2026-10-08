@@ -42,7 +42,7 @@ private def runtimeSourceJson : RuntimeInternalSourceKind → String
 
 private def workspaceJson (w : RequestWorkspace) : String :=
   "{\"workspace_id\":" ++ optionalString w.workspaceId ++
-  ",\"workspace_owner_agent_did\":" ++ optionalString w.ownerAgentDid ++
+  ",\"workspace_owner_node_did\":" ++ optionalString w.ownerNodeDid ++
   ",\"workspace_authority\":" ++ optionalString (w.authority.map BindingAuthority.toDefraDB) ++
   ",\"workspace_seal_hash\":" ++ optionalString w.sealHash ++ "}"
 
