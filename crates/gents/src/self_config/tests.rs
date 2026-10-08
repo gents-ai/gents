@@ -1202,6 +1202,34 @@ async fn run_graph_by_graph_id_is_selected_through_the_shared_owner() {
     .expect("the pinned run cancels");
 }
 
+/// Read from the registered tool, so it binds whichever source supplies the
+/// in-session definitions: a `graph_id` run may omit entry and input too.
+#[tokio::test]
+async fn run_graph_description_makes_entry_optional_for_every_selection() {
+    let mut tool_config = config(&[]);
+    tool_config.enable_graph_tools = true;
+    let tools = build_self_config_tools(
+        build_persona_node().await,
+        "did:key:zSelfConfigTest".to_owned(),
+        None,
+        &tool_config,
+        test_plugins(),
+    );
+    let definition = tools
+        .iter()
+        .find(|tool| tool.name() == RUN_GRAPH_TOOL_NAME)
+        .expect("run_graph registered")
+        .definition(String::new())
+        .await;
+    assert!(
+        definition
+            .description
+            .contains("Supply entry only when the graph has more than one"),
+        "{}",
+        definition.description
+    );
+}
+
 /// `RunGraphTool`'s host-ceiling gate for an entry whose `prepare` declares a
 /// `git_diff` host step: refused when the current behavior has no effective
 /// read authority, and refused again once it does but the named repository
