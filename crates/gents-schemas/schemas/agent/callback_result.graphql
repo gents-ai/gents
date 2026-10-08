@@ -1,11 +1,11 @@
 # Created only after the succeeded invocation's required result docs are durable.
 type CallbackResult @branchable
-    @index(fields: ["owner_agent_did", "result_id"], unique: true)
-    @index(fields: ["owner_agent_did", "invocation_id"], unique: true) {
+    @index(fields: ["owner_node_did", "result_id"], unique: true)
+    @index(fields: ["owner_node_did", "invocation_id"], unique: true) {
     result_id: String @immutable
     invocation_id: String @index @immutable
     binding_id: String @index @immutable
-    owner_agent_did: String @index @immutable
+    owner_node_did: String @index @immutable
     workspace_id: String @index
     work_unit_id: String @index
     caused_by_correlation: String @index @immutable
