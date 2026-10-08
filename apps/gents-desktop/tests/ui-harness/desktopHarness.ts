@@ -156,9 +156,9 @@ export type MobilePerformanceHarnessController = {
   endReply(step: { live: "keep" | "drop"; saved: boolean; completed: boolean }): void;
   /**
    * A message the person sent, as the bridge shows it: first the pending
-   * turn, then the saved message under its own key, before the live tail.
-   * The bridge names the request on the pending turn by its id, as a send
-   * returns it, and on the saved message by its document id.
+   * turn, then the saved prompt row, before the live tail. Every stand-in
+   * names the request by its id, as a send returns it, so the row is one
+   * from pending to saved.
    */
   userTurn(stage: "pending" | "saved"): void;
   /**
@@ -324,8 +324,8 @@ export function createDesktopUiHarness(
   let hydrationRetryCalls = 0;
   let updateEvents = 0;
   let storeVersion = 1;
+  let liveSourceEpoch = 1;
   let olderPageDelayMs = 0;
-  let reconcileVersion = 1;
   let streamSequence = 0;
   let bridgeCalls: MobilePerformanceBridgeCall[] = [];
   let commits: MobilePerformanceCommit[] = [];
@@ -539,6 +539,7 @@ export function createDesktopUiHarness(
         {
           kind: "userMessage",
           itemKey: "remote-user",
+          ownsTurn: true,
           sequence: 1,
           content: "hello from desktop",
           timestamp: THIRTY_DAYS_AGO,
@@ -591,14 +592,13 @@ export function createDesktopUiHarness(
     updateEvents += 1;
     if (reason === "store") {
       storeVersion += 1;
-      if (!responseOnly) reconcileVersion += 1;
+      if (!responseOnly) liveSourceEpoch += 1;
     }
     window.setTimeout(() => {
       for (const listener of listeners) {
         void listener({
           reason,
           storeVersion,
-          reconcileVersion,
         });
       }
     }, 0);
@@ -610,13 +610,12 @@ export function createDesktopUiHarness(
       for (let index = 0; index < count; index += 1) {
         if (reason === "store") {
           storeVersion += 1;
-          if (!responseOnly) reconcileVersion += 1;
+          if (!responseOnly) liveSourceEpoch += 1;
         }
         for (const listener of listeners) {
           void listener({
             reason,
             storeVersion,
-            reconcileVersion,
           });
         }
       }
@@ -795,6 +794,7 @@ export function createDesktopUiHarness(
         {
           kind: "userMessage",
           itemKey: `${requestId}-user`,
+          ownsTurn: true,
           sequence: 1,
           content: prompt,
           timestamp: now,
@@ -1136,7 +1136,12 @@ export function createDesktopUiHarness(
       if (timelinePage?.beforeItemKey && olderPageDelayMs > 0)
         await wait(olderPageDelayMs);
       const snapshot = clone(session);
-      snapshot.projectionRevision = { storeVersion, reconcileVersion };
+      snapshot.projectionRevision = { storeVersion };
+      snapshot.liveCursor = session.timelineItems.some(
+        (item) => item.kind === "liveAssistant",
+      )
+        ? `${session.agentDid}:${sessionId}:${session.latestRequestId}:${liveSourceEpoch}`
+        : null;
       if (!timelinePage) return snapshot;
 
       const totalItems = snapshot.timelineItems.length;
@@ -1190,8 +1195,9 @@ export function createDesktopUiHarness(
     async fetchSessionLiveDelta(request) {
       const session = sessions.get(request.sessionId);
       if (!session || session.latestRequestId !== request.requestId) return null;
-      const revision = { storeVersion, reconcileVersion };
-      if (request.baseReconcileVersion !== reconcileVersion) {
+      const revision = { storeVersion };
+      const liveCursor = `${session.agentDid}:${request.sessionId}:${session.latestRequestId}:${liveSourceEpoch}`;
+      if (request.baseLiveCursor !== liveCursor) {
         return {
           outcome: "snapshotRequired",
           revision,
@@ -1222,6 +1228,7 @@ export function createDesktopUiHarness(
             ? "unchanged"
             : "delta",
         revision,
+        liveCursor,
         requestId: request.requestId,
         turnState: session.turnState,
         status: session.status,
@@ -1263,6 +1270,7 @@ export function createDesktopUiHarness(
             {
               kind: "userMessage",
               itemKey: `${requestId}-user`,
+              ownsTurn: true,
               sequence: nextSequence,
               content,
               timestamp: new Date().toISOString(),
@@ -2553,7 +2561,6 @@ export function createDesktopUiHarness(
               throw new Error("mobile performance fixture lost session-large");
             }
             const requestId = LARGE_SENT_REQUEST_ID;
-            const requestDocId = `bae-${requestId}`;
             const turn =
               stage === "pending"
                 ? {
@@ -2568,16 +2575,15 @@ export function createDesktopUiHarness(
                 : {
                     kind: "userMessage" as const,
                     itemKey: "large-user-sent",
-                    requestId: requestDocId,
+                    requestId,
+                    ownsTurn: true,
                     sequence: session.timelineItems.length,
                     content: "again",
                     timestamp: STARTED_AT,
                     reconstruction: HARNESS_READY_RECONSTRUCTION,
                   };
             const without = session.timelineItems.filter(
-              (item) =>
-                !("requestId" in item) ||
-                (item.requestId !== requestId && item.requestId !== requestDocId),
+              (item) => !("requestId" in item) || item.requestId !== requestId,
             );
             const tailAt = without.findIndex((item) => item.kind === "liveAssistant");
             const timelineItems =
@@ -2776,6 +2782,7 @@ function createLargePerformanceSession(): DesktopSessionSnapshot {
             kind: "userMessage" as const,
             itemKey: `large-user-${index}`,
             requestId: `large-request-${index}`,
+            ownsTurn: true,
             sequence: index,
             content: `User fixture row ${index}: ${filler}`,
             timestamp: STARTED_AT,

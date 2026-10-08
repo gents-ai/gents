@@ -414,6 +414,8 @@ fn load_manifest_with(
     manifest.plugins = distribution.metadata.plugins.clone();
     manifest.config = Some(load_pack_config_with(pack, lookup)?);
     validate_manifest(&manifest).with_context(|| format!("validating {}", path.display()))?;
+    validate_expected_trigger_correlations(&manifest)
+        .with_context(|| format!("validating trigger correlations in {}", path.display()))?;
     validate_prompt_tool_contracts(pack, &manifest)
         .with_context(|| format!("validating prompt/tool contracts in {}", path.display()))?;
     validate_task_goal_declarations(&manifest)
@@ -728,27 +730,60 @@ fn trigger_source_collections(
     let config = scenario_config(manifest)?;
     let mut collections = std::collections::BTreeSet::new();
     for trigger_id in trigger_ids {
-        let trigger = config
-            .triggers
-            .iter()
-            .find(|trigger| trigger.trigger_id == *trigger_id)
-            .with_context(|| format!("missing Trigger {trigger_id}"))?;
-        let event_source_id = match &trigger.source {
-            gents::document_config::TriggerSource::Event { event_source_id } => event_source_id,
-            gents::document_config::TriggerSource::Schedule { .. } => {
-                bail!("scenario Trigger {trigger_id} must use an event source")
-            }
-        };
-        let source = config
-            .event_sources
-            .iter()
-            .find(|source| source.event_source_id == *event_source_id)
-            .with_context(|| format!("missing EventSource {event_source_id}"))?;
+        let source = scenario_event_source(config, trigger_id)?;
         let source_collection = source.source_collection.as_str();
         validate_collection_identifier(source_collection)?;
         collections.insert(source_collection.to_string());
     }
     Ok(collections.into_iter().collect())
+}
+
+/// Resolves a scenario trigger to the event source that feeds it. Every
+/// load-time and run-time question about an expected trigger resolves through
+/// here, so the missing/non-event refusals cannot diverge between them.
+fn scenario_event_source<'a>(
+    config: &'a gents::document_config::PackConfig,
+    trigger_id: &str,
+) -> Result<&'a gents::document_config::EventSource> {
+    let trigger = config
+        .triggers
+        .iter()
+        .find(|trigger| trigger.trigger_id == trigger_id)
+        .with_context(|| format!("missing Trigger {trigger_id}"))?;
+    let event_source_id = match &trigger.source {
+        gents::document_config::TriggerSource::Event { event_source_id } => event_source_id,
+        gents::document_config::TriggerSource::Schedule { .. } => {
+            bail!("scenario Trigger {trigger_id} must use an event source")
+        }
+    };
+    config
+        .event_sources
+        .iter()
+        .find(|source| source.event_source_id == *event_source_id)
+        .with_context(|| format!("missing EventSource {event_source_id}"))
+}
+
+/// A scenario run awaits its stages by filtering requests on the seeded job
+/// id, and an event source only writes that correlation when it has a
+/// correlation_field, so an expected trigger without one can never match and
+/// the run can only time out. No valid no-correlation run exists; refuse it.
+fn validate_expected_trigger_correlations(manifest: &ScenarioManifest) -> Result<()> {
+    let config = scenario_config(manifest)?;
+    for trigger_id in &manifest.expect.trigger_ids {
+        let source = scenario_event_source(config, trigger_id)?;
+        if source
+            .correlation_field
+            .as_deref()
+            .is_none_or(|field| field.trim().is_empty())
+        {
+            bail!(
+                "expect.trigger_ids entry {trigger_id} uses EventSource {} without a \
+                 correlation_field, so its requests can never match the scenario run",
+                source.event_source_id
+            );
+        }
+    }
+    Ok(())
 }
 
 fn validate_manifest(manifest: &ScenarioManifest) -> Result<()> {
@@ -4365,6 +4400,65 @@ mod tests {
             load_manifest_defaults(&pack)
                 .unwrap_or_else(|error| panic!("{} should load: {error:#}", pack.display()));
         }
+    }
+
+    fn copy_fixture_pack(name: &str) -> tempfile::TempDir {
+        let copy = tempfile::tempdir().unwrap();
+        super::super::test_support::copy_tree(
+            &super::super::test_support::fixture_dir(name),
+            copy.path(),
+        )
+        .unwrap();
+        copy
+    }
+
+    /// A run awaits its stages by filtering requests on the seeded job id,
+    /// and an event source writes that correlation only when it has a
+    /// correlation_field, so an expected trigger without one is refused at
+    /// load instead of running into the await timeout.
+    #[test]
+    fn expected_trigger_without_a_correlation_field_is_refused_at_load() {
+        let dir = copy_fixture_pack("documents_fixture");
+        let config_path = dir.path().join("pack_config.json");
+        let mut config: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&config_path).unwrap()).unwrap();
+        config["event_sources"][0]["event_source_id"] = "fixture-worker-source".into();
+        config["event_sources"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("correlation_field");
+        config["triggers"][0]["source"]["event_source_id"] = "fixture-worker-source".into();
+        std::fs::write(&config_path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
+
+        let error = load_manifest_defaults(dir.path()).expect_err("pack must refuse to load: run");
+        let message = format!("{error:#}");
+        assert!(
+            message.contains(
+                "expect.trigger_ids entry fixture-worker uses EventSource fixture-worker-source \
+                 without a correlation_field, so its requests can never match the scenario run"
+            ),
+            "{message}"
+        );
+    }
+
+    /// An expected trigger whose event source is missing was refused only
+    /// once the run joined trigger to source; the shared resolution now
+    /// refuses it at load with the same wording.
+    #[test]
+    fn expected_trigger_with_a_missing_event_source_is_refused_at_load() {
+        let dir = copy_fixture_pack("documents_fixture");
+        let config_path = dir.path().join("pack_config.json");
+        let mut config: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&config_path).unwrap()).unwrap();
+        config["triggers"][0]["source"]["event_source_id"] = "absent-source".into();
+        std::fs::write(&config_path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
+
+        let error = load_manifest_defaults(dir.path()).expect_err("pack must refuse to load: run");
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("missing EventSource absent-source"),
+            "{message}"
+        );
     }
 
     #[test]

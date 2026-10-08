@@ -564,6 +564,41 @@ pub(crate) fn rollback_pack_plugin_records(
     gents::plugin::install::rollback_pack_plugin_records(home, previous)
 }
 
+/// Records a plugin-store change of `coordinate` in `home`'s node for the
+/// home's principal (`gents::pack::record_plugin_store_change`), after the
+/// store itself changed. An uninitialized home has no node, so no runtime to
+/// wake: the next start resolves the plugin store as it is.
+pub(crate) async fn record_plugin_store_change(
+    home: &std::path::Path,
+    coordinate: &str,
+    installed: Option<&gents::pack::PackIdentity>,
+) -> Result<()> {
+    if !gents::home::init_config_path(home).is_file() {
+        return Ok(());
+    }
+    let (access, owner) = resolve_scope_owner(&GraphScopeArgs {
+        home: Some(home.to_owned()),
+        graphql: None,
+        agent_did: None,
+    })
+    .await?;
+    gents::pack::record_plugin_store_change(&access, &owner, home, coordinate, installed).await
+}
+
+/// Reports a failed node notification after a plugin removal as a warning:
+/// the store change already happened and cannot be retried, and a call of a
+/// removed plugin fails closed on its own.
+pub(crate) fn warn_on_unrecorded_removal(coordinate: &str, recorded: Result<()>) {
+    if let Err(error) = recorded {
+        tracing::warn!(
+            coordinate,
+            error = %error,
+            "plugins removed, but the node was not told: a running runtime keeps the removed \
+             tools listed (their calls fail) until it restarts or its configuration changes",
+        );
+    }
+}
+
 /// The owner whose profiles `requested` names for a plugins pack's model
 /// slots, after checking each slot exists and its profile can serve a plugin;
 /// `None` when nothing is requested, which opens no store.
@@ -895,6 +930,14 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
             // by name (`gents plugin run <name>`) as one installed on its
             // own. A failure past this point (the record write) must not
             // leave the plugins installed above orphaned.
+            let prior_record = gents::pack::read_home_install(
+                &home,
+                &format!(
+                    "{}/{}",
+                    pack.manifest().metadata.namespace,
+                    pack.manifest().name
+                ),
+            )?;
             let rollback = snapshot_pack_plugin_records(&home, pack.manifest());
             let installed_plugins = install_pack_plugins(
                 &home,
@@ -927,11 +970,36 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                     .collect(),
                 installed_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             };
-            if let Err(error) =
-                bind_plugin_slots(&home, pack.manifest(), slot_owner.as_deref(), &requested)
-                    .and_then(|()| gents::pack::write_home_install(&home, &record))
-            {
+            // The node record goes last, in one transaction: a failure
+            // before it leaves the node untouched, and undoing the store and
+            // home record restores everything else.
+            let recorded = async {
+                bind_plugin_slots(&home, pack.manifest(), slot_owner.as_deref(), &requested)?;
+                gents::pack::write_home_install(&home, &record)?;
+                if !record.plugins.is_empty() {
+                    let identity = gents::pack::PackIdentity::new(
+                        pack.manifest(),
+                        pack.digest(),
+                        record.plugins.clone(),
+                    );
+                    record_plugin_store_change(&home, &record.coordinate, Some(&identity)).await?;
+                }
+                anyhow::Ok(())
+            }
+            .await;
+            if let Err(error) = recorded {
                 rollback_pack_plugin_records(&home, &rollback);
+                let restored = match &prior_record {
+                    Some(prior) => gents::pack::write_home_install(&home, prior),
+                    None => gents::pack::forget_home_install(&home, &record.coordinate),
+                };
+                if let Err(restore) = restored {
+                    tracing::error!(
+                        coordinate = %record.coordinate,
+                        error = %restore,
+                        "failed to restore the pack install record after a failed pack install",
+                    );
+                }
                 return Err(error);
             }
             crate::print_json(&json!({

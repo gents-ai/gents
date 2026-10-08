@@ -9,4 +9,9 @@ import type { SessionHydrationView } from "./SessionHydrationView.js";
 import type { SessionProjectionRevisionView } from "./SessionProjectionRevisionView.js";
 import type { SessionTimelinePageView } from "./SessionTimelinePageView.js";
 
-export type DesktopSessionSnapshot = { sessionId: string, agentDid: string | null, behaviorId: string | null, title: string | null, previewText: string | null, status: string | null, goal: GoalView | null, turnState: string | null, latestRequestId: string | null, retryEligibility: RetryEligibilityView, latestRequestOutcome: RequestOutcomeView | null, pendingTurn: PendingTurnView | null, context: SessionContextView, timelineItems: Array<RenderedTimelineItem>, hydration?: SessionHydrationView | null, timelinePage?: SessionTimelinePageView | null, projectionRevision?: SessionProjectionRevisionView | null, };
+export type DesktopSessionSnapshot = {
+/**
+ * Ephemeral identity of the canonical live source. Full reads still own
+ * historical reconciliation; this cursor carries no history coverage.
+ */
+liveCursor?: string | null, sessionId: string, agentDid: string | null, behaviorId: string | null, title: string | null, previewText: string | null, status: string | null, goal: GoalView | null, turnState: string | null, latestRequestId: string | null, retryEligibility: RetryEligibilityView, latestRequestOutcome: RequestOutcomeView | null, pendingTurn: PendingTurnView | null, context: SessionContextView, timelineItems: Array<RenderedTimelineItem>, hydration?: SessionHydrationView | null, timelinePage?: SessionTimelinePageView | null, projectionRevision?: SessionProjectionRevisionView | null, };

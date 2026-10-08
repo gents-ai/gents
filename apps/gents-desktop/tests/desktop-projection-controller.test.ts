@@ -144,6 +144,18 @@ describe("createDesktopProjectionController", () => {
     expect(refreshSession).toHaveBeenCalledExactlyOnceWith("session-1");
   });
 
+  it("refreshes the fleet when a delta fallback observes terminal completion", async () => {
+    const refreshSnapshot = vi.fn(async () => {});
+    const projection = controller({
+      refreshSnapshot,
+      refreshSessionLiveDelta: async () => false,
+      refreshSession: async () =>
+        ({ turnState: "completed" }) as DesktopSessionSnapshot,
+    });
+    await projection.request("sessionDelta");
+    expect(refreshSnapshot).toHaveBeenCalledTimes(1);
+  });
+
   it("refreshes the index once after a terminal session event projection", async () => {
     const refreshSnapshot = vi.fn(async () => {});
     const refreshSession = vi.fn(async () => {
