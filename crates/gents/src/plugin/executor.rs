@@ -119,6 +119,19 @@ pub struct PluginExecutor {
     admitted_bytes: AtomicU64,
 }
 
+/// An installed-plugin record that exists but cannot be read. Not a
+/// resolution for change detection (see `ToolSurface::plugin_resolutions`):
+/// a surface resolve that hits one keeps the previous active generation and
+/// retries the read, instead of recording a plugin removal or reporting the
+/// behavior unavailable.
+#[derive(Debug, thiserror::Error)]
+#[error("plugin {coordinate} has an installed record that cannot be read")]
+pub struct RecordUnreadable {
+    coordinate: String,
+    #[source]
+    source: anyhow::Error,
+}
+
 impl std::fmt::Debug for PluginExecutor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PluginExecutor")
@@ -315,6 +328,49 @@ impl PluginExecutor {
             );
         }
         Ok(record)
+    }
+
+    /// The resolution change detection records for `coordinate` (the
+    /// `plugin_resolutions` contract on `ToolSurface`): `Ok(None)` is a
+    /// plugin that determinately resolves to nothing — not installed, no
+    /// plugin directory in this runtime, a coordinate that names no plugin,
+    /// or installed as an artifact other than `pinned` — and `Ok(Some)` is
+    /// the installed identity the pin accepts. `Err` is only
+    /// [`RecordUnreadable`]: a record that cannot be read is not a
+    /// resolution, and the caller keeps its previous view and retries
+    /// instead of acting on one.
+    pub fn resolve_observed(
+        &self,
+        coordinate: &str,
+        pinned: Option<&str>,
+    ) -> std::result::Result<Option<InstalledPlugin>, RecordUnreadable> {
+        let Ok((namespace, name)) = store::parse_coordinate(coordinate) else {
+            return Ok(None);
+        };
+        let Some(home) = self.home.as_deref() else {
+            return Ok(None);
+        };
+        let record = match store::read_record(home, namespace, name) {
+            Ok(record) => record,
+            Err(error)
+                if error
+                    .chain()
+                    .filter_map(|cause| cause.downcast_ref::<std::io::Error>())
+                    .any(|cause| cause.kind() == std::io::ErrorKind::NotFound) =>
+            {
+                return Ok(None);
+            }
+            Err(source) => {
+                return Err(RecordUnreadable {
+                    coordinate: coordinate.to_owned(),
+                    source,
+                })
+            }
+        };
+        if pinned.is_some_and(|pinned| record.digest != pinned) {
+            return Ok(None);
+        }
+        Ok(Some(record))
     }
 
     /// Runs `record`'s artifact once on `input`, within its recorded grant.

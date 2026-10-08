@@ -175,6 +175,46 @@ fn a_plugin_that_is_not_installed_is_refused() {
         .is_err());
 }
 
+/// Change detection must tell a plugin that determinately resolves to
+/// nothing from a record it cannot read: the former records `None`, the
+/// latter is not a resolution and fails, so the previous view is kept and
+/// the read retried instead of the plugin reading as removed.
+#[test]
+fn an_observed_resolution_separates_determinate_absence_from_an_unreadable_record() {
+    let (home, record) = installed_echo();
+    let executor = PluginExecutor::new(Some(home.path().to_owned()));
+
+    assert_eq!(
+        executor.resolve_observed("team/missing", None).unwrap(),
+        None
+    );
+    assert_eq!(executor.resolve_observed("../escape", None).unwrap(), None);
+    assert_eq!(
+        PluginExecutor::default()
+            .resolve_observed("team/plugin", None)
+            .unwrap(),
+        None
+    );
+    let stale = format!("sha256:{}", "0".repeat(64));
+    assert_eq!(
+        executor
+            .resolve_observed("team/plugin", Some(&stale))
+            .unwrap(),
+        None,
+        "a pin mismatch is determinate, not an error"
+    );
+    assert_eq!(
+        executor
+            .resolve_observed("team/plugin", Some(&record.digest))
+            .unwrap(),
+        Some(record.clone())
+    );
+
+    std::fs::write(home.path().join("plugins/installed/team/plugin.json"), b"{").unwrap();
+    let error = executor.resolve_observed("team/plugin", None).unwrap_err();
+    assert!(format!("{error}").contains("cannot be read"), "{error}");
+}
+
 #[tokio::test]
 async fn a_changed_grant_is_admitted_again() {
     let (home, mut record) = installed_echo();

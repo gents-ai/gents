@@ -880,10 +880,19 @@ async fn write_tools_naming_plugin(
     agent_did: &str,
     tools_id: &str,
 ) {
+    write_tools_pinning_plugin(node, agent_did, tools_id, None).await
+}
+
+async fn write_tools_pinning_plugin(
+    node: &Arc<defra_node::EmbeddedNode>,
+    agent_did: &str,
+    tools_id: &str,
+    digest: Option<&str>,
+) {
     let tools: Tools = serde_json::from_value(serde_json::json!({
         "tools_id": tools_id,
         "agent_did": agent_did,
-        "integrations": {"plugins": [{"plugin": "fixture/list_files"}]},
+        "integrations": {"plugins": [{"plugin": "fixture/list_files", "digest": digest}]},
     }))
     .unwrap();
     crate::config_client::write_tools_document(
@@ -1099,6 +1108,266 @@ async fn control_watcher_keeps_one_fingerprint_while_the_named_plugin_stays_miss
     assert!(
         proposal_rx.try_recv().is_err(),
         "no further proposals may arrive once the writes settle"
+    );
+
+    let _ = shutdown_tx.send(true);
+    watcher_task.await.unwrap().unwrap();
+}
+
+/// #2338: an installed record that exists but cannot be read is an
+/// observation gap, not a plugin removal. The resolve fails, so the watcher
+/// keeps the previous active generation — no candidate snapshot may drop
+/// the healthy behavior — and the settle window retries the read until the
+/// record is whole again, at which point the observed identity advances
+/// without ever passing through a `None` hop.
+#[tokio::test]
+async fn an_unreadable_plugin_record_keeps_the_previous_surface_and_retries() {
+    crate::test_support::enable_scoped_event_capture();
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("control-watcher-plugin-unreadable"));
+    bind_default_behavior_backend(
+        node.as_ref(),
+        identity.did(),
+        "backend-plugin-unreadable",
+        "http://127.0.0.1:8117/v1",
+    )
+    .await;
+    let plugin_home = tempfile::tempdir().unwrap();
+    let agent = crate::Gents::from_default_behavior_documents(
+        node.clone(),
+        identity,
+        crate::agent::DocumentRuntimeOptions {
+            tool_ceiling: ToolCeiling::meta_only(),
+            plugin_home: Some(plugin_home.path().to_path_buf()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let agent_did = agent.agent_did().to_string();
+    let behavior_id = agent.default_behavior_id().to_string();
+    let resolve_context = agent
+        .document_runtime_context()
+        .cloned()
+        .expect("document-backed agent");
+    let runtime_status = RuntimeStatusHandle::new(node.clone(), agent_did.clone());
+    runtime_status
+        .initialize_startup(&behavior_id)
+        .await
+        .unwrap();
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let (proposal_tx, mut proposal_rx) = mpsc::channel(8);
+    let reloads = RuntimeViewLoadCapture::default();
+    let reload_count = Arc::clone(&reloads.count);
+    let subscriber = Registry::default().with(reloads);
+    let watcher_task = tokio::spawn(
+        run_test_control_watcher(
+            node.clone(),
+            node.subscribe_document_changes(),
+            agent_did.clone(),
+            resolve_context,
+            proposal_tx,
+            runtime_status,
+            mpsc::channel::<()>(1).1,
+            shutdown_rx,
+        )
+        .with_subscriber(subscriber),
+    );
+    tokio::task::yield_now().await;
+
+    write_tools_naming_plugin(&node, &agent_did, &format!("{behavior_id}:tools")).await;
+    let valid_record = installed_record();
+    crate::plugin::store::write_record(plugin_home.path(), &valid_record).unwrap();
+    write_pack_installation_record(&node, &agent_did).await;
+    let installed = tokio::time::timeout(PROPOSAL_TIMEOUT, proposal_rx.recv())
+        .await
+        .expect("the install must reach the reconcile owner")
+        .expect("proposal channel");
+    let installed_fingerprint = installed.configuration_fingerprint();
+
+    // Tear the record: present, unreadable. Every following resolve must
+    // fail rather than propose a snapshot without the behavior.
+    std::fs::write(
+        plugin_home
+            .path()
+            .join("plugins/installed/fixture/list_files.json"),
+        b"{",
+    )
+    .unwrap();
+    write_pack_installation_record(&node, &agent_did).await;
+    let deadline = tokio::time::Instant::now() + PROPOSAL_TIMEOUT;
+    let failed = loop {
+        let status = fetch_runtime_status(node.as_ref(), &agent_did).await;
+        if status.last_reconcile_result == "error"
+            && status.last_reconcile_error.contains("cannot be read")
+        {
+            break status;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for the unreadable record to fail the resolve; last status: {status:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    };
+    // Let the settle window run out on its own before sampling it: the
+    // retries, not the first failure, are what must be observed.
+    tokio::time::sleep(TEST_CONTROL_WATCHER_TIMING.settle_window).await;
+    assert!(
+        proposal_rx.try_recv().is_err(),
+        "no candidate may drop a healthy behavior over an unreadable record: \
+         the previous active generation stays"
+    );
+    assert!(
+        reload_count.load(Ordering::Relaxed) > 1,
+        "the settle window must retry the unreadable record"
+    );
+
+    // Repair the record at a new digest: the retry observes it and the
+    // identity advances — through a resolved surface, never through None.
+    let mut repaired = valid_record;
+    repaired.digest = format!("sha256:{}", "c".repeat(64));
+    crate::plugin::store::write_record(plugin_home.path(), &repaired).unwrap();
+    write_pack_installation_record(&node, &agent_did).await;
+    let readmitted = tokio::time::timeout(PROPOSAL_TIMEOUT, proposal_rx.recv())
+        .await
+        .expect("the repaired record must reach the reconcile owner")
+        .expect("proposal channel");
+    let surface = readmitted
+        .tool_surfaces
+        .get(&behavior_id)
+        .expect("the behavior kept its resolved surface");
+    assert_eq!(
+        surface.plugin_resolutions(),
+        &[(
+            crate::document_config::PluginToolRef {
+                plugin: "fixture/list_files".to_string(),
+                digest: None,
+            },
+            Some(crate::tool_surface::PluginRecordIdentity {
+                version: repaired.version.clone(),
+                digest: repaired.digest.clone(),
+            })
+        )],
+        "the retry resolves the repaired identity"
+    );
+    assert_ne!(
+        readmitted.configuration_fingerprint(),
+        installed_fingerprint,
+        "the repaired digest must change the fingerprint"
+    );
+
+    let _ = shutdown_tx.send(true);
+    watcher_task.await.unwrap().unwrap();
+}
+
+/// #2338: a pin that names an artifact other than the installed one is a
+/// determinate non-resolution: the surface records `None` (the
+/// `plugin_resolutions` contract) and stays resolved — the behavior is not
+/// unavailable, and tool building against the wrong artifact fails closed
+/// at its own gate.
+#[tokio::test]
+async fn a_pin_mismatch_records_no_identity_and_keeps_the_behavior_available() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("control-watcher-plugin-pin"));
+    bind_default_behavior_backend(
+        node.as_ref(),
+        identity.did(),
+        "backend-plugin-pin",
+        "http://127.0.0.1:8118/v1",
+    )
+    .await;
+    let plugin_home = tempfile::tempdir().unwrap();
+    let agent = crate::Gents::from_default_behavior_documents(
+        node.clone(),
+        identity,
+        crate::agent::DocumentRuntimeOptions {
+            tool_ceiling: ToolCeiling::meta_only(),
+            plugin_home: Some(plugin_home.path().to_path_buf()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let agent_did = agent.agent_did().to_string();
+    let behavior_id = agent.default_behavior_id().to_string();
+    let resolve_context = agent
+        .document_runtime_context()
+        .cloned()
+        .expect("document-backed agent");
+    let runtime_status = RuntimeStatusHandle::new(node.clone(), agent_did.clone());
+    runtime_status
+        .initialize_startup(&behavior_id)
+        .await
+        .unwrap();
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let (proposal_tx, mut proposal_rx) = mpsc::channel(8);
+    let watcher_task = tokio::spawn(run_test_control_watcher(
+        node.clone(),
+        node.subscribe_document_changes(),
+        agent_did.clone(),
+        resolve_context,
+        proposal_tx,
+        runtime_status,
+        mpsc::channel::<()>(1).1,
+        shutdown_rx,
+    ));
+    tokio::task::yield_now().await;
+
+    let installed = installed_record();
+    crate::plugin::store::write_record(plugin_home.path(), &installed).unwrap();
+    write_tools_naming_plugin(&node, &agent_did, &format!("{behavior_id}:tools")).await;
+    let matched = tokio::time::timeout(PROPOSAL_TIMEOUT, proposal_rx.recv())
+        .await
+        .expect("the Tools write must reach the reconcile owner")
+        .expect("proposal channel");
+    assert_eq!(
+        matched
+            .tool_surfaces
+            .get(&behavior_id)
+            .expect("default behavior tool surface")
+            .plugin_resolutions(),
+        &[(
+            crate::document_config::PluginToolRef {
+                plugin: "fixture/list_files".to_string(),
+                digest: None,
+            },
+            Some(crate::tool_surface::PluginRecordIdentity {
+                version: installed.version,
+                digest: installed.digest,
+            })
+        )],
+        "an unpinned reference resolves the installed identity"
+    );
+
+    // Pin an artifact the installed record does not hold.
+    let stale_pin = format!("sha256:{}", "c".repeat(64));
+    write_tools_pinning_plugin(
+        &node,
+        &agent_did,
+        &format!("{behavior_id}:tools"),
+        Some(&stale_pin),
+    )
+    .await;
+    let mismatched = tokio::time::timeout(PROPOSAL_TIMEOUT, proposal_rx.recv())
+        .await
+        .expect("the pin write must reach the reconcile owner")
+        .expect("proposal channel");
+    assert_eq!(
+        mismatched
+            .tool_surfaces
+            .get(&behavior_id)
+            .expect("a pin mismatch must not make the behavior unavailable")
+            .plugin_resolutions(),
+        &[(
+            crate::document_config::PluginToolRef {
+                plugin: "fixture/list_files".to_string(),
+                digest: Some(stale_pin),
+            },
+            None
+        )],
+        "a pin mismatch records no identity, per the plugin_resolutions contract"
     );
 
     let _ = shutdown_tx.send(true);

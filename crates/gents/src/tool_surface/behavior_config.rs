@@ -726,7 +726,11 @@ impl Default for BehaviorToolConfig {
 /// Resolves each surviving plugin reference against the host plugin store.
 /// The resolution outcome is change-detection input only (the
 /// `plugin_resolutions` field on `ToolSurface`); an unresolved plugin stays
-/// `None` and tool building remains the fail-closed gate.
+/// `None` and tool building remains the fail-closed gate. A record that
+/// cannot be read fails the resolve with
+/// [`crate::plugin::executor::RecordUnreadable`], which the snapshot treats
+/// as an observation gap, not a behavior unavailability: the watcher keeps
+/// the previous active generation and retries the read.
 fn resolve_plugin_identities(
     plugins: &std::sync::Arc<crate::plugin::executor::PluginExecutor>,
     plugin_tools: &[crate::document_config::PluginToolRef],
@@ -739,31 +743,13 @@ fn resolve_plugin_identities(
     plugin_tools
         .iter()
         .map(|plugin| {
-            let identity = match plugins.resolve(&plugin.plugin, plugin.digest.as_deref()) {
-                Ok(record) => Some(super::PluginRecordIdentity {
+            let identity = plugins
+                .resolve_observed(&plugin.plugin, plugin.digest.as_deref())
+                .map_err(anyhow::Error::new)?
+                .map(|record| super::PluginRecordIdentity {
                     version: record.version,
                     digest: record.digest,
-                }),
-                // Only an absent record means "not installed". A record that
-                // fails to read must not read as a removal: the watcher
-                // retries the resolve instead of proposing a fingerprint hop,
-                // and a build against the plugin still fails closed at the
-                // store, its own gate.
-                Err(error)
-                    if error
-                        .chain()
-                        .filter_map(|cause| cause.downcast_ref::<std::io::Error>())
-                        .any(|cause| cause.kind() == std::io::ErrorKind::NotFound) =>
-                {
-                    None
-                }
-                Err(error) => {
-                    return Err(error.context(format!(
-                        "resolving the installed record of plugin {}",
-                        plugin.plugin
-                    )));
-                }
-            };
+                });
             Ok((plugin.clone(), identity))
         })
         .collect()

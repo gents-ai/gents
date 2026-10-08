@@ -110,6 +110,7 @@ struct RecordedDocument {
 #[derive(Debug, Default, Clone)]
 struct Record {
     doc_id: Option<String>,
+    version: Option<String>,
     digest: Option<String>,
     documents: BTreeMap<String, RecordedDocument>,
     plugins: Vec<InstalledPackPlugin>,
@@ -177,7 +178,7 @@ fn collection_named(name: &str) -> Result<Collection> {
 async fn read_record(txn: &ConfigApplyTxn<'_>, owner: &str, coordinate: &str) -> Result<Record> {
     let response = txn
         .execute(&format!(
-            r#"{{ {RECORD}(filter: {{ agent_did: {{ _eq: "{}" }}, coordinate: {{ _eq: "{}" }} }}, limit: 2) {{ _docID digest documents plugins history required_by explicit }} }}"#,
+            r#"{{ {RECORD}(filter: {{ agent_did: {{ _eq: "{}" }}, coordinate: {{ _eq: "{}" }} }}, limit: 2) {{ _docID version digest documents plugins history required_by explicit }} }}"#,
             escape_graphql_string(owner),
             escape_graphql_string(coordinate)
         ))
@@ -197,6 +198,7 @@ async fn read_record(txn: &ConfigApplyTxn<'_>, owner: &str, coordinate: &str) ->
     let required_by: Vec<String> = decode_record_field(row, "required_by", owner, coordinate)?;
     Ok(Record {
         doc_id: row["_docID"].as_str().map(str::to_owned),
+        version: row["version"].as_str().map(str::to_owned),
         digest: row["digest"].as_str().map(str::to_owned),
         documents: documents
             .into_iter()
@@ -308,7 +310,11 @@ async fn write_record_in_txn(
         "version": pack.version,
         "digest": pack.digest,
         "documents": if documents.is_empty() { Value::Null } else { json!(documents) },
-        "plugins": pack.plugins,
+        "plugins": if pack.plugins.is_empty() {
+            Value::Null
+        } else {
+            json!(pack.plugins)
+        },
         "history": history,
         // A nanosecond, process-monotonic stamp, not a plain timestamp: a
         // remove immediately followed by a reinstall must not regenerate the
@@ -521,11 +527,14 @@ pub(crate) async fn install_in_txn(
 /// or `gents plugin install`. The record is what wakes the control watcher
 /// (the `PackInstallation` match in `agent::document_view`) so a behavior
 /// demoted on a missing plugin re-admits on the next reconcile, so it goes
-/// through the same writer as a documents install and carries the same
-/// identity: the pack the plugins came from, its version and digest, and
-/// the plugins now in the host store. `documents` is empty — nothing for a
-/// later upgrade to drift-check and nothing for a removal to delete but
-/// the record itself.
+/// through the same writer as a documents install.
+///
+/// What the write carries is decided by [`plugin_store_wake_write`] against
+/// the record read in the same transaction: over a documents or graph
+/// install of the same coordinate it is a wake that preserves that record
+/// (see that function), otherwise the plugin pack's own identity with no
+/// documents — nothing for a later upgrade to drift-check and nothing for a
+/// removal to delete but the record itself.
 ///
 /// Callers write the plugin store first and this record last: the wake it
 /// emits must resolve a store that already holds what the record names.
@@ -538,10 +547,67 @@ pub async fn record_plugin_store_install(
         .transact("pack.record_plugin_store", |txn| {
             Box::pin(async move {
                 let prior = read_record(txn, owner, &pack.coordinate).await?;
-                write_record_in_txn(txn, owner, pack, &prior, Vec::new(), true).await
+                let (identity, documents) = plugin_store_wake_write(pack, &prior);
+                write_record_in_txn(txn, owner, &identity, &prior, documents, true).await
             })
         })
         .await
+}
+
+/// What the record write of a plugin-store install carries over `prior`:
+/// the identity to record and the documents to keep listing.
+///
+/// Over a record that lists documents — a documents or graph pack this
+/// coordinate already installed — the write is a wake, not an upgrade:
+/// installing plugins replaced no pack content, so the recorded documents
+/// (a later upgrade drift-checks them and a removal deletes by them) and
+/// the recorded version, digest and history stay what that install wrote.
+/// Only the plugins refresh, as the union of what the record held and what
+/// this install stored: a name this install replaced wins, and a name this
+/// pack no longer carries is still the coordinate's, so it must stay listed
+/// for a removal to release.
+///
+/// Otherwise — no record yet, or one a previous plugin-store install left
+/// with no documents — the write is the plugin pack's own record: this
+/// install's identity and plugins, no documents, so a plugins pack's
+/// reinstalls and updates advance its recorded version like any pack's.
+fn plugin_store_wake_write(
+    pack: &PackIdentity,
+    prior: &Record,
+) -> (PackIdentity, Vec<RecordedDocument>) {
+    let documents: Vec<RecordedDocument> = prior.documents.values().cloned().collect();
+    let mut plugins: BTreeMap<String, String> = prior
+        .plugins
+        .iter()
+        .map(|plugin| (plugin.name.clone(), plugin.digest.clone()))
+        .collect();
+    for plugin in &pack.plugins {
+        plugins.insert(plugin.name.clone(), plugin.digest.clone());
+    }
+    let (version, digest) = if prior.documents.is_empty() {
+        (pack.version.clone(), pack.digest.clone())
+    } else {
+        (
+            prior
+                .version
+                .clone()
+                .unwrap_or_else(|| pack.version.clone()),
+            prior.digest.clone().unwrap_or_else(|| pack.digest.clone()),
+        )
+    };
+    (
+        PackIdentity {
+            coordinate: pack.coordinate.clone(),
+            version,
+            digest,
+            plugins: plugins
+                .into_iter()
+                .map(|(name, digest)| InstalledPackPlugin { name, digest })
+                .collect(),
+            dependencies: Vec::new(),
+        },
+        documents,
+    )
 }
 
 /// Deletes the record a plugin-store install wrote
