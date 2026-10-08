@@ -18,7 +18,14 @@ source consistency checks, not a separate runtime compatibility version.
   record: there is no node to wake, and the next start resolves the fresh
   plugin store anyway. The demotion log names installing a missing plugin
   as the fix.
-
+- `gents config apply` and `gents server --apply-root` no longer refuse
+  configurations the runtime serves: the pre-flight's `{{ doc.* }}`
+  template-field check is now the publication owner's rule, so a
+  per-document `emit_outcome` delivery of `CallbackResult` or
+  `WorkspaceReceipt` accepts the `handoff_id`, `reply_session_id` and
+  `attempt` fields the trigger engine injects, and `goal_objective_template`
+  and `session_id_template` are judged by the same rule as the prompt
+  (#2341). Refusals now read the publication owner's message.
 - Per-document callback bindings no longer drop documents written before the
   callback engine starts (#2343). Like event triggers, each binding now
   checkpoints a receiving-node arrival cursor, seeded when its configuration
