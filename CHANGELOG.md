@@ -164,6 +164,8 @@ source consistency checks, not a separate runtime compatibility version.
   (`invalid_edge_concurrency`), grouped or not: on a per-document edge it
   supersedes the trigger's in-flight requests and would cancel fan-out
   items, and on a grouped edge it never applies.
+- Self-configuration selection changes and clones are now bounded by the
+  operator-grant guard, as Tools writes are.
 
 ### Fixed
 
