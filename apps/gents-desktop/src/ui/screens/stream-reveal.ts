@@ -246,8 +246,6 @@ export function drawKeys(
   return next;
 }
 
-/* a saved message names the request whose input it is (`inputRequestId`):
-   a folded message is published under the request that answered it */
 const requestOf = (item: RenderedTimelineItem) =>
   item.kind === "userMessage"
     ? (item.inputRequestId ?? item.requestId ?? null)

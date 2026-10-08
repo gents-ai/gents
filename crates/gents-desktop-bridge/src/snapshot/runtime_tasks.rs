@@ -112,7 +112,6 @@ pub(super) fn session_summaries(
             } else {
                 None
             };
-            // Only an unclaimed or folded head can name a different turn.
             let request = request.map(|request| {
                 let may_wait_or_fold = gents::lifecycle::folded_into(request).is_some()
                     || matches!(
