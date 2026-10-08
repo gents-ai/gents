@@ -1125,15 +1125,21 @@ async fn replay_resolution_reads_shared_request_once_and_keeps_every_physical_ca
         commits: std::sync::atomic::AtomicUsize::new(0),
     };
     for resolution in 1..=2 {
-        let candidates = super::output::load_canonical_assistant_candidates_with(
-            &fixture.node,
-            &requests,
-            fixture.scope(),
-            &fixture.boundary,
-            None,
+        let (candidates, segment_scans) = crate::session::count_request_output_scans(
+            super::output::load_canonical_assistant_candidates_with(
+                &fixture.node,
+                &requests,
+                fixture.scope(),
+                &fixture.boundary,
+                None,
+            ),
         )
-        .await
-        .unwrap();
+        .await;
+        let candidates = candidates.unwrap();
+        assert_eq!(
+            segment_scans, 1,
+            "one pass scans a shared request's output once"
+        );
         assert_eq!(candidates.len(), 2);
         assert_ne!(candidates[0].header_doc_id, candidates[1].header_doc_id);
         assert!(candidates.iter().all(|candidate| candidate.has_capture()));

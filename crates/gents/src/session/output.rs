@@ -136,6 +136,10 @@ struct ReadCache {
     observed: BTreeMap<String, super::canonical_rows::TranscriptMessageRow>,
     /// Bulk readers cache scoped session headers; single-header readers query twins only.
     sessions: Option<BTreeMap<String, Vec<serde_json::Value>>>,
+    /// One bounded bulk pass reconstructs every message of a request
+    /// against the same scan. A reused scan that lacks a referenced close is
+    /// dropped and re-read, so replication filling that gap is still observed.
+    reuse_node_scans: bool,
 }
 
 impl ReadAccess<'_, '_> {
@@ -709,6 +713,15 @@ async fn load_referenced_segments(
                 .collect::<Result<Vec<_>>>()?,
         );
     }
+    for closure in &closures {
+        if cache
+            .requests
+            .get(&closure.segment.request_doc_id)
+            .is_some_and(|rows| !rows.iter().any(|row| row.doc_id == closure.doc_id))
+        {
+            cache.requests.remove(&closure.segment.request_doc_id);
+        }
+    }
     let mut sources = Vec::new();
     for closure in &closures {
         if !sources.iter().any(
@@ -739,8 +752,8 @@ async fn load_referenced_segments(
         records.extend(rows.into_iter().filter(|row| row.segment.source == source));
     }
     // A transaction has a fixed view; a node read may still be receiving
-    // additional facts, so never reuse its potentially incomplete scan.
-    if matches!(access, ReadAccess::Txn(_)) {
+    // additional facts, so reuse its scan only within one opted-in pass.
+    if matches!(access, ReadAccess::Txn(_)) || cache.reuse_node_scans {
         cache.requests.extend(local);
     }
     Ok(records)
@@ -869,7 +882,10 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
     let Some(high_water) = high_water else {
         return Ok(Vec::new());
     };
-    let mut cache = ReadCache::default();
+    let mut cache = ReadCache {
+        reuse_node_scans: true,
+        ..ReadCache::default()
+    };
     let mut request_facts = BTreeMap::from([(
         (
             scope.request_doc_id.to_owned(),
@@ -1658,7 +1674,10 @@ pub(super) async fn load_sequenced_messages(
         .iter()
         .map(decode_transcript_message_row)
         .collect::<Result<Vec<_>>>()?;
-    let mut cache = ReadCache::default();
+    let mut cache = ReadCache {
+        reuse_node_scans: true,
+        ..ReadCache::default()
+    };
     let mut sequences = BTreeSet::new();
     let mut keys = BTreeSet::new();
     for row in &headers {
