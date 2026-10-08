@@ -282,3 +282,29 @@ fn an_unexecuted_trigger_request_is_pending_with_its_origin() {
         }] if trigger_id == "on-push"
     ));
 }
+
+#[test]
+fn automated_inputs_carry_the_identity_of_the_request_they_publish() {
+    let snapshot =
+        build_session_snapshot_from_store(&automated_store(), "sess-1", None).expect("snapshot");
+    let identities = snapshot
+        .timeline_items
+        .iter()
+        .filter_map(|item| match item {
+            RenderedTimelineItem::AutomatedInput {
+                input_request_id, ..
+            } => Some(input_request_id.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        identities,
+        [
+            Some("message".to_owned()),
+            Some("trigger".to_owned()),
+            None,
+            Some("wake".to_owned()),
+            Some("goal".to_owned()),
+        ]
+    );
+}

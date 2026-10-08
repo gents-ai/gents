@@ -181,6 +181,7 @@ pub(super) fn build_rendered_timeline(
                 Some(RenderedTimelineItem::AutomatedInput {
                     item_key: message.message_key.clone(),
                     request_id: message.request_id.clone(),
+                    input_request_id: message.input_request_id.clone(),
                     sequence: message.sequence,
                     origin,
                     content: message.input_text.clone(),

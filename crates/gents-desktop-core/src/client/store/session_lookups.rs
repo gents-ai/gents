@@ -128,6 +128,32 @@ impl ClientStore {
             .map(|index| self.requests[*index].request_id.clone())
     }
 
+    /// The physical request whose tip a session read loads: the turn reached
+    /// from `request_id` (`turns::session_turn_request`) within that exact
+    /// agent and requester scope. A queued or folded submission names the
+    /// running request, whose open output is the live tail.
+    pub fn session_tip_request(
+        &self,
+        session_id: &str,
+        agent_did: Option<&str>,
+        requester_did: Option<&str>,
+        request_id: &str,
+    ) -> Option<AgentRequestRow> {
+        let requests = self
+            .requests_for_session(session_id)
+            .into_iter()
+            .filter(|row| {
+                row.agent_did.as_deref() == agent_did
+                    && row.requester_did.as_deref() == requester_did
+            })
+            .collect::<Vec<_>>();
+        let submitted = requests
+            .iter()
+            .copied()
+            .find(|row| row.request_id == request_id)?;
+        Some(turns::session_turn_request(&requests, submitted).clone())
+    }
+
     /// The request whose turn the session is on (`turns::session_turn_request`),
     /// starting from its newest request.
     pub fn turn_request_id_for_session(&self, session_id: &str) -> Option<String> {

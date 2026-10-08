@@ -357,6 +357,10 @@ pub enum RenderedTimelineItem {
         #[serde(skip_serializing_if = "Option::is_none", default)]
         #[ts(optional = nullable)]
         request_id: Option<String>,
+        /// The request whose input this is; dedups its pending projection.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        #[ts(optional = nullable)]
+        input_request_id: Option<String>,
         sequence: Option<i64>,
         origin: RequestOriginView,
         content: Option<String>,

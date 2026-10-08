@@ -21,10 +21,30 @@ pub async fn desktop_session_snapshot(
     timeline_before_item_key: Option<String>,
     state: State<'_, DesktopAppState>,
 ) -> Result<Option<DesktopSessionSnapshot>, BridgeError> {
-    let started = std::time::Instant::now();
     let Some(core) = current_core(&state) else {
         return Ok(None);
     };
+    session_snapshot(
+        &core,
+        session_id,
+        agent_did,
+        request_id,
+        timeline_limit,
+        timeline_before_item_key,
+    )
+    .await
+}
+
+/// The bounded session read behind `desktop_session_snapshot`.
+pub(crate) async fn session_snapshot(
+    core: &std::sync::Arc<gents_desktop_core::client::ClientCore>,
+    session_id: String,
+    agent_did: Option<String>,
+    request_id: Option<String>,
+    timeline_limit: Option<usize>,
+    timeline_before_item_key: Option<String>,
+) -> Result<Option<DesktopSessionSnapshot>, BridgeError> {
+    let started = std::time::Instant::now();
     let agent_did = agent_did.or_else(|| {
         core.store()
             .snapshot()
@@ -168,19 +188,14 @@ pub async fn desktop_session_snapshot(
     let page_and_tip = async {
         let result = if timeline_before_item_key.is_none() {
             let context_read = async {
-                let request = {
-                    let store = core.store().snapshot();
-                    store
-                        .requests
-                        .iter()
-                        .find(|row| {
-                            Some(row.request_id.as_str()) == request_id.as_deref()
-                                && row.session_id.as_deref() == Some(session_id.as_str())
-                                && row.agent_did.as_deref() == agent_did.as_deref()
-                                && row.requester_did.as_deref() == requester_scope.as_deref()
-                        })
-                        .cloned()
-                };
+                let request = request_id.as_deref().and_then(|request_id| {
+                    core.store().snapshot().session_tip_request(
+                        &session_id,
+                        agent_did.as_deref(),
+                        requester_scope.as_deref(),
+                        request_id,
+                    )
+                });
                 let Some(request) = request else {
                     return Ok(None);
                 };

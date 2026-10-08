@@ -580,4 +580,96 @@ mod tests {
         assert!(!facts.by_request_doc_id["folded"].materialized);
         assert_eq!(facts.by_request_doc_id["folded"].first_sequence, None);
     }
+
+    /// H streams while Q waits behind it, or F was folded into it. The read
+    /// targets the submitted Q or F, but the tip it loads is H's, so H's open
+    /// output reaches the live tail.
+    #[tokio::test]
+    async fn a_queued_or_folded_submission_loads_the_running_turns_open_output() {
+        use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestInput, RequestQueue};
+        use gents_protocol::request_lifecycle::RequestLifecycleState;
+
+        let node = defra_node::NodeBuilder::default().build().await.unwrap();
+        crate::client::schema::ensure_runtime_schemas(&node)
+            .await
+            .unwrap();
+        ConfigAccess::write_local(
+            &node,
+            "test.tip_open_stream",
+            r#"mutation { create_AgentOutputSegment(input: {
+                agent_did: "agent", session_id: "session", request_doc_id: "doc-head",
+                requester_did: "reader",
+                source: {kind: "authored", key: "stream"}, ordinal: 0,
+                writer: {kind: "request_execution", execution_generation: "generation-1"},
+                runs: [{stream: 0, bytes: 5, declaration: {block_index: 0, part_index: 0, payload: {kind: "text"}}}],
+                payload: "hello", created_at: "2026-09-30T00:00:00Z"
+            }) { _docID } }"#,
+        )
+        .await
+        .unwrap();
+        let row = |id: &str, state, requester: &str| AgentRequestRow {
+            purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
+            doc_id: Some(format!("doc-{id}")),
+            request_id: id.into(),
+            agent_did: Some("agent".into()),
+            session_id: Some("session".into()),
+            requester_did: Some(requester.into()),
+            lifecycle_state: Some(state),
+            ..Default::default()
+        };
+        let queue = |after: &str| {
+            Some(RequestInput {
+                queue: Some(RequestQueue {
+                    source: QueueSource::User,
+                    policy: QueuePolicy::Append,
+                    key: None,
+                    queued_after_request_id: Some(after.into()),
+                    interrupted_request_id: None,
+                    background_completion_wake_version: None,
+                }),
+                ..Default::default()
+            })
+        };
+        let queued = AgentRequestRow {
+            input: queue("head"),
+            ..row("queued", RequestLifecycleState::Pending, "reader")
+        };
+        let folded = AgentRequestRow {
+            input: queue("head"),
+            superseded_by_request: Some("head".into()),
+            superseded_by_request_doc_id: Some("doc-head".into()),
+            failure_reason: Some(gents::lifecycle::FOLDED_REASON.into()),
+            ..row("folded", RequestLifecycleState::Superseded, "reader")
+        };
+        let foreign = AgentRequestRow {
+            input: queue("head"),
+            ..row("foreign", RequestLifecycleState::Pending, "other")
+        };
+        let store = ClientStore::from_rows(ClientStoreRows {
+            requests: vec![
+                row("head", RequestLifecycleState::Processing, "reader"),
+                queued.clone(),
+                folded,
+                foreign,
+            ],
+            ..Default::default()
+        });
+
+        let untargeted = load_session_tip_store(&node, &queued).await.unwrap();
+        assert!(untargeted.output_segments.is_empty());
+        for submitted in ["queued", "folded"] {
+            let tip = store
+                .session_tip_request("session", Some("agent"), Some("reader"), submitted)
+                .expect("submitted row in scope");
+            assert_eq!(tip.request_id, "head", "{submitted}");
+            let loaded = load_session_tip_store(&node, &tip).await.unwrap();
+            assert_eq!(loaded.output_segments.len(), 1, "{submitted}");
+            assert_eq!(loaded.output_segments[0].segment.payload, "hello");
+        }
+        let foreign_tip = store
+            .session_tip_request("session", Some("agent"), Some("other"), "foreign")
+            .expect("foreign row in its own scope");
+        assert_eq!(foreign_tip.request_id, "foreign");
+        node.shutdown().await;
+    }
 }

@@ -53,10 +53,6 @@ pub async fn send_chat_message(
         cwd: chat_folder(request.cwd.as_deref())?,
         ..Default::default()
     };
-    // A message sent while the session's turn is not terminal is queued
-    // behind the newest request (Lean `SendDecision.queue`); the runtime
-    // claims it after that turn and folds queued user messages into the turn
-    // that claims them. An answer's claim also consumes its mailbox item.
     let busy = store
         .derive_turn_for_agent(&session_id, &agent_did)
         .is_some_and(|turn_state| !turn_state.is_terminal());
