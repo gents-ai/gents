@@ -9,7 +9,7 @@ The canonical configuration graph is:
 
 ```text
 AgentPrincipal
-  -> default_behavior_id -> AgentBehavior
+  -> default_agent_id -> AgentBehavior
 
 AgentBehavior
   -> context_id           -> AgentContext
@@ -21,7 +21,7 @@ AgentContext
   -> skill_ids     -> Skill
 
 Tools
-  -> subagents.target_ids                 -> SubagentTarget
+  -> agents.target_ids                    -> AgentTarget
   -> remote.services[].mcp_service_id     -> ToolServiceRegistry
   -> datastore.datastore_tool_surface_ids -> DatastoreToolSurface
   -> integrations.eth_tool_ids            -> EthTool
@@ -36,7 +36,7 @@ InferenceExecution
 ```
 
 Configuration references are owner scoped unless the target document explicitly
-models a foreign principal, as `SubagentTarget.target_agent_did` does. Desired
+models a foreign principal, as `AgentTarget.target_node_did` does. Desired
 state publishes a complete retained owner graph atomically and validates every
 reference before commit. Tags are discovery metadata and never references,
 permissions, or execution selectors.
@@ -51,7 +51,7 @@ not exist.
 The runtime resolves a behavior in this order:
 
 1. Load the `AgentPrincipal` for the actor DID.
-2. Select its default behavior or the request's explicit `behavior_id`.
+2. Select its default behavior or the request's explicit `agent_id`.
 3. Resolve the behavior's `AgentContext` graph.
 4. Resolve its `InferenceProfile` graph.
 5. Intersect resolved tools with the host's `ToolCeiling`.
@@ -78,7 +78,7 @@ AgentSession -> ordered request and transcript observations
 initial title, queue facts, and authenticated goal-continuation facts. Sampling,
 provider selection, and arbitrary metadata are not request inputs. Physical
 request document IDs bind responses, messages, tool calls, retries, and
-subagent lineage to the exact request instance.
+delegation lineage to the exact request instance.
 
 `AgentSession` is the single durable session document. It owns session identity,
 requester scope, behavior selection, creation and close times, title, tags,
@@ -94,7 +94,7 @@ commit before send.
 ## Tasks and automation
 
 ```text
-Task     -> behavior_id -> AgentBehavior
+Task     -> agent_id    -> AgentBehavior
 Schedule -> task_id     -> Task
 Trigger  -> task_id     -> Task
           source.schedule_id     -> Schedule

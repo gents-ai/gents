@@ -5,8 +5,8 @@ type InferenceCall @branchable {
     request_doc_id: String @index @immutable
     call_seq: Int
     backend_id: String @index
-    behavior_id: String @index
-    agent_did: String @index
+    agent_id: String @index
+    node_did: String @index
     call_kind: String @index
     attempt: Int
 
