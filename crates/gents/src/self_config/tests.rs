@@ -1101,7 +1101,8 @@ async fn graph_tools_start_observe_and_cancel_on_the_current_node() {
 
 /// A `graph_id` run goes through the same selection owner as a package run:
 /// a digest that is not the active revision is refused there, naming the
-/// active one, before any start transaction.
+/// active one, before any start transaction, and the `graph_id` and digest
+/// `list_graphs` returns start the graph's only entry on the default input.
 #[tokio::test]
 async fn run_graph_by_graph_id_is_selected_through_the_shared_owner() {
     let node = build_persona_node().await;
@@ -1169,6 +1170,36 @@ async fn run_graph_by_graph_id_is_selected_through_the_shared_owner() {
         "{refused}"
     );
     assert!(refused.contains(&format!("not {stale}")), "{refused}");
+
+    let list: Value = serde_json::from_str(
+        &call(LIST_GRAPHS_TOOL_NAME, json!({}))
+            .await
+            .expect("the installed graph is listed"),
+    )
+    .unwrap();
+    let graph_id = list["graphs"][0]["definition"]["graph_id"].clone();
+    let revision_digest = list["graphs"][0]["active_plan"]["digest"].clone();
+    let started: Value = serde_json::from_str(
+        &call(
+            RUN_GRAPH_TOOL_NAME,
+            json!({"graph_id": graph_id, "revision_digest": revision_digest}),
+        )
+        .await
+        .expect("the listed graph_id and digest start without entry or input"),
+    )
+    .unwrap();
+    assert_eq!(started["receipt"]["graph_id"], graph_id, "{started}");
+    assert_eq!(
+        started["receipt"]["revision_digest"], revision_digest,
+        "{started}"
+    );
+    assert_eq!(started["receipt"]["entry_name"], "review", "{started}");
+    call(
+        CANCEL_GRAPH_RUN_TOOL_NAME,
+        json!({"run_id": started["receipt"]["run_id"], "reason": "test cleanup"}),
+    )
+    .await
+    .expect("the pinned run cancels");
 }
 
 /// `RunGraphTool`'s host-ceiling gate for an entry whose `prepare` declares a
@@ -1253,6 +1284,25 @@ async fn run_graph_refuses_a_git_diff_prepare_without_ceiling_authority() {
         off.to_string()
             .contains("requires effective read authority"),
         "{off:#}"
+    );
+    let pinned_off = tools
+        .iter()
+        .find(|tool| tool.name() == RUN_GRAPH_TOOL_NAME)
+        .expect("run_graph registered")
+        .call(
+            json!({
+                "graph_id": receipt.graph_id,
+                "revision_digest": receipt.revision_digest,
+            })
+            .to_string(),
+        )
+        .await
+        .expect_err("a graph_id run of the same entry meets the same ceiling");
+    assert!(
+        pinned_off
+            .to_string()
+            .contains("requires effective read authority"),
+        "{pinned_off:#}"
     );
 
     // Grant a read-only process ceiling rooted at a directory that does not
