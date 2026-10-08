@@ -135,14 +135,14 @@ def machineCollections : List String :=
 caller node with `node_did = target` and `requester_did = caller`. The
 coordinator leg (caller → host) therefore carries only that request, selected
 by the target's `node_did`; no tool-call row is needed to name the host. -/
-def subagentCoordinatorCollections : List String :=
+def agentTargetCallerCollections : List String :=
   ["AgentRequest"]
 
 /-- The host leg (host → caller) returns the caused request, its session and
 its transcript, selected by the caller's `requester_did`, so the result reaches
 the originating session. The host's AgentToolCall rows are host-local execution
 records and stay on the host, as do results, compaction and configuration. -/
-def subagentHostCollections : List String :=
+def agentTargetHostCollections : List String :=
   ["AgentRequest", "AgentSession", "AgentOutputSegment", "AgentMessage"]
 
 /-- The eager client index retains its existing requester scope. -/
@@ -163,10 +163,10 @@ def machineRules : List CollectionRule :=
     , { collection := "SessionHydrationRequest", field := "requester_did", source := .peerDid }
     , { collection := "NodeDirectoryEntry", field := "source_did", source := .homeDid } ]
 
-def subagentCoordinatorRules : List CollectionRule :=
+def agentTargetCallerRules : List CollectionRule :=
   [ { collection := "AgentRequest", field := "node_did", source := .peerDid } ]
 
-def subagentHostRules : List CollectionRule :=
+def agentTargetHostRules : List CollectionRule :=
   [ { collection := "AgentRequest",    field := "requester_did", source := .peerDid }
   , { collection := "AgentSession",    field := "requester_did", source := .peerDid }
   , { collection := "AgentOutputSegment", field := "requester_did", source := .peerDid }
@@ -206,16 +206,16 @@ def backupTemplate : Template :=
   , scope := .unscoped
   , delivery := .replicate }
 
-def subagentCoordinatorTemplate : Template :=
-  { id := "subagent-coordinator"
-  , collections := subagentCoordinatorCollections.toFinset
-  , scope := .perCollection subagentCoordinatorRules
+def agentTargetCallerTemplate : Template :=
+  { id := "agent-target-caller"
+  , collections := agentTargetCallerCollections.toFinset
+  , scope := .perCollection agentTargetCallerRules
   , delivery := .push }
 
-def subagentHostTemplate : Template :=
-  { id := "subagent-host"
-  , collections := subagentHostCollections.toFinset
-  , scope := .perCollection subagentHostRules
+def agentTargetHostTemplate : Template :=
+  { id := "agent-target-host"
+  , collections := agentTargetHostCollections.toFinset
+  , scope := .perCollection agentTargetHostRules
   , delivery := .push }
 
 def appCollectionsTemplate : Template :=
@@ -245,8 +245,8 @@ def builtinCatalog : Catalog :=
   , clientTemplate
   , agentConfigTemplate
   , backupTemplate
-  , subagentCoordinatorTemplate
-  , subagentHostTemplate
+  , agentTargetCallerTemplate
+  , agentTargetHostTemplate
   , appCollectionsTemplate
   , clientIndexTemplate ]
 
