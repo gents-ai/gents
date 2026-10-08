@@ -5,9 +5,9 @@ use serde::{Deserialize, Serialize};
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct ToolServiceRegistry {
-    /// Logical name within agent_did; clients/pools must not resolve globally.
+    /// Logical name within node_did; clients/pools must not resolve globally.
     pub service_id: String,
-    pub agent_did: String,
+    pub node_did: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub display_name: Option<String>,
@@ -61,7 +61,7 @@ pub struct ToolServiceRegistry {
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct RepositoryPlacement {
     pub repository_id: String,
-    pub agent_did: String,
+    pub node_did: String,
     pub host_path: String,
     #[serde(
         default = "super::serde_helpers::default_enabled",
@@ -86,10 +86,10 @@ pub struct RepositoryPlacement {
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct ProjectionAcpBinding {
     pub binding_id: String,
-    pub agent_did: String,
+    pub node_did: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
-    pub behavior_id: Option<String>,
+    pub agent_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub projection_id: Option<String>,
@@ -123,7 +123,7 @@ pub struct ProjectionAcpBinding {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProjectionAcpObservation {
     pub binding_id: String,
-    pub agent_did: String,
+    pub node_did: String,
     pub publication_status: Option<String>,
     pub published_at: Option<String>,
 }

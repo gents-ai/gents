@@ -16,7 +16,7 @@ use super::surface_tool::{
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct DatastoreToolSurfaceDocument {
     pub surface_id: String,
-    pub agent_did: String,
+    pub node_did: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub display_name: Option<String>,
