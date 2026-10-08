@@ -267,7 +267,7 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
        the scroll the input is about to make. */
     const release = () => {
       if (following.current) {
-        capture();
+        anchor = null;
         setFollowing(false);
       }
     };

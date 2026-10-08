@@ -142,9 +142,14 @@ describe("transcript streaming follow", () => {
     expect(fixture.viewport.scrollTop).toBe(foot(700));
   });
 
-  it.each(["button", "scroll"])(
-    "captures a fresh reading position after returning to the foot by %s",
-    async (resume) => {
+  it.each([
+    ["button", false],
+    ["button", true],
+    ["scroll", false],
+    ["scroll", true],
+  ] as const)(
+    "captures a fresh reading position after returning by %s, scroll before mutation: %s",
+    async (resume, scrollFirst) => {
       const fixture = transcriptFixture();
       const row = fixture.viewport.firstElementChild as HTMLElement;
       row.dataset.timelineKey = "reply";
@@ -163,10 +168,12 @@ describe("transcript streaming follow", () => {
       act(() => {
         fixture.viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -40 }));
       });
+      const expectedTop = foot(500) - (scrollFirst ? 40 : 0);
+      if (scrollFirst) fixture.viewport.scrollTop = expectedTop;
       await act(async () => {
         row.append(document.createElement("span"));
       });
-      expect(fixture.viewport.scrollTop).toBe(foot(500));
+      expect(fixture.viewport.scrollTop).toBe(expectedTop);
       readerScrollsTo(fixture.viewport, foot(500) - 40);
       expect(result.current.atBottom).toBe(false);
       unmount();
