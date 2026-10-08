@@ -357,7 +357,14 @@ impl PluginExecutor {
         // digest from memory, so the call runs the store's current record: a
         // plugin removed or replaced since fails closed here, and a changed
         // grant or declaration is admitted again.
-        let record = &self.resolve(&coordinate, Some(&record.digest))?;
+        let current = self.resolve(&coordinate, Some(&record.digest))?;
+        // `bound` was authorized under the caller's record, possibly after an
+        // approval wait; a reinstall since may declare a different binding.
+        anyhow::ensure!(
+            bound.is_none() || current == *record,
+            "plugin {coordinate} was reinstalled while this call was being authorized; call again"
+        );
+        let record = &current;
         let admitted = self.admit(record)?;
         let (model, binding_note) = self.model_session(record).await?;
         let outcome = drive(

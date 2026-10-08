@@ -676,6 +676,35 @@ mod bound {
         );
     }
 
+    /// A directory authorized under one declaration is never handed to a
+    /// reinstall that declares the binding differently.
+    #[tokio::test]
+    async fn a_bound_call_fails_when_the_plugin_is_reinstalled_after_binding() {
+        let fx = fixture(&open_and_copy_wat("in.json", 0), BindAccess::Read);
+        let executor = PluginExecutor::new(Some(fx.home.path().to_owned()));
+        let input = serde_json::json!({ "path": fx.root.join("work/in.json") });
+        let work = fx.root.join("work");
+        let context = crate::plugin::executor::BindContext::headless(Some(&work));
+        let bound = executor
+            .bind_input(&fx.record, &input, &context)
+            .await
+            .unwrap()
+            .expect("a bound directory");
+        let mut reinstalled = fx.record.clone();
+        reinstalled
+            .declaration
+            .bind_dir
+            .as_mut()
+            .unwrap()
+            .original_field = Some("path_original".into());
+        store::write_record(fx.home.path(), &reinstalled).unwrap();
+        let error = executor
+            .call_bound(&fx.record, input, bound)
+            .await
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("reinstalled"), "{error:#}");
+    }
+
     #[tokio::test]
     async fn a_declared_original_field_carries_the_real_path_of_a_single_file() {
         let (home, mut record) = installed_plugin(ECHO_WAT, Some(BindAccess::Read));
