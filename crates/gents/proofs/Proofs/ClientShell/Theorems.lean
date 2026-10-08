@@ -17,16 +17,17 @@ theorem matching_terminal_snapshot_allows_follow_up
     (hclient : ctx.clientAvailable = true)
     (hbehavior : behaviorMismatch store sid ctx.requestedBehavior = false) :
     projectSendDecision (step s (.snapshot store) store .healthy ctx) store ctx = .ready := by
-  simp [step, snapshotAdvanceWorkflow, hw, hfind, hreq, projectSendDecision,
+  simp [step, snapshotAdvanceWorkflow, observesRequest, hw, hfind, hreq, projectSendDecision,
     hsel, hagent, hclient, hbehavior, hturn, hterminal]
 
 /-- A terminal observation for another request cannot acknowledge this submit. -/
 theorem unrelated_terminal_does_not_retire_awaiting
     (store : LocalStore) (sid : SessionId) (req : RequestId)
     (obs : SessionObservation) (hfind : store.find sid = some obs)
-    (hother : obs.latestObservedRequest ≠ some req) :
+    (hother : obs.latestObservedRequest ≠ some req)
+    (hunqueued : req ∉ obs.queuedRequests) :
     snapshotAdvanceWorkflow (.awaiting sid req) store = .awaiting sid req := by
-  simp [snapshotAdvanceWorkflow, hfind, hother]
+  simp [snapshotAdvanceWorkflow, observesRequest, hfind, hother, hunqueued]
 
 /-- A locally observed request can precede its mutation acknowledgment. The
 acknowledgment consumes the current observation instead of reinstating a latch
@@ -37,7 +38,7 @@ theorem observed_before_ack_retires_without_another_snapshot
     (hfind : store.find sid = some obs)
     (hreq : obs.latestObservedRequest = some req) :
     (step s (.mutation (.submitted sid req)) store .healthy ctx).workflow = .idle := by
-  simp [step, snapshotAdvanceWorkflow, hfind, hreq]
+  simp [step, snapshotAdvanceWorkflow, observesRequest, hfind, hreq]
 
 theorem acknowledgment_and_matching_snapshot_commute
     (s : ShellState) (store : LocalStore) (ctx : SubmitContext)
@@ -107,23 +108,33 @@ theorem selected_in_store_is_resolved
     (projectChat s store ctx).selectionHealth = .resolved := by
   simp [projectChat, classifySelection, h_sel, h_find]
 
-theorem awaiting_retires_only_on_matching_tip
+theorem awaiting_retires_only_on_observed_request
     (sid : SessionId) (req : RequestId)
     (s : ShellState) (store store' : LocalStore) (h : TransportHealth)
     (ctx : SubmitContext)
     (h_wf   : s.workflow = .awaiting sid req)
     (h_idle : (step s (.snapshot store') store h ctx).workflow = .idle) :
-    ∃ obs, store'.find sid = some obs
-         ∧ obs.latestObservedRequest = some req := by
+    ∃ obs, store'.find sid = some obs ∧ observesRequest obs req := by
   have h_adv : snapshotAdvanceWorkflow s.workflow store' = .idle := h_idle
   rw [h_wf] at h_adv
   cases h_find : store'.find sid with
   | none =>
     simp [snapshotAdvanceWorkflow, h_find] at h_adv
   | some obs =>
-    by_cases h_tip : obs.latestObservedRequest = some req
-    · exact ⟨obs, rfl, h_tip⟩
-    · simp [snapshotAdvanceWorkflow, h_find, h_tip] at h_adv
+    by_cases h_obs : observesRequest obs req
+    · exact ⟨obs, rfl, h_obs⟩
+    · simp [snapshotAdvanceWorkflow, h_find, h_obs] at h_adv
+
+/-- A message queued behind a running turn is observed without becoming the
+turn, so the submission retires while the turn it waits behind keeps running. -/
+theorem queued_observation_retires_awaiting
+    (s : ShellState) (store store' : LocalStore) (h : TransportHealth)
+    (ctx : SubmitContext) (sid : SessionId) (req : RequestId) (obs : SessionObservation)
+    (h_wf : s.workflow = .awaiting sid req)
+    (h_find : store'.find sid = some obs)
+    (h_queued : req ∈ obs.queuedRequests) :
+    (step s (.snapshot store') store h ctx).workflow = .idle := by
+  simp [step, snapshotAdvanceWorkflow, h_wf, h_find, observesRequest, h_queued]
 
 theorem projection_reflects_observed_tip
     (s : ShellState) (store : LocalStore) (ctx : SubmitContext)

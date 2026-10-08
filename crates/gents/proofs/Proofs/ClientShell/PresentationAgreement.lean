@@ -26,6 +26,10 @@ theorem canonical_blocker_preserved
     (h : adaptLocalDraft composerNonEmpty (.blocked reason) = .ready) : False := by
   cases composerNonEmpty <;> simp [adaptLocalDraft] at h
 
+theorem canonical_queue_preserved
+    (turn : ClientTurnState) :
+    adaptLocalDraft true (.queue turn) = .queue turn := rfl
+
 theorem presented_ready_iff_nonempty_and_canonical_ready
     (composerNonEmpty : Bool) (canonical : SendDecision) :
     adaptLocalDraft composerNonEmpty canonical = .ready ↔
