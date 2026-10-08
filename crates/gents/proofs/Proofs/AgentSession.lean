@@ -3,11 +3,11 @@ import Proofs.Request.State
 /-! Durable session owner; Nat identifiers/times abstract validated canonical
 strings. Authorization and atomic query/write remain DB adapter obligations.
 Read-only session discovery uses the authenticated caller's DefraDB ACP visibility;
-agent/requester fields identify a selected row, not additional read permissions.
+node/requester fields identify a selected row, not additional read permissions.
 Presentation and provenance never select execution configuration. -/
 namespace AgentSession
 structure Scope where
-  agent : Nat
+  node : Nat
   session : SessionId
   requester : Option Nat
   deriving DecidableEq, Repr
@@ -73,9 +73,9 @@ def newest : List RequestFact → Option RequestFact
     | some previous => if newer row previous then some row else some previous
 
 /-- `none` queries all requesters; `some none` queries exact absent scope. -/
-def latest (rows : List RequestFact) (agent session : Nat)
+def latest (rows : List RequestFact) (node session : Nat)
     (requester : Option (Option Nat)) : Option RequestFact :=
-  newest (rows.filter fun r => r.purpose == .normal && r.scope.agent == agent && r.scope.session == session &&
+  newest (rows.filter fun r => r.purpose == .normal && r.scope.node == node && r.scope.session == session &&
     requester.all (fun scope => r.scope.requester == scope))
 
 theorem newest_member (rows : List RequestFact) (r : RequestFact)
@@ -191,26 +191,26 @@ theorem newest_filter_preserves (rows : List RequestFact) (r : RequestFact)
         have hf := ih previous hn hr
         cases hp : p row <;> simp [List.filter_cons, hp, newest, hf, hc]
 
-theorem latest_scope (rows : List RequestFact) (agent session : Nat)
+theorem latest_scope (rows : List RequestFact) (node session : Nat)
     (requester : Option (Option Nat)) (r : RequestFact)
-    (h : latest rows agent session requester = some r) :
-    r ∈ rows ∧ r.scope.agent = agent ∧ r.scope.session = session ∧
+    (h : latest rows node session requester = some r) :
+    r ∈ rows ∧ r.scope.node = node ∧ r.scope.session = session ∧
       requester.all (fun scope => r.scope.requester == scope) = true := by
   have hm := newest_member _ r h
   simp only [List.mem_filter, Bool.and_eq_true, beq_iff_eq, and_assoc] at hm
   exact ⟨hm.1, hm.2.2⟩
 
-theorem latest_is_normal (rows : List RequestFact) (agent session : Nat)
+theorem latest_is_normal (rows : List RequestFact) (node session : Nat)
     (requester : Option (Option Nat)) (r : RequestFact)
-    (h : latest rows agent session requester = some r) : r.purpose = .normal := by
+    (h : latest rows node session requester = some r) : r.purpose = .normal := by
   have hm := newest_member _ r h
   simp only [List.mem_filter, Bool.and_eq_true, beq_iff_eq, and_assoc] at hm
   exact hm.2.1
 
-theorem latest_maximal (rows : List RequestFact) (agent session : Nat)
+theorem latest_maximal (rows : List RequestFact) (node session : Nat)
     (requester : Option (Option Nat)) (r candidate : RequestFact)
-    (h : latest rows agent session requester = some r)
-    (hm : candidate ∈ rows) (ha : candidate.scope.agent = agent)
+    (h : latest rows node session requester = some r)
+    (hm : candidate ∈ rows) (ha : candidate.scope.node = node)
     (hs : candidate.scope.session = session)
     (hp : candidate.purpose = .normal)
     (hr : requester.all (fun scope => candidate.scope.requester == scope) = true) :
@@ -220,16 +220,16 @@ theorem latest_maximal (rows : List RequestFact) (agent session : Nat)
   simp [List.mem_filter, hm, ha, hs, hp, hr]
 
 theorem title_arrival_preserves_latest (rows : List RequestFact) (title : RequestFact)
-    (agent session : Nat) (requester : Option (Option Nat))
+    (node session : Nat) (requester : Option (Option Nat))
     (hp : title.purpose = .titleAudit) :
-    latest (title :: rows) agent session requester = latest rows agent session requester := by
+    latest (title :: rows) node session requester = latest rows node session requester := by
   simp [latest, hp]
 
-theorem latest_exact_of_session_winner (rows : List RequestFact) (agent session : Nat)
-    (r : RequestFact) (h : latest rows agent session none = some r) :
-    latest rows agent session (some r.scope.requester) = some r := by
+theorem latest_exact_of_session_winner (rows : List RequestFact) (node session : Nat)
+    (r : RequestFact) (h : latest rows node session none = some r) :
+    latest rows node session (some r.scope.requester) = some r := by
   have hf := newest_filter_preserves
-    (rows.filter fun row => row.purpose == .normal && row.scope.agent == agent && row.scope.session == session)
+    (rows.filter fun row => row.purpose == .normal && row.scope.node == node && row.scope.session == session)
     r (fun row => row.scope.requester == r.scope.requester) (by simpa [latest] using h) (by simp)
   simpa [latest, List.filter_filter, Bool.and_assoc, Bool.and_comm, Bool.and_left_comm] using hf
 
@@ -239,7 +239,7 @@ existing projection adapter before this character-bound operation. -/
 def advance (s : Document) (rows : List RequestFact) (r : RequestFact)
     (preview : String) (now : Time) : Document :=
   if r.scope = s.scope ∧ r.agent = s.agent ∧
-      r ∈ rows ∧ latest rows s.scope.agent s.scope.session (some s.scope.requester) = some r then
+      r ∈ rows ∧ latest rows s.scope.node s.scope.session (some s.scope.requester) = some r then
     { s with observation := some {
       activity := max now (s.observation.map (·.activity) |>.getD s.createdAt)
       preview := some (String.mk (preview.toList.take 240))
@@ -251,7 +251,7 @@ theorem title_does_not_advance (s : Document) (rows : List RequestFact)
   unfold advance
   split
   · rename_i h
-    have hn := latest_is_normal rows s.scope.agent s.scope.session
+    have hn := latest_is_normal rows s.scope.node s.scope.session
       (some s.scope.requester) r h.2.2.2
     simp [hp] at hn
   · rfl

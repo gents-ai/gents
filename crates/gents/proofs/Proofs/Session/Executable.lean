@@ -68,10 +68,10 @@ def scopedStep? (target : AgentSession.Scope) (pre : SessionQueueState)
   if pre.scope = target then step? pre action else none
 
 theorem foreign_owner_cannot_drain (target : AgentSession.Scope)
-    (pre : SessionQueueState) (h : pre.scope.agent ≠ target.agent)
+    (pre : SessionQueueState) (h : pre.scope.node ≠ target.node)
     (source : QueueSource) (key : Option QueueKey) :
     scopedStep? target pre (.drainAutomated source key) = none := by
-  have hs : pre.scope ≠ target := by intro he; exact h (congrArg AgentSession.Scope.agent he)
+  have hs : pre.scope ≠ target := by intro he; exact h (congrArg AgentSession.Scope.node he)
   simp [scopedStep?, hs]
 
 theorem foreign_requester_cannot_drain (target : AgentSession.Scope)

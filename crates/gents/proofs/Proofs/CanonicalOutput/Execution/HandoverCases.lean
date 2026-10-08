@@ -12,7 +12,7 @@ def nextEntry : SessionQueue.QueueEntry :=
   , queueKey := none, queuedAfter := some 10 }
 
 def nextAdmission (requester : Option Nat := none) : PhysicalRequestAdmission :=
-  { document := 801, entry := nextEntry, agent := 1, session := 1
+  { document := 801, entry := nextEntry, node := 1, session := 1
   , requester := requester, authenticated := true }
 
 def nextActivation (requester : Option Nat := none) : Activation :=
@@ -102,7 +102,7 @@ def wakeClaimed : Option World := do
   let queued ← composed.queued
   let gate ← Gate.acquire (Gate.initial composed.execution) 1 true
   let request : PhysicalRequestAdmission :=
-    { document := binding.wakeDocument, entry := wakeEntry, agent := 1, session := 1
+    { document := binding.wakeDocument, entry := wakeEntry, node := 1, session := 1
     , requester := none, authenticated := true }
   let snapshot : BackgroundCompletion.WakeAttemptSnapshot :=
     { wakeRequestId := wakeEntry.requestId, throughSequence := 2

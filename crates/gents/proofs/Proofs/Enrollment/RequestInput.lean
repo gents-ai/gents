@@ -58,15 +58,15 @@ def requestInputFields (input : RequestInput) : CanonicalFields :=
     optionFields (fun goal => [toString goal.sequence, toString goal.wrapup]) input.goalContinuation
 
 /-- Existing context allowlist is the sole skill grant. Invalid activation is
-rejected rather than silently authorizing an extra principal-wide skill. -/
+rejected rather than silently authorizing an extra node-wide skill. -/
 def inputWithinContext (input : RequestInput) (skillIds : List String)
     (cwdAllowed : String → Bool) (queueSourceAllowed : SessionQueue.QueueSource → Bool) : Bool :=
   input.selectedSkillIds.all skillIds.contains &&
     (input.cwd.map cwdAllowed).getD true &&
     (input.queue.map (fun q => queueSourceAllowed q.source)).getD true
 
-/-- Behavior selection has one owner and is required even for new sessions. -/
-def behaviorMatchesSession (selected observed : String) : Bool :=
+/-- Agent selection has one owner and is required even for new sessions. -/
+def agentMatchesSession (selected observed : String) : Bool :=
   !selected.trim.isEmpty && selected == observed
 
 /-- Request titles are consumed only by creation. Reuse, including a currently
@@ -134,8 +134,8 @@ private def authorityRank : BindingAuthority → Nat
   | .readWrite => 2
 
 /-- The source is the existing authenticated exact bridge/entry observation.
-No parent replication premise: cross-principal bridges retain opaque parent IDs.
-The executing principal is deliberately not substituted for the workspace owner. -/
+No parent replication premise: cross-node bridges retain opaque parent IDs.
+The executing node is deliberately not substituted for the workspace owner. -/
 def requestWorkspaceWithinSource (request source : RequestWorkspace)
     (sourceAuthenticated : Bool) : Bool :=
   sourceAuthenticated && requestWorkspaceWellFormed request &&

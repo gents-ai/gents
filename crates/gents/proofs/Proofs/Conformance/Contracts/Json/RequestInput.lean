@@ -64,7 +64,7 @@ private def requestInputCaseJson (c : RequestInputCase) : String :=
   ",\"cwd_allowed\":" ++ boolString c.cwdAllowed ++
   ",\"queue_source_allowed\":" ++ boolString c.queueSourceAllowed ++
   ",\"behavior\":" ++ jsonString c.behavior ++
-  ",\"session_behavior\":" ++ jsonString c.sessionBehavior ++
+  ",\"session_agent\":" ++ jsonString c.sessionAgent ++
   ",\"session_exists\":" ++ boolString c.sessionExists ++
   ",\"current_title\":" ++ titleJson c.currentTitle ++
   ",\"canonical_input_fields\":" ++

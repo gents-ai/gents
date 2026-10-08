@@ -12,7 +12,7 @@ structure RequestInputCase where
   cwdAllowed : Bool := true
   queueSourceAllowed : Bool := true
   behavior : String := "coding"
-  sessionBehavior : String := "coding"
+  sessionAgent : String := "coding"
   sessionExists : Bool := true
   currentTitle : Option AgentSession.Title := none
   admissionKind : AgentRequestAdmissionKind := .localSelf
@@ -24,7 +24,7 @@ structure RequestInputCase where
   deriving Repr
 
 def RequestInputCase.accepted (c : RequestInputCase) : Bool :=
-  behaviorMatchesSession c.behavior c.sessionBehavior &&
+  agentMatchesSession c.behavior c.sessionAgent &&
     inputWithinContext c.input c.contextSkillIds (fun _ => c.cwdAllowed)
       (fun _ => c.queueSourceAllowed) &&
     goalContinuationAllowed c.input c.admissionKind c.runtimeSource c.verifiedGoalContinuation &&

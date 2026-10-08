@@ -30,7 +30,7 @@ def wakeNotificationMessage (sequence : Nat := 2) : MessageEnvelope :=
     header := { (toolDeliveryMessage sequence).header with request := some 800 } }
 
 def wakeBinding (message : MessageEnvelope := wakeNotificationMessage) : WakeDocumentBinding :=
-  { entry := wakeEntry, agent := 1, session := 1
+  { entry := wakeEntry, node := 1, session := 1
     notificationMessageId := message.header.id
     notificationSequence := message.sequence
     wakeDocument := 800, authenticated := true }
