@@ -17,9 +17,9 @@ structure ClientShellContractCase where
   name : String
   property : String
   input : String
-  preSelectionAgent : Option AgentDid
+  preSelectionNode : Option NodeDid
   preSelectionSession : Option SessionId
-  postSelectionAgent : Option AgentDid
+  postSelectionNode : Option NodeDid
   postSelectionSession : Option SessionId
   preWorkflowKind : String
   preWorkflowSession : Option SessionId
@@ -40,7 +40,7 @@ structure ClientShellContractCase where
   sendDecision : String
   sendBlockedReason : Option String
   frontendClientAvailable : Bool
-  frontendSelectedAgentDid : Option AgentDid
+  frontendSelectedNodeDid : Option NodeDid
   frontendSelectedSessionId : Option SessionId
   frontendSending : Bool
   frontendSessionPresent : Bool
@@ -117,7 +117,7 @@ def workflowRequest : SubmissionWorkflow → Option RequestId
 
 def blockedReasonName : BlockedReason → String
   | .clientOffline       => "clientOffline"
-  | .behaviorMismatch _ _ => "sessionBehaviorMismatch"
+  | .agentMismatch _ _ => "sessionAgentMismatch"
   | .mutationRejected    => "mutationRejected"
 
 def sendBlockedReasonName : SendBlockedReason → String
@@ -127,7 +127,7 @@ def sendBlockedReasonName : SendBlockedReason → String
   | .mutationInFlight           => "mutationInFlight"
   | .awaitingObservation        => "awaitingObservation"
   | .awaitingTurnTerminality _  => "awaitingTurnTerminality"
-  | .sessionBehaviorMismatch    => "sessionBehaviorMismatch"
+  | .sessionAgentMismatch       => "sessionAgentMismatch"
   | .sessionAbsent              => "sessionAbsent"
   | .inconsistentObservation    => "inconsistentObservation"
   | .workflowBlocked            => "workflowBlocked"
@@ -139,7 +139,7 @@ def frontendBlockedReasonName : SendBlockedReason → String
   | .mutationInFlight           => "submittingRequest"
   | .awaitingObservation        => "waitingForRequestObservation"
   | .awaitingTurnTerminality _  => "awaitingTurnTerminality"
-  | .sessionBehaviorMismatch    => "sessionBehaviorMismatch"
+  | .sessionAgentMismatch       => "sessionAgentMismatch"
   | .sessionAbsent              => "sessionMissingFromSnapshot"
   | .inconsistentObservation    => "inconsistentTurnObservation"
   | .workflowBlocked            => "workflowBlocked"
@@ -161,7 +161,7 @@ def frontendSendReason : SendDecision → Option String
   | .blocked r => some (frontendBlockedReasonName r)
 
 def inputName : ShellInput → String
-  | .user (.selectPrincipalRoute _ _)     => "selectPrincipalRoute"
+  | .user (.selectNodeRoute _ _)     => "selectNodeRoute"
   | .user (.selectSession _)          => "selectSession"
   | .user .requestNewSession     => "requestNewSession"
   | .user .startSubmit                => "startSubmit"

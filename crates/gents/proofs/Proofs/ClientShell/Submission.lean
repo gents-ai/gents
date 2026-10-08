@@ -6,13 +6,13 @@ composer adds only its own emptiness (`PresentationAgreement.adaptLocalDraft`),
 so the shell's decision does not change with each keystroke. -/
 structure SubmitContext where
   clientAvailable   : Bool
-  requestedBehavior : Option BehaviorId
+  requestedAgent : Option AgentId
   deriving Repr
 
-def behaviorMismatch
+def agentMismatch
     (store : LocalStore) (sid : SessionId)
-    (requested : Option BehaviorId) : Bool :=
-  match requested, (store.find sid).bind (·.behaviorId) with
+    (requested : Option AgentId) : Bool :=
+  match requested, (store.find sid).bind (·.agentId) with
   | some r, some e => decide (r ≠ e)
   | _, _           => false
 
@@ -23,7 +23,7 @@ inductive SendBlockedReason where
   | mutationInFlight
   | awaitingObservation
   | awaitingTurnTerminality (turn : ClientTurnState)
-  | sessionBehaviorMismatch
+  | sessionAgentMismatch
   | sessionAbsent
   | inconsistentObservation
   | workflowBlocked
@@ -50,8 +50,8 @@ def projectSendDecision
         | none     =>
           .blocked .sessionAbsent
         | some obs =>
-          if behaviorMismatch store sid ctx.requestedBehavior then
-            .blocked .sessionBehaviorMismatch
+          if agentMismatch store sid ctx.requestedAgent then
+            .blocked .sessionAgentMismatch
           else
             match obs.latestObservedRequest, obs.latestTurn with
             | none,   none   => .ready
