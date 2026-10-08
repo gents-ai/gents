@@ -46,7 +46,7 @@ structure TitleParentEvidence where
   link : TitleParentLink
   agentDid : Did
   sessionId : String
-  behaviorId : String
+  agentId : String
   logicalBindingCurrent : Bool
   physicalBindingCurrent : Bool
   deriving DecidableEq, Repr
@@ -67,7 +67,7 @@ structure AgentRequestSemantics where
   purpose : RequestPurpose
   targetAgent : Did
   requesterDid : Did
-  behaviorId : String
+  agentId : String
   sessionId : String
   content : String
   input : RequestInput
@@ -91,7 +91,7 @@ def hopField (hop : Nat) : WireBytes := List.replicate hop 0
 def agentRequestSemanticFields (request : AgentRequestSemantics) : CanonicalFields :=
   [hopField request.hop] ++ textFieldsToBytes
     [ request.requestId, request.purpose.toWire, request.targetAgent, request.requesterDid
-    , request.behaviorId, request.sessionId, request.content ] ++
+    , request.agentId, request.sessionId, request.content ] ++
   requestInputFields request.input ++ textFieldsToBytes
     [request.createdAt, request.triggerConfigDocumentId] ++
   request.retryFields ++ request.triggerFields ++ request.parentFields ++ requestWorkspaceFields request.workspace
@@ -247,7 +247,7 @@ instance (request : AgentRequestSemantics) (admission : AgentRequestAdmission)
   unfold exactEnrollmentGeneration; infer_instance
 
 /-- Title is a runtime-authored, parent-only request in the same session and
-behavior. The authenticated parent is provenance; neither its lifecycle state
+agent. The authenticated parent is provenance; neither its lifecycle state
 nor its execution generation grants title write authority. -/
 def titlePurposeAllowed
     (request : AgentRequestSemantics) (admission : AgentRequestAdmission)
@@ -271,7 +271,7 @@ def titlePurposeAllowed
           admission.sourceRequestId = parent.link.requestId ∧
           parent.agentDid = request.targetAgent ∧
           parent.sessionId = request.sessionId ∧
-          parent.behaviorId = request.behaviorId ∧
+          parent.agentId = request.agentId ∧
           parent.logicalBindingCurrent = true ∧
           parent.physicalBindingCurrent = true ∧
           evidence.sourceDocumentBindingCurrent = true
@@ -379,7 +379,7 @@ def requestGoalInputAllowed (request : AgentRequestSemantics)
     (evidence.bind RuntimeInternalEvidence.verifiedGoalContinuation)
 
 /-- Composed claim boundary: signatures authenticate input but do not grant
-skills, cwd escape, or runtime queue origins. The observed session behavior is
+skills, cwd escape, or runtime queue origins. The observed session agent is
 resolved by the session owner; blank/mismatched selection cannot be repaired by
 falling back to the principal name. New-session creation passes its selected
 behavior through the same boundary. -/
@@ -390,7 +390,7 @@ def agentRequestClaimable
     (branchFieldsExact pendingDeadlineAbsent : Bool) (target : TargetAuthority)
     (sessionBehavior : String) (skillIds : List String)
     (cwdAllowed : String → Bool) (queueSourceAllowed : SessionQueue.QueueSource → Bool) : Prop :=
-  behaviorMatchesSession request.behaviorId sessionBehavior = true ∧
+  behaviorMatchesSession request.agentId sessionBehavior = true ∧
   inputWithinContext request.input skillIds cwdAllowed queueSourceAllowed = true ∧
   agentRequestAdmissible s request admission enrollmentRequest decision authorizationFresh
     runtimeEvidence branchFieldsExact pendingDeadlineAbsent target ∧
@@ -420,7 +420,7 @@ theorem claim_requires_authenticated_input
       sessionBehavior skills cwdAllowed queueAllowed) :
     admission.signatureValid = true ∧
     admission.signedFields = agentRequestAdmissionFields request admission ∧
-    behaviorMatchesSession request.behaviorId sessionBehavior = true ∧
+    behaviorMatchesSession request.agentId sessionBehavior = true ∧
     inputWithinContext request.input skills cwdAllowed queueAllowed = true := by
   exact ⟨h.2.2.1.1, h.2.2.1.2.1, h.1, h.2.1⟩
 
@@ -442,7 +442,7 @@ theorem title_requires_runtime_parent_only
       request.parentFields = titleParentFields parent.link ∧
       parent.agentDid = request.targetAgent ∧
       parent.sessionId = request.sessionId ∧
-      parent.behaviorId = request.behaviorId := by
+      parent.agentId = request.agentId := by
   have htitle : titlePurposeAllowed request admission runtimeEvidence := by
     simpa [requestPurposeAllowed, hpurpose] using hadmit.2.2.2.2.2.1
   rcases runtimeEvidence with _ | evidence
@@ -585,39 +585,39 @@ theorem available_negative_admission_observation_denies
 
 theorem unavailable_title_pending_preserves
     (s : State) (request : AgentRequestSemantics) (admission : AgentRequestAdmission)
-    (evidence : Option RuntimeInternalEvidence) (behavior : String)
+    (evidence : Option RuntimeInternalEvidence) (agent: String)
     (branchFieldsExact pendingDeadlineAbsent : Bool) (maxRequestHop : Nat)
     (pending : RequestContext)
     (hpurpose : request.purpose = .titleAudit)
     (hstate : pending.state = .pending) (hslot : pending.admission = .released) :
-    titlePendingStep? false s request admission evidence behavior branchFieldsExact
+    titlePendingStep? false s request admission evidence agent branchFieldsExact
       pendingDeadlineAbsent maxRequestHop pending = some pending := by
   simp [titlePendingStep?, titlePendingDisposition, admissionDispositionFromResult,
     hpurpose, hstate, hslot]
 
 theorem admitted_title_pending_awaits_owned_claim
     (s : State) (request : AgentRequestSemantics) (admission : AgentRequestAdmission)
-    (evidence : Option RuntimeInternalEvidence) (behavior : String)
+    (evidence : Option RuntimeInternalEvidence) (agent: String)
     (branchFieldsExact pendingDeadlineAbsent : Bool) (maxRequestHop : Nat)
     (pending : RequestContext)
     (hpurpose : request.purpose = .titleAudit)
     (hstate : pending.state = .pending) (hslot : pending.admission = .released)
-    (hadmit : titlePendingDisposition true s request admission evidence behavior
+    (hadmit : titlePendingDisposition true s request admission evidence agent
       branchFieldsExact pendingDeadlineAbsent maxRequestHop = .admit) :
-    titlePendingStep? true s request admission evidence behavior branchFieldsExact
+    titlePendingStep? true s request admission evidence agent branchFieldsExact
       pendingDeadlineAbsent maxRequestHop pending = some pending := by
   simp [titlePendingStep?, hpurpose, hstate, hslot, hadmit]
 
 theorem denied_title_pending_uses_admission_reject
     (s : State) (request : AgentRequestSemantics) (admission : AgentRequestAdmission)
-    (evidence : Option RuntimeInternalEvidence) (behavior : String)
+    (evidence : Option RuntimeInternalEvidence) (agent: String)
     (branchFieldsExact pendingDeadlineAbsent : Bool) (maxRequestHop : Nat)
     (pending : RequestContext)
     (hpurpose : request.purpose = .titleAudit)
     (hstate : pending.state = .pending) (hslot : pending.admission = .released)
-    (hdeny : titlePendingDisposition true s request admission evidence behavior
+    (hdeny : titlePendingDisposition true s request admission evidence agent
       branchFieldsExact pendingDeadlineAbsent maxRequestHop = .deny) :
-    titlePendingStep? true s request admission evidence behavior branchFieldsExact
+    titlePendingStep? true s request admission evidence agent branchFieldsExact
       pendingDeadlineAbsent maxRequestHop pending =
       pending.step? .admissionReject := by
   simp [titlePendingStep?, hpurpose, hstate, hslot, hdeny]

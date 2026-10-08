@@ -6,13 +6,13 @@ composer adds only its own emptiness (`PresentationAgreement.adaptLocalDraft`),
 so the shell's decision does not change with each keystroke. -/
 structure SubmitContext where
   clientAvailable   : Bool
-  requestedBehavior : Option BehaviorId
+  requestedBehavior : Option AgentId
   deriving Repr
 
 def behaviorMismatch
     (store : LocalStore) (sid : SessionId)
-    (requested : Option BehaviorId) : Bool :=
-  match requested, (store.find sid).bind (·.behaviorId) with
+    (requested : Option AgentId) : Bool :=
+  match requested, (store.find sid).bind (·.agentId) with
   | some r, some e => decide (r ≠ e)
   | _, _           => false
 

@@ -18,9 +18,9 @@ private def budgetsJson : Json := toJson <| [(64, 4096), (5, 900), (60, 900), (1
 
 private def modelSlotsJson : Json := toJson <| [false, true].flatMap fun declared =>
   [false, true].flatMap fun optional =>
-  [false, true].map fun behaviorFree => Json.mkObj [
-    ("declared", toJson declared), ("optional", toJson optional), ("behavior_free", toJson behaviorFree),
-    ("expected", toJson (pluginModelSlotAllowed declared optional behaviorFree))]
+  [false, true].map fun agentFree => Json.mkObj [
+    ("declared", toJson declared), ("optional", toJson optional), ("agent_free", toJson agentFree),
+    ("expected", toJson (pluginModelSlotAllowed declared optional agentFree))]
 
 section Network
 open ToolPolicy.PluginNetwork

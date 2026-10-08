@@ -216,11 +216,11 @@ def projectThreadStatus (head : Option ClientHeadProjection) : ThreadPresentatio
   | some ⟨.interrupted, _⟩ => .idle
   | none => .idle
 
-def projectionBehaviorId (rootBehaviorId : String)
-    (threadBehaviorId : Option String) : String :=
-  match threadBehaviorId with
-  | some behaviorId => behaviorId
-  | none => rootBehaviorId
+def projectionAgentId (rootAgentId : String)
+    (threadAgentId : Option String) : String :=
+  match threadAgentId with
+  | some agentId => agentId
+  | none => rootAgentId
 
 /-- Display metadata must come from the exact selected principal/behavior pair.
 An unavailable binding stays unavailable; parent metadata is not a substitute. -/
@@ -272,10 +272,10 @@ theorem missing_request_observation_is_quiescent :
     projectThreadStatus none = .idle := rfl
 
 theorem child_behavior_overrides_root_for_response_metadata :
-    projectionBehaviorId "root" (some "child") = "child" := rfl
+    projectionAgentId "root" (some "child") = "child" := rfl
 
 theorem absent_child_behavior_keeps_root_response_metadata :
-    projectionBehaviorId "root" none = "root" := rfl
+    projectionAgentId "root" none = "root" := rfl
 
 theorem exact_binding_supplies_model :
     projectedThreadModel "child-owner" "child" "child-owner" "child"

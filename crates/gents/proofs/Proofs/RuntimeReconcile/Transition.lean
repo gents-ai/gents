@@ -57,7 +57,7 @@ inductive Transition : RuntimeState → RuntimeState → Prop where
       post = { pre with routerObservedGeneration := pre.active.generation } →
       Transition pre post
   | accept_request {pre post : RuntimeState} (process : ProcessState)
-      (sessionId : SessionId) (requestId : RequestId) (requested : BehaviorId) :
+      (sessionId : SessionId) (requestId : RequestId) (requested : AgentId) :
       CanAdmitRequest process pre sessionId requestId requested →
       post =
         { pre with
@@ -221,7 +221,7 @@ theorem coherent_preserved
                 (s := pre)
                 (sessionId := sessionId)
                 (other := pre.requestSession rid)
-                (behaviorId := requested)
+                (agentId := requested)
                 h_same
             simpa [h_other, Function.update, h_ne, h_same]
               using h_session rid h_old

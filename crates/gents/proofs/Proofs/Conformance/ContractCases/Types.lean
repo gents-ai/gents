@@ -6,10 +6,10 @@ import Proofs.CanonicalOutput.State
 namespace Conformance.ContractCases
 
 structure RuntimeReconcileCase where
-  requestedBehavior : Option BehaviorId
-  preDefaultBehavior : BehaviorId
-  preSessionBehavior : Option BehaviorId
-  preRunnable : List BehaviorId
+  requestedBehavior : Option AgentId
+  preDefaultBehavior : AgentId
+  preSessionBehavior : Option AgentId
+  preRunnable : List AgentId
   name : String
   action : String
   legal : Bool
@@ -29,8 +29,8 @@ structure RuntimeReconcileCase where
   trackedSessionId : SessionId
   trackedRequestGeneration : Generation
   trackedRequestSession : SessionId
-  trackedRequestBehavior : BehaviorId
-  trackedSessionBehavior : BehaviorId
+  trackedRequestBehavior : AgentId
+  trackedSessionBehavior : AgentId
   deriving Repr
 
 structure ClientBehaviorReadinessCase where
@@ -233,8 +233,8 @@ structure SessionRecoveryCase where
   postLatestId : RequestId
   preSessionId : SessionId
   postSessionId : SessionId
-  preBehaviorId : BehaviorId
-  postBehaviorId : BehaviorId
+  preAgentId : AgentId
+  postAgentId : AgentId
   preRequestCount : Nat
   postRequestCount : Nat
   preRetryCount : Nat

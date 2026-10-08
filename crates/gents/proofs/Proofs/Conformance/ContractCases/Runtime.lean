@@ -81,7 +81,7 @@ def runtimeCaseFromStep
       , trackedRequestBehavior := post.requestBehavior trackedRequestId
       , trackedSessionBehavior :=
           match post.sessionBehavior trackedSessionId with
-          | some behaviorId => behaviorId
+          | some agentId => agentId
           | none => 0
       }
   | none =>
@@ -198,9 +198,9 @@ def clientBehaviorReadinessCase
     (runnable unavailable startupDemoted : Bool)
     (runtimeUnavailableReason : RuntimeState.RuntimeUnavailableReason := .backendTemporarilyUnavailable) :
     ClientBehaviorReadinessCase :=
-  let runnableSet : Finset BehaviorId := if runnable then {20} else ∅
-  let unavailableSet : Finset BehaviorId := if unavailable then {20} else ∅
-  let demotedSet : Finset BehaviorId := if startupDemoted then {20} else ∅
+  let runnableSet : Finset AgentId := if runnable then {20} else ∅
+  let unavailableSet : Finset AgentId := if unavailable then {20} else ∅
+  let demotedSet : Finset AgentId := if startupDemoted then {20} else ∅
   let resolved : ResolvedSnapshot :=
     { defaultBehavior := 20
     , runnable := runnableSet
@@ -254,7 +254,7 @@ def clientBehaviorReadinessCases : List ClientBehaviorReadinessCase :=
   , clientBehaviorReadinessCase "router_generation_stale" "observed" .ready 5 4 true false false
   , clientBehaviorReadinessCase "zero_generation_is_stale" "observed" .ready 0 0 true false false
   , clientBehaviorReadinessCase "behavior_absent_from_runtime_projection" "observed" .ready 4 4 false false false
-  , clientBehaviorReadinessCase "disabled_behavior_is_unavailable" "observed" .ready 4 4 false true false .behaviorDisabled
+  , clientBehaviorReadinessCase "disabled_behavior_is_unavailable" "observed" .ready 4 4 false true false .agentDisabled
   , clientBehaviorReadinessCase "invalid_runtime_configuration_is_unavailable" "observed" .ready 4 4 false true false .runtimeConfigurationInvalid
   , clientBehaviorReadinessCase "missing_backend_is_unavailable" "observed" .ready 4 4 false true false .backendNotConfigured
   , clientBehaviorReadinessCase "disabled_backend_is_unavailable" "observed" .ready 4 4 false true false .backendDisabled

@@ -7,7 +7,7 @@ abbrev AgentDid := Nat
 structure SessionObservation where
   sessionId             : SessionId
   agentDid              : AgentDid
-  behaviorId            : Option BehaviorId
+  agentId            : Option AgentId
   latestObservedRequest : Option RequestId
   latestTurn            : Option ClientTurnState
   deriving DecidableEq, Repr
@@ -42,7 +42,7 @@ structure Selection where
 
 inductive BlockedReason where
   | clientOffline
-  | behaviorMismatch (requested existing : BehaviorId)
+  | behaviorMismatch (requested existing : AgentId)
   | mutationRejected
   deriving DecidableEq, Repr
 

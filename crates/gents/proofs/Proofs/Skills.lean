@@ -30,7 +30,7 @@ structure Context where
   skillIds : Finset SkillId
 
 /-- Skills selectable by `b`: explicitly whitelisted by the context, owned by
-the behavior's principal, and enabled. -/
+the agent's principal, and enabled. -/
 def select (skills : Finset Skill) (b : Context) : Finset Skill :=
   skills.filter (fun s =>
     s.id ∈ b.skillIds ∧

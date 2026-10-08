@@ -223,7 +223,7 @@ private def titleParentEvidenceJson (parent : Enrollment.TitleParentEvidence) : 
     ++ "\"document_id\":" ++ jsonString parent.link.documentId ++ ","
     ++ "\"agent_did\":" ++ jsonString parent.agentDid ++ ","
     ++ "\"session_id\":" ++ jsonString parent.sessionId ++ ","
-    ++ "\"behavior_id\":" ++ jsonString parent.behaviorId ++ ","
+    ++ "\"behavior_id\":" ++ jsonString parent.agentId ++ ","
     ++ "\"logical_binding_current\":" ++ boolJson parent.logicalBindingCurrent ++ ","
     ++ "\"physical_binding_current\":" ++ boolJson parent.physicalBindingCurrent ++ "}"
 
@@ -256,7 +256,7 @@ def titleRequestAdmissionCaseJson (case : TitleRequestAdmissionCase) : String :=
     ++ "\"purpose\":" ++ jsonString request.purpose.toWire ++ ","
     ++ "\"target_agent\":" ++ jsonString request.targetAgent ++ ","
     ++ "\"requester_did\":" ++ jsonString request.requesterDid ++ ","
-    ++ "\"behavior_id\":" ++ jsonString request.behaviorId ++ ","
+    ++ "\"behavior_id\":" ++ jsonString request.agentId ++ ","
     ++ "\"session_id\":" ++ jsonString request.sessionId ++ ","
     ++ "\"content\":" ++ jsonString request.content ++ ","
     ++ "\"input\":" ++ titleRequestInputJson request.input ++ ","

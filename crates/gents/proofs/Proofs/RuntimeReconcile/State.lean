@@ -38,13 +38,13 @@ end ReconcilePhase
 
 structure ResolvedSnapshot where
   /-- Upstream chooser metadata; request admission always requires its own explicit selection. -/
-  defaultBehavior : BehaviorId
-  runnable : Finset BehaviorId
-  unavailable : Finset BehaviorId
+  defaultBehavior : AgentId
+  runnable : Finset AgentId
+  unavailable : Finset AgentId
   /-- Behaviors whose declared runtime dependencies were present while the
-  snapshot was resolved. A behavior may be dependency-ready but unavailable
+  snapshot was resolved. A agent may be dependency-ready but unavailable
   for another reason; the converse is forbidden. -/
-  dependenciesSatisfied : Finset BehaviorId
+  dependenciesSatisfied : Finset AgentId
   deriving DecidableEq
 
 instance : Repr ResolvedSnapshot where
@@ -69,11 +69,11 @@ end ResolvedSnapshot
 
 structure ActiveRuntimeSnapshot where
   generation : Generation
-  defaultBehavior : BehaviorId
-  runnable : Finset BehaviorId
-  unavailable : Finset BehaviorId
-  dependenciesSatisfied : Finset BehaviorId
-  dispatchers : Finset BehaviorId
+  defaultBehavior : AgentId
+  runnable : Finset AgentId
+  unavailable : Finset AgentId
+  dependenciesSatisfied : Finset AgentId
+  dispatchers : Finset AgentId
   deriving DecidableEq
 
 instance : Repr ActiveRuntimeSnapshot where
@@ -132,7 +132,7 @@ structure RuntimeState where
   /-- Behaviors removed from effective dispatch after exhausting the startup
   build budget. They remain in the immutable active snapshot for diagnostics,
   but both runtime admission and client readiness must treat them as unavailable. -/
-  startupDemoted : Finset BehaviorId
+  startupDemoted : Finset AgentId
   readyGenerations : Finset Generation
   liveGenerations : Finset Generation
   /-- Requests whose claim and request-owned session projection committed atomically. -/
@@ -140,28 +140,28 @@ structure RuntimeState where
   inFlight : Finset RequestId
   requestGeneration : RequestId → Generation
   requestSession : RequestId → SessionId
-  requestBehavior : RequestId → BehaviorId
-  sessionBehavior : SessionId → Option BehaviorId
+  requestBehavior : RequestId → AgentId
+  sessionBehavior : SessionId → Option AgentId
 
 namespace RuntimeState
 
-def effectiveDispatchers (s : RuntimeState) : Finset BehaviorId :=
+def effectiveDispatchers (s : RuntimeState) : Finset AgentId :=
   s.active.dispatchers \ s.startupDemoted
 
-def effectiveUnavailable (s : RuntimeState) : Finset BehaviorId :=
+def effectiveUnavailable (s : RuntimeState) : Finset AgentId :=
   s.active.unavailable ∪ s.startupDemoted
 
 def bindSessionIfNeeded
     (s : RuntimeState)
     (sessionId : SessionId)
-    (behaviorId : BehaviorId) :
-    SessionId → Option BehaviorId :=
+    (agentId : AgentId) :
+    SessionId → Option AgentId :=
   match s.sessionBehavior sessionId with
   | some _ => s.sessionBehavior
-  | none => Function.update s.sessionBehavior sessionId (some behaviorId)
+  | none => Function.update s.sessionBehavior sessionId (some agentId)
 
 theorem bindSessionIfNeeded_requested
-    (s : RuntimeState) (sessionId : SessionId) (requested : BehaviorId)
+    (s : RuntimeState) (sessionId : SessionId) (requested : AgentId)
     (h : (s.sessionBehavior sessionId).all (· == requested) = true) :
     s.bindSessionIfNeeded sessionId requested sessionId = some requested := by
   unfold bindSessionIfNeeded
@@ -170,16 +170,16 @@ theorem bindSessionIfNeeded_requested
 theorem bindSessionIfNeeded_other
     {s : RuntimeState}
     {sessionId other : SessionId}
-    {behaviorId : BehaviorId}
+    {agentId : AgentId}
     (h_other : other ≠ sessionId) :
-    s.bindSessionIfNeeded sessionId behaviorId other = s.sessionBehavior other := by
+    s.bindSessionIfNeeded sessionId agentId other = s.sessionBehavior other := by
   unfold bindSessionIfNeeded
   cases h : s.sessionBehavior sessionId <;> simp [h, Function.update, h_other]
 
 theorem bindSessionIfNeeded_eq_self_of_bound
     {s : RuntimeState}
     {sessionId : SessionId}
-    {bound requested : BehaviorId}
+    {bound requested : AgentId}
     (h_bound : s.sessionBehavior sessionId = some bound) :
     s.bindSessionIfNeeded sessionId requested = s.sessionBehavior := by
   funext sid
@@ -189,18 +189,18 @@ theorem bindSessionIfNeeded_eq_self_of_bound
 def BehaviorAdmissible
     (process : ProcessState)
     (s : RuntimeState)
-    (behaviorId : BehaviorId) : Prop :=
+    (agentId : AgentId) : Prop :=
   process.acceptsWork ∧
     0 < s.active.generation ∧
     s.routerObservedGeneration = s.active.generation ∧
-    behaviorId ∈ s.effectiveDispatchers ∧
-    behaviorId ∉ s.effectiveUnavailable
+    agentId ∈ s.effectiveDispatchers ∧
+    agentId ∉ s.effectiveUnavailable
 
 instance
     (process : ProcessState)
     (s : RuntimeState)
-    (behaviorId : BehaviorId) :
-    Decidable (BehaviorAdmissible process s behaviorId) := by
+    (agentId : AgentId) :
+    Decidable (BehaviorAdmissible process s agentId) := by
   unfold BehaviorAdmissible
   infer_instance
 
@@ -208,7 +208,7 @@ def CanAdmitRequest
     (process : ProcessState)
     (s : RuntimeState)
     (sessionId : SessionId)
-    (requestId : RequestId) (requested : BehaviorId) : Prop :=
+    (requestId : RequestId) (requested : AgentId) : Prop :=
   requestId ∉ s.accepted ∧
     requestId ∉ s.inFlight ∧
     BehaviorAdmissible process s requested ∧
@@ -218,7 +218,7 @@ instance
     (process : ProcessState)
     (s : RuntimeState)
     (sessionId : SessionId)
-    (requestId : RequestId) (requested : BehaviorId) :
+    (requestId : RequestId) (requested : AgentId) :
     Decidable (CanAdmitRequest process s sessionId requestId requested) := by
   unfold CanAdmitRequest
   infer_instance
@@ -228,7 +228,7 @@ effective dispatcher set used by request admission. Configuration rows never
 participate. Missing observations, a non-ready process, and generation skew
 all fail closed. -/
 inductive RuntimeUnavailableReason where
-  | behaviorDisabled
+  | agentDisabled
   | runtimeConfigurationInvalid
   | backendNotConfigured
   | backendDisabled
@@ -242,7 +242,7 @@ inductive RuntimeUnavailableReason where
 namespace RuntimeUnavailableReason
 
 def code : RuntimeUnavailableReason → String
-  | .behaviorDisabled => "behavior_disabled"
+  | .agentDisabled => "behavior_disabled"
   | .runtimeConfigurationInvalid => "runtime_configuration_invalid"
   | .backendNotConfigured => "backend_not_configured"
   | .backendDisabled => "backend_disabled"
@@ -293,7 +293,7 @@ inductive ClientRuntimeObservation where
 
 def project
     (observation : ClientRuntimeObservation)
-    (behaviorId : BehaviorId)
+    (agentId : AgentId)
     (runtimeUnavailableReason : RuntimeUnavailableReason) : ClientBehaviorReadiness :=
   match observation with
   | .missing => .unknownMissing
@@ -305,11 +305,11 @@ def project
       else if s.active.generation = 0 ∨
         s.routerObservedGeneration ≠ s.active.generation then
         .unknownStale
-      else if behaviorId ∈ s.startupDemoted then
+      else if agentId ∈ s.startupDemoted then
         .unavailableStartup
-      else if behaviorId ∈ s.active.unavailable then
+      else if agentId ∈ s.active.unavailable then
         .unavailableRuntime runtimeUnavailableReason
-      else if behaviorId ∈ s.effectiveDispatchers then
+      else if agentId ∈ s.effectiveDispatchers then
         .ready
       else
         .unknownAbsent
@@ -317,9 +317,9 @@ def project
 theorem ready_sound
     {process : ProcessState}
     {s : RuntimeState}
-    {behaviorId : BehaviorId}
-    (hReady : project (.observed process s) behaviorId .backendTemporarilyUnavailable = .ready) :
-    BehaviorAdmissible process s behaviorId := by
+    {agentId : AgentId}
+    (hReady : project (.observed process s) agentId .backendTemporarilyUnavailable = .ready) :
+    BehaviorAdmissible process s agentId := by
   have hProcess : process.acceptsWork := by
     by_contra h
     simp [project, h] at hReady
@@ -329,14 +329,14 @@ theorem ready_sound
   have hGeneration : s.routerObservedGeneration = s.active.generation := by
     by_contra h
     simp [project, hProcess, hZero, h] at hReady
-  have hDemoted : behaviorId ∉ s.startupDemoted := by
+  have hDemoted : agentId ∉ s.startupDemoted := by
     intro h
     simp [project, hProcess, hZero, hGeneration, h] at hReady
-  have hActiveUnavailable : behaviorId ∉ s.active.unavailable := by
+  have hActiveUnavailable : agentId ∉ s.active.unavailable := by
     intro h
     simp [project, hProcess, hZero, hGeneration, hDemoted, h] at hReady
-  have hDispatcher : behaviorId ∈ s.effectiveDispatchers := by
-    by_cases h : behaviorId ∈ s.effectiveDispatchers
+  have hDispatcher : agentId ∈ s.effectiveDispatchers := by
+    by_cases h : agentId ∈ s.effectiveDispatchers
     · exact h
     · simp [project, hProcess, hZero, hGeneration, hDemoted, hActiveUnavailable, h] at hReady
   refine ⟨hProcess, Nat.pos_of_ne_zero hZero, hGeneration, hDispatcher, ?_⟩
@@ -344,12 +344,12 @@ theorem ready_sound
 
 theorem missing_or_stale_never_ready
     {observation : ClientRuntimeObservation}
-    {behaviorId : BehaviorId}
+    {agentId : AgentId}
     (hClosed : observation = .missing ∨ observation = .malformed ∨
       observation = .unsupportedVersion ∨
       ∃ process s, observation = .observed process s ∧
         (s.active.generation = 0 ∨ s.routerObservedGeneration ≠ s.active.generation)) :
-    project observation behaviorId .backendTemporarilyUnavailable ≠ .ready := by
+    project observation agentId .backendTemporarilyUnavailable ≠ .ready := by
   rcases hClosed with hMissing | hMalformed | hVersion |
     ⟨process, s, hObservation, hStale⟩
   · simp [project, hMissing]
@@ -363,9 +363,9 @@ theorem missing_or_stale_never_ready
 theorem unavailable_wins_overlap
     {process : ProcessState}
     {s : RuntimeState}
-    {behaviorId : BehaviorId}
-    (hUnavailable : behaviorId ∈ s.effectiveUnavailable) :
-    project (.observed process s) behaviorId .backendTemporarilyUnavailable ≠ .ready := by
+    {agentId : AgentId}
+    (hUnavailable : agentId ∈ s.effectiveUnavailable) :
+    project (.observed process s) agentId .backendTemporarilyUnavailable ≠ .ready := by
   intro hReady
   rcases ready_sound hReady with ⟨_, _, _, _, hNotUnavailable⟩
   exact hNotUnavailable hUnavailable
@@ -373,19 +373,19 @@ theorem unavailable_wins_overlap
 theorem observed_ready_iff_admissible
     {process : ProcessState}
     {s : RuntimeState}
-    {behaviorId : BehaviorId} :
-    project (.observed process s) behaviorId .backendTemporarilyUnavailable = .ready ↔
-      BehaviorAdmissible process s behaviorId := by
+    {agentId : AgentId} :
+    project (.observed process s) agentId .backendTemporarilyUnavailable = .ready ↔
+      BehaviorAdmissible process s agentId := by
   constructor
   · exact ready_sound
   · intro hAdmissible
     rcases hAdmissible with
       ⟨hProcess, hPositive, hGeneration, hDispatcher, hUnavailable⟩
     have hZero : s.active.generation ≠ 0 := Nat.ne_of_gt hPositive
-    have hDemoted : behaviorId ∉ s.startupDemoted := by
+    have hDemoted : agentId ∉ s.startupDemoted := by
       intro h
       exact hUnavailable (by simp [effectiveUnavailable, h])
-    have hActiveUnavailable : behaviorId ∉ s.active.unavailable := by
+    have hActiveUnavailable : agentId ∉ s.active.unavailable := by
       intro h
       exact hUnavailable (by simp [effectiveUnavailable, h])
     simp [project, hProcess, hZero, hGeneration, hDemoted, hActiveUnavailable, hDispatcher]
@@ -395,7 +395,7 @@ theorem ready_implies_runtime_admission_when_fresh
     {s : RuntimeState}
     {sessionId : SessionId}
     {requestId : RequestId}
-    {requested : BehaviorId}
+    {requested : AgentId}
     (hBinding : (s.sessionBehavior sessionId).all (· == requested) = true)
     (hReady : project (.observed process s) requested .backendTemporarilyUnavailable = .ready)
     (hUnaccepted : requestId ∉ s.accepted)
