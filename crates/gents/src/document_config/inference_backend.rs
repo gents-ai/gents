@@ -105,14 +105,14 @@ pub enum BackendAuth {
     ApiKey { key: String },
     /// Read the key from the runtime host's environment. Missing/blank is an error.
     Environment { variable: String },
-    /// Resolve the existing OAuthCredential using the invoking principal's DID
+    /// Resolve the existing OAuthCredential using the node's DID
     /// and the provider adapter's OAuth provider key. Existing login, refresh,
     /// expiry, and credential ownership rules remain authoritative. No tokens
-    /// or fixed principal DID are copied into the shared backend.
+    /// or fixed node DID are copied into the shared backend.
     /// `account_ref` is an opaque, DID-free account reference; absent means the
     /// provider's original account.
-    #[serde(rename = "principal_oauth")]
-    PrincipalOAuth {
+    #[serde(rename = "node_oauth")]
+    NodeOAuth {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[cfg_attr(feature = "typescript", ts(optional))]
         account_ref: Option<String>,
@@ -131,8 +131,8 @@ impl std::fmt::Debug for BackendAuth {
                 .debug_struct("Environment")
                 .field("variable", variable)
                 .finish(),
-            Self::PrincipalOAuth { account_ref } => f
-                .debug_struct("PrincipalOAuth")
+            Self::NodeOAuth { account_ref } => f
+                .debug_struct("NodeOAuth")
                 .field("account_ref", account_ref)
                 .finish(),
         }
@@ -140,22 +140,22 @@ impl std::fmt::Debug for BackendAuth {
 }
 
 impl BackendAuth {
-    /// The account a principal OAuth backend names (Lean `oauthRef`); `None`
+    /// The account a node OAuth backend names (Lean `oauthRef`); `None`
     /// for other auth and for the provider's original account.
     pub fn oauth_account_ref(&self) -> Option<&str> {
         match self {
-            Self::PrincipalOAuth { account_ref } => account_ref.as_deref(),
+            Self::NodeOAuth { account_ref } => account_ref.as_deref(),
             _ => None,
         }
     }
 }
 
 /// One backend catalog observed under a particular authentication scope.
-/// A principal's catalog must not be treated as another principal's entitlement.
+/// A node's catalog must not be treated as another node's entitlement.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BackendModelCatalog {
     /// None denotes the backend's shared credential scope; Some identifies the
-    /// principal whose existing OAuthCredential was used. Never contains secrets.
+    /// node whose existing OAuthCredential was used. Never contains secrets.
     pub node_did: Option<String>,
     /// Successful observation time. A failed refresh must not erase a prior
     /// catalog or claim it was freshly observed. Health remains separately owned.
