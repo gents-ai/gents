@@ -32,7 +32,7 @@ def Surface.meet (a b : Surface) : Surface :=
   , defraCollections := a.defraCollections.meet unitVM b.defraCollections
   , p2pCollections := a.p2pCollections.meet unitVM b.p2pCollections
   , selfConfigCategories := a.selfConfigCategories.meet unitVM b.selfConfigCategories
-  , subagentTargets := a.subagentTargets.meet unitVM b.subagentTargets
+  , agentTargets := a.agentTargets.meet unitVM b.agentTargets
   , backgroundTools := a.backgroundTools.meet unitVM b.backgroundTools
   , writeTools := a.writeTools.meet fieldsVM b.writeTools
   , queryTools := a.queryTools.meet fieldsVM b.queryTools
@@ -279,23 +279,23 @@ theorem effective_defraCollections_subset_behavior (k : ToolId) :
     (behavior.defraCollections.meet unitVM ceiling.defraCollections) runtime.defraCollections k h
   exact EndpointScope.meet_permits_left unitVM behavior.defraCollections ceiling.defraCollections k hin
 
-theorem effective_subagentTargets_subset_ceiling (k : String × String) :
-    (effective behavior ceiling runtime).subagentTargets.permits k →
-      ceiling.subagentTargets.permits k := by
+theorem effective_agentTargets_subset_ceiling (k : String × String) :
+    (effective behavior ceiling runtime).agentTargets.permits k →
+      ceiling.agentTargets.permits k := by
   unfold effective Surface.meet
   intro h
   have hin := EndpointScope.meet_permits_left unitVM
-    (behavior.subagentTargets.meet unitVM ceiling.subagentTargets) runtime.subagentTargets k h
-  exact EndpointScope.meet_permits_right unitVM behavior.subagentTargets ceiling.subagentTargets k hin
+    (behavior.agentTargets.meet unitVM ceiling.agentTargets) runtime.agentTargets k h
+  exact EndpointScope.meet_permits_right unitVM behavior.agentTargets ceiling.agentTargets k hin
 
-theorem effective_subagentTargets_subset_behavior (k : String × String) :
-    (effective behavior ceiling runtime).subagentTargets.permits k →
-      behavior.subagentTargets.permits k := by
+theorem effective_agentTargets_subset_behavior (k : String × String) :
+    (effective behavior ceiling runtime).agentTargets.permits k →
+      behavior.agentTargets.permits k := by
   unfold effective Surface.meet
   intro h
   have hin := EndpointScope.meet_permits_left unitVM
-    (behavior.subagentTargets.meet unitVM ceiling.subagentTargets) runtime.subagentTargets k h
-  exact EndpointScope.meet_permits_left unitVM behavior.subagentTargets ceiling.subagentTargets k hin
+    (behavior.agentTargets.meet unitVM ceiling.agentTargets) runtime.agentTargets k h
+  exact EndpointScope.meet_permits_left unitVM behavior.agentTargets ceiling.agentTargets k hin
 
 theorem effective_backgroundTools_subset_ceiling (k : ToolId) :
     (effective behavior ceiling runtime).backgroundTools.permits k →
