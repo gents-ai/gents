@@ -10,7 +10,8 @@ use std::process::Command;
 
 use anyhow::{anyhow, Context, Result};
 use gents::default_behavior_id_for_agent;
-use serde_json::Value;
+use gents::AgentIdentity as _;
+use serde_json::{json, Value};
 use uuid::Uuid;
 
 fn generated_tools_id_for_agent(agent_did: &str) -> String {
@@ -2794,5 +2795,369 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
     );
     let _ = authenticated.cancel().await;
     let _ = mcp.cancel().await;
+    Ok(())
+}
+
+const MCP_GRAPH_READ_TOOLS: [&str; 3] = ["list_graphs", "get_graph_run", "get_graph_result"];
+
+/// A served home whose owner key is loaded in this process, so the test can
+/// mint the owner's DefraDB bearers.
+struct McpGraphHome {
+    tempdir: tempfile::TempDir,
+    home: std::path::PathBuf,
+    port: u16,
+    owner_did: String,
+    _owner: gents::KeyIdentity,
+    _server: ServeProcess,
+}
+
+impl McpGraphHome {
+    async fn start(label: &str, serve_flags: &[&str]) -> Result<Self> {
+        let tempdir = tempfile::tempdir().context("creating tempdir")?;
+        let home = tempdir.path().join("agent-home");
+        let home_arg = home.to_str().context("home path is not UTF-8")?.to_owned();
+        let init = run_init_json(
+            tempdir.path(),
+            &["--agent-name", label, "--home", home_arg.as_str()],
+        )?;
+        let owner_did = agent_did_from_init(&init)?;
+        let owner = identity_from_init(&init)?;
+        let port = allocate_port()?;
+        let mut serve = vec!["--home", home_arg.as_str()];
+        serve.extend_from_slice(serve_flags);
+        let (server, readiness) = spawn_server_with_ready_json(&home, port, &serve, &[])?;
+        anyhow::ensure!(
+            readiness.get("status").and_then(Value::as_str) == Some("serving"),
+            "server did not become ready: {readiness}"
+        );
+        wait_for_runtime_ready(&graphql_url(port), &owner_did, Duration::from_secs(30)).await?;
+        Ok(Self {
+            tempdir,
+            home,
+            port,
+            owner_did,
+            _owner: owner,
+            _server: server,
+        })
+    }
+
+    fn audience(&self) -> String {
+        format!("127.0.0.1:{}", self.port)
+    }
+
+    async fn client(
+        &self,
+        bearer: Option<&str>,
+    ) -> Result<rmcp::service::RunningService<rmcp::RoleClient, ()>> {
+        use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
+        use rmcp::ServiceExt;
+        let mut config = StreamableHttpClientTransportConfig::with_uri(format!(
+            "http://127.0.0.1:{}/mcp",
+            self.port
+        ));
+        if let Some(bearer) = bearer {
+            config = config.auth_header(bearer.strip_prefix("Bearer ").context("bearer prefix")?);
+        }
+        ().serve(rmcp::transport::StreamableHttpClientTransport::from_config(
+            config,
+        ))
+        .await
+        .context("MCP handshake with /mcp")
+    }
+}
+
+/// Build and install the `prepared_graph` fixture, then start one run of it
+/// through `gents graph run`, as `cli_graph.rs` does; returns its run id.
+async fn start_prepared_graph_run(served: &McpGraphHome) -> Result<String> {
+    let root = served.tempdir.path();
+    let utf8 = |path: &std::path::Path| {
+        path.to_str()
+            .map(str::to_owned)
+            .context("path is not UTF-8")
+    };
+    let home = utf8(&served.home)?;
+    let pack_dir = root.join("prepared_graph");
+    copy_dir_all(&fixture_pack_dir("prepared_graph"), &pack_dir)?;
+    let pack_file = root.join("prepared_graph.pack");
+    run_cli_json(
+        root,
+        &[
+            "pack",
+            "build",
+            &utf8(&pack_dir)?,
+            "--out",
+            &utf8(&pack_file)?,
+        ],
+    )?;
+    let worker = format!("worker={}:default-profile", served.owner_did);
+    run_cli_json(
+        root,
+        &[
+            "pack",
+            "install",
+            &utf8(&pack_file)?,
+            "--home",
+            &home,
+            "--grant-authority",
+            "--agent-did",
+            &served.owner_did,
+            "--inference-slot",
+            &worker,
+        ],
+    )?;
+    let repo = root.join("repo");
+    std::fs::create_dir_all(&repo)?;
+    let git = |args: &[&str]| -> Result<()> {
+        let output = std::process::Command::new("git")
+            .current_dir(&repo)
+            .args([
+                "-c",
+                "user.email=test@example.com",
+                "-c",
+                "user.name=Test",
+                "-c",
+                "commit.gpgsign=false",
+            ])
+            .args(args)
+            .output()
+            .context("running git")?;
+        anyhow::ensure!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        Ok(())
+    };
+    git(&["init", "--quiet"])?;
+    std::fs::write(repo.join("a.txt"), "one\n")?;
+    git(&["add", "-A"])?;
+    git(&["commit", "--quiet", "-m", "base"])?;
+    std::fs::write(repo.join("a.txt"), "two\n")?;
+    git(&["add", "-A"])?;
+    git(&["commit", "--quiet", "-m", "head"])?;
+    let receipt = run_cli_json(
+        root,
+        &[
+            "graph",
+            "run",
+            "fixture/prepared_graph",
+            "--output",
+            "json",
+            "--home",
+            &home,
+            "--graphql",
+            &graphql_url(served.port),
+            "--agent-did",
+            &served.owner_did,
+            "--field",
+            &format!("repository={}", utf8(&repo)?),
+        ],
+    )?;
+    receipt
+        .get("run_id")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .with_context(|| format!("graph run printed no run_id: {receipt}"))
+}
+
+async fn advertised(
+    client: &rmcp::service::RunningService<rmcp::RoleClient, ()>,
+) -> Result<Vec<String>> {
+    Ok(client
+        .peer()
+        .list_tools(None)
+        .await?
+        .tools
+        .iter()
+        .map(|tool| tool.name.to_string())
+        .collect())
+}
+
+/// The JSON a graph read returned, or the refusal text it carried.
+async fn call_mcp_tool(
+    client: &rmcp::service::RunningService<rmcp::RoleClient, ()>,
+    name: &str,
+    args: Value,
+) -> Result<Result<Value, String>> {
+    use rmcp::model::CallToolRequestParams;
+    let text = |result: &rmcp::model::CallToolResult| -> String {
+        result
+            .content
+            .iter()
+            .filter_map(|content| content.raw.as_text().map(|text| text.text.clone()))
+            .collect()
+    };
+    let outcome = client
+        .peer()
+        .call_tool(
+            CallToolRequestParams::new(name.to_owned())
+                .with_arguments(args.as_object().cloned().unwrap_or_default()),
+        )
+        .await;
+    Ok(match outcome {
+        Err(error) => Err(error.to_string()),
+        Ok(result) if result.is_error == Some(true) => Err(text(&result)),
+        Ok(result) => {
+            Ok(serde_json::from_str(&text(&result)).context("graph read result is JSON")?)
+        }
+    })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_graph_tools_refuse_a_request_without_authorization() -> Result<()> {
+    let served = McpGraphHome::start(
+        "mcp-graph-anonymous",
+        &["--enable-mcp", "--mcp-graph-tools"],
+    )
+    .await?;
+    let client = served.client(None).await?;
+    for tool in MCP_GRAPH_READ_TOOLS {
+        let args = if tool == "list_graphs" {
+            json!({})
+        } else {
+            json!({"run_id": "any"})
+        };
+        let refused = call_mcp_tool(&client, tool, args).await?;
+        anyhow::ensure!(
+            matches!(&refused, Err(message) if message.contains("caller-signed DefraDB Bearer")),
+            "{tool}: {refused:?}"
+        );
+    }
+    let _ = client.cancel().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_graph_tools_refuse_a_bearer_for_another_audience() -> Result<()> {
+    let served =
+        McpGraphHome::start("mcp-graph-audience", &["--enable-mcp", "--mcp-graph-tools"]).await?;
+    let bearer = gents::identity::defradb_bearer_authorization(
+        &served.owner_did,
+        &format!("localhost:{}", served.port),
+    )?;
+    let client = served.client(Some(&bearer)).await?;
+    let refused = call_mcp_tool(&client, "list_graphs", json!({})).await?;
+    anyhow::ensure!(
+        matches!(&refused, Err(message) if message.contains("another host:port")),
+        "{refused:?}"
+    );
+    let _ = client.cancel().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_graph_tools_are_absent_without_the_flag() -> Result<()> {
+    let served = McpGraphHome::start("mcp-graph-off", &["--enable-mcp"]).await?;
+    let client = served.client(None).await?;
+    let names = advertised(&client).await?;
+    anyhow::ensure!(names.iter().any(|name| name == "query"), "{names:?}");
+    anyhow::ensure!(
+        !names.iter().any(|name| name.contains("graph")),
+        "graph tools must not be advertised without --mcp-graph-tools: {names:?}"
+    );
+    let _ = client.cancel().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_graph_tools_offer_only_the_read_tools() -> Result<()> {
+    let served =
+        McpGraphHome::start("mcp-graph-reads", &["--enable-mcp", "--mcp-graph-tools"]).await?;
+    let bearer =
+        gents::identity::defradb_bearer_authorization(&served.owner_did, &served.audience())?;
+    let client = served.client(Some(&bearer)).await?;
+    let names = advertised(&client).await?;
+    for name in MCP_GRAPH_READ_TOOLS {
+        anyhow::ensure!(
+            names.iter().any(|advertised| advertised == name),
+            "{name} missing from {names:?}"
+        );
+    }
+    for absent in ["run_graph", "cancel_graph_run", "preview_graph", "config"] {
+        anyhow::ensure!(
+            !names.iter().any(|name| name == absent),
+            "{absent} must not be offered over /mcp: {names:?}"
+        );
+    }
+    let refused = call_mcp_tool(&client, "run_graph", json!({"package": "any"})).await?;
+    anyhow::ensure!(refused.is_err(), "run_graph has no /mcp route: {refused:?}");
+    let _ = client.cancel().await;
+    Ok(())
+}
+
+/// A run the CLI starts is readable over `/mcp` with the owner's bearer:
+/// every read is forwarded to DefraDB as the owner, and the listing names
+/// no run tool because `/mcp` offers none.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_graph_tools_read_a_cli_started_run_with_the_owner_bearer() -> Result<()> {
+    let served =
+        McpGraphHome::start("mcp-graph-owner", &["--enable-mcp", "--mcp-graph-tools"]).await?;
+    let run_id = start_prepared_graph_run(&served).await?;
+    let bearer =
+        gents::identity::defradb_bearer_authorization(&served.owner_did, &served.audience())?;
+    let owner = served.client(Some(&bearer)).await?;
+
+    let listed = call_mcp_tool(&owner, "list_graphs", json!({}))
+        .await?
+        .map_err(|refusal| anyhow::anyhow!("list_graphs refused the owner: {refusal}"))?;
+    let graphs = listed["graphs"].as_array().context("graphs array")?;
+    anyhow::ensure!(
+        graphs
+            .iter()
+            .any(|graph| graph["active_plan"]["package"]["name"] == "prepared_graph"),
+        "{listed}"
+    );
+    anyhow::ensure!(
+        graphs.iter().all(|graph| graph.get("run_with").is_none()),
+        "/mcp offers no run tool, so the listing names none: {listed}"
+    );
+    let observed = call_mcp_tool(&owner, "get_graph_run", json!({"run_id": run_id}))
+        .await?
+        .map_err(|refusal| anyhow::anyhow!("get_graph_run refused the owner: {refusal}"))?;
+    anyhow::ensure!(
+        observed["run_id"] == run_id.as_str() && observed["owner_did"] == served.owner_did.as_str(),
+        "{observed}"
+    );
+    let result = call_mcp_tool(&owner, "get_graph_result", json!({"run_id": run_id}))
+        .await?
+        .map_err(|refusal| anyhow::anyhow!("get_graph_result refused the owner: {refusal}"))?;
+    anyhow::ensure!(result["run_id"] == run_id.as_str(), "{result}");
+    let _ = owner.cancel().await;
+    Ok(())
+}
+
+/// A valid bearer for another DID reads with that DID as its subject: the
+/// listing is that DID's own, empty listing, and the run views apply their
+/// unchanged observer rule with that DID as the actor. This pins the read
+/// subject, not authorization: the graph collections declare no document
+/// policy, so DefraDB admits these reads, and the anonymous `query` tool on
+/// the same `/mcp` reads the same documents.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_graph_tools_take_the_subject_did_from_the_bearer() -> Result<()> {
+    let served =
+        McpGraphHome::start("mcp-graph-subject", &["--enable-mcp", "--mcp-graph-tools"]).await?;
+    let run_id = start_prepared_graph_run(&served).await?;
+    let other = gents::KeyIdentity::load_or_create(served.tempdir.path().join("other.key"), None)?;
+    let bearer = gents::identity::defradb_bearer_authorization(other.did(), &served.audience())?;
+    let client = served.client(Some(&bearer)).await?;
+    let listed = call_mcp_tool(&client, "list_graphs", json!({}))
+        .await?
+        .map_err(|refusal| {
+            anyhow::anyhow!(
+                "DefraDB refused another DID's listing (B-T1 item 3): stop T1 and report it: {refusal}"
+            )
+        })?;
+    anyhow::ensure!(
+        listed["agent_did"] == other.did() && listed["graphs"] == json!([]),
+        "the listing is the bearer DID's own: {listed}"
+    );
+    for tool in ["get_graph_run", "get_graph_result"] {
+        let refused = call_mcp_tool(&client, tool, json!({"run_id": run_id})).await?;
+        anyhow::ensure!(
+            matches!(&refused, Err(message) if message.contains("actor is not authorized to observe this graph run")),
+            "{tool}: the run view takes the bearer's DID as its actor: {refused:?}"
+        );
+    }
+    let _ = client.cancel().await;
     Ok(())
 }
