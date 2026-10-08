@@ -1,7 +1,24 @@
+import type { Locator, Page } from "@playwright/test";
 import { composer, expect, gotoHarness, sendButton, test } from "./desktopTest";
 
 /* Scrolled up, the reader's row stays where it is on screen whatever
    changes around it. */
+/* WebKit on Linux animates a wheel scroll for hundreds of ms, so a
+   position read at a fixed delay can land mid-flight; read it once the
+   view holds still instead. */
+async function restingScrollTop(page: Page, viewport: Locator): Promise<number> {
+  let still = 0;
+  let last = await viewport.evaluate((scroller) => scroller.scrollTop);
+  const deadline = Date.now() + 3000;
+  while (still < 150 && Date.now() < deadline) {
+    await page.waitForTimeout(50);
+    const next = await viewport.evaluate((scroller) => scroller.scrollTop);
+    still = next === last ? still + 50 : 0;
+    last = next;
+  }
+  return last;
+}
+
 test.describe("a reader scrolled up in a transcript", () => {
   test.beforeEach(async ({ page }, testInfo) => {
     test.skip(
@@ -51,9 +68,8 @@ test.describe("a reader scrolled up in a transcript", () => {
   test("keeps their place while the reply below them streams", async ({ page }) => {
     await page.getByTestId("transcript-panel").hover();
     await page.mouse.wheel(0, -1200);
-    await page.waitForTimeout(300);
     const viewport = page.locator('[data-slot="scroll-area-viewport"][data-following]');
-    const before = await viewport.evaluate((scroller) => scroller.scrollTop);
+    const before = await restingScrollTop(page, viewport);
     for (let n = 0; n < 8; n += 1) {
       await page.evaluate(
         (n) =>
@@ -65,7 +81,7 @@ test.describe("a reader scrolled up in a transcript", () => {
       await page.waitForTimeout(100);
     }
     await expect(viewport).toHaveAttribute("data-following", "false");
-    expect(await viewport.evaluate((scroller) => scroller.scrollTop)).toBe(before);
+    expect(await restingScrollTop(page, viewport)).toBe(before);
   });
 });
 

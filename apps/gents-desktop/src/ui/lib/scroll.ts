@@ -102,6 +102,9 @@ export function useScroller(): [
 const REPIN_PX = 24;
 /* how long after a wheel, touch or key a scroll still counts as the reader's */
 const INTENT_MS = 300;
+/* a scroll is at rest when it holds still this long; the last event of an
+   animated scroll is at (or within one tail step of) the resting position */
+const READER_QUIESCE_MS = 120;
 /* the line a reader's eye is on, this far below the scroller's top */
 const READING_LINE_PX = 72;
 const NAV_KEYS = new Set([
@@ -232,9 +235,27 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
     let intentUntil = 0;
     /* holding the scrollbar, the reader is placing the view themselves */
     let dragging = false;
+    /* An animated scroll (WebKitGTK's smooth wheel) emits scroll events for
+       hundreds of ms after the input, each one mid-flight. An anchor
+       captured from any of them encodes a position the animation then
+       leaves, and the next content change corrects against it and snaps
+       the reader by the animation's tail. While the flight lasts — input
+       until the view holds still — no capture and no hold correction; the
+       rest position is captured once it rests. */
+    let flight = false;
+    let quiesce: number | undefined;
+    const restReader = () => {
+      if (quiesce !== undefined) window.clearTimeout(quiesce);
+      quiesce = window.setTimeout(() => {
+        quiesce = undefined;
+        flight = false;
+        if (!following.current && !dragging) capture();
+      }, READER_QUIESCE_MS);
+    };
     const reconcile = () => {
       if (dragging) return;
       if (following.current) pin();
+      else if (flight) return;
       else hold();
     };
     settleRef.current = reconcile;
@@ -273,6 +294,7 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
     };
     const onWheel = (event: WheelEvent) => {
       intend();
+      flight = true;
       if (event.deltaY < 0) release();
     };
     let touchY: number | undefined;
@@ -281,6 +303,7 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
     };
     const onTouchMove = (event: TouchEvent) => {
       intend();
+      flight = true;
       const y = event.touches[0]?.clientY;
       if (touchY !== undefined && y !== undefined && y > touchY) release();
       touchY = y;
@@ -290,6 +313,7 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
       if (target?.closest?.('input, textarea, [contenteditable="true"]')) return;
       if (!NAV_KEYS.has(event.key)) return;
       intend();
+      flight = true;
       if (UP_KEYS.has(event.key)) release();
     };
     const area = scroller.parentElement;
@@ -306,7 +330,10 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
     const onScroll = () => {
       if (!dragging && performance.now() > intentUntil) return;
       setFollowing(distanceFromFoot(scroller) <= REPIN_PX);
-      if (!following.current) capture();
+      if (!following.current) {
+        /* capture happens at rest, not per event — see the flight note */
+        restReader();
+      }
     };
     /* A row the reader opens or closes says so first. It is held while the
        content moves under it, and following stops: opening something is
@@ -334,6 +361,7 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
     scroller.addEventListener("scroll", onScroll, { passive: true });
     scroller.addEventListener("transcript:hold", onHold);
     return () => {
+      if (quiesce !== undefined) window.clearTimeout(quiesce);
       settleRef.current = null;
       sizes.disconnect();
       changes.disconnect();
