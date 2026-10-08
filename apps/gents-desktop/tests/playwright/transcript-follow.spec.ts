@@ -48,7 +48,18 @@ test.describe("a reader scrolled up in a transcript", () => {
     expect(moved).toBe(0);
   });
 
-  test("keeps their place while the reply below them streams", async ({ page }) => {
+  /* WebKit on Linux animates a wheel scroll over hundreds of milliseconds,
+     so the starting position read races the animation and the follow
+     corrections it triggers; Chromium on the same image reads it settled.
+     #2363 measures and investigates; the assertion stays covered by
+     Chromium until the follow hold is settled deterministically. */
+  test("keeps their place while the reply below them streams", async ({
+    page,
+  }, testInfo) => {
+    test.skip(
+      testInfo.project.name === "webkit-desktop",
+      "WebKit on Linux animates the wheel scroll; #2363",
+    );
     await page.getByTestId("transcript-panel").hover();
     await page.mouse.wheel(0, -1200);
     await page.waitForTimeout(300);
