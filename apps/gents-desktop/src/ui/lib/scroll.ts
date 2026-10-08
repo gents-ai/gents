@@ -185,6 +185,9 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
     setAtBottom(true);
     if (!scroller || !subject) return;
     scroller.style.overflowAnchor = "none";
+    /* no bounce at the ends: WebKit drops a write to the position made
+       during one, and stops drawing the scroll area until a later write takes */
+    scroller.style.overscrollBehaviorY = "none";
     let anchor: { el: Element; key: string | null; offset: number } | null = null;
     const setFollowing = (next: boolean) => {
       following.current = next;
@@ -406,9 +409,24 @@ const OLDER_AHEAD_VIEWS = 3;
 const OLDER_AHEAD_PX = 160;
 /* moving up this recently, the next page follows the one that landed */
 const OLDER_INTENT_MS = 1000;
+/* A page that lands while the view is moving is not put back with a write
+   to the position: WebKit drops a write made while its own scrolling (a
+   fling's momentum, a held key's glide) is under way, and stops drawing the
+   scroll area until a later write takes. Its rows are kept out of sight
+   above the content's top instead, the content pulled up by their height,
+   and that becomes one write once the view has rested this long, or once
+   the reader reaches the top, where the view has stopped against the end
+   (there is no bounce) and a write takes. Resting is no scroll, no wheel
+   event and no finger on a touchscreen: a trackpad's momentum goes on
+   sending wheel events after it is too slow to move the view a pixel, a
+   finger held still is still scrolling, and WebKit reports `scrollend` as
+   the fingers lift, before the momentum. */
+const OLDER_STILL_MS = 150;
 
 /* the row under the reader when an older page was asked for, and where it was */
 type Hold = {
+  /** the subject the page was asked for */
+  subject: string;
   row: HTMLElement | undefined;
   top: number | undefined;
   scrollTop: number;
@@ -421,18 +439,18 @@ type Hold = {
   settled: boolean;
 };
 
-/* puts the held row back where the reader had it, allowing for their own
-   scrolling since; a row that left the DOM falls back to the added height */
-function restore(viewport: HTMLElement, hold: Hold) {
-  if (hold.row?.isConnected && hold.top !== undefined) {
-    const movement = viewport.scrollTop - hold.scrollTop;
-    setScroll(
-      viewport,
-      viewport.scrollTop + hold.row.getBoundingClientRect().top - hold.top + movement,
+/* how far the held row has moved from where the reader had it, allowing for
+   their own scrolling since; a row that left the DOM falls back to the added
+   height */
+function shiftOf(viewport: HTMLElement, hold: Hold) {
+  if (hold.row?.isConnected && hold.top !== undefined)
+    return (
+      hold.row.getBoundingClientRect().top -
+      hold.top +
+      viewport.scrollTop -
+      hold.scrollTop
     );
-  } else {
-    setScroll(viewport, viewport.scrollTop + viewport.scrollHeight - hold.height);
-  }
+  return viewport.scrollHeight - hold.height;
 }
 
 /**
@@ -445,6 +463,8 @@ function restore(viewport: HTMLElement, hold: Hold) {
  */
 export function useOlderPages(
   scroller: HTMLElement | null,
+  /** the scroller's content, pulled up over rows landing mid-scroll */
+  content: HTMLElement | null,
   subject: string | null,
   hasOlder: boolean,
   load: () => Promise<boolean>,
@@ -459,12 +479,15 @@ export function useOlderPages(
   const hold = useRef<Hold | null>(null);
   /* asks for the next page if the reader is still moving up near the top */
   const again = useRef<() => void>(() => {});
+  /* puts the reader's row back by this much */
+  const land = useRef<(shift: number) => void>(() => {});
 
   useLayoutEffect(() => {
     const held = hold.current;
-    if (!held || !scroller) return;
+    /* a page asked for in another subject never lands in this one */
+    if (!held || !scroller || held.subject !== subject) return;
     if (!held.landed && oldestKey !== held.oldestKey) {
-      restore(scroller, held);
+      land.current(shiftOf(scroller, held));
       held.landed = true;
     }
     if (held.settled) {
@@ -474,20 +497,59 @@ export function useOlderPages(
       if (held.landed && scroller.scrollHeight > held.height)
         queueMicrotask(() => again.current());
     }
-  }, [oldestKey, scroller, settles]);
+  }, [oldestKey, scroller, settles, subject]);
 
-  useEffect(() => {
+  /* A layout effect: a subject's cleanup takes the content's offset off
+     before the next subject's first layout, where the view is put at its
+     foot. */
+  useLayoutEffect(() => {
     const viewport = scroller;
     if (!viewport || !subject) return;
     let disposed = false;
     let lastTop = viewport.scrollTop;
     let movedUpAt = -Infinity;
+    let movedAt = -Infinity;
+    let touching = false;
+    const resting = () => !touching && performance.now() - movedAt >= OLDER_STILL_MS;
+    /* the height of rows kept out of sight above the content's top */
+    let hidden = 0;
+    let unhideTimer = 0;
+    const unhide = () => {
+      window.clearTimeout(unhideTimer);
+      unhideTimer = 0;
+      if (!hidden || !content) return;
+      if (!resting() && viewport.scrollTop > 0) {
+        /* a finger on the screen: its lift asks again */
+        if (!touching)
+          unhideTimer = window.setTimeout(
+            unhide,
+            OLDER_STILL_MS - (performance.now() - movedAt),
+          );
+        return;
+      }
+      const top = viewport.scrollTop;
+      content.style.removeProperty("margin-top");
+      setScroll(viewport, top + hidden);
+      hidden = 0;
+      again.current();
+    };
+    land.current = (shift) => {
+      if (Math.abs(shift) < 0.5) return;
+      if (!content || viewport.scrollTop <= 0 || resting()) {
+        setScroll(viewport, viewport.scrollTop + shift);
+        return;
+      }
+      hidden += shift;
+      content.style.marginTop = `${-hidden}px`;
+      if (!unhideTimer) unhideTimer = window.setTimeout(unhide, OLDER_STILL_MS);
+    };
     hold.current = null;
     setLoading(false);
     const fetchOlder = async () => {
       if (
         disposed ||
         hold.current ||
+        hidden !== 0 ||
         !latest.current.hasOlder ||
         viewport.scrollTop >
           Math.max(OLDER_AHEAD_PX, OLDER_AHEAD_VIEWS * viewport.clientHeight)
@@ -498,6 +560,7 @@ export function useOlderPages(
         viewport.querySelectorAll<HTMLElement>("[data-timeline-key]"),
       ).find((node) => node.getBoundingClientRect().bottom > viewportTop);
       const held: Hold = {
+        subject,
         row,
         top: row?.getBoundingClientRect().top,
         scrollTop: viewport.scrollTop,
@@ -526,18 +589,31 @@ export function useOlderPages(
       if (performance.now() - movedUpAt < OLDER_INTENT_MS) void fetchOlder();
     };
     const onScroll = () => {
+      movedAt = performance.now();
+      if (hidden && viewport.scrollTop <= 0) unhide();
       const upward = viewport.scrollTop < lastTop;
       lastTop = viewport.scrollTop;
       if (upward) up();
     };
     const onWheel = (event: WheelEvent) => {
+      movedAt = performance.now();
       if (event.deltaY < 0) up();
     };
     let touchY: number | undefined;
     const onTouchStart = (event: TouchEvent) => {
+      touching = true;
+      movedAt = performance.now();
       touchY = event.touches[0]?.clientY;
     };
+    const onTouchEnd = (event: TouchEvent) => {
+      if (event.touches.length) return;
+      touching = false;
+      movedAt = performance.now();
+      if (hidden && !unhideTimer)
+        unhideTimer = window.setTimeout(unhide, OLDER_STILL_MS);
+    };
     const onTouchMove = (event: TouchEvent) => {
+      movedAt = performance.now();
       const nextY = event.touches[0]?.clientY;
       if (touchY !== undefined && nextY !== undefined && nextY > touchY) up();
       touchY = nextY;
@@ -549,17 +625,24 @@ export function useOlderPages(
     viewport.addEventListener("wheel", onWheel, { passive: true });
     viewport.addEventListener("touchstart", onTouchStart, { passive: true });
     viewport.addEventListener("touchmove", onTouchMove, { passive: true });
+    viewport.addEventListener("touchend", onTouchEnd, { passive: true });
+    viewport.addEventListener("touchcancel", onTouchEnd, { passive: true });
     viewport.addEventListener("keydown", onKeyDown);
     return () => {
       disposed = true;
       again.current = () => {};
+      land.current = () => {};
+      window.clearTimeout(unhideTimer);
+      if (hidden) content?.style.removeProperty("margin-top");
       hold.current = null;
       viewport.removeEventListener("scroll", onScroll);
       viewport.removeEventListener("wheel", onWheel);
       viewport.removeEventListener("touchstart", onTouchStart);
       viewport.removeEventListener("touchmove", onTouchMove);
+      viewport.removeEventListener("touchend", onTouchEnd);
+      viewport.removeEventListener("touchcancel", onTouchEnd);
       viewport.removeEventListener("keydown", onKeyDown);
     };
-  }, [scroller, subject]);
+  }, [scroller, content, subject]);
   return loading;
 }

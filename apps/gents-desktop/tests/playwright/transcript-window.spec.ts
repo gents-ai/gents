@@ -1,6 +1,13 @@
 import { expect, gotoHarness, test } from "./desktopTest";
 
-type Frame = { boxes: number; boxesInView: number; rows: number; height: number };
+type Frame = {
+  boxes: number;
+  boxesInView: number;
+  rows: number;
+  height: number;
+  /** how far the content is pulled up over older rows kept out of sight */
+  hidden: number;
+};
 
 /* A long transcript draws only the rows near the view; the rest are boxes
    of their own height. A reader scrolling through it never sees a box:
@@ -39,6 +46,7 @@ test("a long transcript shows no undrawn row while the reader scrolls up", async
         boxesInView,
         rows: scroller.querySelectorAll("[data-window-row]").length,
         height: scroller.scrollHeight,
+        hidden: -parseFloat(getComputedStyle(scroller.firstElementChild!).marginTop),
       });
       requestAnimationFrame(tick);
     };
@@ -65,10 +73,13 @@ test("a long transcript shows no undrawn row while the reader scrolls up", async
   expect(Math.max(...frames.map((f) => f.boxes))).toBeGreaterThan(50);
   expect(frames.filter((f) => f.boxesInView > 0)).toEqual([]);
   /* a box is its row's height, so swapping rows never changes the page's
-     height; only a page of older rows landing does */
+     height; only a page of older rows landing, or coming out of hiding, does */
   const resized = frames.filter(
     (f, i) =>
-      i > 0 && f.rows === frames[i - 1].rows && f.height !== frames[i - 1].height,
+      i > 0 &&
+      f.rows === frames[i - 1].rows &&
+      f.hidden === frames[i - 1].hidden &&
+      f.height !== frames[i - 1].height,
   );
   expect(resized).toEqual([]);
 });

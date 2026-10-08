@@ -117,3 +117,87 @@ test("a page landing views above the reader leaves their row in place", async ({
   const after = await row.evaluate((el) => el.getBoundingClientRect().top);
   expect(Math.abs(after - before.top)).toBeLessThan(1);
 });
+
+/* WebKit drops a write to the position made while its own scrolling is under
+   way, and stops drawing the transcript until a later write takes. A page
+   that lands while the reader scrolls is kept out of sight above the
+   content instead; the position is written only once the view rests or
+   reaches the top. */
+test("a page landing while the reader scrolls is not put back with a write until the view rests", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    !["webkit-desktop", "chromium-desktop"].includes(testInfo.project.name),
+    "one layout per engine",
+  );
+  test.slow();
+  await page.setViewportSize({ width: 1500, height: 900 });
+  await gotoHarness(page, "mobile-performance");
+  await page.locator('[data-testid="session-session-large"]').click();
+  const panel = page.getByTestId("transcript-panel");
+  await panel.getByText("stream-start").last().waitFor();
+  await page.evaluate(() =>
+    window.__GENTS_MOBILE_PERFORMANCE__!.setOlderPageDelay(400),
+  );
+
+  /* every write to the position once the reader starts scrolling (opening
+     the session pins it to the foot): how far it moved the view, how long
+     after the view last moved, and where it was */
+  await panel.evaluate((node) => {
+    const scroller = node.closest<HTMLElement>('[data-slot="scroll-area-viewport"]')!;
+    const native = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop")!;
+    const writes: { by: number; sinceMoved: number; from: number }[] = [];
+    let movedAt = -Infinity;
+    let reading = false;
+    scroller.addEventListener("wheel", () => (reading = true), {
+      capture: true,
+      passive: true,
+    });
+    scroller.addEventListener("scroll", () => (movedAt = performance.now()), {
+      capture: true,
+      passive: true,
+    });
+    Object.defineProperty(scroller, "scrollTop", {
+      configurable: true,
+      get: () => native.get!.call(scroller),
+      set: (value: number) => {
+        const from = native.get!.call(scroller) as number;
+        if (reading)
+          writes.push({
+            by: value - from,
+            sinceMoved: performance.now() - movedAt,
+            from,
+          });
+        native.set!.call(scroller, value);
+      },
+    });
+    Object.assign(window, { __writes: writes });
+  });
+
+  await panel.hover();
+  for (let i = 0; i < 60; i += 1) {
+    await page.mouse.wheel(0, -120);
+    await page.waitForTimeout(40);
+  }
+  await page.waitForTimeout(600);
+
+  const { writes, rows, hidden } = await panel.evaluate((node) => {
+    const scroller = node.closest<HTMLElement>('[data-slot="scroll-area-viewport"]')!;
+    return {
+      writes: (
+        window as unknown as {
+          __writes: { by: number; sinceMoved: number; from: number }[];
+        }
+      ).__writes,
+      rows: scroller.querySelectorAll("[data-timeline-key]").length,
+      hidden: getComputedStyle(scroller.firstElementChild!).marginTop,
+    };
+  });
+  /* a write that puts a page back moves the view by the page's height */
+  const pagesPutBack = writes.filter((w) => Math.abs(w.by) > 450);
+  expect(rows).toBeGreaterThan(40);
+  expect(pagesPutBack.length).toBeGreaterThan(0);
+  expect(pagesPutBack.filter((w) => w.sinceMoved < 150 && w.from > 0)).toEqual([]);
+  /* rested: nothing is left out of sight */
+  expect(hidden).toBe("0px");
+});
