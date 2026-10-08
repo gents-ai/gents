@@ -5,9 +5,9 @@ import Proofs.ToolExecution.State
 
 Authorization and bounded-wait semantics for ordinary background tool calls.
 A process handle remains manageable across request turns in the same session,
-but never crosses the session, agent-principal, or requester-principal boundary.
+but never crosses the session, node, or requester boundary.
 When requester identity is unavailable on both requests, absence is the shared
-principal scope. A missing requester on only one side fails closed.
+requester scope. A missing requester on only one side fails closed.
 -/
 
 namespace Background.ProcessControl
@@ -27,7 +27,7 @@ def authorized (caller owner : Scope) : Bool :=
 theorem owner_authorized (owner : Scope) : authorized owner owner = true := by
   simp [authorized]
 
-theorem same_principal_next_request_authorized
+theorem same_node_next_request_authorized
     (owner : Scope) (nextRequestId : String) :
     authorized { owner with requestId := nextRequestId } owner = true := by
   simp [authorized]

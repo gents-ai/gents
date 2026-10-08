@@ -68,7 +68,7 @@ def interruptBeforeClaim? (w : World) : Option World := do
   let request ← RequestContext.step? w.request .interruptBeforeClaim
   pure { w with request }
 
-/-- Native selection establishes the exact physical request and principal/requester
+/-- Native selection establishes the exact physical request and node/requester
 scope before this composition. Queue scope represents the admitted request's
 scope here; ACP and lookup cardinality remain native premises. Terminal state
 does not disqualify the selected row. -/

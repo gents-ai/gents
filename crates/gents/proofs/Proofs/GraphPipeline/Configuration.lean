@@ -18,7 +18,7 @@ structure CapabilitySelection where
   target : StageTarget
   allowedCallers : List String
 
-/-- The artifact digest a principal's host has installed under a plugin name. -/
+/-- The artifact digest a node's host has installed under a plugin name. -/
 abbrev PluginInstalls := String → String → Option String
 
 /-- How a resolved stage runs. -/
@@ -34,7 +34,7 @@ def resolvePlugin (installs : PluginInstalls) (nodeDid plugin digest : String) :
   | some installed =>
     if installed = digest then .ok (.plugin plugin digest) else .error .pluginDigestMismatch
 
-/-- A graph resolves a capability's target under that capability's principal.
+/-- A graph resolves a capability's target under that capability's node.
 Foreign capabilities are usable when authorized; no foreign config is installed
 or rewritten, and there is no graph-specific behavior/model override. -/
 def resolveStage (capabilities : String → Option CapabilitySelection)

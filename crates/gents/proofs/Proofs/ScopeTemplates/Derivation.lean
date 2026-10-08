@@ -119,7 +119,7 @@ def directionalScopeFilters (template : Template) (direction : RouteDirection)
                 , operator := filter.operator
                 , value := filter.value } ] })
 
-/-- The durable client-route transcript row identifies its principal scope by
+/-- The durable client-route transcript row identifies its node scope by
 the originating requester and the owning node destination, matching the
 immutable `requester_did` / `node_did` fields of the accepted SDL. -/
 structure TranscriptIdentity where

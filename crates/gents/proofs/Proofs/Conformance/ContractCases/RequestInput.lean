@@ -11,8 +11,8 @@ structure RequestInputCase where
   contextSkillIds : List String
   cwdAllowed : Bool := true
   queueSourceAllowed : Bool := true
-  behavior : String := "coding"
-  sessionBehavior : String := "coding"
+  agent : String := "coding"
+  sessionAgent : String := "coding"
   sessionExists : Bool := true
   currentTitle : Option AgentSession.Title := none
   admissionKind : AgentRequestAdmissionKind := .localSelf
@@ -24,7 +24,7 @@ structure RequestInputCase where
   deriving Repr
 
 def RequestInputCase.accepted (c : RequestInputCase) : Bool :=
-  behaviorMatchesSession c.behavior c.sessionBehavior &&
+  behaviorMatchesSession c.agent c.sessionAgent &&
     inputWithinContext c.input c.contextSkillIds (fun _ => c.cwdAllowed)
       (fun _ => c.queueSourceAllowed) &&
     goalContinuationAllowed c.input c.admissionKind c.runtimeSource c.verifiedGoalContinuation &&
@@ -72,17 +72,17 @@ def requestInputCases : List RequestInputCase :=
   [ { name := "empty-input-inherits-context", input := {}, contextSkillIds := ["rust"] }
   , { name := "explicit-skill-within-whitelist", input := { selectedSkillIds := ["rust"] },
       contextSkillIds := ["rust"] }
-  , { name := "principal-skill-outside-context-denied", input := { selectedSkillIds := ["admin"] },
+  , { name := "node-skill-outside-context-denied", input := { selectedSkillIds := ["admin"] },
       contextSkillIds := ["rust"] }
   , { name := "cwd-owner-rejects-escape", input := { cwd := some "/outside" },
       contextSkillIds := [], cwdAllowed := false }
   , { name := "forged-background-source-confers-no-authority",
       input := { queue := some { source := .backgroundCompletion, policy := .coalesce } },
       contextSkillIds := [], queueSourceAllowed := false }
-  , { name := "blank-behavior-no-principal-fallback", input := {}, contextSkillIds := [],
-      behavior := "  " }
-  , { name := "mismatched-behavior-cannot-rebind-session", input := {}, contextSkillIds := [],
-      behavior := "review" }
+  , { name := "blank-agent-no-node-fallback", input := {}, contextSkillIds := [],
+      agent := "  " }
+  , { name := "mismatched-agent-cannot-rebind-session", input := {}, contextSkillIds := [],
+      agent := "review" }
   , { name := "initial-title-only-on-creation",
       input := { initialTitle := some ⟨"Task title", .task⟩ }, contextSkillIds := [],
       sessionExists := false }
