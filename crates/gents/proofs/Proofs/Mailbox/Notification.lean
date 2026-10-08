@@ -12,32 +12,32 @@ structure Key where
   mode : Mode
   agent : String
   requester : String
-  behavior : String
+  agentBehavior : String
   value : String
   deriving DecidableEq, Repr
 
-def resolveKey (mode : Mode) (agent requester behavior configuredKey eventId : String) : Key :=
-  ⟨mode, agent, requester, behavior, if mode = .condition then configuredKey else eventId⟩
+def resolveKey (mode : Mode) (agent requester agentBehavior configuredKey eventId : String) : Key :=
+  ⟨mode, agent, requester, agentBehavior, if mode = .condition then configuredKey else eventId⟩
 
-theorem condition_ignores_invocation (agent requester behavior key event₁ event₂ : String) :
-    resolveKey .condition agent requester behavior key event₁ = resolveKey .condition agent requester behavior key event₂ := by
+theorem condition_ignores_invocation (agent requester agentBehavior key event₁ event₂ : String) :
+    resolveKey .condition agent requester agentBehavior key event₁ = resolveKey .condition agent requester agentBehavior key event₂ := by
   rfl
 
-theorem different_events_do_not_coalesce (agent requester behavior key event₁ event₂ : String)
+theorem different_events_do_not_coalesce (agent requester agentBehavior key event₁ event₂ : String)
     (h : event₁ ≠ event₂) :
-    resolveKey .event agent requester behavior key event₁ ≠ resolveKey .event agent requester behavior key event₂ := by
+    resolveKey .event agent requester agentBehavior key event₁ ≠ resolveKey .event agent requester agentBehavior key event₂ := by
   simp [resolveKey, h]
 
-theorem behavior_scopes_notification (mode : Mode) (agent requester b₁ b₂ key eventId : String)
+theorem agentBehavior_scopes_notification (mode : Mode) (agent requester b₁ b₂ key eventId : String)
     (h : b₁ ≠ b₂) : resolveKey mode agent requester b₁ key eventId ≠ resolveKey mode agent requester b₂ key eventId := by
   simp [resolveKey, h]
 
-theorem requester_scopes_notification (mode : Mode) (agent r₁ r₂ behavior key eventId : String)
-    (h : r₁ ≠ r₂) : resolveKey mode agent r₁ behavior key eventId ≠ resolveKey mode agent r₂ behavior key eventId := by
+theorem requester_scopes_notification (mode : Mode) (agent r₁ r₂ agentBehavior key eventId : String)
+    (h : r₁ ≠ r₂) : resolveKey mode agent r₁ agentBehavior key eventId ≠ resolveKey mode agent r₂ agentBehavior key eventId := by
   simp [resolveKey, h]
 
-theorem agent_scopes_notification (mode : Mode) (a₁ a₂ requester behavior key eventId : String)
-    (h : a₁ ≠ a₂) : resolveKey mode a₁ requester behavior key eventId ≠ resolveKey mode a₂ requester behavior key eventId := by
+theorem agent_scopes_notification (mode : Mode) (a₁ a₂ requester agentBehavior key eventId : String)
+    (h : a₁ ≠ a₂) : resolveKey mode a₁ requester agentBehavior key eventId ≠ resolveKey mode a₂ requester agentBehavior key eventId := by
   simp [resolveKey, h]
 
 inductive WriteOutcome where

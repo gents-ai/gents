@@ -118,13 +118,13 @@ structure TaskFireIdentity where
   retryKey : String
   deriving DecidableEq, Repr
 
-def taskFireScope (agentDid taskId fireKey : String) : String :=
-  toString agentDid.length ++ ":" ++ agentDid ++ ":" ++
+def taskFireScope (nodeDid taskId fireKey : String) : String :=
+  toString nodeDid.length ++ ":" ++ nodeDid ++ ":" ++
     toString taskId.length ++ ":" ++ taskId ++ ":" ++
     toString fireKey.length ++ ":" ++ fireKey
 
-def taskFireIdentity (agentDid taskId fireKey : String) : TaskFireIdentity :=
-  let scope := taskFireScope agentDid taskId fireKey
+def taskFireIdentity (nodeDid taskId fireKey : String) : TaskFireIdentity :=
+  let scope := taskFireScope nodeDid taskId fireKey
   { sessionId := "task-goal-session:" ++ scope
   , requestId := "task-goal-request:" ++ scope
   , retryKey := "task-goal-retry:" ++ scope }
@@ -133,17 +133,17 @@ def taskFireIdentity (agentDid taskId fireKey : String) : TaskFireIdentity :=
     GoalCreationClaim documents are creation-time state and may later be
     removed without making an already-published request undiscoverable. -/
 structure TaskGoalRequestBinding where
-  agentDid : String
-  behaviorId : String
+  nodeDid : String
+  agentId : String
   sessionId : String
   requestId : String
   retryKey : String
   deriving DecidableEq, Repr
 
-def expectedTaskGoalRequestBinding (agentDid behaviorId taskId fireKey : String) :
+def expectedTaskGoalRequestBinding (nodeDid agentId taskId fireKey : String) :
     TaskGoalRequestBinding :=
-  let identity := taskFireIdentity agentDid taskId fireKey
-  { agentDid, behaviorId
+  let identity := taskFireIdentity nodeDid taskId fireKey
+  { nodeDid, agentId
   , sessionId := identity.sessionId
   , requestId := identity.requestId
   , retryKey := identity.retryKey }
@@ -221,7 +221,7 @@ structure TaskPublication where
     declaration switches publication to the atomic goal+request boundary and
     carries deterministic identities for retry/reconciliation. -/
 def decideTaskPublication (declaration : TaskGoalDeclaration)
-    (agentDid taskId fireKey : String) : TaskPublication :=
+    (nodeDid taskId fireKey : String) : TaskPublication :=
   if !validTaskGoalDeclaration declaration then
     { mode := .invalid, published := false, runnableRequest := false, durableGoal := false
     , sessionId := none, requestId := none, retryKey := none }
@@ -230,34 +230,34 @@ def decideTaskPublication (declaration : TaskGoalDeclaration)
       { mode := .ordinary, published := true, runnableRequest := true, durableGoal := false
       , sessionId := none, requestId := none, retryKey := none }
   | some _ =>
-      let identity := taskFireIdentity agentDid taskId fireKey
+      let identity := taskFireIdentity nodeDid taskId fireKey
       { mode := .atomicGoalBacked, published := true, runnableRequest := true, durableGoal := true
       , sessionId := some identity.sessionId, requestId := some identity.requestId
       , retryKey := some identity.retryKey }
 
 theorem task_goal_backed_runnable_implies_durable_goal
-    (declaration : TaskGoalDeclaration) (agentDid taskId fireKey : String)
-    (hmode : (decideTaskPublication declaration agentDid taskId fireKey).mode =
+    (declaration : TaskGoalDeclaration) (nodeDid taskId fireKey : String)
+    (hmode : (decideTaskPublication declaration nodeDid taskId fireKey).mode =
       .atomicGoalBacked)
     (hrunnable :
-      (decideTaskPublication declaration agentDid taskId fireKey).runnableRequest = true) :
-    (decideTaskPublication declaration agentDid taskId fireKey).durableGoal = true := by
+      (decideTaskPublication declaration nodeDid taskId fireKey).runnableRequest = true) :
+    (decideTaskPublication declaration nodeDid taskId fireKey).durableGoal = true := by
   by_cases hrun :
-      (decideTaskPublication declaration agentDid taskId fireKey).runnableRequest = true
+      (decideTaskPublication declaration nodeDid taskId fireKey).runnableRequest = true
   · unfold decideTaskPublication at hmode ⊢
     split <;> simp_all
     split <;> simp_all
   · exact (hrun hrunnable).elim
 
 theorem invalid_task_goal_declaration_cannot_publish
-    (declaration : TaskGoalDeclaration) (agentDid taskId fireKey : String)
+    (declaration : TaskGoalDeclaration) (nodeDid taskId fireKey : String)
     (hinvalid : validTaskGoalDeclaration declaration = false) :
-    (decideTaskPublication declaration agentDid taskId fireKey).published = false ∧
-      (decideTaskPublication declaration agentDid taskId fireKey).runnableRequest = false := by
+    (decideTaskPublication declaration nodeDid taskId fireKey).published = false ∧
+      (decideTaskPublication declaration nodeDid taskId fireKey).runnableRequest = false := by
   simp [decideTaskPublication, hinvalid]
 
-theorem task_without_goal_uses_ordinary_publication (agentDid taskId fireKey : String) :
-    (decideTaskPublication ⟨none, none⟩ agentDid taskId fireKey).mode = .ordinary := by
+theorem task_without_goal_uses_ordinary_publication (nodeDid taskId fireKey : String) :
+    (decideTaskPublication ⟨none, none⟩ nodeDid taskId fireKey).mode = .ordinary := by
   simp [decideTaskPublication, validTaskGoalDeclaration]
 
 structure SubmissionState where
