@@ -216,17 +216,17 @@ def projectThreadStatus (head : Option ClientHeadProjection) : ThreadPresentatio
   | some ⟨.interrupted, _⟩ => .idle
   | none => .idle
 
-def projectionBehaviorId (rootBehaviorId : String)
-    (threadBehaviorId : Option String) : String :=
-  match threadBehaviorId with
-  | some behaviorId => behaviorId
-  | none => rootBehaviorId
+def projectionAgentId (rootAgentId : String)
+    (threadAgentId : Option String) : String :=
+  match threadAgentId with
+  | some agentId => agentId
+  | none => rootAgentId
 
-/-- Display metadata must come from the exact selected principal/behavior pair.
+/-- Display metadata must come from the exact selected principal/agent pair.
 An unavailable binding stays unavailable; parent metadata is not a substitute. -/
-def projectedThreadModel (selectedOwner selectedBehavior actualOwner actualBehavior : String)
+def projectedThreadModel (selectedOwner selectedAgent actualOwner actualAgent : String)
     (resolvedModel : Option String) : Option String :=
-  if selectedOwner = actualOwner ∧ selectedBehavior = actualBehavior then
+  if selectedOwner = actualOwner ∧ selectedAgent = actualAgent then
     nonemptyReasoningText resolvedModel
   else none
 
@@ -271,11 +271,11 @@ theorem completed_request_projects_idle_thread :
 theorem missing_request_observation_is_quiescent :
     projectThreadStatus none = .idle := rfl
 
-theorem child_behavior_overrides_root_for_response_metadata :
-    projectionBehaviorId "root" (some "child") = "child" := rfl
+theorem child_agent_overrides_root_for_response_metadata :
+    projectionAgentId "root" (some "child") = "child" := rfl
 
-theorem absent_child_behavior_keeps_root_response_metadata :
-    projectionBehaviorId "root" none = "root" := rfl
+theorem absent_child_agent_keeps_root_response_metadata :
+    projectionAgentId "root" none = "root" := rfl
 
 theorem exact_binding_supplies_model :
     projectedThreadModel "child-owner" "child" "child-owner" "child"
@@ -285,15 +285,15 @@ theorem unavailable_binding_stays_unavailable :
     projectedThreadModel "child-owner" "child" "child-owner" "child" none = none := rfl
 
 theorem foreign_owner_cannot_supply_model
-    (selectedOwner selectedBehavior actualOwner actualBehavior : String)
+    (selectedOwner selectedAgent actualOwner actualAgent : String)
     (model : Option String) (h : selectedOwner ≠ actualOwner) :
-    projectedThreadModel selectedOwner selectedBehavior actualOwner actualBehavior model = none := by
+    projectedThreadModel selectedOwner selectedAgent actualOwner actualAgent model = none := by
   simp [projectedThreadModel, h]
 
-theorem foreign_behavior_cannot_supply_model
-    (selectedOwner selectedBehavior actualOwner actualBehavior : String)
-    (model : Option String) (h : selectedBehavior ≠ actualBehavior) :
-    projectedThreadModel selectedOwner selectedBehavior actualOwner actualBehavior model = none := by
+theorem foreign_agent_cannot_supply_model
+    (selectedOwner selectedAgent actualOwner actualAgent : String)
+    (model : Option String) (h : selectedAgent ≠ actualAgent) :
+    projectedThreadModel selectedOwner selectedAgent actualOwner actualAgent model = none := by
   simp [projectedThreadModel, h]
 
 theorem selected_tool_identity_overrides_model_facing_name :

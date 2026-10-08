@@ -25,7 +25,7 @@ inductive ClientPhase where
 
 structure ClientProgress where
   session : String := ""
-  agent : String := ""
+  node : String := ""
   phase : ClientPhase := .idle
   mergedDocuments : Finset DocumentKey := ∅
   servedDocuments : Option (Finset DocumentKey) := none
@@ -127,13 +127,13 @@ def mergeServed (prev next : Option (Finset DocumentKey)) : Option (Finset Docum
   | some documents => some documents
   | none => prev
 
-def progressFor (prev : ClientProgress) (session agent : String) : ClientProgress :=
-  if prev.session = session ∧ prev.agent = agent then prev
-  else { session, agent }
+def progressFor (prev : ClientProgress) (session node : String) : ClientProgress :=
+  if prev.session = session ∧ prev.node = node then prev
+  else { session, node }
 
 /-- An explicit request starts a fresh receiver attempt for this target. -/
-def beginRequest (session agent : String) : ClientProgress :=
-  { session, agent, phase := .requested }
+def beginRequest (session node : String) : ClientProgress :=
+  { session, node, phase := .requested }
 
 /-- An owned session header permits hydration during a live turn. Without that
 header, a pending local request alone does not prove the session exists. -/
@@ -166,12 +166,12 @@ theorem readable_header_keeps_initial_start
   simp [canStart]
 
 /-- An explicit retry is legal only for the same failed target. -/
-def canRetry (prev : ClientProgress) (session agent : String) : Bool :=
-  decide (prev.session = session ∧ prev.agent = agent ∧ prev.phase = .failed)
+def canRetry (prev : ClientProgress) (session node : String) : Bool :=
+  decide (prev.session = session ∧ prev.node = node ∧ prev.phase = .failed)
 
-theorem canRetry_iff (prev : ClientProgress) (session agent : String) :
-    canRetry prev session agent = true ↔
-      prev.session = session ∧ prev.agent = agent ∧ prev.phase = .failed := by
+theorem canRetry_iff (prev : ClientProgress) (session node : String) :
+    canRetry prev session node = true ↔
+      prev.session = session ∧ prev.node = node ∧ prev.phase = .failed := by
   simp [canRetry]
 
 def observeCore (prev : ClientProgress) (merged : Finset DocumentKey)
@@ -192,14 +192,14 @@ def observeCore (prev : ClientProgress) (merged : Finset DocumentKey)
 def observe (prev : ClientProgress) (mergedDocuments : Finset DocumentKey)
     (servedDocuments : Option (Finset DocumentKey)) (validation : ValidationResult)
     (failed : Bool)
-    (session agent : String) : ClientProgress :=
-  let base := progressFor prev session agent
+    (session node : String) : ClientProgress :=
+  let base := progressFor prev session node
   { observeCore base
       (base.mergedDocuments ∪ mergedDocuments)
       (mergeServed base.servedDocuments servedDocuments)
-      validation failed with session, agent }
+      validation failed with session, node }
 
-/-- Durable control-row state for one exact session/agent target. -/
+/-- Durable control-row state for one exact session/node target. -/
 inductive DurableRequest where
   | missing
   | pending
@@ -210,14 +210,14 @@ inductive DurableRequest where
 /-- Projecting a snapshot is a pure query over one durable control row plus
 the locally merged set. It retains no process-wide receiver state. -/
 def projectDurable (request : DurableRequest) (mergedDocuments : Finset DocumentKey)
-    (validation : ValidationResult) (session agent : String) : ClientProgress :=
+    (validation : ValidationResult) (session node : String) : ClientProgress :=
   match request with
-  | .missing => observe { session, agent } mergedDocuments none .loading false session agent
-  | .pending => observe (beginRequest session agent) mergedDocuments none .loading false session agent
+  | .missing => observe { session, node } mergedDocuments none .loading false session node
+  | .pending => observe (beginRequest session node) mergedDocuments none .loading false session node
   | .served documents =>
-      observe (beginRequest session agent) mergedDocuments (some documents) validation false session agent
+      observe (beginRequest session node) mergedDocuments (some documents) validation false session node
   | .rejected documents =>
-      observe (beginRequest session agent) mergedDocuments documents validation true session agent
+      observe (beginRequest session node) mergedDocuments documents validation true session node
 
 /-- Public receiver boundary: a served receipt cannot supply its own validation
 enum. The projection recomputes canonical closure and native reconstruction from
@@ -233,13 +233,13 @@ def projectCanonicalSnapshot (request : DurableRequest)
     (segments : List CanonicalOutput.Segment)
     (provenance : List CanonicalOutput.Hydration.ProvenanceAccess)
     (deniedHeaders deniedSegments : List CanonicalOutput.DocId)
-    (session agent : String)
+    (session node : String)
     (dependencyDenials : List CanonicalOutput.DependencyDenial := []) : ClientProgress :=
   let validation := match request with
     | .served signed => validateSnapshot scope rootSession signed bases roots requirements messages segments
         provenance deniedHeaders deniedSegments dependencyDenials
     | _ => .loading
-  projectDurable request mergedDocuments validation session agent
+  projectDurable request mergedDocuments validation session node
 
 theorem canonical_completion_requires_valid_reconstruction
     (signed merged : Finset DocumentKey)
@@ -252,9 +252,9 @@ theorem canonical_completion_requires_valid_reconstruction
     (segments : List CanonicalOutput.Segment)
     (provenance : List CanonicalOutput.Hydration.ProvenanceAccess)
     (deniedHeaders deniedSegments : List CanonicalOutput.DocId)
-    (session agent : String) (dependencyDenials : List CanonicalOutput.DependencyDenial)
+    (session node : String) (dependencyDenials : List CanonicalOutput.DependencyDenial)
     (hcomplete : (projectCanonicalSnapshot (.served signed) merged scope rootSession bases roots requirements
-      messages segments provenance deniedHeaders deniedSegments session agent
+      messages segments provenance deniedHeaders deniedSegments session node
       dependencyDenials).phase = .complete) :
     validateSnapshot scope rootSession signed bases roots requirements messages segments provenance
       deniedHeaders deniedSegments dependencyDenials = .valid := by
@@ -270,15 +270,15 @@ theorem canonical_completion_requires_valid_reconstruction
 
 theorem projectDurable_exact_target (request : DurableRequest)
     (mergedDocuments : Finset DocumentKey) (validation : ValidationResult)
-    (session agent : String) :
-    (projectDurable request mergedDocuments validation session agent).session = session ∧
-      (projectDurable request mergedDocuments validation session agent).agent = agent := by
+    (session node : String) :
+    (projectDurable request mergedDocuments validation session node).session = session ∧
+      (projectDurable request mergedDocuments validation session node).node = node := by
   cases request <;> simp [projectDurable, observe]
 
 theorem projectDurable_rejected_failed (documents : Option (Finset DocumentKey))
     (mergedDocuments : Finset DocumentKey) (validation : ValidationResult)
-    (session agent : String) :
-    (projectDurable (.rejected documents) mergedDocuments validation session agent).phase = .failed := by
+    (session node : String) :
+    (projectDurable (.rejected documents) mergedDocuments validation session node).phase = .failed := by
   simp [projectDurable, observe, observeCore]
 
 theorem observeCore_mergedDocuments (prev : ClientProgress)
@@ -291,43 +291,43 @@ theorem observeCore_mergedDocuments (prev : ClientProgress)
 theorem observe_mergedDocuments (prev : ClientProgress)
     (mergedDocuments : Finset DocumentKey)
     (servedDocuments : Option (Finset DocumentKey)) (validation : ValidationResult) (failed : Bool)
-    (session agent : String) :
-    (observe prev mergedDocuments servedDocuments validation failed session agent).mergedDocuments =
-      (progressFor prev session agent).mergedDocuments ∪ mergedDocuments := by
+    (session node : String) :
+    (observe prev mergedDocuments servedDocuments validation failed session node).mergedDocuments =
+      (progressFor prev session node).mergedDocuments ∪ mergedDocuments := by
   unfold observe
   exact observeCore_mergedDocuments _ _ _ _ _
 
 theorem observe_merged_monotone (prev : ClientProgress)
     (mergedDocuments : Finset DocumentKey)
     (servedDocuments : Option (Finset DocumentKey)) (validation : ValidationResult) (failed : Bool)
-    (session agent : String) (hsession : prev.session = session)
-    (hagent : prev.agent = agent) :
+    (session node : String) (hsession : prev.session = session)
+    (hnode : prev.node = node) :
     prev.mergedDocuments ⊆
-      (observe prev mergedDocuments servedDocuments validation failed session agent).mergedDocuments := by
+      (observe prev mergedDocuments servedDocuments validation failed session node).mergedDocuments := by
   rw [observe_mergedDocuments]
-  simp [progressFor, hsession, hagent]
+  simp [progressFor, hsession, hnode]
 
 theorem observe_complete_iff_valid (prev : ClientProgress)
     (mergedDocuments : Finset DocumentKey)
-    (servedDocuments : Option (Finset DocumentKey)) (session agent : String)
-    (hprev : (progressFor prev session agent).phase ≠ .failed) :
-    (observe prev mergedDocuments servedDocuments .valid false session agent).phase = .complete ↔
-      canComplete ((progressFor prev session agent).mergedDocuments ∪ mergedDocuments)
-        (mergeServed (progressFor prev session agent).servedDocuments servedDocuments)
+    (servedDocuments : Option (Finset DocumentKey)) (session node : String)
+    (hprev : (progressFor prev session node).phase ≠ .failed) :
+    (observe prev mergedDocuments servedDocuments .valid false session node).phase = .complete ↔
+      canComplete ((progressFor prev session node).mergedDocuments ∪ mergedDocuments)
+        (mergeServed (progressFor prev session node).servedDocuments servedDocuments)
         .valid = true := by
   unfold observe observeCore
-  have hnf : decide ((progressFor prev session agent).phase = .failed) = false :=
+  have hnf : decide ((progressFor prev session node).phase = .failed) = false :=
     decide_eq_false_iff_not.mpr hprev
   simp [hnf]
   split_ifs <;> simp_all
 
 theorem observe_cannot_complete_without_server (prev : ClientProgress)
-    (mergedDocuments : Finset DocumentKey) (session agent : String)
-    (hprev : (progressFor prev session agent).phase ≠ .failed)
-    (hserved : mergeServed (progressFor prev session agent).servedDocuments none = none) :
-    (observe prev mergedDocuments none .loading false session agent).phase ≠ .complete := by
+    (mergedDocuments : Finset DocumentKey) (session node : String)
+    (hprev : (progressFor prev session node).phase ≠ .failed)
+    (hserved : mergeServed (progressFor prev session node).servedDocuments none = none) :
+    (observe prev mergedDocuments none .loading false session node).phase ≠ .complete := by
   unfold observe observeCore
-  have hnf : decide ((progressFor prev session agent).phase = .failed) = false :=
+  have hnf : decide ((progressFor prev session node).phase = .failed) = false :=
     decide_eq_false_iff_not.mpr hprev
   simp [hnf, hserved, canComplete]
   split_ifs <;> simp
@@ -343,10 +343,10 @@ theorem equal_count_substitution_fails_closed
 was started. Only `beginRequest` may move an idle receiver into an in-flight
 phase when the server has not supplied a manifest. -/
 theorem observe_idle_without_server_stays_idle (prev : ClientProgress)
-    (mergedDocuments : Finset DocumentKey) (session agent : String)
-    (hidle : (progressFor prev session agent).phase = .idle)
-    (hserved : (progressFor prev session agent).servedDocuments = none) :
-    (observe prev mergedDocuments none .loading false session agent).phase = .idle := by
+    (mergedDocuments : Finset DocumentKey) (session node : String)
+    (hidle : (progressFor prev session node).phase = .idle)
+    (hserved : (progressFor prev session node).servedDocuments = none) :
+    (observe prev mergedDocuments none .loading false session node).phase = .idle := by
   unfold observe observeCore
   simp [hidle, hserved, mergeServed, canComplete]
 
@@ -355,16 +355,16 @@ same target requires the explicit `beginRequest` transition. -/
 theorem observe_failed_without_begin_stays_failed (prev : ClientProgress)
     (mergedDocuments : Finset DocumentKey)
     (servedDocuments : Option (Finset DocumentKey)) (validation : ValidationResult)
-    (session agent : String)
-    (hfailed : (progressFor prev session agent).phase = .failed) :
-    (observe prev mergedDocuments servedDocuments validation false session agent).phase = .failed := by
+    (session node : String)
+    (hfailed : (progressFor prev session node).phase = .failed) :
+    (observe prev mergedDocuments servedDocuments validation false session node).phase = .failed := by
   unfold observe observeCore
   simp [hfailed]
 
-/-- Focusing a different session/agent starts from an idle empty receiver state. -/
-theorem progressFor_other_target_resets (prev : ClientProgress) (session agent : String)
-    (hdifferent : prev.session ≠ session ∨ prev.agent ≠ agent) :
-    progressFor prev session agent = { session, agent } := by
+/-- Focusing a different session/node starts from an idle empty receiver state. -/
+theorem progressFor_other_target_resets (prev : ClientProgress) (session node : String)
+    (hdifferent : prev.session ≠ session ∨ prev.node ≠ node) :
+    progressFor prev session node = { session, node } := by
   unfold progressFor
   split
   · rename_i hsame
@@ -372,10 +372,10 @@ theorem progressFor_other_target_resets (prev : ClientProgress) (session agent :
   · rfl
 
 /-- Retrying clears a prior terminal receiver state and its old manifest. -/
-theorem beginRequest_resets_terminal (session agent : String) :
-    (beginRequest session agent).phase = .requested ∧
-    (beginRequest session agent).mergedDocuments = ∅ ∧
-    (beginRequest session agent).servedDocuments = none := by
+theorem beginRequest_resets_terminal (session node : String) :
+    (beginRequest session node).phase = .requested ∧
+    (beginRequest session node).mergedDocuments = ∅ ∧
+    (beginRequest session node).servedDocuments = none := by
   simp [beginRequest]
 
 end SessionHydration
