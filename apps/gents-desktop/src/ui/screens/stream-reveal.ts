@@ -208,9 +208,10 @@ export function holdLive(
    browser lays the page out between the two. So a person's message is drawn
    under its request, whatever stands for it, and the saved reply under the
    key its live tail was drawn under. The bridge names every stand-in for a
-   person's message by its request id, so they are all drawn under one key.
-   The bridge names every turn's live tail alike, so each tail gets a key of
-   its own. */
+   person's message by its request id and marks the saved one that owns the
+   turn, so they are all drawn under one key while the rows a request
+   authors besides the prompt keep keys of their own. The bridge names every
+   turn's live tail alike, so each tail gets a key of its own. */
 export type DrawKeys = {
   sessionId: string | null;
   tail: string | null;
@@ -246,10 +247,15 @@ export function drawKeys(
   return next;
 }
 
-const requestOf = (item: RenderedTimelineItem) =>
-  (item.kind === "userMessage" || item.kind === "pendingUserTurn") && item.requestId
-    ? item.requestId
-    : null;
+/* The request a row stands in for, as the turn of the person's message.
+   A saved row stands in only when it owns the turn — the request's prompt,
+   as the bridge marks it (`ownsTurn`); a request authors other user rows
+   (workspace instructions, tool delivery) that are rows of their own. */
+const requestOf = (item: RenderedTimelineItem): string | null => {
+  if (item.kind === "pendingUserTurn") return item.requestId;
+  if (item.kind === "userMessage" && item.ownsTurn) return item.requestId ?? null;
+  return null;
+};
 
 export const drawKey = (keys: DrawKeys, item: RenderedTimelineItem): string => {
   const request = requestOf(item);

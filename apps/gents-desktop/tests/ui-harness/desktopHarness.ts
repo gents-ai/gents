@@ -156,9 +156,9 @@ export type MobilePerformanceHarnessController = {
   endReply(step: { live: "keep" | "drop"; saved: boolean; completed: boolean }): void;
   /**
    * A message the person sent, as the bridge shows it: first the pending
-   * turn, then the saved message under its own key, before the live tail.
-   * The bridge names the request on the pending turn by its id, as a send
-   * returns it, and on the saved message by its document id.
+   * turn, then the saved prompt row, before the live tail. Every stand-in
+   * names the request by its id, as a send returns it, so the row is one
+   * from pending to saved.
    */
   userTurn(stage: "pending" | "saved"): void;
   /**
@@ -539,6 +539,7 @@ export function createDesktopUiHarness(
         {
           kind: "userMessage",
           itemKey: "remote-user",
+          ownsTurn: true,
           sequence: 1,
           content: "hello from desktop",
           timestamp: THIRTY_DAYS_AGO,
@@ -795,6 +796,7 @@ export function createDesktopUiHarness(
         {
           kind: "userMessage",
           itemKey: `${requestId}-user`,
+          ownsTurn: true,
           sequence: 1,
           content: prompt,
           timestamp: now,
@@ -1263,6 +1265,7 @@ export function createDesktopUiHarness(
             {
               kind: "userMessage",
               itemKey: `${requestId}-user`,
+              ownsTurn: true,
               sequence: nextSequence,
               content,
               timestamp: new Date().toISOString(),
@@ -2553,7 +2556,6 @@ export function createDesktopUiHarness(
               throw new Error("mobile performance fixture lost session-large");
             }
             const requestId = LARGE_SENT_REQUEST_ID;
-            const requestDocId = `bae-${requestId}`;
             const turn =
               stage === "pending"
                 ? {
@@ -2569,15 +2571,14 @@ export function createDesktopUiHarness(
                     kind: "userMessage" as const,
                     itemKey: "large-user-sent",
                     requestId,
+                    ownsTurn: true,
                     sequence: session.timelineItems.length,
                     content: "again",
                     timestamp: STARTED_AT,
                     reconstruction: HARNESS_READY_RECONSTRUCTION,
                   };
             const without = session.timelineItems.filter(
-              (item) =>
-                !("requestId" in item) ||
-                (item.requestId !== requestId && item.requestId !== requestDocId),
+              (item) => !("requestId" in item) || item.requestId !== requestId,
             );
             const tailAt = without.findIndex((item) => item.kind === "liveAssistant");
             const timelineItems =
@@ -2776,6 +2777,7 @@ function createLargePerformanceSession(): DesktopSessionSnapshot {
             kind: "userMessage" as const,
             itemKey: `large-user-${index}`,
             requestId: `large-request-${index}`,
+            ownsTurn: true,
             sequence: index,
             content: `User fixture row ${index}: ${filler}`,
             timestamp: STARTED_AT,

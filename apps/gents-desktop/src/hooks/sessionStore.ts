@@ -24,9 +24,10 @@ export type SessionFacts = {
   toolsRevision: number;
   /** every tool call, in transcript order; the same array until a tool changes */
   tools: readonly RenderedToolCallView[];
-  /** the request ids on the transcript's user rows, as the bridge names
-      them: a pending turn's is the request's id, a saved message's the
-      request's document id */
+  /** the request ids on the transcript's user rows that stand for a turn —
+      a pending turn, or the saved prompt row that owns one — every one
+      naming the request by its id; a request's other user rows (workspace
+      instructions, tool delivery) name it too but stand for no turn */
   userRequestIds: ReadonlySet<string>;
 };
 
@@ -135,9 +136,11 @@ function factsOf(
   if (rowsSame) return facts;
   const userRequestIds = new Set(
     after.flatMap((item) =>
-      (item.kind === "userMessage" || item.kind === "pendingUserTurn") && item.requestId
+      item.kind === "pendingUserTurn"
         ? [item.requestId]
-        : [],
+        : item.kind === "userMessage" && item.ownsTurn && item.requestId
+          ? [item.requestId]
+          : [],
     ),
   );
   return {
@@ -153,11 +156,11 @@ function factsOf(
 /**
  * Whether the bridge holds a request the app sent, by the request's id (what
  * a send returns): once it does, the transcript has a row for it, its
- * pending turn or its saved message, both naming the request by its id.
- * Should that row sit outside the loaded window, the request is known by the
- * session's latest request; and should no read happen to show it as the
- * latest, by the latest having moved on from `latestWhenSent`, the one the
- * session showed when the request was sent.
+ * pending turn or the saved prompt row that owns its turn, both naming the
+ * request by its id. Should that row sit outside the loaded window, the
+ * request is known by the session's latest request; and should no read
+ * happen to show it as the latest, by the latest having moved on from
+ * `latestWhenSent`, the one the session showed when the request was sent.
  */
 export function holdsRequest(
   state: SessionState,

@@ -21,7 +21,11 @@ source consistency checks, not a separate runtime compatibility version.
   publishes carry the same id; a message whose request row is not observed
   reports none. The desktop transcript collapses the app's own copy, the
   bridge's pending turn and the saved message into one row under the request
-  they share, where the saved message was a row of its own.
+  they share, where the saved message was a row of its own. Only the
+  request's prompt row joins that collapse: a user row it authors beside the
+  prompt — the workspace instructions it carries — reports `ownsTurn: false`
+  and stays a row of its own, the same ownership the bridge's pending turn
+  already reconciles by.
 - A runtime that cannot start because a behavior is unavailable now logs each
   blocking behavior's diagnostic; a `--tool-root` that does not admit the
   live `Tools.host.root` names both roots (#2296).

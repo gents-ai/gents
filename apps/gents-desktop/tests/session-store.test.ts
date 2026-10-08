@@ -15,6 +15,15 @@ const user = (requestId: string) =>
     kind: "userMessage",
     itemKey: `u-${requestId}`,
     requestId,
+    ownsTurn: true,
+  }) as RenderedTimelineItem;
+/* a row the request authors beside its prompt: saved, but not the turn */
+const context = (requestId: string) =>
+  ({
+    kind: "userMessage",
+    itemKey: `authored:doc-${requestId}:context`,
+    requestId,
+    ownsTurn: false,
   }) as RenderedTimelineItem;
 const tools = (key: string, status: string) =>
   ({
@@ -62,10 +71,16 @@ describe("session facts", () => {
     expect(second.toolsRevision).toBe(first.toolsRevision);
     expect(second.tools).toBe(first.tools);
   });
+
+  it("leave a request's context row out: saved, but not a turn", () => {
+    const store = createSessionStore(session([user("r1"), context("r2")]));
+    expect(store.getState().facts.userRequestIds).toEqual(new Set(["r1"]));
+  });
 });
 
-/* A request the app sent, known by its id; the bridge names every row for
-   it, pending or saved, by that id. */
+/* A request the app sent, known by its id on every row the bridge draws
+   for it; the rows that stand for its turn — its pending turn, its saved
+   prompt — are the ones that hold it. */
 describe("whether the bridge holds a sent request", () => {
   const pending = (requestId: string) =>
     ({
@@ -91,6 +106,10 @@ describe("whether the bridge holds a sent request", () => {
 
   it("once its saved message is in the transcript", () => {
     expect(holdsRequest(read("r1", [user("r2")]), sent)).toBe(true);
+  });
+
+  it("not while only the context row it authors is in the transcript", () => {
+    expect(holdsRequest(read("r1", [context("r2")]), sent)).toBe(false);
   });
 
   it("once it is the session's latest request, its row outside the window", () => {

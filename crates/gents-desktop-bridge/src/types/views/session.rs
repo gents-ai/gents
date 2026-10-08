@@ -8,6 +8,10 @@ use super::operations::DerivedCancelCauseView;
 pub struct MessageView {
     pub message_key: String,
     pub request_id: Option<String>,
+    /// Whether this row is the person's own message for its request (the
+    /// authored prompt publication) rather than a row the request also
+    /// authors: workspace context, tool delivery, reminders.
+    pub owns_turn: bool,
     pub sequence: Option<i64>,
     pub role: Option<String>,
     pub display_role: Option<String>,
@@ -262,6 +266,12 @@ pub enum RenderedTimelineItem {
         #[serde(skip_serializing_if = "Option::is_none", default)]
         #[ts(optional = nullable)]
         request_id: Option<String>,
+        /// Whether this row stands for the person's turn of its request.
+        /// A request authors user rows that do not (workspace instructions
+        /// under `authored:{doc}:context`, tool delivery); consumers must
+        /// not let those replace or retire the turn's other stand-ins
+        /// (pending turn, the app's own copy of a sent message).
+        owns_turn: bool,
         sequence: Option<i64>,
         content: Option<String>,
         timestamp: Option<String>,

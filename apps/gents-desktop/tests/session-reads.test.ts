@@ -43,6 +43,7 @@ function session(
       kind: "userMessage" as const,
       itemKey: key,
       requestId: key,
+      ownsTurn: true,
       sequence: Number(key.slice(1)),
       content: key,
       timestamp: null,

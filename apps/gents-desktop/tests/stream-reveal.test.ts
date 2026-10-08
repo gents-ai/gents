@@ -281,6 +281,19 @@ describe("the keys replies are drawn under", () => {
     expect(drawKey(keys, saved)).toBe(drawKey(keys, local));
   });
 
+  it("draws a row the request authors beside its prompt under the row's own key", () => {
+    const context = userMessage({
+      kind: "userMessage",
+      itemKey: "authored:doc-r2:context",
+      requestId: "r2",
+      ownsTurn: false,
+      sequence: 2,
+      content: "<context>\nworkspace instructions\n</context>",
+      timestamp: null,
+    });
+    expect(drawKey(noDrawKeys("s"), context)).toBe("authored:doc-r2:context");
+  });
+
   it("starts again for another session", () => {
     const streaming = drawKeys(noDrawKeys("a"), [live("One")], undefined, "a");
     const saved = drawKeys(streaming, [message("One")], "a-r1", "a");
@@ -336,6 +349,48 @@ describe("the rows drawn for sent messages", () => {
     expect(
       withSentTurns([person, saved], local, "s").map((row) => row.itemKey),
     ).toEqual(["u1", "u2"]);
+  });
+
+  /* A read can land between the request publishing its workspace
+     instructions and its prompt: the context row is saved, the person's
+     message is not yet. The instructions are a row of their own, never the
+     turn, so the pending turn keeps standing in for the message. */
+  it("keeps the pending turn while only the request's context row is saved", () => {
+    const context = userMessage({
+      kind: "userMessage",
+      itemKey: "authored:doc-r2:context",
+      requestId: "r2",
+      ownsTurn: false,
+      sequence: 2,
+      content: "<context>\nworkspace instructions\n</context>",
+      timestamp: null,
+    });
+    expect(
+      withSentTurns([person, context, pending], local, "s").map((row) => row.itemKey),
+    ).toEqual(["u1", "authored:doc-r2:context", "pending-r2"]);
+  });
+
+  it("collapses the turn once the request's prompt row is saved", () => {
+    const context = userMessage({
+      kind: "userMessage",
+      itemKey: "authored:doc-r2:context",
+      requestId: "r2",
+      ownsTurn: false,
+      sequence: 2,
+      content: "<context>\nworkspace instructions\n</context>",
+      timestamp: null,
+    });
+    const prompt = userMessage({
+      kind: "userMessage",
+      itemKey: "authored:doc-r2:prompt",
+      requestId: "r2",
+      sequence: 3,
+      content: "again",
+      timestamp: null,
+    });
+    expect(
+      withSentTurns([person, context, prompt], local, "s").map((row) => row.itemKey),
+    ).toEqual(["u1", "authored:doc-r2:context", "authored:doc-r2:prompt"]);
   });
 
   it("never shows one session's message in another", () => {
