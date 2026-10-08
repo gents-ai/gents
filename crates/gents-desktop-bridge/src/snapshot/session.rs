@@ -71,6 +71,14 @@ pub(super) fn request_is_background_completion(request: &AgentRequestRow) -> boo
         .is_some_and(gents::lifecycle::is_background_completion_request)
 }
 
+/// `canonical_rows::authored_message_key` is `pub(crate)` in gents, so its
+/// prompt shape is repeated here; the two reconciliations that compare keys
+/// (the pending turn's owner and the message projection's owns-turn marker)
+/// must not drift apart.
+pub(super) fn authored_prompt_message_key(request_doc_id: &str) -> String {
+    format!("authored:{request_doc_id}:prompt")
+}
+
 struct LoadedRequestContext {
     request_id: String,
     call_id: String,

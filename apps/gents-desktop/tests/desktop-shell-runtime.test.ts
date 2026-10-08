@@ -229,6 +229,7 @@ function session(
       kind: "userMessage" as const,
       itemKey: key,
       requestId: key,
+      ownsTurn: true,
       sequence: Number(key.slice(1)),
       content: key,
       timestamp: null,
@@ -266,6 +267,7 @@ describe("session timeline page merging", () => {
         kind: "userMessage",
         itemKey: "authored-r1",
         requestId: "r1",
+        ownsTurn: true,
         sequence: 1,
         content: "repeat",
         timestamp: null,
@@ -304,6 +306,7 @@ describe("session timeline page merging", () => {
         kind: "userMessage",
         itemKey: "authored-r",
         requestId: "r",
+        ownsTurn: true,
         sequence: 1,
         content: "repeat",
         timestamp: null,
@@ -316,6 +319,54 @@ describe("session timeline page merging", () => {
       ),
     ).toEqual(["authored-r", "k2"]);
   });
+
+  /* A request authors rows besides the person's message: the workspace
+     instructions it publishes beside the prompt arrive as their own row and
+     must not retire the pending turn standing in for the message. */
+  it.each(["older", "tip"] as const)(
+    "keeps a queued input when only the request's context row is saved on the %s page",
+    (direction) => {
+      const page = {
+        totalItems: 3,
+        pageItems: 2,
+        hasOlder: true,
+        hasNewer: false,
+        oldestItemKey: "k1",
+        newestItemKey: "k2",
+      };
+      const current = session(["k1", "k2"], page);
+      current.timelineItems.unshift({
+        kind: "pendingUserTurn",
+        itemKey: "pending-r",
+        requestId: "r",
+        content: "same text",
+        selectedSkillIds: [],
+        lifecycleState: "pending",
+        createdAt: null,
+      });
+      const incoming = session(["k1", "k2"], page);
+      incoming.timelineItems.push({
+        kind: "userMessage",
+        itemKey: "authored-r-context",
+        requestId: "r",
+        ownsTurn: false,
+        sequence: 3,
+        content: "<context>\nworkspace instructions\n</context>",
+        timestamp: null,
+        reconstruction: { state: "ready" },
+      });
+      const merged =
+        direction === "tip"
+          ? mergeSessionTipSnapshot(current, incoming)
+          : mergeOlderSessionTimelinePage(incoming, current);
+      expect(merged.timelineItems.map((item) => item.itemKey)).toEqual([
+        "pending-r",
+        "k1",
+        "k2",
+        "authored-r-context",
+      ]);
+    },
+  );
 
   it.each(["older", "tip"] as const)(
     "replaces a queued input with its durable owner when the %s page arrives",
@@ -343,6 +394,7 @@ describe("session timeline page merging", () => {
         kind: "userMessage",
         itemKey: "authored-r",
         requestId: "r",
+        ownsTurn: true,
         sequence: 3,
         content: "same text",
         timestamp: null,
@@ -385,6 +437,7 @@ describe("session timeline page merging", () => {
         {
           kind,
           itemKey: "k1",
+          ownsTurn: true,
           sequence: 1,
           content: null,
           reasoning: null,

@@ -287,15 +287,58 @@ fn opened_path(_: &File) -> Option<PathBuf> {
 /// the link is the remaining pin.
 fn pin(path: &Path) -> Result<Identity> {
     let handle = File::open(path).with_context(|| format!("{} cannot be read", path.display()))?;
+    let identity = handle_identity(&handle);
     if let Some(opened) = opened_path(&handle) {
         anyhow::ensure!(
-            opened == path,
+            opened == path || named_in_pinned_folder(path, identity),
             "{} now resolves to {}; the path changed after it was validated",
             path.display(),
             opened.display()
         );
     }
-    Ok(handle_identity(&handle))
+    Ok(identity)
+}
+
+/// Whether `path`'s folder, itself pinned, names the regular file `identity`
+/// under `path`'s file name without following a symlink. macOS's F_GETPATH
+/// reports any one of a hard-linked file's names, not the one it was opened
+/// by, so a file with a second link (another call's private link among them)
+/// is checked through its folder instead; a folder has no hard links.
+#[cfg(unix)]
+fn named_in_pinned_folder(path: &Path, identity: Identity) -> bool {
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::ffi::OsStrExt;
+    let (Some(folder), Some(name), Some(_)) = (path.parent(), path.file_name(), identity) else {
+        return false;
+    };
+    let Ok(dir) = File::open(folder) else {
+        return false;
+    };
+    if opened_path(&dir).as_deref() != Some(folder) {
+        return false;
+    }
+    let Ok(name) = std::ffi::CString::new(name.as_bytes()) else {
+        return false;
+    };
+    // SAFETY: `dir` is an open directory and `name` a NUL-terminated name.
+    let fd = unsafe {
+        libc::openat(
+            dir.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        return false;
+    }
+    // SAFETY: `fd` was just opened and is owned by nothing else.
+    let named = unsafe { File::from_raw_fd(fd) };
+    named.metadata().is_ok_and(|meta| meta.is_file()) && handle_identity(&named) == identity
+}
+
+#[cfg(not(unix))]
+fn named_in_pinned_folder(_: &Path, _: Identity) -> bool {
+    false
 }
 
 /// Folders a link to `file` can be made under, best first: the system temp
