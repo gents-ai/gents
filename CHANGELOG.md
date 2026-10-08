@@ -6,6 +6,21 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- Installing or removing a plugin a behavior's Tools document names now
+  re-admits a behavior that was demoted for failing to build on the missing
+  tool (#2338). The resolved plugin identity (version and digest) joins the
+  runtime configuration fingerprint and the slot comparison. A plugins pack
+  install, `gents plugin install` and their removes now write or delete a
+  `PackInstallation` record marked by the new `plugin_store` field after
+  the plugin store changes, which wakes the reconciler. Each plugin call
+  re-reads its installed record, so a removed or replaced plugin fails
+  closed on its next call even when its artifact is cached, and a changed
+  grant or declaration is admitted again. Installed-pack listings and
+  `gents pack outdated`/`update` skip such records, and `gents pack remove`
+  refers them to `gents plugin remove`. An uninitialized home records
+  nothing. The demotion log names installing a missing plugin as the fix.
+  The `PackInstallation` schema changed: existing homes must be
+  re-initialized.
 - A scenario pack whose expected trigger's event source has no
   correlation_field is now refused at load — by `gents pack check` and by
   `gents pack scenario run`/`seed` — naming the trigger and event source

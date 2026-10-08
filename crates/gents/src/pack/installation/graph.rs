@@ -274,6 +274,7 @@ pub(crate) async fn record_graph_install_in_txn(
         &prior,
         documents.into_values().collect(),
         explicit,
+        false,
     )
     .await
 }

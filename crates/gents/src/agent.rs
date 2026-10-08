@@ -187,6 +187,25 @@ pub(crate) struct DocumentResolveContext {
     pub(crate) identity: Arc<dyn AgentIdentity>,
     pub(crate) tool_ceiling: ToolCeiling,
     pub(crate) backend_health: BackendHealthMap,
+    pub(crate) plugins: Arc<crate::plugin::executor::PluginExecutor>,
+}
+
+impl DocumentResolveContext {
+    /// A context over a host with no plugins installed; test construction
+    /// only, since production always carries the runtime's own executor.
+    #[cfg(test)]
+    pub(crate) fn for_tests(
+        identity: Arc<dyn AgentIdentity>,
+        tool_ceiling: ToolCeiling,
+        backend_health: BackendHealthMap,
+    ) -> Self {
+        Self {
+            identity,
+            tool_ceiling,
+            backend_health,
+            plugins: Arc::default(),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -246,10 +265,15 @@ impl Gents {
         // Register the runtime schema through the shared migration engine.
         migration::ensure_all_runtime_migrations(node.clone()).await?;
         let backend_health = options.backend_health.clone().unwrap_or_default();
+        let plugin_models = crate::plugin::model_calls::AccessModels(
+            crate::config_client::ConfigAccess::Local(node.clone()),
+        );
+        let plugins = Arc::new(plugin_executor(options.plugin_home, plugin_models));
         let document_runtime_context = DocumentResolveContext {
             identity: identity.clone(),
             tool_ceiling: options.tool_ceiling.clone(),
             backend_health: backend_health.clone(),
+            plugins: plugins.clone(),
         };
         let resolved_snapshot =
             resolve_document_runtime_snapshot(node.as_ref(), &document_runtime_context).await?;
@@ -273,9 +297,6 @@ impl Gents {
 
         let rendered_request_capture_factory =
             crate::rendered_request::defra_rendered_request_capture_factory(node.clone());
-        let plugin_models = crate::plugin::model_calls::AccessModels(
-            crate::config_client::ConfigAccess::Local(node.clone()),
-        );
 
         Ok(Self {
             node,
@@ -307,7 +328,7 @@ impl Gents {
             rendered_request_capture_factory: Some(rendered_request_capture_factory),
             manual_trigger_handle: Arc::new(OnceCell::new()),
             operator_tool_root: options.tool_ceiling.root().map(PathBuf::from),
-            plugins: Arc::new(plugin_executor(options.plugin_home, plugin_models)),
+            plugins,
         })
     }
 
