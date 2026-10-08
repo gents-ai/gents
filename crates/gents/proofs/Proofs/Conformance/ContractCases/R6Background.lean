@@ -274,13 +274,14 @@ def r6WakeFailureBoundaryCase
     (some SessionQueue.QueueSource.backgroundCompletion.toDefraDB)
     (some "background_completion:900")
 
+/-- A deliberately noncanonical queue source that `fromDefraDB?` must reject. -/
 def r6NoncanonicalQueueSourceCase : R6BackgroundingCase :=
-  let noncanonical := "subagent_completion"
+  let noncanonical := "unrecognized_completion_source"
   let parsed := SessionQueue.QueueSource.fromDefraDB? noncanonical
   r6Case
-    "noncanonical_subagent_completion_source_is_rejected"
+    "noncanonical_completion_source_is_rejected"
     "queue_source"
-    "reject_noncanonical_subagent_completion"
+    "reject_noncanonical_completion"
     parsed.isNone
     1
     "completed"
@@ -610,8 +611,8 @@ theorem r6BackgroundingCases_pinned :
       , ("acknowledgement_projection_restart_is_atomic", true,
           "background", "completed", some "background_completion",
           some "background_completion:900")
-      , ("noncanonical_subagent_completion_source_is_rejected", true,
-          "background", "completed", some "subagent_completion",
+      , ("noncanonical_completion_source_is_rejected", true,
+          "background", "completed", some "unrecognized_completion_source",
           none)
       , ("list_processes_same_requester_next_turn_authorized", true,
           "background", "running", none, none)
