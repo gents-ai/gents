@@ -77,9 +77,9 @@ private def authText : BackendAuth → String
   | .unauthenticated => "{\"kind\":\"unauthenticated\"}"
   | .apiKey key => s!"\{\"kind\":\"api_key\",\"key\":{(toJson key).compress}}"
   | .environment name => s!"\{\"kind\":\"environment\",\"variable\":{(toJson name).compress}}"
-  | .principalOAuth none => "{\"kind\":\"principal_oauth\"}"
-  | .principalOAuth (some a) =>
-    s!"\{\"kind\":\"principal_oauth\",\"account_ref\":{(toJson a).compress}}"
+  | .nodeOAuth none => "{\"kind\":\"node_oauth\"}"
+  | .nodeOAuth (some a) =>
+    s!"\{\"kind\":\"node_oauth\",\"account_ref\":{(toJson a).compress}}"
 
 /-- Stored sign-ins the cases resolve against: alice's original and `acct-1`,
 bob's `acct-2`, and alice's disabled `acct-off`. -/
@@ -93,21 +93,21 @@ private def oauthRows : List OAuthAccountRow := [
 reference is looked up under the executing scope, never the stored owner, and
 never resolves another node's or a disabled row. -/
 private def oauthAccountCases : List (String × String × String × String × BackendAuth) := [
-  ("original_none_under_scope", "alice", "alice", "ChatGptCodex", .principalOAuth none),
-  ("reference_under_scope", "alice", "alice", "ChatGptCodex", .principalOAuth (some "acct-1")),
+  ("original_none_under_scope", "alice", "alice", "ChatGptCodex", .nodeOAuth none),
+  ("reference_under_scope", "alice", "alice", "ChatGptCodex", .nodeOAuth (some "acct-1")),
   ("foreign_stored_owner_uses_executing_scope", "alice", "bob", "ChatGptCodex",
-    .principalOAuth (some "acct-1")),
+    .nodeOAuth (some "acct-1")),
   ("environment_has_no_owner", "alice", "alice", "OpenAiCompatible", .environment "KEY"),
   ("foreign_node_row_rejected", "alice", "alice", "ChatGptCodex",
-    .principalOAuth (some "acct-2")),
-  ("disabled_row_not_picked", "alice", "alice", "ChatGptCodex", .principalOAuth (some "acct-off"))]
+    .nodeOAuth (some "acct-2")),
+  ("disabled_row_not_picked", "alice", "alice", "ChatGptCodex", .nodeOAuth (some "acct-off"))]
 
 private def oauthRowJson (row : OAuthAccountRow) : Json := Json.mkObj
   [("owner", toJson row.owner), ("provider_kind", toJson row.kind),
    ("account", toJson row.account), ("enabled", toJson row.enabled)]
 
 private def oauthResolvedJson (scope kind : String) : BackendAuth → Json
-  | .principalOAuth account =>
+  | .nodeOAuth account =>
     (oauthResolve scope kind account oauthRows).map oauthRowJson |>.getD Json.null
   | _ => Json.null
 

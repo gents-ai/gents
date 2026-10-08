@@ -86,10 +86,10 @@ def decodeGrants (doc : Doc) : Option Grants :=
 /-- Fixture decoder for the exact backend auth texts used below. -/
 def decodeAuthText : String → Option Configuration.BackendAuth
   | "{\"kind\":\"environment\",\"variable\":\"KEY\"}" => some (.environment "KEY")
-  | "{\"kind\":\"principal_oauth\"}" => some (.principalOAuth none)
-  | "{\"kind\":\"principal_oauth\",\"account_ref\":\"a1\"}" => some (.principalOAuth (some "a1"))
-  | "{\"kind\":\"principal_oauth\",\"account_ref\":\"a2\"}" => some (.principalOAuth (some "a2"))
-  | "{\"kind\":\"principal_oauth\",\"account_ref\":\"g2\"}" => some (.principalOAuth (some "g2"))
+  | "{\"kind\":\"node_oauth\"}" => some (.nodeOAuth none)
+  | "{\"kind\":\"node_oauth\",\"account_ref\":\"a1\"}" => some (.nodeOAuth (some "a1"))
+  | "{\"kind\":\"node_oauth\",\"account_ref\":\"a2\"}" => some (.nodeOAuth (some "a2"))
+  | "{\"kind\":\"node_oauth\",\"account_ref\":\"g2\"}" => some (.nodeOAuth (some "g2"))
   | _ => none
 
 def decodeAuth (doc : Doc) : Option Configuration.BackendAuth :=
@@ -220,11 +220,11 @@ def examplesToRows : List CaseRow := examples.map fun (t, k, v) =>
 /-- One provider with two accounts, another with its original and a second
 account, and one account-free backend. -/
 def profileBackends : List (String × String × String) :=
-  [ ("\"chat-a1\"", "ChatGptCodex", "{\"kind\":\"principal_oauth\",\"account_ref\":\"a1\"}")
-  , ("\"chat-a1-alt\"", "ChatGptCodex", "{\"kind\":\"principal_oauth\",\"account_ref\":\"a1\"}")
-  , ("\"chat-a2\"", "ChatGptCodex", "{\"kind\":\"principal_oauth\",\"account_ref\":\"a2\"}")
-  , ("\"grok-original\"", "XaiGrokOAuth", "{\"kind\":\"principal_oauth\"}")
-  , ("\"grok-g2\"", "XaiGrokOAuth", "{\"kind\":\"principal_oauth\",\"account_ref\":\"g2\"}")
+  [ ("\"chat-a1\"", "ChatGptCodex", "{\"kind\":\"node_oauth\",\"account_ref\":\"a1\"}")
+  , ("\"chat-a1-alt\"", "ChatGptCodex", "{\"kind\":\"node_oauth\",\"account_ref\":\"a1\"}")
+  , ("\"chat-a2\"", "ChatGptCodex", "{\"kind\":\"node_oauth\",\"account_ref\":\"a2\"}")
+  , ("\"grok-original\"", "XaiGrokOAuth", "{\"kind\":\"node_oauth\"}")
+  , ("\"grok-g2\"", "XaiGrokOAuth", "{\"kind\":\"node_oauth\",\"account_ref\":\"g2\"}")
   , ("\"local\"", "OpenAiCompatible", "{\"kind\":\"environment\",\"variable\":\"KEY\"}") ]
 
 def scenarios : List CaseRow := examplesToRows ++
@@ -316,27 +316,27 @@ def scenarios : List CaseRow := examplesToRows ++
     , patch := [("probe_status", some "healthy")] }
   , { name := "backend_oauth_account_change_rejected"
     , target := .inferenceBackend, guarded := true, validates := true
-    , doc := [("auth", "{\"kind\":\"principal_oauth\",\"account_ref\":\"a1\"}")]
-    , patch := [("auth", some "{\"kind\":\"principal_oauth\",\"account_ref\":\"a2\"}")] }
+    , doc := [("auth", "{\"kind\":\"node_oauth\",\"account_ref\":\"a1\"}")]
+    , patch := [("auth", some "{\"kind\":\"node_oauth\",\"account_ref\":\"a2\"}")] }
   , { name := "backend_oauth_reference_set_rejected"
     , target := .inferenceBackend, guarded := true, validates := true
     , doc := [("auth", "{\"kind\":\"environment\",\"variable\":\"KEY\"}")]
-    , patch := [("auth", some "{\"kind\":\"principal_oauth\",\"account_ref\":\"a1\"}")] }
+    , patch := [("auth", some "{\"kind\":\"node_oauth\",\"account_ref\":\"a1\"}")] }
   , { name := "backend_oauth_reference_dropped_rejected"
     , target := .inferenceBackend, guarded := true, validates := true
-    , doc := [("auth", "{\"kind\":\"principal_oauth\",\"account_ref\":\"a1\"}")]
-    , patch := [("auth", some "{\"kind\":\"principal_oauth\"}")] }
+    , doc := [("auth", "{\"kind\":\"node_oauth\",\"account_ref\":\"a1\"}")]
+    , patch := [("auth", some "{\"kind\":\"node_oauth\"}")] }
   , { name := "backend_oauth_original_introduce_accepted"
     , target := .inferenceBackend, guarded := true, validates := true
     , doc := [("auth", "{\"kind\":\"environment\",\"variable\":\"KEY\"}")]
-    , patch := [("auth", some "{\"kind\":\"principal_oauth\"}")] }
+    , patch := [("auth", some "{\"kind\":\"node_oauth\"}")] }
   , { name := "backend_oauth_endpoint_edit_accepted"
     , target := .inferenceBackend, guarded := true, validates := true
-    , doc := [("auth", "{\"kind\":\"principal_oauth\",\"account_ref\":\"a1\"}")]
+    , doc := [("auth", "{\"kind\":\"node_oauth\",\"account_ref\":\"a1\"}")]
     , patch := [("endpoint", some "\"http://127.0.0.1:2/v1\"")] }
   , { name := "backend_oauth_to_environment_accepted"
     , target := .inferenceBackend, guarded := true, validates := true
-    , doc := [("auth", "{\"kind\":\"principal_oauth\",\"account_ref\":\"a1\"}")]
+    , doc := [("auth", "{\"kind\":\"node_oauth\",\"account_ref\":\"a1\"}")]
     , patch := [("auth", some "{\"kind\":\"environment\",\"variable\":\"KEY\"}")] }
   , { name := "profile_keep_backend_model_edit_accepted"
     , target := .inferenceProfile, guarded := true, validates := true
