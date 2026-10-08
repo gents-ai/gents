@@ -5,9 +5,9 @@ import Proofs.Basic
 
 Every agent is an ordinary agent, addressed directly; the runtime encodes no
 parent/child hierarchy. The one causal fact the runtime keeps is the hop: the
-signed, immutable `AgentRequest.subagent_depth`, written once by
+signed, immutable `AgentRequest.request_hop`, written once by
 `lifecycle::materialize` and checked at admission against the target's
-`AgentPrincipal.max_request_hop`.
+`Node.max_request_hop`.
 
 Each session has a *current hop*: the hop of its latest request. The hop
 bounds call *depth*, not how many calls a session makes, so it separates the
@@ -41,7 +41,7 @@ would be a same-session steering continuation with no hop increase.
 
 namespace CausalHop
 
-/-- Default `AgentPrincipal.max_request_hop` when the principal leaves it unset. -/
+/-- Default `Node.max_request_hop` when the principal leaves it unset. -/
 def defaultMaxRequestHop : Nat := 8
 
 /-- Why a request exists, relative to the request whose hop it inherits. -/

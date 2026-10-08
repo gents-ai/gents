@@ -18,7 +18,7 @@ the ingest boundary for request lineage:
   the prepared message belongs to the owned execution start, not this lineage
   ingest boundary (see `QueuedSteering`).
 
-`subagentDepth` is the causal hop, computed by `CausalHop.nextHop`. The edge
+`requestHop` is the causal hop, computed by `CausalHop.nextHop`. The edge
 is provenance only; it grants no hierarchy, cascade or authority over the
 calling session.
 -/
@@ -30,7 +30,7 @@ structure RawLineage where
   hasParentRequestDocId : Bool
   hasParentToolCallId : Bool
   hasParentToolCallDocId : Bool
-  subagentDepth : Nat
+  requestHop : Nat
   requestOnlyControl : Bool
   controlAllowedAtDepthZero : Bool := false
   deriving DecidableEq, Repr
@@ -50,10 +50,10 @@ def parentShapeCoherent (row : RawLineage) : Bool :=
 
 def depthCoherent (row : RawLineage) : Bool :=
   if row.hasParentRequestId then
-    row.subagentDepth > 0 ||
+    row.requestHop > 0 ||
       (row.requestOnlyControl && row.controlAllowedAtDepthZero)
   else
-    row.subagentDepth == 0
+    row.requestHop == 0
 
 def admissible (row : RawLineage) : Bool :=
   edgePairsCoherent row && parentShapeCoherent row && depthCoherent row
@@ -74,12 +74,12 @@ theorem malformed_head_does_not_poison
     steering, a retry, a Goal continuation or a completion wake. It keeps both
     halves of the parent request edge and no tool-call edge, at any hop,
     including zero for a top-level session. -/
-def controlContinuation (subagentDepth : Nat) : RawLineage :=
+def controlContinuation (requestHop : Nat) : RawLineage :=
   { hasParentRequestId := true
   , hasParentRequestDocId := true
   , hasParentToolCallId := false
   , hasParentToolCallDocId := false
-  , subagentDepth
+  , requestHop
   , requestOnlyControl := true
   , controlAllowedAtDepthZero := true
   }
@@ -112,7 +112,7 @@ def sessionMessageWrite (delivery : Delivery) (callerHop own : Nat) : SessionMes
       , hasParentRequestDocId := true
       , hasParentToolCallId := true
       , hasParentToolCallDocId := true
-      , subagentDepth := CausalHop.nextHop (.crossSession callerHop) own
+      , requestHop := CausalHop.nextHop (.crossSession callerHop) own
       , requestOnlyControl := false }
   , queuedAfterActive := delivery == .steering }
 

@@ -4,7 +4,7 @@ import Proofs.Conformance.Contracts.Json.Helpers
 
 /-! Executable causal-hop rows. Every expectation evaluates `CausalHop.nextHop`
 and `CausalHop.admitHop`; the native materializer (the single writer of
-`AgentRequest.subagent_depth`) and the admission hop check must agree with
+`AgentRequest.request_hop`) and the admission hop check must agree with
 them. -/
 namespace Conformance.CausalHopContracts
 
@@ -194,7 +194,7 @@ def writeCaseJson (c : WriteCase) : String :=
         | .request => "request" | .steering => "steering")
     ++ ",\"caller_hop\":" ++ toString c.callerHop
     ++ ",\"own_hop\":" ++ toString c.ownHop
-    ++ ",\"expected_hop\":" ++ toString write.lineage.subagentDepth
+    ++ ",\"expected_hop\":" ++ toString write.lineage.requestHop
     ++ ",\"names_caller_tool_call\":" ++ toString write.lineage.hasParentToolCallDocId
     ++ ",\"queued_after_active\":" ++ toString write.queuedAfterActive ++ "}"
 
