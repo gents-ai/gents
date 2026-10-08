@@ -974,6 +974,61 @@ def publishAuthored (world : World) (generation : Generation)
       authoredMessageValid post generation post.segments closing message)
     (publishAuthoredCore world generation closing message)
 
+/-- A reclaimed generation of the same physical request reuses an identical
+authored entry that an earlier generation of it accepted, so redriving the
+turn's input never duplicates it. Reuse writes nothing: the caller must hold
+the live lease, and any input that is not an exact accepted entry stays on
+the fenced publication path. -/
+def reuseAuthored (world : World) (current : Generation) (closing : Segment)
+    (message : MessageEnvelope) : Except Error World :=
+  match closing.writer with
+  | .request prior =>
+      if authoredPublicationPresent world closing message then
+        match RequestExecutionLease.step? world.lease
+            (.authorizeProducerDecision .mutationWriteGate current .acceptAndPublish) with
+        | none => .error .leaseRejected
+        | some _ => publishAuthored world prior closing message
+      else .error .publicationIncomplete
+  | .tool _ => .error .invalidSegment
+
+theorem publishAuthored_present_unchanged (world after : World) (generation : Generation)
+    (closing : Segment) (message : MessageEnvelope)
+    (h_present : authoredPublicationPresent world closing message = true)
+    (h : publishAuthored world generation closing message = .ok after) : after = world := by
+  have h_core := checked_core_success _ _ _ h
+  unfold publishAuthoredCore at h_core
+  simp only [h_present, ↓reduceIte] at h_core
+  repeat' (first | contradiction | split at h_core)
+  all_goals (cases h_core; rfl)
+
+theorem reuseAuthored_writes_nothing (world after : World) (current : Generation)
+    (closing : Segment) (message : MessageEnvelope)
+    (h : reuseAuthored world current closing message = .ok after) : after = world := by
+  unfold reuseAuthored at h
+  split at h
+  · split at h
+    · rename_i h_present
+      split at h
+      · contradiction
+      · exact publishAuthored_present_unchanged world after _ closing message h_present h
+    · contradiction
+  · contradiction
+
+/-- Reuse is fenced: a generation without the live lease reuses nothing. -/
+theorem reuseAuthored_requires_live_lease (world : World) (current : Generation)
+    (closing : Segment) (message : MessageEnvelope)
+    (h_fenced : RequestExecutionLease.step? world.lease
+      (.authorizeProducerDecision .mutationWriteGate current .acceptAndPublish) = none) :
+    ∀ after, reuseAuthored world current closing message ≠ .ok after := by
+  intro after h
+  unfold reuseAuthored at h
+  split at h
+  · split at h
+    · rw [h_fenced] at h
+      contradiction
+    · contradiction
+  · contradiction
+
 def publishHeaderOnly (world : World) (generation : Generation)
     (message : MessageEnvelope) (admissions : List ToolAdmission) : Except Error World :=
   checked (fun post =>

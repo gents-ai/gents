@@ -212,7 +212,10 @@ theorem terminal_history_monotonic
       exact h_mem
   | claim_folding _ _ h_post =>
       rw [h_post, SessionQueueState.claimFolding]
-      exact Finset.mem_union.mpr (Or.inl h_mem)
+      exact h_mem
+  | consume_folded _ _ h_post =>
+      rw [h_post, SessionQueueState.consumeFolded]
+      exact Finset.mem_insert_of_mem h_mem
   | finish_active _ h_post =>
       rw [h_post, SessionQueueState.finishActive]
       exact Finset.mem_insert_of_mem h_mem

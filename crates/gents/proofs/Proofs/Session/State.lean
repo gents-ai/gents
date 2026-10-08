@@ -153,6 +153,10 @@ structure SessionQueueState where
   active : Option RequestId
   pending : List QueueEntry
   terminal : Finset RequestId
+  /-- Messages the active claim selected to answer, in queue order, that its
+  turn has not yet consumed. They wait behind the active request and return to
+  the head of the queue if its turn ends without consuming them. -/
+  folding : List QueueEntry := []
   deriving DecidableEq
 
 /-- Queue execution belongs to the same exact session identity as durable sessions. -/
@@ -191,7 +195,7 @@ def containsRequestId : List QueueEntry → RequestId → Bool
 def RequestIdFresh (s : SessionQueueState) (entry : QueueEntry) : Prop :=
   s.active ≠ some entry.requestId ∧
     entry.requestId ∉ s.terminal ∧
-      containsRequestId s.pending entry.requestId = false
+      containsRequestId (s.folding ++ s.pending) entry.requestId = false
 
 instance (s : SessionQueueState) (entry : QueueEntry) :
     Decidable (RequestIdFresh s entry) := by
@@ -262,6 +266,18 @@ def foldRun (head : QueueEntry) (admitted : List RequestId) :
       else
         []
 
+theorem foldRun_append_drop (head : QueueEntry) (admitted : List RequestId)
+    (entries : List QueueEntry) :
+    foldRun head admitted entries ++
+      entries.drop (foldRun head admitted entries).length = entries := by
+  induction entries with
+  | nil => rfl
+  | cons entry rest ih =>
+      by_cases h : head.foldsInto entry ∧ entry.requestId ∈ admitted
+      · simp only [foldRun, h, and_self, ↓reduceIte, List.length_cons, List.drop_succ_cons,
+          List.cons_append, ih]
+      · simp [foldRun, h]
+
 def CreatedOrdered : List QueueEntry → Prop
   | [] => True
   | entry :: rest =>
@@ -288,20 +304,33 @@ def claimHead (s : SessionQueueState) (entry : QueueEntry) (rest : List QueueEnt
     SessionQueueState :=
   { s with active := some entry.requestId, pending := rest }
 
-/-- Claim `entry` and fold its run into the same turn. Folded requests are
-superseded by the claimed request in the claim transaction; the claim is the
-cutoff, so later messages wait for the next turn. -/
+/-- Claim `entry` and select its fold run. The claim is the cutoff: later
+messages wait for the next turn. Selection is not consumption; nothing is
+superseded until the turn publishes the message. -/
 def claimFolding (s : SessionQueueState) (entry : QueueEntry) (rest : List QueueEntry)
     (admitted : List RequestId) : SessionQueueState :=
   let folded := foldRun entry admitted rest
   { s with
     active := some entry.requestId
+    folding := folded
     pending := rest.drop folded.length
-    terminal := s.terminal ∪ (folded.map QueueEntry.requestId).toFinset
   }
 
+/-- The active turn publishes the next selected message as its own authored
+input before its first inference; that publication supersedes the message's
+request. Selected messages are consumed in queue order. -/
+def consumeFolded (s : SessionQueueState) (entry : QueueEntry) (rest : List QueueEntry) :
+    SessionQueueState :=
+  { s with folding := rest, terminal := insert entry.requestId s.terminal }
+
+/-- A turn ending before it published a selected message did not answer it;
+the message returns to the head of the queue in its original order. -/
 def finishActive (s : SessionQueueState) (requestId : RequestId) : SessionQueueState :=
-  { s with active := none, terminal := insert requestId s.terminal }
+  { s with
+    active := none
+    terminal := insert requestId s.terminal
+    pending := s.folding ++ s.pending
+    folding := [] }
 
 def drainAutomatedWakeups
     (s : SessionQueueState)

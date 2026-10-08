@@ -5,37 +5,26 @@ import Proofs.Request.Executable
 
 A user may keep writing while a session is busy. Each message is admitted and
 signed as its own pending request. When the queue head is a user message, its
-claim also folds the run of user messages directly behind it: those requests
-leave `pending` through the existing supersession transition, pointing at the
-claimed request, and the claimed turn answers all of them with one inference.
+claim selects the run of user messages directly behind it, and the claimed
+turn answers all of them with one inference.
 
 Semantics:
 * The claim transaction is the cutoff. A message admitted after it waits in
-  the queue and heads (or folds into) the next turn; the claimed turn's
-  provider input is fixed before its first inference.
+  the queue and heads (or folds into) the next turn.
 * Only interactive user messages under the head's own requester authority and
-  execution settings fold. Agent steering, goal and background continuations,
-  and scheduled or trigger-sourced requests keep their own turns.
-* Interrupting or failing the claimed turn ends every message it answers;
-  folded requests are already terminal and are never claimed again. A redrive
-  of the same physical request replays the same folded set; folding happens
-  only on a request's first claim.
-* Provider retries inside the turn reuse its fixed input. A request retry
-  re-admits the head's content; folded requests stay superseded, and their
-  authored entries, once published, remain session history. -/
+  execution settings, whose signed admission the claim verified, fold. Agent
+  steering, goal and background continuations, and scheduled or
+  trigger-sourced requests keep their own turns.
+* Selection is not consumption. The turn publishes each selected message as
+  its own authored input before its first inference, and that publication
+  supersedes the message's request. A turn that ends before publishing a
+  selected message (an early failure, an interrupt) did not answer it: the
+  message returns to the head of the queue.
+* A redrive of the same physical request claims again: messages it already
+  published stay superseded into it and are reused, and the claim selects
+  again among those still queued.
+* Provider retries inside the turn reuse its fixed input. -/
 namespace SessionQueue
-
-theorem foldRun_append_drop (head : QueueEntry) (admitted : List RequestId)
-    (entries : List QueueEntry) :
-    foldRun head admitted entries ++
-      entries.drop (foldRun head admitted entries).length = entries := by
-  induction entries with
-  | nil => rfl
-  | cons entry rest ih =>
-      by_cases h : head.foldsInto entry ∧ entry.requestId ∈ admitted
-      · simp only [foldRun, h, and_self, ↓reduceIte, List.length_cons, List.drop_succ_cons,
-          List.cons_append, ih]
-      · simp [foldRun, h]
 
 theorem mem_foldRun {head entry : QueueEntry} {admitted : List RequestId}
     {entries : List QueueEntry} (h_mem : entry ∈ foldRun head admitted entries) :
@@ -91,42 +80,78 @@ theorem foldRun_nil_admitted (head : QueueEntry) (entries : List QueueEntry) :
 
 /-- A claim that verified no foldable admission is the ordinary claim. -/
 theorem claimFolding_nil_admitted (s : SessionQueueState) (entry : QueueEntry)
-    (rest : List QueueEntry) :
+    (rest : List QueueEntry) (h_idle : s.folding = []) :
     s.claimFolding entry rest [] = s.claimHead entry rest := by
-  simp [SessionQueueState.claimFolding, SessionQueueState.claimHead, foldRun_nil_admitted]
+  simp [SessionQueueState.claimFolding, SessionQueueState.claimHead, foldRun_nil_admitted,
+    h_idle]
 
 theorem claimFolding_claims_head (s : SessionQueueState) (entry : QueueEntry)
     (rest : List QueueEntry) (admitted : List RequestId) :
     (s.claimFolding entry rest admitted).active = some entry.requestId := rfl
 
-/-- The folded run leaves the queue as a prefix behind the head; every other
-entry keeps its relative order. -/
+/-- The claim selects the run; nothing is terminal yet. -/
+theorem claimFolding_selects (s : SessionQueueState) (entry : QueueEntry)
+    (rest : List QueueEntry) (admitted : List RequestId) :
+    (s.claimFolding entry rest admitted).folding = foldRun entry admitted rest ∧
+      (s.claimFolding entry rest admitted).terminal = s.terminal := ⟨rfl, rfl⟩
+
+/-- The selected run leaves the pending queue as a prefix behind the head;
+every other entry keeps its relative order. -/
 theorem claimFolding_pending_suffix (s : SessionQueueState) (entry : QueueEntry)
     (rest : List QueueEntry) (admitted : List RequestId) :
-    foldRun entry admitted rest ++ (s.claimFolding entry rest admitted).pending = rest :=
+    (s.claimFolding entry rest admitted).folding ++
+      (s.claimFolding entry rest admitted).pending = rest :=
   foldRun_append_drop entry admitted rest
 
-theorem folded_terminal {s : SessionQueueState} {entry folded : QueueEntry}
-    {rest : List QueueEntry} {admitted : List RequestId}
-    (h_mem : folded ∈ foldRun entry admitted rest) :
-    folded.requestId ∈ (s.claimFolding entry rest admitted).terminal := by
-  simp only [SessionQueueState.claimFolding, Finset.mem_union, List.mem_toFinset,
-    List.mem_map]
-  exact Or.inr ⟨folded, h_mem, rfl⟩
+/-- Publishing a selected message consumes the next one in queue order and
+supersedes its request. -/
+theorem consume_terminalizes_next {pre post : SessionQueueState}
+    (h_step : step? pre .consumeFolded = some post) :
+    ∃ entry rest, pre.folding = entry :: rest ∧ post.folding = rest ∧
+      entry.requestId ∈ post.terminal ∧ post.active = pre.active := by
+  simp only [step?] at h_step
+  split at h_step
+  · rename_i entry rest _ h_folding
+    cases h_step
+    exact ⟨entry, rest, h_folding, rfl, Finset.mem_insert_self _ _, rfl⟩
+  · contradiction
 
-/-- The claim is the cutoff: a message admitted while the folded turn is
-active is queued for a later turn and does not change the active request. -/
-theorem append_after_claim_waits {pre post : SessionQueueState} {entry : QueueEntry}
-    (h_step : step? pre (.appendPending entry) = some post) :
-    post.active = pre.active ∧ post.pending = pre.pending ++ [entry] ∧
-      post.terminal = pre.terminal := by
+/-- A turn that ends without publishing a selected message returns it to the
+head of the queue, ahead of every message admitted later. -/
+theorem finish_returns_unconsumed {pre post : SessionQueueState}
+    (h_step : step? pre .finishActive = some post) :
+    post.pending = pre.folding ++ pre.pending ∧ post.folding = [] ∧ post.active = none := by
   simp only [step?] at h_step
   split at h_step
   · cases h_step
     exact ⟨rfl, rfl, rfl⟩
   · contradiction
 
-/-- Each folded request leaves `pending` through the existing supersession
+/-- An early failure strands nothing: claiming, then ending the turn before
+any publication, leaves every selected message queued in its original order. -/
+theorem early_finish_restores_queue (s : SessionQueueState) (entry : QueueEntry)
+    (rest : List QueueEntry) (admitted : List RequestId) :
+    ((s.claimFolding entry rest admitted).finishActive entry.requestId).pending = rest ∧
+      ((s.claimFolding entry rest admitted).finishActive entry.requestId).terminal =
+        insert entry.requestId s.terminal := by
+  constructor
+  · simp only [SessionQueueState.finishActive]
+    exact claimFolding_pending_suffix s entry rest admitted
+  · rfl
+
+/-- The claim is the cutoff: a message admitted while the folded turn is
+active is queued for a later turn and does not change the active request. -/
+theorem append_after_claim_waits {pre post : SessionQueueState} {entry : QueueEntry}
+    (h_step : step? pre (.appendPending entry) = some post) :
+    post.active = pre.active ∧ post.pending = pre.pending ++ [entry] ∧
+      post.terminal = pre.terminal ∧ post.folding = pre.folding := by
+  simp only [step?] at h_step
+  split at h_step
+  · cases h_step
+    exact ⟨rfl, rfl, rfl, rfl⟩
+  · contradiction
+
+/-- Each consumed request leaves `pending` through the existing supersession
 transition; folding adds no lifecycle state. -/
 theorem folded_request_superseded (request : RequestContext)
     (h_state : request.state = .pending) (h_admission : request.admission = .released) :
@@ -140,10 +165,11 @@ inductive AuthoredKey where
   | folded (requestId : RequestId)
   deriving DecidableEq, Repr
 
-/-- The input a folded turn sends: the request context, then the head's
+/-- The input a folded turn admits: the request context, then the head's
 message, then each folded message in queue order, as distinct user messages.
-The owned loop publishes each under its own authored key before the first
-inference and sends exactly this sequence. -/
+The owned loop publishes exactly these authored entries before its first
+inference, from the input itself and not from the provider projection, which
+the existing compaction owner may reduce. -/
 structure TurnInput (α : Type) where
   context : Option α
   head : α
@@ -160,7 +186,8 @@ def authored (input : TurnInput α) : List (AuthoredKey × α) :=
   (input.context.toList.map fun context => (.context, context)) ++
     (.prompt, input.head) :: input.folded.map fun (id, message) => (.folded id, message)
 
-/-- The provider receives the transcript's authored entries in order. -/
+/-- Before any provider-view reduction, the provider input is the transcript's
+authored entries in order. -/
 theorem providerInput_eq_authored (input : TurnInput α) :
     input.providerInput = input.authored.map Prod.snd := by
   cases h : input.context <;>
@@ -187,16 +214,13 @@ def foldedTurn {α : Type} (content : RequestId → α) (context : Option α)
   , folded := (foldRun entry admitted rest).map fun folded =>
       (folded.requestId, content folded.requestId) }
 
-/-- The folded turn answers exactly the requests the claim terminalized, in
-queue order. -/
-theorem foldedTurn_answers_folded {α : Type} (content : RequestId → α)
+/-- The folded turn admits exactly the messages the claim selected, in queue
+order. -/
+theorem foldedTurn_admits_selection {α : Type} (content : RequestId → α)
     (context : Option α) (s : SessionQueueState) (entry : QueueEntry)
     (rest : List QueueEntry) (admitted : List RequestId) :
-    ∀ id ∈ (foldedTurn content context entry rest admitted).folded.map Prod.fst,
-      id ∈ (s.claimFolding entry rest admitted).terminal := by
-  intro id h_id
-  simp only [foldedTurn, List.map_map, List.mem_map, Function.comp_apply] at h_id
-  rcases h_id with ⟨folded, h_mem, rfl⟩
-  exact folded_terminal h_mem
+    (foldedTurn content context entry rest admitted).folded.map Prod.fst =
+      (s.claimFolding entry rest admitted).folding.map QueueEntry.requestId := by
+  simp [foldedTurn, SessionQueueState.claimFolding, Function.comp_def]
 
 end SessionQueue

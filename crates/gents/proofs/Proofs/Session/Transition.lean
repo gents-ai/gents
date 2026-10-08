@@ -7,19 +7,19 @@ inductive Transition : SessionQueueState → SessionQueueState → Prop where
       entry.policy = .append →
       entry.appendWellFormed →
       RequestIdFresh pre entry →
-      canAppendAfter pre.pending entry = true →
+      canAppendAfter (pre.folding ++ pre.pending) entry = true →
       post = pre.appendPending entry →
       Transition pre post
   | coalesce_pending_new {pre post : SessionQueueState} {entry : QueueEntry} {key : QueueKey} :
       entry.coalesceWellFormed key →
       RequestIdFresh pre entry →
-      containsCoalescedQueueKey pre.pending entry.source key = false →
-      canAppendAfter pre.pending entry = true →
+      containsCoalescedQueueKey (pre.folding ++ pre.pending) entry.source key = false →
+      canAppendAfter (pre.folding ++ pre.pending) entry = true →
       post = pre.appendPending entry →
       Transition pre post
   | coalesce_pending_existing {pre post : SessionQueueState} {entry : QueueEntry} {key : QueueKey} :
       entry.coalesceWellFormed key →
-      containsCoalescedQueueKey pre.pending entry.source key = true →
+      containsCoalescedQueueKey (pre.folding ++ pre.pending) entry.source key = true →
       post = pre →
       Transition pre post
   | claim_next {pre post : SessionQueueState} {entry : QueueEntry} {rest : List QueueEntry} :
@@ -32,6 +32,12 @@ inductive Transition : SessionQueueState → SessionQueueState → Prop where
       pre.active = none →
       pre.pending = entry :: rest →
       post = pre.claimFolding entry rest admitted →
+      Transition pre post
+  | consume_folded {pre post : SessionQueueState} {entry : QueueEntry}
+      {rest : List QueueEntry} :
+      pre.active.isSome →
+      pre.folding = entry :: rest →
+      post = pre.consumeFolded entry rest →
       Transition pre post
   | finish_active {pre post : SessionQueueState} {requestId : RequestId} :
       pre.active = some requestId →
