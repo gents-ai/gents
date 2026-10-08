@@ -49,8 +49,8 @@ structure SurfaceView where
   p2pCollectionsKeys : List String
   selfConfigCategoriesScopeKind : String
   selfConfigCategoriesKeys : List String
-  subagentTargetsScopeKind : String
-  subagentTargetsKeys : List String
+  agentTargetsScopeKind : String
+  agentTargetsKeys : List String
   backgroundToolsScopeKind : String
   backgroundToolsKeys : List String
   writeProbe : String × String
@@ -109,9 +109,9 @@ def knownEthMethods : List String :=
 def probeQuery : String × String := ("qt", "coll")
 
 def knownSelfConfigCategories : List String :=
-  ["automation", "backend", "behavior", "mcp_service", "profile", "tools"]
+  ["agent", "automation", "backend", "mcp_service", "profile", "tools"]
 
-def knownSubagentTargets : List (String × String) :=
+def knownAgentTargets : List (String × String) :=
   [("did-a", "beh-a"), ("did-b", "beh-b")]
 
 def knownFieldNames : List String :=
@@ -136,9 +136,9 @@ def selfConfigScopeKeys {V : Type} : EndpointScope ToolId V → List String
   | .all => []
   | .none => []
 
-def subagentScopeKeys {V : Type} : EndpointScope (String × String) V → List String
+def agentTargetScopeKeys {V : Type} : EndpointScope (String × String) V → List String
   | .only keys _ =>
-      knownSubagentTargets.filterMap (fun key =>
+      knownAgentTargets.filterMap (fun key =>
         if key ∈ keys then some (key.1 ++ "::" ++ key.2) else none)
   | .all => []
   | .none => []
@@ -182,7 +182,7 @@ def toolOnly (tool : ToolId) : EndpointScope ToolId Unit :=
 def toolsOnly (tools : List ToolId) : EndpointScope ToolId Unit :=
   unitOnly tools.toFinset
 
-def subagentOnly (keys : List (String × String)) :
+def agentTargetOnly (keys : List (String × String)) :
     EndpointScope (String × String) Unit :=
   unitOnly keys.toFinset
 
@@ -243,7 +243,7 @@ def surface (file : FileCap) (bash : BashPolicy)
   , defraCollections := .all
   , p2pCollections := .all
   , selfConfigCategories := .all
-  , subagentTargets := .all
+  , agentTargets := .all
   , backgroundTools := .all
   , writeTools := write
   , queryTools := .all
@@ -291,8 +291,8 @@ def view (s : Surface) (mcpProbe : String) (writeProbe : String × String)
   , p2pCollectionsKeys := toolScopeKeys s.p2pCollections
   , selfConfigCategoriesScopeKind := scopeKind s.selfConfigCategories
   , selfConfigCategoriesKeys := selfConfigScopeKeys s.selfConfigCategories
-  , subagentTargetsScopeKind := scopeKind s.subagentTargets
-  , subagentTargetsKeys := subagentScopeKeys s.subagentTargets
+  , agentTargetsScopeKind := scopeKind s.agentTargets
+  , agentTargetsKeys := agentTargetScopeKeys s.agentTargets
   , backgroundToolsScopeKind := scopeKind s.backgroundTools
   , backgroundToolsKeys := toolScopeKeys s.backgroundTools
   , writeProbe := writeProbe
@@ -393,8 +393,8 @@ def behaviorEachCategory : Surface :=
   { wideOpen with
     cliTools := cliOnly [("svc-a", ["field_a", "field_b"]), ("svc-x", ["field_a"])]
   , defraCollections := toolsOnly ["svc-a", "svc-x"]
-  , selfConfigCategories := toolsOnly ["behavior", "profile", "tools"]
-  , subagentTargets := subagentOnly [("did-a", "beh-a"), ("did-b", "beh-b")]
+  , selfConfigCategories := toolsOnly ["agent", "profile", "tools"]
+  , agentTargets := agentTargetOnly [("did-a", "beh-a"), ("did-b", "beh-b")]
   , backgroundTools := toolsOnly ["svc-a", "svc-x"] }
 
 def ceilingClampsEachCategory : Surface :=
@@ -412,15 +412,15 @@ def ceilingClampsEachCategory : Surface :=
   , cliTools := cliOnly [("svc-a", ["field_a"])]
   , defraCollections := toolOnly "svc-a"
   , selfConfigCategories := toolsOnly ["tools"]
-  , subagentTargets := subagentOnly [("did-a", "beh-a")]
+  , agentTargets := agentTargetOnly [("did-a", "beh-a")]
   , backgroundTools := toolOnly "svc-a" }
 
 def ceilingScopesOnly : Surface :=
   { wideOpen with
     cliTools := cliOnly [("svc-a", ["field_a"])]
   , defraCollections := toolOnly "svc-a"
-  , selfConfigCategories := toolsOnly ["behavior"]
-  , subagentTargets := subagentOnly [("did-a", "beh-a")]
+  , selfConfigCategories := toolsOnly ["agent"]
+  , agentTargets := agentTargetOnly [("did-a", "beh-a")]
   , backgroundTools := toolOnly "svc-a" }
 
 def behaviorBashRich : Surface :=
