@@ -491,9 +491,6 @@ fn project_turn_group(
     let Some(first_request) = requests.first() else {
         return turn_value(turn_id, codex::TurnStatus::Completed, Vec::new(), None);
     };
-    // A message folded into a request in this turn is answered by that
-    // request: its user item follows the request's own, and it never ends
-    // the turn.
     fn folded_into_group<'a>(
         request: &'a AgentRequestRow,
         requests: &[AgentRequestRow],

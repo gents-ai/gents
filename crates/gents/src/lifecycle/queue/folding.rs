@@ -1,8 +1,8 @@
 //! Folding queued user messages into the turn that claims them (Lean
-//! `SessionQueue.claimFolding`). Each folded message keeps its own signed
-//! request; its row is superseded by the claimed request in the claim
-//! transaction and its content becomes one more authored user message of the
-//! claimed turn.
+//! `SessionQueue.claimFolding`, `consumeFolded`). Each folded message keeps its
+//! own signed request. The claim only selects it; the turn's publication of it
+//! as an authored user message supersedes its row in the same transaction. A
+//! turn that ends before that publication leaves it queued.
 
 use super::*;
 use gents_protocol::request_admission::RequestPurpose;
@@ -49,10 +49,29 @@ pub(crate) fn heads_user_turn(head: &AgentRequest) -> bool {
         && blank(head.caused_by_parent_tool_call_doc_id.as_deref())
 }
 
-/// Folding happens only on a request's first claim; a redrive replays the
-/// set its first claim folded.
-pub(crate) fn may_fold_at_claim(head: &AgentRequest) -> bool {
-    heads_user_turn(head) && head.execution_generation.is_none()
+/// The authored key's folded request, when the key names one.
+pub(crate) fn folded_request_doc_id(key: &str) -> Option<&str> {
+    key.strip_prefix("folded:").filter(|doc| !doc.is_empty())
+}
+
+/// The queued message an authored publication answers.
+#[derive(Debug, Clone)]
+pub(crate) struct FoldedConsumption {
+    pub(crate) folded_request_doc_id: String,
+    pub(crate) head_request_id: String,
+    pub(crate) head_doc_id: String,
+    pub(crate) agent_did: String,
+}
+
+impl FoldedConsumption {
+    pub(crate) fn for_key(head: &AgentRequest, key: &str) -> Option<Self> {
+        folded_request_doc_id(key).map(|folded| Self {
+            folded_request_doc_id: folded.to_owned(),
+            head_request_id: head.request_id.clone(),
+            head_doc_id: head.doc_id.clone(),
+            agent_did: head.agent_did.clone(),
+        })
+    }
 }
 
 /// Lean `QueueEntry.foldsInto`, candidate side: a queued user message under
@@ -124,14 +143,14 @@ fn pending_session_query(head: &AgentRequest) -> String {
     )
 }
 
-/// Pending messages that may fold into `head`'s first claim, for the caller
+/// Pending messages that may fold into `head`'s claim, for the caller
 /// to verify each one's signed admission before the claim. Queue order and
 /// contiguity are decided by the claim transaction.
 pub(crate) async fn fold_candidates(
     node: &EmbeddedNode,
     head: &AgentRequest,
 ) -> Result<Vec<AgentRequest>> {
-    if !may_fold_at_claim(head) {
+    if !heads_user_turn(head) {
         return Ok(Vec::new());
     }
     let response = crate::graphql::graphql_with_transaction_retry(
@@ -149,18 +168,18 @@ pub(crate) async fn fold_candidates(
         .collect()
 }
 
-/// Supersede the run of pending messages directly behind `head` that fold
-/// into it, inside `head`'s claim transaction. `admitted` names the requests
-/// whose signed admission the caller verified. The run follows the native
-/// arrival order and stops at the first row that does not fold, so no
-/// request passes one that stays queued. Returns the folded doc IDs in order.
-pub(crate) async fn fold_in_claim_txn(
+/// Select the run of pending messages directly behind `head` that fold into
+/// it, inside `head`'s claim transaction, which is the cutoff. `admitted`
+/// names the requests whose signed admission the caller verified. The run
+/// follows the native arrival order and stops at the first row that does not
+/// fold, so no request passes one that stays queued. Selection writes nothing.
+pub(crate) async fn select_fold_in_claim_txn(
     txn: &ConfigApplyTxn<'_>,
     head: &AgentRequest,
     admitted: &[String],
     claimed_at: &str,
-) -> Result<Vec<String>> {
-    if admitted.is_empty() || !may_fold_at_claim(head) {
+) -> Result<Vec<FoldedInput>> {
+    if admitted.is_empty() || !heads_user_turn(head) {
         return Ok(Vec::new());
     }
     let response = txn.execute(&pending_session_query(head)).await?;
@@ -195,7 +214,7 @@ pub(crate) async fn fold_in_claim_txn(
     let now = chrono::DateTime::parse_from_rfc3339(claimed_at)
         .context("claim time is not RFC 3339")?
         .with_timezone(&chrono::Utc);
-    let mut folded = Vec::new();
+    let mut selected = Vec::new();
     for doc in &order[head_position + 1..] {
         let Some(row) = by_doc.get(doc.as_str()) else {
             break;
@@ -203,25 +222,24 @@ pub(crate) async fn fold_in_claim_txn(
         if !admitted.contains(doc) || !folds_into(head, row, now) {
             break;
         }
-        if !supersede_folded_in_txn(txn, head, row, claimed_at).await? {
-            break;
-        }
-        folded.push(doc.clone());
+        selected.push(FoldedInput {
+            request_doc_id: doc.clone(),
+            request_id: row.request_id.clone(),
+            content: row.content.clone().unwrap_or_default(),
+        });
     }
-    Ok(folded)
+    Ok(selected)
 }
 
-async fn supersede_folded_in_txn(
+/// Supersede the folded request its turn is publishing, in the publication
+/// transaction. The request must still be pending: a message interrupted or
+/// otherwise ended after the claim cannot be answered.
+pub(crate) async fn consume_folded_in_txn(
     txn: &ConfigApplyTxn<'_>,
-    head: &AgentRequest,
-    row: &AgentRequestRow,
-    claimed_at: &str,
-) -> Result<bool> {
-    let doc_id = escape_graphql_string(
-        row.doc_id
-            .as_deref()
-            .context("pending AgentRequest row is missing _docID")?,
-    );
+    consumption: &FoldedConsumption,
+    published_at: &str,
+) -> Result<()> {
+    let doc_id = escape_graphql_string(&consumption.folded_request_doc_id);
     let mutation = format!(
         r#"mutation {{ update_AgentRequest(docID: "{doc_id}", filter: {{
             _docID: {{ _eq: "{doc_id}" }},
@@ -235,35 +253,68 @@ async fn supersede_folded_in_txn(
             terminalized_at: "{}",
             terminal_redrive_attempts: 0
         }}) {{ _docID request_id workspace_id workspace_owner_agent_did }} }}"#,
-        escape_graphql_string(&head.agent_did),
-        escape_graphql_string(&head.request_id),
-        escape_graphql_string(&head.doc_id),
+        escape_graphql_string(&consumption.agent_did),
+        escape_graphql_string(&consumption.head_request_id),
+        escape_graphql_string(&consumption.head_doc_id),
         escape_graphql_string(FOLDED_REASON),
-        escape_graphql_string(claimed_at),
+        escape_graphql_string(published_at),
     );
     let response = txn.execute(&mutation).await?;
-    let Some(updated) = response["data"]["update_AgentRequest"]
+    let updated = response["data"]["update_AgentRequest"]
         .as_array()
         .filter(|rows| rows.len() == 1)
-    else {
-        return Ok(false);
-    };
+        .with_context(|| {
+            format!(
+                "folded request {} is no longer pending",
+                consumption.folded_request_doc_id
+            )
+        })?;
+    let request_id = updated[0]["request_id"]
+        .as_str()
+        .context("folded request receipt omitted request_id")?
+        .to_owned();
     crate::workspace::release_terminal_writer_binding(txn, &updated[0]).await?;
     crate::trigger_engine::durable::publish_request_outcome(
         txn,
-        &head.agent_did,
-        &row.request_id,
+        &consumption.agent_did,
+        &request_id,
         RequestLifecycleState::Superseded.as_str(),
         FOLDED_REASON,
-        claimed_at,
+        published_at,
     )
-    .await?;
-    Ok(true)
+    .await
 }
 
-/// The messages `head`'s first claim folded, in queue order. A redrive of the
-/// same physical request reads the same set.
-pub(crate) async fn load_folded_inputs(
+/// A replayed folded publication was consumed by the same request.
+pub(crate) async fn ensure_folded_consumed_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    consumption: &FoldedConsumption,
+) -> Result<()> {
+    let response = txn
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }}, agent_did: {{ _eq: "{}" }} }}) {{
+                request_id lifecycle_state superseded_by_request_doc_id failure_reason
+            }} }}"#,
+            escape_graphql_string(&consumption.folded_request_doc_id),
+            escape_graphql_string(&consumption.agent_did),
+        ))
+        .await?;
+    let rows: Vec<AgentRequestRow> =
+        serde_json::from_value(response["data"]["AgentRequest"].clone())?;
+    anyhow::ensure!(
+        rows.len() == 1
+            && rows[0].lifecycle_state == Some(RequestLifecycleState::Superseded)
+            && rows[0].superseded_by_request_doc_id.as_deref()
+                == Some(consumption.head_doc_id.as_str())
+            && rows[0].failure_reason.as_deref() == Some(FOLDED_REASON),
+        "replayed folded publication was not consumed by its request"
+    );
+    Ok(())
+}
+
+/// The messages `head`'s turn already published and consumed, in queue order.
+/// A redrive reuses them ahead of its own selection.
+pub(crate) async fn load_consumed_folded_inputs(
     node: &EmbeddedNode,
     head: &AgentRequest,
 ) -> Result<Vec<FoldedInput>> {

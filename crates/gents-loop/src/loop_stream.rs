@@ -174,6 +174,9 @@ where
             )))
         })?;
         let history = entry_projection;
+        // The admitted input is immutable; the provider projection below may
+        // be reduced by compaction before the first dispatch.
+        let authored_prompt = prompt.message.clone();
         // Prior requests' per-request context rows must not re-enter provider
         // history. The current context is assembled into `new_messages`.
         // Repair may rewrite both vectors in place after provider rejection.
@@ -294,27 +297,13 @@ where
             // input. New executions publish under their live request owner,
             // before dispatch, not when the request is merely queued.
             if current_turn == 1 && hook.is_some() && turn_index == 0 && !config.resume_from_history {
-                let folded_count = config.folded_prompts.len();
-                let first_prompt = new_messages
-                    .len()
-                    .checked_sub(folded_count + 1)
-                    .ok_or_else(|| {
-                        StreamingError::Completion(CompletionError::RequestError(Box::new(
-                            std::io::Error::new(
-                                std::io::ErrorKind::InvalidInput,
-                                "provider-bound loop entry lost its folded prompts",
-                            ),
-                        )))
-                    })?;
-                let prompts = &new_messages[first_prompt..];
                 yield LoopStreamItem::AuthoredInputReady {
                     context: config.context_message.clone(),
-                    prompt: prompts[0].message.clone(),
+                    prompt: authored_prompt.clone(),
                     folded: config
                         .folded_prompts
                         .iter()
-                        .zip(&prompts[1..])
-                        .map(|(folded, row)| (folded.key.clone(), row.message.clone()))
+                        .map(|folded| (folded.key.clone(), folded.message.clone()))
                         .collect(),
                 };
             }

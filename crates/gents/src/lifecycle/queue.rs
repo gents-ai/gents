@@ -45,7 +45,8 @@ pub use enqueue::enqueue_local_steering_request;
 pub(crate) use enqueue::enqueue_steering_request;
 pub use folding::FOLDED_REASON;
 pub(crate) use folding::{
-    fold_candidates, fold_in_claim_txn, folded_input_key, load_folded_inputs,
+    consume_folded_in_txn, ensure_folded_consumed_in_txn, fold_candidates, folded_input_key,
+    load_consumed_folded_inputs, select_fold_in_claim_txn, FoldedConsumption, FoldedInput,
 };
 pub use gents_protocol::request_input::{
     GoalContinuationInput, QueuePolicy, QueueSource, RequestInput, RequestQueue,

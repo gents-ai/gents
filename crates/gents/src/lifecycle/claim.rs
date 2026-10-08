@@ -11,6 +11,7 @@ pub(crate) struct DurableClaimReceipt {
     valid_until_at_claim: Option<chrono::DateTime<chrono::Utc>>,
     execution_generation: String,
     lease_ms: u64,
+    folded_selection: Vec<super::queue::FoldedInput>,
 }
 
 pub(crate) enum DurableClaimOutcome {
@@ -55,7 +56,13 @@ async fn claim_request_with_projection<F>(
     claimed_at: &str,
     fold_admitted: &[String],
     build_mutation: F,
-) -> Result<Option<(defra_node::QueryResponse, BackgroundCompletionClaimSnapshot)>>
+) -> Result<
+    Option<(
+        defra_node::QueryResponse,
+        BackgroundCompletionClaimSnapshot,
+        Vec<super::queue::FoldedInput>,
+    )>,
+>
 where
     F: Fn(&str) -> String + Sync,
 {
@@ -135,6 +142,7 @@ where
                     .unwrap_or_default();
                 let mutation = build_mutation(&snapshot_fields);
                 let claimed = txn.execute_local_response(&mutation).await?;
+                let mut folded_selection = Vec::new();
                 if request.purpose == gents_protocol::request_admission::RequestPurpose::Normal
                     && claimed
                         .data
@@ -146,10 +154,15 @@ where
                     crate::mailbox::claim_reply_in_txn(&txn, request, claimed_at).await?;
                     super::materialize::apply_request_session_projection(&txn, request, claimed_at)
                         .await?;
-                    super::queue::fold_in_claim_txn(&txn, request, fold_admitted, claimed_at)
-                        .await?;
+                    folded_selection = super::queue::select_fold_in_claim_txn(
+                        &txn,
+                        request,
+                        fold_admitted,
+                        claimed_at,
+                    )
+                    .await?;
                 }
-                Ok::<_, anyhow::Error>(Some((claimed, snapshot)))
+                Ok::<_, anyhow::Error>(Some((claimed, snapshot, folded_selection)))
             })
         },
     )
@@ -625,6 +638,7 @@ impl RequestLifecycle {
         self.background_completion_input_through_sequence =
             receipt.background_completion_input_through_sequence;
         self.valid_until_at_claim = receipt.valid_until_at_claim;
+        self.folded_selection = receipt.folded_selection;
         self.execution_lease = Some(RequestExecutionLease::new(
             receipt.execution_generation.clone(),
         ));
@@ -740,7 +754,7 @@ impl RequestLifecycle {
         let is_background_completion = self.request.purpose
             == gents_protocol::request_admission::RequestPurpose::Normal
             && crate::lifecycle::is_background_completion_request(&self.request.input);
-        let Some((resp, snapshot)) = claim_request_with_projection(
+        let Some((resp, snapshot, folded_selection)) = claim_request_with_projection(
             self.node.as_ref(),
             &self.request.session_id,
             is_background_completion,
@@ -796,6 +810,7 @@ impl RequestLifecycle {
             valid_until_at_claim: self.valid_until_at_claim,
             execution_generation,
             lease_ms: lease_ms as u64,
+            folded_selection,
         }))
     }
 }

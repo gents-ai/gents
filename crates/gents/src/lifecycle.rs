@@ -442,13 +442,13 @@ pub struct RequestLifecycle {
     execution_lease_duration_secs: u64,
     renewal_task: Option<execution_renewal::RenewalTask>,
     fold_admitted: Vec<String>,
+    folded_selection: Vec<queue::FoldedInput>,
 }
 
 impl RequestLifecycle {
     /// Pending requests whose signed admission the caller verified for this
-    /// request's first claim. The claim folds the contiguous run of them
-    /// directly behind it (Lean `SessionQueue.claimFolding`); empty claims
-    /// only this request.
+    /// claim. The claim selects the contiguous run of them directly behind
+    /// it (Lean `SessionQueue.claimFolding`); empty claims only this request.
     pub(crate) fn set_fold_admitted(&mut self, admitted: Vec<String>) {
         assert_eq!(
             self.state,
@@ -456,6 +456,12 @@ impl RequestLifecycle {
             "verify folded admissions before claim"
         );
         self.fold_admitted = admitted;
+    }
+
+    /// The still-queued messages this claim selected to answer, in queue
+    /// order. The turn consumes each when it publishes it.
+    pub(crate) fn folded_selection(&self) -> &[queue::FoldedInput] {
+        &self.folded_selection
     }
 
     /// Configuration supplied by the runtime, never by request input. Only the

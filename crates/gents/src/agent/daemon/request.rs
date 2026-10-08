@@ -202,8 +202,10 @@ impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
                 &request,
                 frozen_instruction_manifest.as_deref(),
             )?;
-            let folded_prompts = crate::lifecycle::queue::load_folded_inputs(&self.node, &request)
-                .await?
+            let mut folded_inputs =
+                crate::lifecycle::queue::load_consumed_folded_inputs(&self.node, &request).await?;
+            folded_inputs.extend(lifecycle.folded_selection().iter().cloned());
+            let folded_prompts = folded_inputs
                 .into_iter()
                 .map(|folded| crate::agent::loop_stream::FoldedPrompt {
                     key: folded.key(),

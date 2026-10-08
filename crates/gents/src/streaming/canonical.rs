@@ -32,6 +32,8 @@ pub(crate) struct ProviderPublicationPlan {
     pub(crate) tool_deadline_at: String,
     /// Provider-native ids of the calls this turn accepts as background rows.
     pub(crate) background_calls: Vec<String>,
+    /// The queued message this authored publication answers and supersedes.
+    pub(crate) consumes_folded: Option<crate::lifecycle::queue::FoldedConsumption>,
 }
 
 /// Provider-native ids of a turn's `agent_new`/`agent_message` calls: a
@@ -683,15 +685,24 @@ async fn publish_provider_turn_with_time(
                         return Err(ProviderCloseRejection::InvalidExtent.into());
                     }
                 }
-                return replay_publication_in_txn(
+                let accepted_writer = records
+                    .iter()
+                    .find(|row| row.segment.close.is_some())
+                    .map(|row| row.segment.writer.clone());
+                let published = replay_publication_in_txn(
                     txn,
                     exemplar,
                     generation,
+                    accepted_writer.as_ref(),
                     &message_key,
                     expected.as_ref(),
                     &background_calls,
                 )
-                .await;
+                .await?;
+                if let Some(consumption) = plan.consumes_folded.as_ref() {
+                    crate::lifecycle::queue::ensure_folded_consumed_in_txn(txn, consumption).await?;
+                }
+                return Ok(published);
             }
             anyhow::ensure!(records.iter().all(|row| row.segment.close.is_none()), "provider source is already closed");
             let prepared = exemplar;
@@ -799,6 +810,9 @@ async fn publish_provider_turn_with_time(
                 input: {{ execution_generation: "{escaped_generation}" }}) {{ _docID }} }}"#)).await?;
             anyhow::ensure!(response.data.as_ref().and_then(|data| data.get("update_AgentRequest"))
                 .is_some_and(crate::graphql::response_has_documents), "provider publication lost request CAS");
+            if let Some(consumption) = plan.consumes_folded.as_ref() {
+                crate::lifecycle::queue::consume_folded_in_txn(txn, consumption, &prepared.created_at).await?;
+            }
             let accepted_tools = encoded.tool_calls.iter().zip(tool_doc_ids).map(|(tool, tool_call_doc_id)| {
                 super::AcceptedToolCall {
                     tool_call_doc_id,
@@ -832,6 +846,7 @@ async fn replay_publication_in_txn(
     txn: &ConfigApplyTxn<'_>,
     exemplar: &OutputSegment,
     generation: &str,
+    accepted_writer: Option<&OutputWriter>,
     message_key: &str,
     expected: &gents_protocol::message::Message,
     background_calls: &[String],
@@ -857,11 +872,22 @@ async fn replay_publication_in_txn(
         "closed provider source has no unique accepted header"
     );
     let row = decode_transcript_message_row(&rows[0])?;
+    let MessagePublication::RequestExecution {
+        execution_generation: accepted_generation,
+    } = &row.message.publication
+    else {
+        anyhow::bail!("publication replay generation changed");
+    };
+    // Lean `reuseAuthored`: a reclaimed generation, already authorized on the
+    // live lease above, reuses the identical authored entry an earlier
+    // generation of this request accepted. Provider turns stay generation-bound.
     anyhow::ensure!(
-        row.message.publication
-            == MessagePublication::RequestExecution {
-                execution_generation: generation.to_owned(),
-            },
+        accepted_generation == generation
+            || (matches!(exemplar.source, OutputSource::Authored { .. })
+                && accepted_writer
+                    == Some(&OutputWriter::RequestExecution {
+                        execution_generation: accepted_generation.clone(),
+                    })),
         "publication replay generation changed"
     );
     let (_, reconstructed) = crate::session::load_canonical_message_in_txn(
