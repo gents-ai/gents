@@ -285,6 +285,7 @@ fn test_loop_config() -> LoopConfig {
         max_turns: 8,
         output_obligation_gate: None,
         folded_prompts: Vec::new(),
+        authored_input: None,
     }
 }
 

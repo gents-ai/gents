@@ -182,6 +182,7 @@ fn gate_test_loop_config() -> crate::agent::loop_stream::LoopConfig {
         max_turns: 0,
         output_obligation_gate: None,
         folded_prompts: Vec::new(),
+        authored_input: None,
     }
 }
 
@@ -1684,6 +1685,7 @@ fn scheduled_origin_config() -> crate::agent::loop_stream::LoopConfig {
         max_turns: 0,
         output_obligation_gate: None,
         folded_prompts: Vec::new(),
+        authored_input: None,
     }
 }
 
@@ -2973,6 +2975,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         max_turns: 0,
         output_obligation_gate: None,
         folded_prompts: Vec::new(),
+        authored_input: None,
     };
     let compactor = ProviderReductionEngine::new(std::sync::Arc::new(model), config);
 

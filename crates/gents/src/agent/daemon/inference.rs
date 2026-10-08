@@ -163,6 +163,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
         workspace: crate::tool_call_lifecycle::runtime::ToolWorkspaceScope,
         request_context_message: Option<crate::llm::message::Message>,
         resume_from_history: bool,
+        consumed_prompts: Vec<crate::agent::loop_stream::FoldedPrompt>,
         folded_prompts: Vec<crate::agent::loop_stream::FoldedPrompt>,
     ) -> Result<HandleRequestOutcome> {
         let request_deadline = lifecycle.claimed_deadline_at();
@@ -405,6 +406,14 @@ impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
                 loop_config.context_message = request_context_message.clone();
                 loop_config.resume_from_history = resume_from_history;
                 loop_config.folded_prompts = folded_prompts.clone();
+                let authored_input = |folded: Vec<crate::agent::loop_stream::FoldedPrompt>| {
+                    crate::agent::loop_stream::AuthoredInput {
+                        context: request_context_message.clone(),
+                        prompt: crate::llm::message::Message::user(request.content.clone()),
+                        folded,
+                    }
+                };
+                loop_config.authored_input = Some(authored_input(folded_prompts.clone()));
                 let restored = crate::provider_context_reduction::load_unconsumed_for_request(
                     self.node.as_ref(),
                     &request.doc_id,
@@ -438,7 +447,11 @@ impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
                         self.node.as_ref(), replay_scope, &boundary,
                     ).await?;
                     loop_config.context_message = None;
+                    // The checkpoint follows its turn's accepted input: its
+                    // provider view already holds every consumed message, and
+                    // a selection made at this claim waits for the next turn.
                     loop_config.folded_prompts = Vec::new();
+                    loop_config.authored_input = Some(authored_input(consumed_prompts.clone()));
                     loop_config.active_reduction_keys = row.active_reduction_keys();
                     loop_config.reduction_chain_keys = lineage_keys;
                     loop_config.initial_turn_index = usize::try_from(row.turn_index)
@@ -2018,4 +2031,5 @@ pub(super) mod tests {
         let _ = std::fs::remove_dir_all(data_path);
     }
     include!("execution_lease_regression_tests.rs");
+    include!("fold_checkpoint_reclaim_tests.rs");
 }

@@ -202,15 +202,30 @@ impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
                 &request,
                 frozen_instruction_manifest.as_deref(),
             )?;
-            let mut folded_inputs =
-                crate::lifecycle::queue::load_consumed_folded_inputs(&self.node, &request).await?;
-            folded_inputs.extend(lifecycle.folded_selection().iter().cloned());
-            let folded_prompts = folded_inputs
-                .into_iter()
-                .map(|folded| crate::agent::loop_stream::FoldedPrompt {
+            let prompt = |folded: crate::lifecycle::queue::FoldedInput| {
+                crate::agent::loop_stream::FoldedPrompt {
                     key: folded.key(),
                     message: crate::llm::message::Message::user(folded.content),
-                })
+                }
+            };
+            let consumed_prompts =
+                crate::lifecycle::queue::load_consumed_folded_inputs(&self.node, &request)
+                    .await?
+                    .into_iter()
+                    .map(prompt)
+                    .collect::<Vec<_>>();
+            // A retry resuming its parent's published progress sends that
+            // history as its input and publishes nothing, so it answers no
+            // newly selected message; the selection waits for the next turn.
+            let selection = if resume_from_history {
+                &[][..]
+            } else {
+                lifecycle.folded_selection()
+            };
+            let folded_prompts = consumed_prompts
+                .iter()
+                .cloned()
+                .chain(selection.iter().cloned().map(prompt))
                 .collect::<Vec<_>>();
             let workspace = match overlay {
                 Some(overlay) => crate::tool_call_lifecycle::runtime::ToolWorkspaceScope {
@@ -565,6 +580,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
                     workspace,
                     request_context_message,
                     resume_from_history,
+                    consumed_prompts,
                     folded_prompts,
                 )
                 .instrument(tracing::info_span!(

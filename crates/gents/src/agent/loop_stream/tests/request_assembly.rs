@@ -1219,14 +1219,32 @@ async fn drive_generated_turn_input(
         })
         .collect();
     let compactor_saw = Arc::new(std::sync::Mutex::new(Vec::<Message>::new()));
+    let published_before_reduction = Arc::new(std::sync::Mutex::new(0_usize));
     if first_turn_compaction {
         config.max_tokens = Some(6_000);
         config.context_window = 6_500;
         config.compaction_threshold = 0.25;
         let saw = compactor_saw.clone();
+        let published_before_reduction = published_before_reduction.clone();
+        let compaction_node = node.clone();
+        let request_doc_id = head.doc_id.clone();
         config.turn_compactor = Some(Arc::new(move |request| {
             *saw.lock().unwrap() = request.messages.iter().map(|row| row.message.clone()).collect();
+            let published_before_reduction = published_before_reduction.clone();
+            let node = compaction_node.clone();
+            let request_doc_id = request_doc_id.clone();
             Box::pin(async move {
+                let observed = node
+                    .execute(&format!(
+                        r#"{{ AgentMessage(filter: {{ request_doc_id: {{ _eq: "{}" }}, role: {{ _eq: "user" }} }}) {{ _docID }} }}"#,
+                        crate::graphql::escape_graphql_string(&request_doc_id)
+                    ))
+                    .await;
+                *published_before_reduction.lock().unwrap() = observed.data.unwrap()
+                    ["AgentMessage"]
+                    .as_array()
+                    .unwrap()
+                    .len();
                 Ok(TurnCompactionOutcome::Reduced {
                     messages: vec![TaggedMessage::unassociated(Message::user("compacted prompt"))],
                     reduction_key: "folded-first-turn".to_string(),
@@ -1265,6 +1283,12 @@ async fn drive_generated_turn_input(
     if first_turn_compaction {
         let saw = compactor_saw.lock().unwrap().clone();
         assert!(saw.ends_with(&expected_input), "{}: compaction input", case.name);
+        assert_eq!(
+            *published_before_reduction.lock().unwrap(),
+            case.authored.len(),
+            "{}: the admitted input is accepted before any reduction",
+            case.name
+        );
         assert_eq!(histories[0].last(), Some(&Message::user("compacted prompt")));
     } else {
         assert!(histories[0].ends_with(&expected_input), "{}: provider order", case.name);

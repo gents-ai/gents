@@ -59,7 +59,7 @@ mod tool_dispatch;
 mod turn_threading;
 
 pub use contract::{
-    FoldedPrompt, LoopConfig, LoopReplayInput, LoopStreamItem, RenderedRequestSink,
+    AuthoredInput, FoldedPrompt, LoopConfig, LoopReplayInput, LoopStreamItem, RenderedRequestSink,
     ReplayEvidenceResolver, ReplayEvidenceRow, ReplayEvidenceViolation, StructuredOutputConfig,
     TaggedMessage, TurnCompactionOutcome, TurnCompactionRequest,
 };
@@ -174,8 +174,6 @@ where
             )))
         })?;
         let history = entry_projection;
-        // The admitted input is immutable; the provider projection below may
-        // be reduced by compaction before the first dispatch.
         let authored_prompt = prompt.message.clone();
         // Prior requests' per-request context rows must not re-enter provider
         // history. The current context is assembled into `new_messages`.
@@ -233,6 +231,25 @@ where
             current_turn += 1;
 
             let turn_index = current_turn - 1;
+            // The admitted input is published before anything can reduce the
+            // provider projection or persist a reduction checkpoint, so a
+            // restored checkpoint always follows its accepted input.
+            if current_turn == 1 && hook.is_some() && turn_index == 0 && !config.resume_from_history {
+                let authored = config.authored_input.clone().unwrap_or_else(|| AuthoredInput {
+                    context: config.context_message.clone(),
+                    prompt: authored_prompt.clone(),
+                    folded: config.folded_prompts.clone(),
+                });
+                yield LoopStreamItem::AuthoredInputReady {
+                    context: authored.context,
+                    prompt: authored.prompt,
+                    folded: authored
+                        .folded
+                        .into_iter()
+                        .map(|folded| (folded.key, folded.message))
+                        .collect(),
+                };
+            }
             let preparation_started = std::time::Instant::now();
             let (mut request, turn_context_decision) = build_budgeted_request(
                 &model,
@@ -291,21 +308,6 @@ where
                         reason,
                     })))?;
                 }
-            }
-
-            // A resumed checkpoint already includes its original authored
-            // input. New executions publish under their live request owner,
-            // before dispatch, not when the request is merely queued.
-            if current_turn == 1 && hook.is_some() && turn_index == 0 && !config.resume_from_history {
-                yield LoopStreamItem::AuthoredInputReady {
-                    context: config.context_message.clone(),
-                    prompt: authored_prompt.clone(),
-                    folded: config
-                        .folded_prompts
-                        .iter()
-                        .map(|folded| (folded.key.clone(), folded.message.clone()))
-                        .collect(),
-                };
             }
 
             let mut attempt = 0_u32;

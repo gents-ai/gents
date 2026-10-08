@@ -130,6 +130,7 @@ pub(crate) fn loop_config(
         max_turns: behavior.max_turns,
         output_obligation_gate: None,
         folded_prompts: Vec::new(),
+        authored_input: None,
     }
 }
 

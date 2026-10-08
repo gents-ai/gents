@@ -343,8 +343,6 @@ pub(crate) async fn load_consumed_folded_inputs(
     if crate::graphql::rows::<AgentRequestRow>(&observed, "AgentRequest")?.is_empty() {
         return Ok(Vec::new());
     }
-    // Folded rows are terminal, so this transaction reads the same set; it
-    // exists to read their native arrival order.
     let query = &query;
     crate::config_client::ConfigAccess::transact_local(
         node,

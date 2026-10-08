@@ -269,6 +269,17 @@ pub struct LoopConfig {
     /// (Lean `SessionQueue.TurnInput`). Each is a distinct user message sent
     /// after the prompt and published under its own authored key.
     pub folded_prompts: Vec<FoldedPrompt>,
+    /// The request's admitted input, published before the first provider
+    /// projection is built. A restored checkpoint carries its own provider
+    /// view, so the authored input travels independently of it.
+    pub authored_input: Option<AuthoredInput>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AuthoredInput {
+    pub context: Option<Message>,
+    pub prompt: Message,
+    pub folded: Vec<FoldedPrompt>,
 }
 
 #[derive(Clone, Debug)]
