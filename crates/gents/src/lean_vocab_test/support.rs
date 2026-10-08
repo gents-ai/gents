@@ -218,6 +218,8 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) canonical_spawned_target_rejection_cases: Vec<LeanSpawnedTargetRejectionCase>,
     pub(crate) interrupt_queue_cases: Vec<LeanInterruptQueueCase>,
     pub(crate) fold_queue_cases: Vec<LeanFoldQueueCase>,
+    pub(crate) fold_turn_input_cases: Vec<LeanFoldTurnInputCase>,
+    pub(crate) handover_fold_cases: Vec<LeanHandoverFoldCase>,
     pub(crate) canonical_worker_capacity_cases: Vec<LeanWorkerCapacityCase>,
     pub(crate) canonical_payload_presentation_cases: Vec<LeanPayloadPresentationCase>,
     pub(crate) terminal_diagnostic_presentation_cases: Vec<LeanTerminalDiagnosticPresentationCase>,
@@ -1773,6 +1775,7 @@ pub(crate) struct LeanFoldQueueCase {
 pub(crate) enum LeanFoldQueueInput {
     Enqueue { entry: LeanFoldQueueEntry },
     Claim { admitted: Vec<u64> },
+    Consume,
     Finish,
 }
 
@@ -1793,7 +1796,71 @@ pub(crate) struct LeanFoldQueueEntry {
 pub(crate) struct LeanFoldQueueObservation {
     pub(crate) active: Option<u64>,
     pub(crate) pending: Vec<u64>,
+    pub(crate) folding: Vec<u64>,
+    pub(crate) terminal: Vec<u64>,
     pub(crate) claims: Vec<LeanFoldQueueClaim>,
+}
+
+pub(crate) fn lean_fold_turn_input_cases() -> &'static [LeanFoldTurnInputCase] {
+    &lean_contract_snapshot().fold_turn_input_cases
+}
+
+/// `SessionQueue.TurnInput` with its executable authored entries and
+/// provider order.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanFoldTurnInputCase {
+    pub(crate) name: String,
+    pub(crate) context: Option<String>,
+    pub(crate) head: String,
+    pub(crate) folded: Vec<LeanFoldTurnInputFolded>,
+    pub(crate) authored: Vec<LeanFoldTurnInputAuthored>,
+    pub(crate) provider_input: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanFoldTurnInputFolded {
+    pub(crate) request_id: u64,
+    pub(crate) content: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanFoldTurnInputAuthored {
+    pub(crate) key: LeanFoldAuthoredKey,
+    pub(crate) content: String,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum LeanFoldAuthoredKey {
+    Context,
+    Prompt,
+    Folded { request_id: u64 },
+}
+
+pub(crate) fn lean_handover_fold_cases() -> &'static [LeanHandoverFoldCase] {
+    &lean_contract_snapshot().handover_fold_cases
+}
+
+/// `Handover.Cases.foldClaimCases`: a verified-folding claim through the
+/// handover owner.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanHandoverFoldCase {
+    pub(crate) name: String,
+    pub(crate) pending: Vec<LeanFoldQueueEntry>,
+    pub(crate) admitted: Vec<u64>,
+    pub(crate) expected: LeanHandoverFoldObservation,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanHandoverFoldObservation {
+    pub(crate) active: Option<u64>,
+    pub(crate) folding: Vec<u64>,
+    pub(crate) pending: Vec<u64>,
 }
 
 #[derive(Debug, Deserialize)]

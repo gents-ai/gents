@@ -1110,8 +1110,18 @@ def caseCoverage : List CoverageEntry :=
       "fold_queue_cases"
       "FoldQueueCases"
       "lifecycle::queue::tests::folding::generated_fold_queue_cases_bind_to_native_claims"
-      "Generated scripts drive the native claim transaction with an explicit verified-admission set and bind active, pending and per-claim folded rows, including supersession pointers. The daemon's admission verification that produces that set is exercised natively, not generated.")
+      "Generated scripts drive the native claim transaction with an explicit verified-admission set, publish selected messages through the authored publication owner and finish turns, binding active, pending, selected and terminal rows and supersession pointers. The daemon's admission verification that produces that set is exercised natively, not generated.")
       "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "handover_fold_cases"
+      "HandoverFoldCases"
+      "lifecycle::queue::tests::folding::generated_handover_fold_claims_bind_to_native_claims")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "fold_turn_input_cases"
+      "FoldTurnInputCases"
+      "agent::loop_stream::tests::folded_prompts_publish_and_send_in_queue_order")
+      "request-lifecycle" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
       "interrupt_queue_cases"
       "InterruptQueueHttpOverlapCases"

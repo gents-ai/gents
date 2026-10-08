@@ -297,22 +297,31 @@
       { "file": "crates/gents/proofs/Proofs/Session/State.lean", "symbol": "SessionQueue.foldRun" },
       { "file": "crates/gents/proofs/Proofs/Session/Fold.lean", "symbol": "SessionQueue.folded_share_head_authority" },
       { "file": "crates/gents/proofs/Proofs/Session/Fold.lean", "symbol": "SessionQueue.TurnInput.providerInput_eq_authored" },
-      { "file": "crates/gents/proofs/Proofs/Session/FoldCases.lean", "symbol": "SessionQueue.FoldCases.cases" }
+      { "file": "crates/gents/proofs/Proofs/Session/FoldCases.lean", "symbol": "SessionQueue.FoldCases.cases" },
+      { "file": "crates/gents/proofs/Proofs/Session/Fold.lean", "symbol": "SessionQueue.early_finish_restores_queue" },
+      { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/Transition.lean", "symbol": "CanonicalOutput.Execution.reuseAuthored" },
+      { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/HandoverCases.lean", "symbol": "CanonicalOutput.Execution.Handover.Cases.foldClaimCases" }
     ],
     "constructors": [
-      "SessionQueue.Action.claimFolding"
+      "SessionQueue.Action.claimFolding",
+      "SessionQueue.Action.consumeFolded"
     ],
     "generated_groups": [
-      "fold_queue_cases"
+      "fold_queue_cases",
+      "handover_fold_cases",
+      "fold_turn_input_cases"
     ],
     "fixture_status": "concrete_inputs",
     "native_owner_paths": [
       "crates/gents/src/lifecycle/claim.rs",
-      "crates/gents/src/lifecycle/queue/folding.rs"
+      "crates/gents/src/lifecycle/queue/folding.rs",
+      "crates/gents/src/streaming/canonical.rs",
+      "crates/gents-loop/src/loop_stream.rs"
     ],
     "consumer_paths": [
       "crates/gents/src/lean_vocab_test/support.rs",
-      "crates/gents/src/lifecycle/queue/tests/folding.rs"
+      "crates/gents/src/lifecycle/queue/tests/folding.rs",
+      "crates/gents/src/agent/loop_stream/tests/request_assembly.rs"
     ],
     "native_status": "pending",
     "required_cases": [
@@ -322,13 +331,17 @@
       "agent_steering_stops_fold",
       "changed_settings_stop_fold",
       "unverified_admission_stops_fold",
-      "steering_head_folds_nothing"
+      "steering_head_folds_nothing",
+      "early_finish_returns_selection_to_queue",
+      "finish_after_partial_publication_returns_the_rest",
+      "handover_claim_selects_verified_run",
+      "A reclaimed generation reuses each accepted authored entry once and consumes only still-queued messages"
     ],
     "retired_bindings": [],
     "admission": {
       "boundary": "SessionQueue.scopedStep?",
       "disposition": "admitted",
-      "reason": "Folding happens in the claim transaction under the same queue scope; only requests whose own signed admission the claim verified, under the head's requester, fold."
+      "reason": "The claim transaction selects under the same queue scope; only requests whose own signed admission the claim verified, under the head's requester, are selected, and each is superseded only by the authored publication that answers it."
     }
   }
 ]
