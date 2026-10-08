@@ -282,6 +282,86 @@ def cursorCases : List String :=
    { name := "latest_only_busy_requires_receipt", mode := .latestOnly, busy := true, checkpointCommit := some true },
    { name := "latest_only_later_receipt_cannot_skip_gap", mode := .latestOnly, entry := arrival 3 "c", admissionCommit := some true, checkpointCommit := some true }].map cursorCase
 
+/-- Drives a callback-binding consumer through the shared cursor owner. Its
+receipts are `CallbackInvocation`s; `editAfterAdmission` edits the admitted
+document and admits it again under the new source version. -/
+structure CallbackCursorScenario where
+  name : String
+  seedHead : Nat := 1
+  priorAfter : Option Nat := none
+  restart : Bool := false
+  bindingEnabled : Bool := true
+  callbackEnabled : Bool := true
+  committed : List String := []
+  entry : EventDelivery.Durable.Arrival := arrival 2 "b"
+  matchesFilter : Bool := true
+  admissionCommit : Option Bool := none
+  editAfterAdmission : Bool := false
+  checkpointCommit : Option Bool := none
+
+def callbackCursorCase (scenario : CallbackCursorScenario) : String :=
+  let source := [arrival 1 "a", arrival 2 "b", arrival 3 "c"]
+  let journal : EventDelivery.Durable.Journal := { head := 3, entries := source }
+  let consumer := EventDelivery.Durable.Consumer.callbackBinding
+    scenario.bindingEnabled scenario.callbackEnabled
+  let admission := fun (document version : String) =>
+    ({ identity := identity "owner-a" document, version } : EventDelivery.Durable.CallbackAdmission)
+  let pre := scenario.committed.foldl
+    (fun state document => EventDelivery.Durable.admitCallback state (admission document "v1")) {}
+  let first := EventDelivery.Durable.seed {} scenario.seedHead
+  let saved := match scenario.priorAfter with
+    | none => first
+    | some position => { first with after := position }
+  let before := if scenario.restart then EventDelivery.Durable.seed saved journal.head else saved
+  let document := scenario.entry.identity.document
+  let admitted := match scenario.admissionCommit with
+    | some true => EventDelivery.Durable.admitCallback pre (admission document "v1")
+    | _ => pre
+  let afterState := if scenario.editAfterAdmission
+    then EventDelivery.Durable.admitCallback admitted (admission document "v2") else admitted
+  let filterEligible := fun _ : EventDelivery.Durable.Arrival => scenario.matchesFilter
+  let eligible := consumer.eligible filterEligible
+  let accepted := EventDelivery.Durable.checkpointAccepted before afterState journal
+    scenario.entry.position consumer.mode false eligible
+  let afterCursor := match scenario.checkpointCommit with
+    | none => before
+    | some commit => EventDelivery.Durable.acknowledge before afterState journal
+        scenario.entry.position consumer.mode false eligible commit
+  let optionalBool := fun value : Option Bool => match value with
+    | none => "null"
+    | some value => toString value
+  object [
+    ("name", jsonString scenario.name), ("seed_head", jsonString (toString scenario.seedHead)),
+    ("restart", toString scenario.restart),
+    ("binding_enabled", toString scenario.bindingEnabled),
+    ("callback_enabled", toString scenario.callbackEnabled),
+    ("pre_cursor", cursorJson before), ("post_cursor", cursorJson afterCursor),
+    ("pre_receipts", jsonArray (pre.receipts.map identityJson)),
+    ("post_receipts", jsonArray (afterState.receipts.map identityJson)),
+    ("source", jsonArray (source.map arrivalJson)), ("entry", arrivalJson scenario.entry),
+    ("matches_filter", toString scenario.matchesFilter),
+    ("admission_commit", optionalBool scenario.admissionCommit),
+    ("edit_after_admission", toString scenario.editAfterAdmission),
+    ("checkpoint_commit", optionalBool scenario.checkpointCommit),
+    ("checkpoint_succeeds", optionalBool (scenario.checkpointCommit.map accepted)),
+    ("journal_after", jsonArray ((EventDelivery.Durable.pending afterCursor source true).map arrivalJson))]
+
+def callbackCursorCases : List String :=
+  [({ name := "callback_first_seed_excludes_existing", seedHead := 3 } : CallbackCursorScenario),
+   { name := "callback_restart_does_not_reseed", restart := true },
+   { name := "callback_crash_before_invocation_commit", admissionCommit := some false, checkpointCommit := some true },
+   { name := "callback_crash_after_invocation_before_checkpoint", admissionCommit := some true },
+   { name := "callback_checkpoint_commits", admissionCommit := some true, checkpointCommit := some true },
+   { name := "callback_checkpoint_transaction_crashes", admissionCommit := some true, checkpointCommit := some false },
+   { name := "callback_edit_after_admission_keeps_one_receipt", admissionCommit := some true, editAfterAdmission := true, checkpointCommit := some true },
+   { name := "callback_unmatched_filter_checkpoint", matchesFilter := false, checkpointCommit := some true },
+   { name := "callback_unadmitted_match_cannot_checkpoint", checkpointCommit := some true },
+   { name := "callback_later_receipt_cannot_skip_gap", entry := arrival 3 "c", admissionCommit := some true, checkpointCommit := some true },
+   { name := "callback_complete_prefix_checkpoint", entry := arrival 3 "c", committed := ["b"], admissionCommit := some true, checkpointCommit := some true },
+   { name := "callback_disabled_binding_holds_unmatched", bindingEnabled := false, matchesFilter := false, checkpointCommit := some true },
+   { name := "callback_disabled_callback_holds_match", callbackEnabled := false, checkpointCommit := some true },
+   { name := "callback_disabled_passes_receipts", bindingEnabled := false, committed := ["b"], checkpointCommit := some true }].map callbackCursorCase
+
 def identityCases : List String :=
   [identity "owner-a" "a", identity "owner-b" "a", identity "a:b" "é",
    { identity "a" "b:é" with trigger := "b:handoff" }].map fun id => object [
@@ -336,6 +416,7 @@ def casesJson : String := object [
   ("assignment_roots", jsonArray assignmentRootCases),
   ("outcomes", jsonArray outcomeCases), ("outcome_traces", jsonArray outcomeTraces),
   ("cursors", jsonArray cursorCases),
+  ("callback_cursors", jsonArray callbackCursorCases),
   ("identities", jsonArray identityCases), ("sessions", jsonArray sessionCases),
   ("self_sessions", jsonArray selfCases)]
 

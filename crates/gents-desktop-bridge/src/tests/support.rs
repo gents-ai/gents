@@ -43,6 +43,36 @@ pub async fn seed_standalone_fixture() -> (Arc<ClientCore>, TempDir) {
 
 pub const OPERATOR: &str = "did:test:operator";
 
+/// Read counter over the sanctioned access owner, so tests can pin how many
+/// database round trips a projection issues. Instrumentation only: it adds no
+/// retry, authorization or filtering of its own.
+pub struct CountingRead {
+    inner: gents::config_client::ConfigAccess,
+    queries: std::sync::atomic::AtomicUsize,
+}
+
+impl CountingRead {
+    pub fn new(inner: gents::config_client::ConfigAccess) -> Self {
+        Self {
+            inner,
+            queries: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+
+    pub fn queries(&self) -> usize {
+        self.queries.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+#[async_trait::async_trait]
+impl gents::config_client::ConfigRead for CountingRead {
+    async fn execute_read(&self, document: &str) -> anyhow::Result<serde_json::Value> {
+        self.queries
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.inner.execute_read(document).await
+    }
+}
+
 /// `req_parent` in `sess_parent` made four agents-tool calls:
 /// - `tc_start` (`agent_new`) started `sess_child` (`req_child`), then
 ///   `tc_message` (`agent_message`) messaged it again (`req_child_2`);
@@ -146,6 +176,61 @@ pub async fn seed_provenance_fixture() -> (Arc<ClientCore>, TempDir, String) {
         }
     }
     (core, tmp, parent)
+}
+
+/// A fleet-shaped provenance fixture for the snapshot starter join: two parent
+/// requests in their own sessions, two children started by the first parent,
+/// one by the second, one child whose stored parent names no stored request,
+/// and one session with no provenance. Returns the core and both parent
+/// request document ids.
+pub async fn seed_fleet_starter_fixture() -> (Arc<ClientCore>, TempDir, String, String) {
+    let (core, tmp) = boot_core().await;
+    let parent_a = create_request(
+        &core,
+        "req_fleet_parent_a",
+        OPERATOR,
+        "sess_fleet_parent_a",
+        "completed",
+        "2026-05-20T00:00:00Z",
+        None,
+    )
+    .await;
+    create_session(&core, OPERATOR, "sess_fleet_parent_a", None).await;
+    let parent_b = create_request(
+        &core,
+        "req_fleet_parent_b",
+        OPERATOR,
+        "sess_fleet_parent_b",
+        "completed",
+        "2026-05-20T00:00:10Z",
+        None,
+    )
+    .await;
+    create_session(&core, OPERATOR, "sess_fleet_parent_b", None).await;
+    create_session(
+        &core,
+        OPERATOR,
+        "sess_fleet_child_shared_1",
+        Some(&parent_a),
+    )
+    .await;
+    create_session(
+        &core,
+        OPERATOR,
+        "sess_fleet_child_shared_2",
+        Some(&parent_a),
+    )
+    .await;
+    create_session(&core, OPERATOR, "sess_fleet_child_b", Some(&parent_b)).await;
+    create_session(
+        &core,
+        OPERATOR,
+        "sess_fleet_child_dangling",
+        Some("doc_id_of_no_stored_request"),
+    )
+    .await;
+    create_session(&core, OPERATOR, "sess_fleet_plain", None).await;
+    (core, tmp, parent_a, parent_b)
 }
 
 async fn created_doc_id(core: &Arc<ClientCore>, mutation: &str, collection: &str) -> String {

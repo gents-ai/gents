@@ -43,15 +43,20 @@ pub(crate) struct LeanRenderedCaptureStorageCase {
     pub(crate) base_depth: usize,
     pub(crate) max_depth: usize,
     pub(crate) base_verified: bool,
-    /// How many block references a manifest row names (`RenderedCapture.
-    /// StoredRequest.manifest`); 0 for the other encodings and for the empty
-    /// manifest. The manifest document sits at ref 1 / witness 10 and its
-    /// blocks at refs 2.., each under its own pinned witness, so this count is
-    /// what lets the Rust fence rebuild the row's artifact store.
-    #[serde(default)]
-    pub(crate) block_count: usize,
+    /// The references the row's manifest document names, with what the row's
+    /// Lean store holds under each; empty for the other encodings.
+    pub(crate) manifest_blocks: Vec<LeanRenderedCaptureManifestBlock>,
     pub(crate) decoded_request: Option<u64>,
     pub(crate) send_permitted: bool,
+}
+
+/// One manifest reference of a storage row: the block it names, the witness
+/// the manifest pins, and the commit the store holds (`None` when absent).
+#[derive(Debug, Deserialize, Clone)]
+pub(crate) struct LeanRenderedCaptureManifestBlock {
+    pub(crate) r#ref: u64,
+    pub(crate) pinned_witness: u64,
+    pub(crate) stored_witness: Option<u64>,
 }
 
 /// Two capture keys and whether the model calls them the same fact.

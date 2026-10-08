@@ -12,9 +12,8 @@
 //! the deterministic mock backend and compare the persisted payload with the
 //! body that backend was posted.
 
-use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
@@ -1227,6 +1226,132 @@ async fn a_retried_attempt_is_its_own_durable_fact() {
         "the greatest call sequence must carry retry attempt 1"
     );
 
+    agent.shutdown().await;
+}
+
+#[tokio::test]
+async fn retry_continues_recorded_tool_progress_without_republishing_input() {
+    let marker = "capture-retry-frontier";
+    let output = "RETRY_RECORDED_TOOL_RESULT";
+    let backend = MockStreamingBackend::start_with_plans(
+        CAPTURE_MODEL,
+        vec![StreamPlan::new(
+            marker,
+            vec![
+                StreamResponse::streams(
+                    marker,
+                    vec![StreamChunk::tool_call(
+                        "retry-call",
+                        CAPTURE_TOOL,
+                        r#"{"note":"first"}"#,
+                    )],
+                ),
+                StreamResponse::bad_request(r#"{"error":{"message":"invalid test parameter","type":"invalid_request_error"}}"#),
+                StreamResponse::completes(marker, ["continued"]),
+            ],
+        )],
+    )
+    .unwrap();
+    let db = test_db(marker).await;
+    let agent = boot_capture_agent_with(&db, marker, backend.endpoint(), None, |behavior| {
+        behavior.custom_tool(FixedOutputTool::new(CAPTURE_TOOL, output))
+    })
+    .await;
+    let content = format!("please use the tool {marker}");
+    let parent = create_runtime_request(
+        db.node.as_ref(),
+        &agent.agent_did,
+        CAPTURE_BEHAVIOR_ID,
+        "retry-parent",
+        marker,
+        &content,
+    )
+    .await;
+    assert_eq!(
+        wait_for_request_terminal_state(db.node.as_ref(), &parent).await,
+        RequestLifecycleState::Failed
+    );
+    let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
+        "retry-successor",
+        &agent.agent_did,
+        &agent.agent_did,
+        CAPTURE_BEHAVIOR_ID,
+        marker,
+        &content,
+        "interactive",
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
+            &agent.agent_did,
+        ),
+    );
+    create.retry_parent_request = Some("retry-parent".into());
+    create.retry_parent_request_doc_id = Some(parent.clone());
+    create.retry_root_request = Some("retry-parent".into());
+    create.retry_count = 1;
+    create.max_retries = 3;
+    gents::sign_agent_request_create_as_registered_target(&mut create)
+        .await
+        .unwrap();
+    let response = gents::config_client::ConfigAccess::Local(db.node.clone())
+        .write("test.retry_successor", &create.graphql_mutation().unwrap())
+        .await
+        .unwrap();
+    let response: gents::defra_node::QueryResponse = serde_json::from_value(response).unwrap();
+    let doc_id = gents::graphql::single_mutation_document(&response, "create_AgentRequest")
+        .unwrap()
+        .unwrap()["_docID"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        wait_for_request_terminal_state(db.node.as_ref(), &doc_id).await,
+        RequestLifecycleState::Completed
+    );
+    let observed = backend.observed_completion_bodies();
+    let captures = wait_for_rendered_requests(db.node.as_ref(), "retry-successor", 1).await;
+    let captured = parse_json(&captures[0]["request_json"]);
+    let retry_body = observed
+        .iter()
+        .find(|body| canonical(body) == captured)
+        .expect("the successor capture must match an actual provider request");
+    let messages = retry_body["messages"].as_array().unwrap();
+    let contract: Value = gents_lean_contract::load_contract_snapshot().unwrap();
+    let case = contract["retry_entry_cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| {
+            case["resume"] == true
+                && case["history"] == serde_json::json!([1, 2, 3])
+                && case["context"].is_null()
+        })
+        .unwrap();
+    let expected = case["expected"].as_array().unwrap();
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|row| row["content"].to_string().contains(&content))
+            .count(),
+        expected.iter().filter(|value| **value == 1).count(),
+        "{messages:?}"
+    );
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|row| row["role"] == "tool" && row["tool_call_id"] == "retry-call")
+            .count(),
+        expected.iter().filter(|value| **value == 3).count(),
+        "{messages:?}"
+    );
+    let retry_doc = escape_graphql_string(&doc_id);
+    let rows = gents::graphql::graphql_with_transaction_retry(db.node.as_ref(), &format!(
+        r#"{{ AgentMessage(filter: {{request_doc_id: {{_eq:"{retry_doc}"}}, message_key: {{_eq:"authored:{retry_doc}:prompt"}}}}) {{_docID}} }}"#
+    ), "test.retry_authored_input").await.unwrap();
+    assert_eq!(
+        rows.data.unwrap()["AgentMessage"].as_array().unwrap().len(),
+        usize::from(case["publish"].as_bool().unwrap())
+    );
     agent.shutdown().await;
 }
 
@@ -2986,706 +3111,4 @@ async fn upsert_capture_backend(node: &EmbeddedNode, owner: &str, endpoint: &str
     gents::backend_registry::set_backend_probe_status(node, owner, CAPTURE_BACKEND_ID, "healthy")
         .await
         .unwrap();
-}
-
-// ---------------------------------------------------------------------------
-// Hot-path measurement (#2333).
-//
-// The manifest format's claim is about storage shape; the hot-path residuals
-// named in review — full-body re-chunk/re-hash, in-transaction reuse
-// verification reads, per-entry witness lookups — are measured here, not
-// asserted. Histories grow to 10/50/100/200 turns of ~4 KiB messages and one
-// compaction-shaped run rewrites an early span mid-way, and every capture
-// decodes back so the same run is a long-history correctness soak.
-//
-// What is measured where:
-//
-// * wall — `Instant` around `DefraRenderedRequestSink::capture` in this test.
-// * txn — the per-transaction telemetry event the write owner already emits
-//   (target `gents.defradb.write_attempt`, operation `rendered_request.capture`),
-//   observed through a scoped tracing subscriber. Its `elapsed` spans the whole
-//   `transact_local` attempt (begin, closure, commit) and that telemetry
-//   truncates to whole milliseconds. No production code changed to obtain it.
-// * Byte and query counts are exact analytic counts over the stored manifests
-//   and the pre-capture block state, following the production statement
-//   shapes: sha256 = two chunk passes per payload (pending set + entry list,
-//   one digest per chunk) + one per row the batched existence read returns +
-//   the created-block read-back; witness = one `_commits` query per manifest
-//   entry; verification read bytes = payloads the batched existence read
-//   returns for already-stored keys + the read-back. The maintained block map
-//   is compared against the store at each run's end so these derivations
-//   cannot drift from what was actually written.
-
-/// String twin of `config_client::write_telemetry::WRITE_ATTEMPT_EVENT_TARGET`
-/// (crate-private, unreachable from an integration test). Changing that target
-/// breaks this harness's txn column, not the production sink.
-const WRITE_ATTEMPT_TELEMETRY_TARGET: &str = "gents.defradb.write_attempt";
-const CAPTURE_TXN_OPERATION: &str = "rendered_request.capture";
-
-#[derive(Clone, Debug, Default)]
-struct TxnAttemptRecord {
-    operation: String,
-    attempt: u64,
-    outcome: String,
-    elapsed_ms: u64,
-    affected_documents: u64,
-}
-
-#[derive(Clone, Default)]
-struct WriteAttemptCollector {
-    attempts: Arc<std::sync::Mutex<Vec<TxnAttemptRecord>>>,
-}
-
-impl WriteAttemptCollector {
-    fn len(&self) -> usize {
-        self.attempts.lock().unwrap().len()
-    }
-
-    fn capture_attempts_since(&self, since: usize) -> Vec<TxnAttemptRecord> {
-        self.attempts
-            .lock()
-            .unwrap()
-            .iter()
-            .skip(since)
-            .filter(|record| record.operation == CAPTURE_TXN_OPERATION)
-            .cloned()
-            .collect()
-    }
-}
-
-impl tracing::Subscriber for WriteAttemptCollector {
-    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
-        metadata.target() == WRITE_ATTEMPT_TELEMETRY_TARGET
-    }
-
-    fn new_span(&self, _attributes: &tracing::span::Attributes<'_>) -> tracing::Id {
-        tracing::Id::from_u64(1)
-    }
-
-    fn record(&self, _id: &tracing::Id, _values: &tracing::span::Record<'_>) {}
-
-    fn record_follows_from(&self, _id: &tracing::Id, _follows: &tracing::Id) {}
-
-    fn event(&self, event: &tracing::Event<'_>) {
-        if event.metadata().target() != WRITE_ATTEMPT_TELEMETRY_TARGET {
-            return;
-        }
-        let mut scraper = TxnFieldScraper::default();
-        event.record(&mut scraper);
-        let record = TxnAttemptRecord {
-            operation: scraper.operation.unwrap_or_default(),
-            attempt: scraper.attempt,
-            outcome: scraper.outcome.unwrap_or_default(),
-            elapsed_ms: scraper.elapsed_ms,
-            affected_documents: scraper.affected_documents,
-        };
-        self.attempts.lock().unwrap().push(record);
-    }
-
-    fn enter(&self, _id: &tracing::Id) {}
-
-    fn exit(&self, _id: &tracing::Id) {}
-}
-
-#[derive(Default)]
-struct TxnFieldScraper {
-    operation: Option<String>,
-    attempt: u64,
-    outcome: Option<String>,
-    elapsed_ms: u64,
-    affected_documents: u64,
-}
-
-impl tracing::field::Visit for TxnFieldScraper {
-    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
-        match field.name() {
-            "operation" => self.operation = Some(value.to_owned()),
-            "outcome" => self.outcome = Some(value.to_owned()),
-            _ => {}
-        }
-    }
-
-    fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
-        match field.name() {
-            "attempt" => self.attempt = value,
-            "elapsed_ms" => self.elapsed_ms = value,
-            "affected_documents" => self.affected_documents = value,
-            _ => {}
-        }
-    }
-
-    fn record_debug(&mut self, _field: &tracing::field::Field, _value: &dyn std::fmt::Debug) {}
-}
-
-/// Keeps the telemetry callsite's interest enabled process-wide: tracing caches
-/// one interest per callsite from whichever thread reaches it first, so a
-/// thread with no subscriber would cache it disabled and the scoped collector
-/// below would then observe nothing. Discards every event it admits.
-struct WriteAttemptInterestAdmission;
-
-impl tracing::Subscriber for WriteAttemptInterestAdmission {
-    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
-        metadata.target() == WRITE_ATTEMPT_TELEMETRY_TARGET
-    }
-
-    fn new_span(&self, _attributes: &tracing::span::Attributes<'_>) -> tracing::Id {
-        tracing::Id::from_u64(1)
-    }
-
-    fn record(&self, _id: &tracing::Id, _values: &tracing::span::Record<'_>) {}
-
-    fn record_follows_from(&self, _id: &tracing::Id, _follows: &tracing::Id) {}
-
-    fn event(&self, _event: &tracing::Event<'_>) {}
-
-    fn enter(&self, _id: &tracing::Id) {}
-
-    fn exit(&self, _id: &tracing::Id) {}
-}
-
-fn admit_write_attempt_callsites() {
-    static INSTALLED: std::sync::Once = std::sync::Once::new();
-    INSTALLED.call_once(|| {
-        // A competing global default is not fatal: the scoped collector still
-        // receives events as long as that default admits the target.
-        let _ = tracing::subscriber::set_global_default(WriteAttemptInterestAdmission);
-    });
-}
-
-/// Everything one capture measured, plus the created block identities the
-/// caller folds into its maintained block map.
-struct CaptureMeasurement {
-    label: String,
-    turn: usize,
-    history_messages: usize,
-    body_bytes: usize,
-    trace_bytes: usize,
-    wall: Duration,
-    txn: Duration,
-    txn_attempts: usize,
-    affected_documents: u64,
-    req_chunks: usize,
-    prov_chunks: usize,
-    created: Vec<(String, u64)>,
-    new_block_bytes: usize,
-    row_bytes: usize,
-    reused_ref_bytes: usize,
-    verification_read_bytes: usize,
-    sha256_calls: usize,
-    witness_queries: usize,
-    txn_statements: usize,
-}
-
-async fn block_len_map(node: &EmbeddedNode) -> BTreeMap<String, u64> {
-    let response = node
-        .execute(r#"{ RenderedRequestBlock { content_key byte_len } }"#)
-        .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    response.data.unwrap()["RenderedRequestBlock"]
-        .as_array()
-        .map(|rows| {
-            rows.iter()
-                .map(|row| {
-                    (
-                        row["content_key"].as_str().expect("key").to_owned(),
-                        row["byte_len"].as_u64().expect("len"),
-                    )
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-/// One measured capture through the production sink. The decode round-trip at
-/// the end is the soak invariant; it runs outside every timed window.
-async fn measured_capture(
-    sink: &gents::rendered_request::DefraRenderedRequestSink,
-    node: &EmbeddedNode,
-    telemetry: &WriteAttemptCollector,
-    rendered: &RenderedCompletionRequest,
-    stored_before: &BTreeMap<String, u64>,
-    label: &str,
-    turn: usize,
-    history_messages: usize,
-) -> CaptureMeasurement {
-    let body_bytes = gents::rendered_request::canonical_json_string(&rendered.request_json)
-        .unwrap()
-        .len();
-    let trace_bytes =
-        gents::rendered_request::canonical_json_string(&rendered.provenance_payload_json)
-            .unwrap()
-            .len();
-
-    let telemetry_mark = telemetry.len();
-    let start = Instant::now();
-    sink.capture(rendered.clone()).await.expect("capture");
-    let wall = start.elapsed();
-    let attempts = telemetry.capture_attempts_since(telemetry_mark);
-    assert!(
-        !attempts.is_empty(),
-        "no write_attempt telemetry observed for {CAPTURE_TXN_OPERATION}; the scoped collector \
-         lost the callsite and every txn-derived number below would be fiction"
-    );
-    let txn = Duration::from_millis(attempts.iter().map(|record| record.elapsed_ms).sum());
-    let affected_documents = attempts
-        .iter()
-        .map(|record| record.affected_documents)
-        .sum();
-
-    // The stored row: manifest container plus the provenance column, both of
-    // which the manifest create wrote.
-    let query = format!(
-        r#"{{ RenderedRequest(filter:{{capture_key:{{_eq:"{}"}}}},limit:1){{request_json provenance_json}} }}"#,
-        escape_graphql_string(&rendered.capture_key)
-    );
-    let response = node.execute(&query).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let row = response.data.unwrap()["RenderedRequest"][0].clone();
-    let stored = row["request_json"].as_str().unwrap().to_owned();
-    let row_bytes = stored.len() + row["provenance_json"].as_str().unwrap().len();
-    let container: Value = serde_json::from_str(&stored).unwrap();
-
-    let mut entries_by_payload = [Vec::new(), Vec::new()];
-    for (slot, payload) in ["request_body", "provenance_payload"]
-        .into_iter()
-        .enumerate()
-    {
-        let (record, _) = stored_payload_record(&container, payload);
-        assert_eq!(record["kind"], "manifest", "payload {payload}");
-        entries_by_payload[slot] = record["blocks"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|entry| {
-                (
-                    entry["content_key"].as_str().unwrap().to_owned(),
-                    entry["byte_len"].as_u64().unwrap(),
-                )
-            })
-            .collect();
-    }
-    let req_chunks = entries_by_payload[0].len();
-    let prov_chunks = entries_by_payload[1].len();
-
-    let mut created: Vec<(String, u64)> = Vec::new();
-    let mut created_set = std::collections::BTreeSet::new();
-    let mut reused_ref_bytes = 0usize;
-    for (key, byte_len) in entries_by_payload[0]
-        .iter()
-        .chain(entries_by_payload[1].iter())
-    {
-        if stored_before.contains_key(key) {
-            reused_ref_bytes += *byte_len as usize;
-        } else if created_set.insert(key.clone()) {
-            created.push((key.clone(), *byte_len));
-        }
-    }
-    let new_block_bytes: usize = created.iter().map(|(_, len)| *len as usize).sum();
-    // The batched existence read returns one row per already-stored pending
-    // key; the read-back returns the first created entry of the request body.
-    let pending: std::collections::BTreeSet<String> = entries_by_payload[0]
-        .iter()
-        .chain(entries_by_payload[1].iter())
-        .map(|(key, _)| key.clone())
-        .collect();
-    let verification_read_bytes = pending
-        .iter()
-        .filter(|key| stored_before.contains_key(*key))
-        .map(|key| stored_before[key.as_str()] as usize)
-        .sum::<usize>()
-        + entries_by_payload[0]
-            .iter()
-            .find(|(key, _)| !stored_before.contains_key(key))
-            .map(|(_, len)| *len as usize)
-            .unwrap_or_default();
-    let found_rows = pending
-        .iter()
-        .filter(|key| stored_before.contains_key(*key))
-        .count();
-    let readback = entries_by_payload[0]
-        .iter()
-        .any(|(key, _)| !stored_before.contains_key(key));
-    let sha256_calls = 2 * (req_chunks + prov_chunks) + found_rows + usize::from(readback);
-    // The witness read is one aliased batch per payload: one statement per
-    // ceil(distinct block documents / alias cap). A content key names exactly
-    // one block document, so distinct manifest keys are the distinct documents.
-    let distinct_docs = |entries: &[(String, u64)]| {
-        entries
-            .iter()
-            .map(|(key, _)| key)
-            .collect::<std::collections::BTreeSet<_>>()
-            .len()
-    };
-    let req_docs = distinct_docs(&entries_by_payload[0]);
-    let prov_docs = distinct_docs(&entries_by_payload[1]);
-    let alias_cap = gents::rendered_request::commits::FIELD_COMMIT_ALIAS_BATCH;
-    let batched = |docs: usize| docs.div_ceil(alias_cap);
-    let witness_queries = batched(req_docs) + batched(prov_docs);
-    // The batched shape this table asserts: O(1) statements per capture, at
-    // most one partial batch per payload above the cap. A revert to one
-    // statement per manifest entry would push this past the bound.
-    assert!(
-        witness_queries <= 2 + (req_docs + prov_docs) / alias_cap,
-        "witness statements {witness_queries} for {req_docs}+{prov_docs} documents no longer \
-         batch at the alias cap {alias_cap}"
-    );
-    let txn_statements = 1 + created.len() + usize::from(readback) + witness_queries + 1;
-
-    // Soak: both payloads decode back to exactly what was captured.
-    for (kind, expected) in [
-        (
-            gents::rendered_request::CapturePayloadKind::RequestBody,
-            canonical(&rendered.request_json),
-        ),
-        (
-            gents::rendered_request::CapturePayloadKind::ProvenancePayload,
-            canonical(&rendered.provenance_payload_json),
-        ),
-    ] {
-        assert_eq!(
-            gents::rendered_request::decode_capture_json_embedded(
-                node,
-                gents::rendered_request::CAPTURE_VERSION,
-                &stored,
-                kind,
-            )
-            .await
-            .unwrap(),
-            expected
-        );
-    }
-
-    CaptureMeasurement {
-        label: label.to_owned(),
-        turn,
-        history_messages,
-        body_bytes,
-        trace_bytes,
-        wall,
-        txn,
-        txn_attempts: attempts.len(),
-        affected_documents,
-        req_chunks,
-        prov_chunks,
-        created,
-        new_block_bytes,
-        row_bytes,
-        reused_ref_bytes,
-        verification_read_bytes,
-        sha256_calls,
-        witness_queries,
-        txn_statements,
-    }
-}
-
-fn print_measurement_header() {
-    eprintln!(
-        "[capture-hot-path] columns: wall=capture() wall time | txn=transact_local attempt \
-         (begin+closure+commit) from write_attempt telemetry, whole-ms | outside=wall-txn \
-         (canonicalize+chunk/hash+container) | reqC/prC=manifest entries per payload | \
-         sha256=exact analytic count | wit=batched _commits statements, ceil(distinct block \
-         docs/{alias_cap}) per payload | txnq=GraphQL statements in the transaction | \
-         new_blk/new_B=blocks this capture created | row_B=stored manifest row | reuse_B=bytes \
-         referenced from pre-existing blocks | vread_B=payload bytes the in-txn existence read \
-         (+read-back) returned",
-        alias_cap = gents::rendered_request::commits::FIELD_COMMIT_ALIAS_BATCH,
-    );
-}
-
-fn print_measurement_row(measurement: &CaptureMeasurement) {
-    eprintln!(
-        "[capture-hot-path] {label:<14} turn={turn:>3} hist={hist:>3} body={body:>7} \
-         trace={trace:>6} wall={wall:>8.1}ms txn={txn:>7.1}ms out={out:>7.1}ms \
-         reqC={req:>3} prC={pr:>2} sha256={sha:>6} wit={wit:>4} txnq={txnq:>4} \
-         new_blk={nblk:>3} new_B={nb:>6} row_B={rb:>6} reuse_B={ru:>8} vread_B={vr:>8}",
-        label = measurement.label,
-        turn = measurement.turn,
-        hist = measurement.history_messages,
-        body = measurement.body_bytes,
-        trace = measurement.trace_bytes,
-        wall = measurement.wall.as_secs_f64() * 1000.0,
-        txn = measurement.txn.as_secs_f64() * 1000.0,
-        out = (measurement.wall - measurement.txn).as_secs_f64() * 1000.0,
-        req = measurement.req_chunks,
-        pr = measurement.prov_chunks,
-        sha = measurement.sha256_calls,
-        wit = measurement.witness_queries,
-        txnq = measurement.txn_statements,
-        nblk = measurement.created.len(),
-        nb = measurement.new_block_bytes,
-        rb = measurement.row_bytes,
-        ru = measurement.reused_ref_bytes,
-        vr = measurement.verification_read_bytes,
-    );
-}
-
-fn print_run_summary(label: &str, rows: &[CaptureMeasurement]) {
-    let total_wall: Duration = rows.iter().map(|row| row.wall).sum();
-    let total_txn: Duration = rows.iter().map(|row| row.txn).sum();
-    let total_new: usize = rows
-        .iter()
-        .map(|row| row.new_block_bytes + row.row_bytes)
-        .sum();
-    let total_reuse: usize = rows.iter().map(|row| row.reused_ref_bytes).sum();
-    let total_read: usize = rows.iter().map(|row| row.verification_read_bytes).sum();
-    let total_sha: usize = rows.iter().map(|row| row.sha256_calls).sum();
-    let total_wit: usize = rows.iter().map(|row| row.witness_queries).sum();
-    eprintln!(
-        "[capture-hot-path] summary {label}: captures={n} mean_wall={mean:.1}ms \
-         mean_txn={mean_txn:.1}ms | totals: wall={wall:.0}ms txn={txn:.0}ms new_B={new} \
-         reuse_ref_B={reuse} vread_B={read} sha256={sha} witness={wit}",
-        n = rows.len(),
-        mean = total_wall.as_secs_f64() * 1000.0 / rows.len() as f64,
-        mean_txn = total_txn.as_secs_f64() * 1000.0 / rows.len() as f64,
-        wall = total_wall.as_secs_f64() * 1000.0,
-        txn = total_txn.as_secs_f64() * 1000.0,
-        new = total_new,
-        reuse = total_reuse,
-        read = total_read,
-        sha = total_sha,
-        wit = total_wit,
-    );
-}
-
-/// One measurement turn under a session of its own: a body over the given
-/// messages and a fresh single-message trace, under its own turn-indexed
-/// capture key.
-fn measurement_turn_fixture(
-    session_id: &str,
-    body: Value,
-    turn: usize,
-    trace_seed: u64,
-) -> RenderedCompletionRequest {
-    let mut rendered = rendered_fixture(body);
-    rendered.session_id = session_id.to_owned();
-    rendered.request_id = format!("req-measure-{session_id}-{turn}");
-    rendered.turn_index = turn;
-    rendered.assembly_trace = gents::rendered_request::AssemblyTrace::from_effective_messages(
-        gents::rendered_request::AssemblyBuildPath::Budgeted,
-        vec![Message::user(format!(
-            "λ {turn} {}",
-            message_text(trace_seed, 4 * 1024)
-        ))],
-    );
-    rendered.provenance_payload_json = serde_json::to_value(&rendered.assembly_trace).unwrap();
-    rendered.provenance_json =
-        serde_json::to_value(gents::rendered_request::ProvenanceManifest::captured_only(
-            rendered.capture_scope.clone(),
-            None,
-            None,
-            rendered.assembly_trace.clone(),
-        ))
-        .unwrap();
-    rendered.capture_key = gents::rendered_request::capture_key(
-        &rendered.agent_did,
-        session_id,
-        &rendered.request_doc_id,
-        &rendered.capture_scope,
-        turn,
-        rendered.attempt,
-    )
-    .unwrap();
-    rendered
-}
-
-#[tokio::test]
-#[ignore = "measurement: minutes-long EmbeddedNode run; pass --ignored"]
-async fn capture_hot_path_over_long_histories() {
-    admit_write_attempt_callsites();
-    let collector = WriteAttemptCollector::default();
-    let dispatch = tracing::Dispatch::new(collector.clone());
-    let _telemetry_guard = tracing::dispatcher::set_default(&dispatch);
-
-    let db = test_db("rendered-request-hot-path-measure").await;
-    let sink = gents::rendered_request::DefraRenderedRequestSink::new(db.node.clone());
-    print_measurement_header();
-
-    let mut final_walls: Vec<(String, f64, f64)> = Vec::new();
-    for length in [10usize, 50, 100, 200] {
-        let label = format!("grow-{length}");
-        let session = format!("session-measure-grow-{length}");
-        let seed_base = 1_000_000 + u64::try_from(length).unwrap() * 10_000;
-        let trace_base = 3_000_000 + u64::try_from(length).unwrap() * 10_000;
-        let history: Vec<Value> = (0..length)
-            .map(|index| {
-                serde_json::json!({
-                    "role":"user",
-                    "content": message_text(seed_base + u64::try_from(index).unwrap(), 4 * 1024)
-                })
-            })
-            .collect();
-        let mut blocks = block_len_map(db.node.as_ref()).await;
-        let sample_step = (length / 8).max(1);
-        let mut rows = Vec::new();
-        for turn in 0..length {
-            let body = serde_json::json!({"model":"m", "messages": history[..=turn]});
-            let rendered = measurement_turn_fixture(
-                &session,
-                body,
-                turn,
-                trace_base + u64::try_from(turn).unwrap(),
-            );
-            let row = measured_capture(
-                &sink,
-                db.node.as_ref(),
-                &collector,
-                &rendered,
-                &blocks,
-                &label,
-                turn,
-                turn + 1,
-            )
-            .await;
-            for (key, len) in &row.created {
-                blocks.insert(key.clone(), *len);
-            }
-            assert!(
-                turn == 0 || row.created.len() <= 8,
-                "turn {turn} created {} blocks for one appended message",
-                row.created.len()
-            );
-            if turn == 0 || (turn + 1) % sample_step == 0 || turn + 1 == length {
-                print_measurement_row(&row);
-            }
-            if length == 10 {
-                // Every payload of this history stays below the alias cap, so
-                // the witness read is exactly one statement per payload while
-                // the entries it covers grow from 4 to 15.
-                assert_eq!(
-                    row.witness_queries, 2,
-                    "below the alias cap each payload batches into one statement"
-                );
-            }
-            rows.push(row);
-        }
-        assert_eq!(
-            block_len_map(db.node.as_ref()).await,
-            blocks,
-            "the maintained block map must match the store for {label}"
-        );
-        let final_row = rows.last().unwrap();
-        final_walls.push((
-            label.clone(),
-            final_row.wall.as_secs_f64() * 1000.0,
-            final_row.txn.as_secs_f64() * 1000.0,
-        ));
-        print_run_summary(&label, &rows);
-    }
-
-    // Cost attribution, from the statement-shape experiment this change
-    // motivated: 201 `_commits` resolutions cost ~200ms whether issued as 201
-    // statements or 7 aliased ones. The witness reads are 201 of 207
-    // statements pre-batching and most of the ~290ms 200-turn transaction
-    // wall, but their cost is per-document commit resolution inside DefraDB,
-    // not per-statement overhead, so aliasing buys the statement count
-    // (207 -> 14) and a modest wall win (~290ms pre-batching, 276-281ms
-    // observed after), not the round-trip multiple. This fence keeps that win:
-    // a materially slower final turn than the pre-batching measurement means
-    // the batch or its fail-closed per-entry selection regressed.
-    const PRE_BATCHING_200_TURN_WALL_MS: f64 = 289.7;
-    let (_, wall_200, _) = final_walls
-        .iter()
-        .find(|(label, _, _)| label == "grow-200")
-        .expect("the grow-200 run recorded its final turn");
-    assert!(
-        *wall_200 < 287.0,
-        "final-turn wall at 200 turns is {wall_200:.1}ms, above the \
-         {PRE_BATCHING_200_TURN_WALL_MS:.1}ms pre-batching measurement; the witness batch \
-         regressed",
-    );
-
-    // The compaction shape: a session grows to 100 turns, then one capture
-    // replaces an early span with a summary while keeping the tail verbatim,
-    // and the session keeps growing over the compacted history.
-    const TURNS: usize = 100;
-    const KEPT_FROM: usize = 80;
-    const POST_COMPACTION_TURNS: usize = 10;
-    let label = "compact";
-    let session = "session-measure-compact".to_string();
-    let history: Vec<Value> = (0..TURNS)
-        .map(|index| {
-            serde_json::json!({
-                "role":"user",
-                "content": message_text(2_000_000 + u64::try_from(index).unwrap(), 4 * 1024)
-            })
-        })
-        .collect();
-    let mut blocks = block_len_map(db.node.as_ref()).await;
-    let mut rows = Vec::new();
-    let mut compacted: Vec<Value> = Vec::new();
-    for turn in 0..TURNS + 1 + POST_COMPACTION_TURNS {
-        let (body, print) = if turn < TURNS {
-            let body = serde_json::json!({"model":"m", "messages": history[..=turn]});
-            (body, turn + 1 == TURNS)
-        } else if turn == TURNS {
-            compacted = std::iter::once(serde_json::json!({
-                "role":"user","content": message_text(2_900_001, 2 * 1024)
-            }))
-            .chain(history[KEPT_FROM..].iter().cloned())
-            .chain(std::iter::once(serde_json::json!({
-                "role":"user","content": message_text(2_900_002, 4 * 1024)
-            })))
-            .collect();
-            (
-                serde_json::json!({"model":"m", "messages": compacted.clone()}),
-                true,
-            )
-        } else {
-            compacted.push(serde_json::json!({
-                "role":"user",
-                "content": message_text(
-                    2_910_000 + u64::try_from(turn - TURNS).unwrap(),
-                    4 * 1024,
-                )
-            }));
-            (
-                serde_json::json!({"model":"m", "messages": compacted.clone()}),
-                true,
-            )
-        };
-        let rendered = measurement_turn_fixture(
-            &session,
-            body,
-            turn,
-            3_900_000 + u64::try_from(turn).unwrap(),
-        );
-        let row = measured_capture(
-            &sink,
-            db.node.as_ref(),
-            &collector,
-            &rendered,
-            &blocks,
-            label,
-            turn,
-            rendered.request_json["messages"].as_array().unwrap().len(),
-        )
-        .await;
-        for (key, len) in &row.created {
-            blocks.insert(key.clone(), *len);
-        }
-        assert!(
-            turn == 0 || row.created.len() <= 8,
-            "turn {turn} created {} blocks for one appended message or one compaction edit",
-            row.created.len()
-        );
-        if print {
-            print_measurement_row(&row);
-        }
-        rows.push(row);
-    }
-    assert_eq!(
-        block_len_map(db.node.as_ref()).await,
-        blocks,
-        "the maintained block map must match the store for {label}"
-    );
-    print_run_summary(label, &rows);
-
-    eprintln!(
-        "[capture-hot-path] final-turn wall/txn by history length: {}",
-        final_walls
-            .iter()
-            .map(|(label, wall, txn)| format!("{label}={wall:.1}/{txn:.1}ms"))
-            .collect::<Vec<_>>()
-            .join("  ")
-    );
 }

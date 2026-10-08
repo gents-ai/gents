@@ -1,6 +1,7 @@
 use super::*;
 use crate::config_client::ConfigAccess;
 use crate::graphql::escape_graphql_string;
+use gents_protocol::event_delivery::EventConsumer;
 
 pub(super) struct PendingCheckpoint {
     arrival: CheckpointArrival,
@@ -159,7 +160,9 @@ impl EventSource {
                         crate::config_client::event_source_cursor::checkpoint_prefix(
                             txn,
                             &pending.owner,
-                            &pending.trigger_id,
+                            &EventConsumer::Trigger {
+                                trigger_id: pending.trigger_id.clone(),
+                            },
                             &pending.collection,
                             &pending.position,
                             matches!(&result, Ok(super::super::FireResult::Skipped { reason })
@@ -298,6 +301,9 @@ impl EventSource {
         trigger: &crate::runtime_snapshot::ResolvedEventTrigger,
     ) -> anyhow::Result<Option<FireIntent>> {
         let owner = Self::delivery(snapshot, trigger)?.owner().to_owned();
+        let consumer = EventConsumer::Trigger {
+            trigger_id: trigger.trigger_id.clone(),
+        };
         let record = ConfigAccess::transact_local_readonly(
             &self.node,
             None,
@@ -307,7 +313,7 @@ impl EventSource {
                     crate::config_client::event_source_cursor::load_for_source(
                         txn,
                         &owner,
-                        &trigger.trigger_id,
+                        &consumer,
                         &trigger.source_collection,
                     )
                     .await
@@ -327,7 +333,7 @@ impl EventSource {
                             crate::config_client::event_source_cursor::load_or_seed_for_source(
                                 txn,
                                 &owner,
-                                &trigger.trigger_id,
+                                &consumer,
                                 &trigger.source_collection,
                             )
                             .await
@@ -419,7 +425,9 @@ impl EventSource {
                 crate::config_client::event_source_cursor::exclude_arrival(
                     txn,
                     owner,
-                    &trigger.trigger_id,
+                    &EventConsumer::Trigger {
+                        trigger_id: trigger.trigger_id.clone(),
+                    },
                     &trigger.source_collection,
                     position,
                 )

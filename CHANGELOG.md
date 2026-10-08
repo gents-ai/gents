@@ -6,6 +6,30 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- Per-document callback bindings no longer drop documents written before the
+  callback engine starts (#2343). Like event triggers, each binding now
+  checkpoints a receiving-node arrival cursor, seeded when its configuration
+  is applied. Any arrival after registration is delivered once, including
+  documents written while the node was down. A per-document invocation's
+  idempotency key is now its binding, source collection and document (no
+  source version), so an edit after admission is never admitted again.
+  `EventSourceCursor` now names its typed `consumer` in place of
+  `trigger_id`. Existing homes must be re-initialized.
+- A runtime that cannot start because a behavior is unavailable now logs each
+  blocking behavior's diagnostic; a `--tool-root` that does not admit the
+  live `Tools.host.root` names both roots (#2296).
+- Agent-scoped OAuth backends (Claude, ChatGPT, Grok) heal an expired access
+  token on their own: the scheduled prober resolves its bearer through the
+  credential owner, refreshing and persisting when stale, so an idle runtime no
+  longer demotes a signed-in backend to unhealthy until restart (#2289).
+- One tool-result image Claude would reject no longer fails the whole
+  request. The Claude Messages body reads each image's size from its PNG,
+  GIF, WebP or JPEG header and puts a note naming the reason in place of an
+  image over 8000 px on a side, or one Claude's count limits leave out:
+  the newest 20 images are kept, older ones only while every kept image is
+  within 2000 px on a side, and at most 100 in all. A plugin
+  result with image parts now replays on later turns as its bounded text
+  parts plus a note per image, not as raw JSON with the image's base64.
 - Capture storage stops re-signing the whole conversation (#2333). New
   `RenderedRequest` captures split the rendered provider body and the assembly
   trace into content-defined byte blocks stored once in a new
@@ -21,6 +45,15 @@ source consistency checks, not a separate runtime compatibility version.
   its node starts and applies the scenario pack (plugins install only on the
   node's own host, and the scenario's documents may name the dependency's),
   and `--grant-authority` reaches those installs.
+- Removing an enrolled agent stays removed. Removal records the ended
+  authorization generation locally, so the enrollment reconciler stops
+  reinstalling and redialling the server every tick until the authorization
+  lease expires or the network owner revokes; re-enrolling needs a fresh
+  offer from the server's `/status`. The reconciler's own teardown of a peer
+  whose route receipt is briefly unobserved does not retire it. The
+  enrollment list also derives "approved" from the durable projection the
+  reconciler uses, so a locally removed or revoked request stops listing as
+  approved before its own expiry (#2295).
 
 - Plugins reach the network through the host (#2300). A plugin whose granted
   manifold carries an `OutboundHttp` allow-list answers a call with
@@ -75,6 +108,11 @@ source consistency checks, not a separate runtime compatibility version.
   proxy's floor (#2274). A 426 version gate now fails fast instead of burning
   the retry ladder, and `grok-auth-probe` and model discovery name the version
   gents sent and the `GENTS_XAI_GROK_CLIENT_VERSION` override.
+
+- Fleet snapshots resolve every session starter, across all deployments, with
+  one batched request read instead of two per started session, so the cost of
+  a client snapshot no longer grows with the number of started sessions
+  (#2291).
 
 ## 0.20.0 - 2026-10-05
 

@@ -1285,7 +1285,7 @@ pub async fn apply_desired_state_plan(
         let (owner, id) = document_identity(document.collection, &document.add)?;
         match document.collection {
             Collection::EventSource => {
-                super::event_source_cursor::seed_referencing_triggers(txn, owner, id).await?;
+                super::event_source_cursor::seed_referencing_consumers(txn, owner, id).await?;
             }
             Collection::Trigger => {
                 let trigger: crate::document_config::Trigger =
@@ -1294,8 +1294,17 @@ pub async fn apply_desired_state_plan(
                     trigger.source,
                     crate::document_config::TriggerSource::Event { .. }
                 ) {
-                    super::event_source_cursor::load_or_seed(txn, owner, id).await?;
+                    let consumer = gents_protocol::event_delivery::EventConsumer::Trigger {
+                        trigger_id: id.to_owned(),
+                    };
+                    super::event_source_cursor::load_or_seed(txn, owner, &consumer).await?;
                 }
+            }
+            Collection::CallbackBinding => {
+                let consumer = gents_protocol::event_delivery::EventConsumer::CallbackBinding {
+                    binding_id: id.to_owned(),
+                };
+                super::event_source_cursor::load_or_seed(txn, owner, &consumer).await?;
             }
             _ => {}
         }

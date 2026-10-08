@@ -583,6 +583,11 @@ def caseCoverage : List CoverageEntry :=
       "event-delivery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "trigger_delivery"
+      "EventDelivery.Durable"
+      "trigger_engine::tests::durable_contract::generated_callback_arrival_checkpoints_use_invocation_receipts")
+      "event-delivery" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "trigger_delivery"
       "Triggers.Durable.Outcomes"
       "trigger_engine::tests::durable_contract::generated_terminal_outcome_action_traces_use_native_owners")
       "durable-goals" [Surface.runtimeInternal]

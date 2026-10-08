@@ -172,8 +172,11 @@ pub(super) struct CallbackResultInvocationRow {
     pub invocation_id: String,
 }
 
-pub fn idempotency_key(binding_id: &str, source_doc_id: &str, source_version: &str) -> String {
-    format!("{binding_id}:{source_doc_id}:{source_version}")
+/// One per-document event invocation per binding and arrival. The source
+/// version is not part of it: an edit after admission is not another arrival.
+/// Collections and document IDs carry no `:`, so the key is unambiguous.
+pub fn idempotency_key(binding_id: &str, source_collection: &str, source_doc_id: &str) -> String {
+    format!("{binding_id}:{source_collection}:{source_doc_id}")
 }
 
 pub fn parse_string_list(raw: Option<&str>) -> Vec<String> {
@@ -365,6 +368,13 @@ pub async fn load_callback(
     owner: &str,
 ) -> Result<Option<crate::document_config::Callback>> {
     load_config(node, crate::Collection::Callback, owner, callback_id).await
+}
+pub async fn load_binding(
+    node: &EmbeddedNode,
+    binding_id: &str,
+    owner: &str,
+) -> Result<Option<CallbackBindingDoc>> {
+    load_config(node, crate::Collection::CallbackBinding, owner, binding_id).await
 }
 pub async fn load_event_source(
     node: &EmbeddedNode,

@@ -276,6 +276,7 @@ fn test_loop_config() -> LoopConfig {
         active_reduction_keys: Vec::new(),
         reduction_chain_keys: Vec::new(),
         initial_turn_index: 0,
+        resume_from_history: false,
         context_window: 128_000,
         compaction_threshold: 0.75,
         retry_policy: crate::completion_retry::CompletionRetryPolicy::interactive_default(),

@@ -91,8 +91,10 @@ use request_assembly::{
     prepare_dispatch_attempt, repair_and_rebuild_request,
 };
 pub use tool_dispatch::value_to_json_string;
-pub use turn_threading::TOOL_RESULT_IMAGE_OMITTED;
 use turn_threading::{bounded_tool_result, close_streaming_turn};
+pub use turn_threading::{
+    replayed_tool_result_text, TOOL_RESULT_IMAGE_NOT_REPLAYED, TOOL_RESULT_IMAGE_OMITTED,
+};
 // The test suite stayed in gents (crates/gents/src/agent/loop_stream/tests/):
 // it builds real DefraSessionHook/EmbeddedNode fixtures for its end-to-end
 // cases and uses `include!` to share one big fixture module across files.
@@ -197,6 +199,7 @@ where
         // differ from the provider input.
         let mut retain_effective_messages_oracle =
             config.context_message.is_some()
+                || config.resume_from_history
                 || !config.active_reduction_keys.is_empty()
                 || provider_profile == crate::provider_input::ProviderInputProfile::ClaudeMessages;
         let mut active_reduction_keys = config.active_reduction_keys.clone();
@@ -284,7 +287,7 @@ where
             // A resumed checkpoint already includes its original authored
             // input. New executions publish under their live request owner,
             // before dispatch, not when the request is merely queued.
-            if current_turn == 1 && hook.is_some() && turn_index == 0 {
+            if current_turn == 1 && hook.is_some() && turn_index == 0 && !config.resume_from_history {
                 yield LoopStreamItem::AuthoredInputReady {
                     context: config.context_message.clone(),
                     prompt: current_prompt.clone(),
