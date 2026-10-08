@@ -313,8 +313,6 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
 /// rows (`CallbackModule`, `CallbackBinding`, `CallbackInvocation`) are
 /// branchable but deliberately not bulk-synced.
 pub const BRANCHABLE_COLLECTION_NAMES: &[&str] = &[
-    NODE_NAME,
-    AGENT_NAME,
     NODE_DIRECTORY_ENTRY_NAME,
     NODE_MEMORY_NAME,
     AGENT_REQUEST_NAME,
