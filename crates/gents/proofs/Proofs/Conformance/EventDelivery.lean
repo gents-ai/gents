@@ -322,7 +322,7 @@ def eventGroupCaptureCasesJson : String :=
         ⟨name, ⟨[]⟩, c⟩
       ++ ",\"input\":" ++ jsonString input
       ++ ",\"captured\":" ++ toString captured.isSome
-      ++ ",\"captured_owner\":" ++ jsonOptionalString (captured.map (·.ownerAgentDid))
+      ++ ",\"captured_owner\":" ++ jsonOptionalString (captured.map (·.ownerNodeDid))
       ++ ",\"captured_input\":" ++ jsonOptionalString (captured.map (·.input))
       ++ ",\"captured_group_key\":" ++
         ((captured.bind (·.originGroupKey)).map Conformance.EventGroupContracts.keyJson).getD "null"
