@@ -5,6 +5,7 @@ import type {
   DesktopSessionSnapshot,
   SessionLiveDeltaView,
 } from "@source-inc/gents-desktop-client";
+import { setDesktopShellTimingConfigForTests } from "../src/hooks/desktopShellRuntime";
 import { createSessionReads } from "../src/hooks/sessionReads";
 import { createSelectionStore } from "../src/hooks/selectionStore";
 import { createSessionStore, readSession } from "../src/hooks/sessionStore";
@@ -14,6 +15,7 @@ function session(
   page: NonNullable<DesktopSessionSnapshot["timelinePage"]>,
 ): DesktopSessionSnapshot {
   return {
+    liveCursor: "cursor",
     sessionId: "session-1",
     agentDid: "did:key:test",
     behaviorId: "behavior-1",
@@ -56,6 +58,7 @@ function session(
 function readsFor(
   api: DesktopApiAdapter,
   store = createSelectionStore({ agentDid: "did:key:test", sessionId: "session-1" }),
+  setError = vi.fn(),
 ) {
   const sessionStore = createSessionStore();
   const reads = createSessionReads({
@@ -63,12 +66,124 @@ function readsFor(
     store,
     sessionStore,
     trackedRequestId: () => "request-1",
-    setError: vi.fn(),
+    setError,
   });
   return { ...reads, sessionStore };
 }
 
 describe("createSessionReads", () => {
+  it("keeps older pages and hydration failures across routine tip refreshes", async () => {
+    const tip = session(["k1"], {
+      totalItems: 2,
+      pageItems: 1,
+      hasOlder: true,
+      hasNewer: false,
+      oldestItemKey: "k1",
+      newestItemKey: "k1",
+    });
+    let finishPage!: (value: DesktopSessionSnapshot) => void;
+    let failHydration!: (error: Error) => void;
+    const fetchSessionSnapshot = vi.fn().mockResolvedValue(tip);
+    const setError = vi.fn();
+    const reads = readsFor(
+      {
+        fetchSessionSnapshot,
+        retrySessionHydration: () =>
+          new Promise<void>((_, reject) => {
+            failHydration = reject;
+          }),
+      } as unknown as DesktopApiAdapter,
+      undefined,
+      setError,
+    );
+    await reads.refreshSession("session-1");
+    fetchSessionSnapshot.mockReturnValueOnce(
+      new Promise<DesktopSessionSnapshot>((resolve) => {
+        finishPage = resolve;
+      }),
+    );
+    const page = reads.loadOlderSessionTimeline();
+    await reads.refreshSession("session-1");
+    finishPage(session(["k0"], { ...tip.timelinePage!, hasOlder: false }));
+    expect(await page).toBe(true);
+    expect(
+      readSession(reads.sessionStore)?.timelineItems.map((item) => item.itemKey),
+    ).toEqual(["k0", "k1"]);
+    const hydration = reads.retrySessionHydration("session-1");
+    await reads.refreshSession("session-1");
+    failHydration(new Error("hydration failed"));
+    expect(await hydration).toBeNull();
+    expect(setError).toHaveBeenLastCalledWith("Error: hydration failed");
+  });
+
+  it("revokes pending page and hydration reads when observation stops", async () => {
+    const tip = session(["k1"], {
+      totalItems: 2,
+      pageItems: 1,
+      hasOlder: true,
+      hasNewer: false,
+      oldestItemKey: "k1",
+      newestItemKey: "k1",
+    });
+    let finishPage!: (value: DesktopSessionSnapshot) => void;
+    let finishHydration!: () => void;
+    const fetchSessionSnapshot = vi
+      .fn()
+      .mockResolvedValueOnce(tip)
+      .mockReturnValueOnce(
+        new Promise<DesktopSessionSnapshot>((resolve) => {
+          finishPage = resolve;
+        }),
+      );
+    const reads = readsFor({
+      fetchSessionSnapshot,
+      retrySessionHydration: () =>
+        new Promise<void>((resolve) => {
+          finishHydration = resolve;
+        }),
+    } as unknown as DesktopApiAdapter);
+    await reads.refreshSession("session-1");
+    const page = reads.loadOlderSessionTimeline();
+    reads.invalidateSessionReads();
+    finishPage(session(["k0"], { ...tip.timelinePage!, hasOlder: false }));
+    expect(await page).toBe(false);
+    expect(readSession(reads.sessionStore)?.timelineItems).toEqual(tip.timelineItems);
+    const hydration = reads.retrySessionHydration("session-1");
+    reads.invalidateSessionReads();
+    finishHydration();
+    expect(await hydration).toBeNull();
+    expect(fetchSessionSnapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it("recovers a failed live read through a snapshot without a sticky global error", async () => {
+    const tip = session([], {
+      totalItems: 0,
+      pageItems: 0,
+      hasOlder: false,
+      hasNewer: false,
+      oldestItemKey: null,
+      newestItemKey: null,
+    });
+    tip.projectionRevision = { storeVersion: 1 };
+    const fetchSessionSnapshot = vi.fn(async () => tip);
+    const fetchSessionLiveDelta = vi.fn(async () => {
+      throw new Error("operator restarted");
+    });
+    const setError = vi.fn();
+    const reads = readsFor(
+      { fetchSessionSnapshot, fetchSessionLiveDelta } as unknown as DesktopApiAdapter,
+      createSelectionStore({ agentDid: "did:key:test", sessionId: "session-1" }),
+      setError,
+    );
+    await reads.refreshSession("session-1");
+    expect(await reads.refreshSessionLiveDelta()).toBe(false);
+    await reads.refreshSession("session-1");
+    expect(fetchSessionLiveDelta).toHaveBeenCalledTimes(1);
+    expect(fetchSessionSnapshot).toHaveBeenCalledTimes(2);
+    expect(reads.sessionStore.getState().load.phase).toBe("loaded");
+    expect(setError).not.toHaveBeenCalled();
+  });
+
   it("keeps rendered replies while a database refresh stalls and then fails", async () => {
     const page = {
       totalItems: 1,
@@ -244,7 +359,7 @@ describe("createSessionReads", () => {
       oldestItemKey: "k8",
       newestItemKey: "k8",
     });
-    tip.projectionRevision = { storeVersion: 7, reconcileVersion: 3 };
+    tip.projectionRevision = { storeVersion: 7 };
     tip.timelineItems.push({
       kind: "liveAssistant",
       itemKey: "live-assistant",
@@ -278,7 +393,8 @@ describe("createSessionReads", () => {
     await reads.loadOlderSessionTimeline();
     resolveDelta({
       outcome: "delta",
-      revision: { storeVersion: 8, reconcileVersion: 3 },
+      liveCursor: "cursor",
+      revision: { storeVersion: 8 },
       requestId: "request-1",
       turnState: "running",
       status: null,
@@ -303,6 +419,137 @@ describe("createSessionReads", () => {
     expect(readSession(reads.sessionStore)?.timelineItems.at(-1)).toMatchObject({
       content: "hello world",
     });
+  });
+
+  it("rejects old live reads after a full refresh and after observation stops", async () => {
+    const tip = session([], {
+      totalItems: 0,
+      pageItems: 0,
+      hasOlder: false,
+      hasNewer: false,
+      oldestItemKey: null,
+      newestItemKey: null,
+    });
+    tip.projectionRevision = { storeVersion: 7 };
+    tip.timelineItems = [
+      { kind: "liveAssistant", itemKey: "live", content: "hello", reasoning: null },
+    ];
+    let finish!: (value: SessionLiveDeltaView) => void;
+    const api = {
+      fetchSessionSnapshot: vi.fn(async () => tip),
+      fetchSessionLiveDelta: vi.fn(
+        () =>
+          new Promise<SessionLiveDeltaView>((resolve) => {
+            finish = resolve;
+          }),
+      ),
+    } as unknown as DesktopApiAdapter;
+    const reads = readsFor(api);
+    await reads.refreshSession("session-1");
+    const stale: SessionLiveDeltaView = {
+      outcome: "delta",
+      liveCursor: "cursor",
+      requestId: "request-1",
+      revision: { storeVersion: 8 },
+      turnState: "running",
+      status: null,
+      content: { mode: "replace", value: "old", byteLen: 3, hash: "bd2b9bd6" },
+      reasoning: { mode: "unchanged", value: "", byteLen: 0, hash: "811c9dc5" },
+    };
+    let pending!: Promise<boolean>;
+    pending = reads.refreshSessionLiveDelta();
+    await reads.refreshSession("session-1");
+    finish(stale);
+    expect(await pending).toBe(true);
+    expect(readSession(reads.sessionStore)?.timelineItems[0]).toMatchObject({
+      content: "hello",
+    });
+    pending = reads.refreshSessionLiveDelta();
+    reads.invalidateSessionReads();
+    finish(stale);
+    expect(await pending).toBe(true);
+  });
+
+  it("requires history reconciliation even when every live read succeeds", async () => {
+    const clock = vi.spyOn(performance, "now").mockReturnValue(0);
+    try {
+      const tip = session([], {
+        totalItems: 0,
+        pageItems: 0,
+        hasOlder: false,
+        hasNewer: false,
+        oldestItemKey: null,
+        newestItemKey: null,
+      });
+      tip.projectionRevision = { storeVersion: 1 };
+      tip.timelineItems = [
+        { kind: "liveAssistant", itemKey: "live", content: "hello", reasoning: null },
+      ];
+      const fetchSessionLiveDelta = vi.fn(async () => ({
+        outcome: "unchanged",
+        liveCursor: "cursor",
+        requestId: "request-1",
+        revision: { storeVersion: 2 },
+        turnState: "running",
+        status: null,
+        content: { mode: "unchanged", value: "", byteLen: 5, hash: "4f9f2cab" },
+        reasoning: { mode: "unchanged", value: "", byteLen: 0, hash: "811c9dc5" },
+      }));
+      const reads = readsFor({
+        fetchSessionSnapshot: async () => tip,
+        fetchSessionLiveDelta,
+      } as unknown as DesktopApiAdapter);
+      await reads.refreshSession("session-1");
+      clock.mockReturnValue(250);
+      expect(await reads.refreshSessionLiveDelta()).toBe(true);
+      clock.mockReturnValue(1_500);
+      expect(await reads.refreshSessionLiveDelta()).toBe(false);
+      expect(fetchSessionLiveDelta).toHaveBeenCalledTimes(1);
+      await reads.refreshSession("session-1");
+      expect(await reads.refreshSessionLiveDelta()).toBe(true);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("keeps applying live reads when periodic reconciliation is disabled", async () => {
+    const clock = vi.spyOn(performance, "now").mockReturnValue(0);
+    setDesktopShellTimingConfigForTests({ activeSessionPollMs: null });
+    try {
+      const tip = session([], {
+        totalItems: 0,
+        pageItems: 0,
+        hasOlder: false,
+        hasNewer: false,
+        oldestItemKey: null,
+        newestItemKey: null,
+      });
+      tip.projectionRevision = { storeVersion: 1 };
+      tip.timelineItems = [
+        { kind: "liveAssistant", itemKey: "live", content: "hello", reasoning: null },
+      ];
+      const fetchSessionLiveDelta = vi.fn(async () => ({
+        outcome: "unchanged",
+        liveCursor: "cursor",
+        requestId: "request-1",
+        revision: { storeVersion: 2 },
+        turnState: "running",
+        status: null,
+        content: { mode: "unchanged", value: "", byteLen: 5, hash: "4f9f2cab" },
+        reasoning: { mode: "unchanged", value: "", byteLen: 0, hash: "811c9dc5" },
+      }));
+      const reads = readsFor({
+        fetchSessionSnapshot: async () => tip,
+        fetchSessionLiveDelta,
+      } as unknown as DesktopApiAdapter);
+      await reads.refreshSession("session-1");
+      clock.mockReturnValue(60_000);
+      expect(await reads.refreshSessionLiveDelta()).toBe(true);
+      expect(fetchSessionLiveDelta).toHaveBeenCalledTimes(1);
+    } finally {
+      setDesktopShellTimingConfigForTests(null);
+      clock.mockRestore();
+    }
   });
 
   it("drops a delayed snapshot after the selected session changes", async () => {

@@ -1,4 +1,5 @@
 import Proofs.ClientShell.ObservationOrdering
+import Proofs.Conformance.ClientLiveDelta
 
 open ClientObservationOrdering
 
@@ -28,4 +29,5 @@ def main : IO Unit := do
         ",\"autostartDeclined\":" ++ toString autostartDeclined ++ ",\"expected\":\"" ++
         phaseName (ClientSnapshotObservation.observeStartup phase running autostartDeclined) ++ "\"}"
   IO.println ("{\"fences\":[" ++ String.intercalate "," rows ++
-    "],\"startup\":[" ++ String.intercalate "," startupRows ++ "]}")
+    "],\"startup\":[" ++ String.intercalate "," startupRows ++
+    "],\"liveDeltas\":" ++ Conformance.ClientLiveDeltaContracts.casesJson ++ "}")

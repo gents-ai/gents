@@ -1001,6 +1001,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "session_snapshot_projection_consumes_generated_client_shell_contract_cases",
         },
         ConformanceConsumer::RustTest {
+            id: "gents_desktop_bridge::snapshot::session::live_delta::tests::generated_live_cursor_contract",
+            package: "gents-desktop-bridge",
+            source_path: "crates/gents-desktop-bridge/src/snapshot/session/live_delta/tests.rs",
+            module_path: "gents_desktop_bridge::snapshot::session::live_delta::tests",
+            function: "generated_live_cursor_contract",
+        },
+        ConformanceConsumer::RustTest {
             id: "gents_desktop_bridge::snapshot::tests::session_state::session_snapshot_binds_request_lifecycle_operator_ui_cases",
             package: "gents-desktop-bridge",
             source_path: "crates/gents-desktop-bridge/src/snapshot/tests/session_state.rs",

@@ -33,8 +33,9 @@ mod document_patches;
 mod session_tip;
 mod session_transcript;
 pub use session_tip::{
-    load_request_prompt_ownership, load_request_prompt_ownership_on, load_session_tip_store,
-    load_session_tip_store_on, RequestPromptFact, RequestPromptOwnership,
+    load_request_prompt_ownership, load_request_prompt_ownership_on, load_session_live_store,
+    load_session_live_store_on, load_session_tip_store, load_session_tip_store_on,
+    RequestPromptFact, RequestPromptOwnership,
 };
 mod snapshot_loaders;
 

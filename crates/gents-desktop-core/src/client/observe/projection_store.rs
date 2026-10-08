@@ -55,7 +55,6 @@ impl ObserverMetrics {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StoreProjectionRevision {
     pub store_version: u64,
-    pub reconcile_version: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,10 +82,7 @@ pub struct ObservedStore {
 impl ObservedStore {
     pub fn new(initial_snapshot: ClientStore) -> (Arc<Self>, watch::Receiver<u64>) {
         let (version_tx, version_rx) = watch::channel(1_u64);
-        let revision = StoreProjectionRevision {
-            store_version: 1,
-            reconcile_version: 1,
-        };
+        let revision = StoreProjectionRevision { store_version: 1 };
         let (change_tx, _change_rx) = watch::channel(StoreUpdateNotice { revision });
         let store = Arc::new(Self {
             state: RwLock::new(ObservedState {
@@ -202,7 +198,6 @@ impl ObservedStore {
             let mut state = self.state.write().expect("store snapshot lock poisoned");
             state.revision = StoreProjectionRevision {
                 store_version: state.revision.store_version.saturating_add(1),
-                reconcile_version: state.revision.reconcile_version.saturating_add(1),
             };
             StoreUpdateNotice {
                 revision: state.revision,
@@ -229,12 +224,8 @@ impl ObservedStore {
                 return None;
             }
             let store_version = state.revision.store_version.saturating_add(1);
-            let reconcile_version = state.revision.reconcile_version.saturating_add(1);
             state.snapshot = Arc::new(transform(state.snapshot.as_ref()));
-            state.revision = StoreProjectionRevision {
-                store_version,
-                reconcile_version,
-            };
+            state.revision = StoreProjectionRevision { store_version };
             StoreUpdateNotice {
                 revision: state.revision,
             }

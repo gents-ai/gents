@@ -275,14 +275,12 @@ fn session_snapshot_consumes_generated_live_overlay_cases() {
     });
     let delta = build_session_live_delta_from_store(
         &store,
-        gents_desktop_core::client::StoreProjectionRevision {
-            store_version: 7,
-            reconcile_version: 4,
-        },
+        &store,
+        gents_desktop_core::client::StoreProjectionRevision { store_version: 7 },
         "sess-1",
         Some("did:test:amy"),
         "req-1",
-        4,
+        "missing-source",
         0,
         "811c9dc5",
         0,
@@ -340,19 +338,17 @@ fn queried_timeline_page_drops_old_orphans_below_the_selected_sequence_window() 
 }
 
 #[test]
-fn live_delta_appends_only_the_new_suffix_and_fences_reconcile_gaps() {
+fn live_delta_requires_a_canonical_source() {
     let store = active_store();
-    let revision = gents_desktop_core::client::StoreProjectionRevision {
-        store_version: 9,
-        reconcile_version: 4,
-    };
+    let revision = gents_desktop_core::client::StoreProjectionRevision { store_version: 9 };
     let current = build_session_live_delta_from_store(
+        &store,
         &store,
         revision,
         "sess-1",
         Some("did:test:amy"),
         "req-1",
-        4,
+        "missing-source",
         5,
         "4f9f2cab",
         0,
@@ -361,11 +357,12 @@ fn live_delta_appends_only_the_new_suffix_and_fences_reconcile_gaps() {
     assert_eq!(current.outcome, "snapshotRequired");
     let fenced = build_session_live_delta_from_store(
         &store,
+        &store,
         revision,
         "sess-1",
         Some("did:test:amy"),
         "req-1",
-        3,
+        "other-source",
         5,
         "4f9f2cab",
         0,
