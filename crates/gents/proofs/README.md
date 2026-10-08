@@ -1521,7 +1521,7 @@ These proofs do not establish:
 - OS sandbox behavior
 - wall-clock skew / real-time monotonicity (`Time := Nat` is abstract; #558)
 - ID-namespace collision freedom or cross-node identity uniqueness for
-  `RequestId` / `PeerId` / `AgentDid` collapsed to `Nat` (#558;
+  `RequestId` / `PeerId` / `NodeDid` collapsed to `Nat` (#558;
   `boundary.model.nat-typed-ids-time`)
 - fair-scheduler or bounded-latency temporal liveness for distributed
   delivery (tier 2/3; see § Liveness taxonomy and `tla/`)

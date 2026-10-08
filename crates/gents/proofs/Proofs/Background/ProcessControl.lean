@@ -15,13 +15,13 @@ namespace Background.ProcessControl
 structure Scope where
   requestId : String
   sessionId : String
-  agentDid : String
+  nodeDid : String
   requesterDid : Option String
   deriving DecidableEq, Repr
 
 def authorized (caller owner : Scope) : Bool :=
   caller.sessionId == owner.sessionId &&
-  caller.agentDid == owner.agentDid &&
+  caller.nodeDid == owner.nodeDid &&
   caller.requesterDid == owner.requesterDid
 
 theorem owner_authorized (owner : Scope) : authorized owner owner = true := by
@@ -33,10 +33,10 @@ theorem same_principal_next_request_authorized
   simp [authorized]
 
 theorem empty_requester_does_not_alias_absent
-    (requestId nextRequestId sessionId agentDid : String) :
+    (requestId nextRequestId sessionId nodeDid : String) :
     authorized
-      { requestId := nextRequestId, sessionId, agentDid, requesterDid := some "" }
-      { requestId, sessionId, agentDid, requesterDid := none } = false := by
+      { requestId := nextRequestId, sessionId, nodeDid, requesterDid := some "" }
+      { requestId, sessionId, nodeDid, requesterDid := none } = false := by
   simp [authorized]
 
 theorem different_session_denied
@@ -46,7 +46,7 @@ theorem different_session_denied
 
 theorem different_agent_denied
     (caller owner : Scope)
-    (hAgent : caller.agentDid ≠ owner.agentDid) :
+    (hAgent : caller.nodeDid ≠ owner.nodeDid) :
     authorized caller owner = false := by
   simp [authorized, hAgent]
 

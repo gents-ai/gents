@@ -80,7 +80,7 @@ namespace RenderedCapture
 
 /-- The permission and audit boundary the capture is attributed to. `Nat` under
 `boundary.model.nat-typed-ids-time`. -/
-abbrev AgentDid := Nat
+abbrev NodeDid := Nat
 
 /-! ## Capture key -/
 
@@ -91,7 +91,7 @@ already carry: the agent principal, the session, the exact request `_docID`, the
 completion turn, and the attempt within that turn. Equality is componentwise —
 there is no delimiter, and therefore no delimiter collision. -/
 structure CaptureKey where
-  agentDid : AgentDid
+  nodeDid : NodeDid
   sessionId : SessionId
   requestId : RequestId
   turnIndex : Nat

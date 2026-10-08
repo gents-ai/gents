@@ -5,8 +5,8 @@ namespace ApplyReconcile
 /-- The candidate is the complete desired snapshot for the install scope,
 including retained installed documents. Lookup/ACP checks precede this boundary.
 Ordinary references resolve to the same node_did. Explicit foreign capability
-and subagent delegations are not ordinary references and retain their own ACP checks.
-No collection ordering is imposed: subagent reference cycles are legitimate. -/
+and agent-request delegations are not ordinary references and retain their own ACP checks.
+No collection ordering is imposed: agent-request reference cycles are legitimate. -/
 def refsPresent (m : Manifest) (source : DocRef) : Option DesiredFields → Bool
   | none => false
   | some f => decide (∀ r ∈ f.refs, r.nodeDid = source.nodeDid ∧ (m.docs r).isSome = true)

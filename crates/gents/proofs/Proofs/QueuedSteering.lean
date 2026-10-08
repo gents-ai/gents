@@ -329,7 +329,7 @@ def providerSendPermitted (w : World) (prepared : PreparedInput)
       | some execution =>
           capture.key.requestId == w.input.requestDocId &&
             capture.key.sessionId == execution.sessionId &&
-            capture.key.agentDid == execution.nodeDid &&
+            capture.key.nodeDid == execution.nodeDid &&
             capture.sendPermitted)
 
 theorem interrupted_before_claim_retains_exact_input
@@ -590,7 +590,7 @@ private def preparedInput : PreparedInput :=
 
 private def capture (prior : Option RenderedCapture.CanonicalRequest := none) :
     RenderedCapture.Scenario :=
-  { key := { agentDid := 1, sessionId := 7, requestId := 101,
+  { key := { nodeDid := 1, sessionId := 7, requestId := 101,
              turnIndex := 0, attempt := 0 },
     request := ⟨700⟩, priorBinding := prior }
 
