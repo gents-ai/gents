@@ -245,7 +245,7 @@ Finite rows for the startup classifier in
 `Recovery.restartDisposition`**, so these rows cannot drift from the model:
 changing a classifier branch changes the emitted JSON and fails the Rust
 consumer. The leave-running rows are the previously inexpressible outcomes —
-background subagent bridges and detached/clean-complete bridges that startup
+session-message bridges (`Request.CausalHop`) and detached/clean-complete bridges that startup
 recovery must preserve. -/
 
 def restartDispositionCase
