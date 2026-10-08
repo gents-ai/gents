@@ -122,8 +122,10 @@ def rowResolve (r : CaseRow) : Doc → Option Doc :=
 
 /-- The always-on operator-grant slice. It is not part of the guarded
 dispatch: the native owner runs it on every Tools write from the shared validate
-slot, and on every Context or Behavior write whose Tools selection changes
-(`guard_reselection_keeps_grants_in_txn`). -/
+slot, on every Context or Behavior write whose Tools selection changes
+(`guard_reselection_keeps_grants_in_txn`), and on a clone when its request is
+authored or previewed (`clone_keeps_grants_in_txn`), not on the Behavior write
+that later publishes it. -/
 def grantGuard (r : CaseRow) (stored : Doc) : Doc → Bool :=
   match r.target with
   | .tools => keepsGrants decodeGrants r.held stored
