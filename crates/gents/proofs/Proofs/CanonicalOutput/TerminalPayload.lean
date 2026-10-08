@@ -8,7 +8,7 @@ inductive TerminalPayloadError where
   | reconstruction (error : MessageError)
   deriving DecidableEq, Repr
 
-/-- The common exact-answer boundary for UI, subagent completion and mailbox
+/-- The common exact-answer boundary for UI, agent-request completion and mailbox
 delivery. A terminal lifecycle alone does not make a selected message available.
 Explicit NoMessage is distinct from an unresolved selection or incomplete replica.
 The caller's existing request/ACP owner supplies terminal lifecycle and scope. -/

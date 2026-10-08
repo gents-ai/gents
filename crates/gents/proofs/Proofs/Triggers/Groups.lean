@@ -6,7 +6,7 @@ Shared durable event-group identity and clock.
 `EventGroupState` replaces the trigger-only group-state vocabulary: one durable
 first-seen/quiescence clock serves task triggers and callback bindings through
 the existing event engine. The consumer is a typed trigger or callback-binding
-reference under its `agent_did`. The durable group key derives from the owner,
+reference under its `node_did`. The durable group key derives from the owner,
 consumer kind/id, effective delivery configuration key and correlation;
 identical trigger and binding ids cannot alias because the consumer kind is
 part of the key and of its derivation input, and a binding id is never placed
@@ -150,7 +150,7 @@ theorem equal_raw_ids_different_kinds_do_not_alias
 Concurrency gate identity. Per-document trigger delivery gates on the trigger
 reference alone; per-group delivery and all callback-binding delivery gate on
 the full typed group key. The old trigger-kind component is gone: `trigger_id`
-is the logical trigger key within its `agent_did`, so the typed consumer plus
+is the logical trigger key within its `node_did`, so the typed consumer plus
 owner is the whole gate identity.
 -/
 

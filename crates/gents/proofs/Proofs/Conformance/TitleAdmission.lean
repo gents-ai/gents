@@ -165,7 +165,7 @@ private def caseJson (c : Case) : Json :=
       , ("model_own_physical", symbolJson start.requestId)
       , ("purpose", toJson start.purpose.toWire)
       , ("session", symbolJson start.sessionId)
-      , ("principal", symbolJson start.nodeDid)
+      , ("node_did", symbolJson start.nodeDid)
       , ("queue_scope_agent", symbolJson start.queue.scope.agent)
       , ("queue_scope_session", symbolJson start.queue.scope.session)
       , ("queue_active", optionalSymbolJson start.queue.active)

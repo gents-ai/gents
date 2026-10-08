@@ -292,9 +292,9 @@ def r6NoncanonicalQueueSourceCase : R6BackgroundingCase :=
     none
 
 def processScope
-    (requestId sessionId agentDid : String)
+    (requestId sessionId nodeDid : String)
     (requesterDid : Option String) : Background.ProcessControl.Scope :=
-  { requestId, sessionId, agentDid, requesterDid }
+  { requestId, sessionId, nodeDid, requesterDid }
 
 def r6ProcessControlCase
     (name action scenario : String)

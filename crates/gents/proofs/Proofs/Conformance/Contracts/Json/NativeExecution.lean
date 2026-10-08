@@ -796,7 +796,7 @@ def seedJson (value : World) : String :=
     ++ "\"purpose\":" ++ jsonString value.purpose.toWire ++ ","
     ++ "\"title_binding\":" ++ (titleBinding.map titleBindingJson).getD "null" ++ ","
     ++ "\"session_id\":" ++ toString value.sessionId ++ ","
-    ++ "\"principal\":" ++ toString value.nodeDid ++ ","
+    ++ "\"node_did\":" ++ toString value.nodeDid ++ ","
     ++ "\"lease\":" ++ Conformance.RequestExecutionLeaseContracts.worldJson value.lease ++ ","
     ++ "\"transcript_session_id\":" ++ toString value.transcript.sessionId ++ ","
     ++ "\"next_sequence\":" ++ toString value.transcript.nextSeq ++ ","
