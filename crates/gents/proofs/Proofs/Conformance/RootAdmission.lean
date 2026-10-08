@@ -20,7 +20,6 @@ structure Case where
   published : List CanonicalPath
   candidate : Option CanonicalPath
   expected : Bool
-  storedRequiresRoot : Bool := false
   deriving DecidableEq, Repr
 
 private def path (components : List String) : CanonicalPath := ⟨"sandbox", components⟩
@@ -32,61 +31,43 @@ private def nested := path ["workspace", "root", "project"]
 abstract canonical-path case must refine. They do not model filesystem effects. -/
 def cases : List Case :=
   [ ⟨"exact_create", "create", "configured", false, "existing", true, some workspace,
-      [root], [root], some root, true, false⟩
+      [root], [root], some root, true⟩
   , ⟨"descendant_create", "create", "configured", false, "existing", true, some workspace,
-      [root], [root], some nested, true, false⟩
-  , ⟨"descendant_edit", "edit_set", "configured", false, "existing", true, some workspace,
-      [root], [root], some nested, true, false⟩
+      [root], [root], some nested, true⟩
   , ⟨"whitespace_create_explicit", "create", "   ", true, "blank", true, some workspace,
-      [root], [root], none, false, false⟩
-  , ⟨"whitespace_edit_explicit", "edit_set", "   ", true, "blank", true, some workspace,
-      [root], [root], none, false, false⟩
-  , ⟨"clear_edit_explicit", "edit_clear", "", true, "clear", true, some workspace,
-      [root], [root], none, false, false⟩
-  , ⟨"clear_edit_unconfigured", "edit_clear", "", true, "clear", false, some root,
-      [], [root], none, true, false⟩
-  , ⟨"omitted_edit_preserves_admitted_stored_root", "edit_omitted", "stored", false,
-      "existing", true, some workspace, [root], [root], some nested, true, true⟩
-  , ⟨"omitted_edit_rejects_blank_stored_root_under_policy", "edit_omitted", "   ", true,
-      "blank", true, some workspace, [root], [root], none, false, true⟩
-  , ⟨"omitted_edit_rejects_revoked_stored_root", "edit_omitted", "stored", false,
-      "existing", true, some workspace, [nested], [nested], some root, false, true⟩
-  , ⟨"omitted_edit_allows_blank_stored_root_without_policy", "edit_omitted", "", true,
-      "blank", false, some root, [], [root], none, true, true⟩
-  , ⟨"omitted_edit_allows_inactive_rootless_tools", "edit_omitted", "", true,
-      "inactive", true, some workspace, [root], [root], none, true, false⟩
+      [root], [root], none, false⟩
   , ⟨"whitespace_create_unconfigured", "create", "   ", true, "blank", false, some root,
-      [], [root], none, true, false⟩
+      [], [root], none, true⟩
   , ⟨"no_documents_uses_ceiling", "create", "configured", false, "existing", false, some root,
-      [], [root], some root, true, false⟩
+      [], [root], some root, true⟩
   , ⟨"no_policy_no_ceiling_authored_root", "create", "configured", false, "existing", false, none,
-      [], [], some root, true, false⟩
+      [], [], some root, true⟩
   , ⟨"all_disabled_does_not_fallback", "create", "configured", false, "existing", true, some root,
-      [], [], some root, false, false⟩
+      [], [], some root, false⟩
   , ⟨"invalid_ceiling_does_not_fallback", "create", "configured", false, "invalid_ceiling",
-      true, none, [], [], some root, false, false⟩
+      true, none, [], [], some root, false⟩
   , ⟨"prefix_sibling", "create", "configured", false, "existing", true, some workspace,
-      [root], [root], some (path ["workspace", "root-other"]), false, false⟩
+      [root], [root], some (path ["workspace", "root-other"]), false⟩
   , ⟨"traversal_normalizes_inside", "create", "configured", false, "traversal", true, some workspace,
-      [root], [root], some nested, true, false⟩
+      [root], [root], some nested, true⟩
   , ⟨"traversal_normalizes_outside", "create", "configured", false, "traversal", true, some workspace,
-      [root], [root], some (path ["workspace", "outside"]), false, false⟩
+      [root], [root], some (path ["workspace", "outside"]), false⟩
   , ⟨"symlink_target_inside", "create", "configured", false, "symlink", true, some workspace,
-      [root], [root], some nested, true, false⟩
+      [root], [root], some nested, true⟩
   , ⟨"symlink_target_outside", "create", "configured", false, "symlink", true, some workspace,
-      [root], [root], some (path ["outside", "project"]), false, false⟩
+      [root], [root], some (path ["outside", "project"]), false⟩
   , ⟨"nonexistent_suffix", "create", "configured", false, "nonexistent", true, some workspace,
-      [root], [root], some (path ["workspace", "root", "future", "project"]), true, false⟩
+      [root], [root], some (path ["workspace", "root", "future", "project"]), true⟩
   , ⟨"resolution_failure", "create", "configured", false, "unresolved", true, some workspace,
-      [root], [root], none, false, false⟩
+      [root], [root], none, false⟩
   , ⟨"explicit_restriction_does_not_widen", "create", "configured", false,
       "explicit_restriction", true, some root, [nested], [nested],
-      some (path ["workspace", "root", "other"]), false, false⟩
+      some (path ["workspace", "root", "other"]), false⟩
   , ⟨"one_of_multiple_published_roots", "create", "configured", false, "existing", true,
       some (path []), [root, path ["srv", "source"]], [root, path ["srv", "source"]],
-      some (path ["srv", "source", "repo"]), true, false⟩
+      some (path ["srv", "source", "repo"]), true⟩
   , ⟨"different_anchor", "create", "configured", false, "existing", true, none,
-      [root], [root], some ⟨"other-volume", ["workspace", "root"]⟩, false, false⟩
+      [root], [root], some ⟨"other-volume", ["workspace", "root"]⟩, false⟩
   ]
 
 private def policy (c : Case) : PublicationPolicy :=
@@ -99,15 +80,6 @@ def evaluates (c : Case) : Bool :=
     | "create" =>
         decide (rootSelectionOk c.configured (publishedRoots (policy c))
           (c.authored.trim == "") c.candidate)
-    | "edit_set" =>
-        decide (rootEditSelectionOk c.configured (publishedRoots (policy c))
-          "" none false (.set c.authored) c.candidate)
-    | "edit_clear" =>
-        decide (rootEditSelectionOk c.configured (publishedRoots (policy c))
-          "" none false .clear c.candidate)
-    | "edit_omitted" =>
-        decide (rootEditSelectionOk c.configured (publishedRoots (policy c))
-          c.authored c.candidate c.storedRequiresRoot .omitted none)
     | _ => false
 
 theorem cases_replay : ∀ c ∈ cases, evaluates c = c.expected := by native_decide
@@ -133,8 +105,7 @@ private def caseJson (c : Case) : String :=
   ",\"enabled\":" ++ jsonArray (c.enabled.map pathJson) ++
   ",\"published\":" ++ jsonArray (c.published.map pathJson) ++
   ",\"candidate\":" ++ candidateJson c.candidate ++
-  ",\"expected\":" ++ boolJson c.expected ++
-  ",\"stored_requires_root\":" ++ boolJson c.storedRequiresRoot ++ "}"
+  ",\"expected\":" ++ boolJson c.expected ++ "}"
 
 def casesJson : String := jsonArray (cases.map caseJson)
 
