@@ -230,7 +230,6 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
         .await
         .unwrap();
 
-        // The runtime reclaims the same physical request.
         let prompt_builder = LayeredPromptBuilder::for_behavior(
             &behavior.system_prompt,
             &behavior.behavior_id,
