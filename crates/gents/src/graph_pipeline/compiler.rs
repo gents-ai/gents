@@ -130,7 +130,7 @@ impl LimitViolation {
 }
 
 /// Every requested limit outside the platform policy, in `GraphLimits` field
-/// order: the one comparison table for graph intents and operator ranges.
+/// order: the one comparison of `GraphLimits` against a `CompilerPolicy`.
 /// The invocation and runtime budgets must be at least 1, because a zero
 /// budget fails every run at its first request or at once; the structural
 /// limits accept zero and leave it to the graph-content checks
