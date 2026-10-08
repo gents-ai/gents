@@ -1,6 +1,6 @@
 type PeerRegistry @branchable {
     peer_id: String @index(unique: true)
-    agent_did: String @index
+    node_did: String @index
     addresses: [String!]!
     templates: [String!]
     display_name: String
