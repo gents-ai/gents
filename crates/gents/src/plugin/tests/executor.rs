@@ -181,12 +181,32 @@ async fn a_changed_grant_is_admitted_again() {
     let executor = PluginExecutor::new(Some(home.path().to_owned()));
     executor.call(&record, serde_json::json!(1)).await.unwrap();
     record.granted = Some(crate::plugin::Manifold::sealed());
+    store::write_record(home.path(), &record).unwrap();
     let call = executor.call(&record, serde_json::json!(2)).await.unwrap();
     assert_eq!(call.outcome.output, serde_json::json!(2));
     assert_eq!(
         executor.admitted_len(),
         1,
         "the new grant replaces the old admission"
+    );
+}
+
+/// A caller holds the record it resolved, and the artifact stays admitted in
+/// memory, yet a call after `gents plugin remove` fails closed.
+#[tokio::test]
+async fn a_removed_plugin_fails_closed_with_a_warm_cache() {
+    let (home, record) = installed_echo();
+    let executor = PluginExecutor::new(Some(home.path().to_owned()));
+    executor.call(&record, serde_json::json!(1)).await.unwrap();
+    assert_eq!(executor.admitted_len(), 1);
+    store::remove_record(home.path(), &record.namespace, &record.name).unwrap();
+    let error = executor
+        .call(&record, serde_json::json!(2))
+        .await
+        .unwrap_err();
+    assert!(
+        format!("{error:#}").contains("is not installed"),
+        "{error:#}"
     );
 }
 
@@ -198,6 +218,7 @@ async fn changed_resource_declaration_invalidates_admission_without_new_artifact
         max_output_mib: Some(2),
         ..Default::default()
     });
+    store::write_record(home.path(), &record).unwrap();
     let executor = PluginExecutor::new(Some(home.path().to_owned()));
     let input = serde_json::json!({});
     assert_eq!(
@@ -210,6 +231,7 @@ async fn changed_resource_declaration_invalidates_admission_without_new_artifact
         crate::plugin::PluginVerdict::Success
     );
     record.declaration.limits = None;
+    store::write_record(home.path(), &record).unwrap();
     assert_eq!(
         executor.call(&record, input).await.unwrap().outcome.verdict,
         crate::plugin::PluginVerdict::BadOutput
@@ -658,6 +680,7 @@ mod bound {
     async fn a_declared_original_field_carries_the_real_path_of_a_single_file() {
         let (home, mut record) = installed_plugin(ECHO_WAT, Some(BindAccess::Read));
         record.declaration.bind_dir.as_mut().unwrap().original_field = Some("path_original".into());
+        store::write_record(home.path(), &record).unwrap();
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
         std::fs::write(root.join("a.txt"), "a").unwrap();

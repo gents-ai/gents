@@ -347,8 +347,13 @@ impl PluginExecutor {
         input: serde_json::Value,
         bound: Option<BoundDir>,
     ) -> Result<PluginCall> {
-        let admitted = self.admit(record)?;
         let coordinate = format!("{}/{}", record.namespace, record.name);
+        // Callers may hold a record resolved long ago and `admit` serves its
+        // digest from memory, so the call runs the store's current record: a
+        // plugin removed or replaced since fails closed here, and a changed
+        // grant or declaration is admitted again.
+        let record = &self.resolve(&coordinate, Some(&record.digest))?;
+        let admitted = self.admit(record)?;
         let (model, binding_note) = self.model_session(record).await?;
         let outcome = drive(
             &coordinate,

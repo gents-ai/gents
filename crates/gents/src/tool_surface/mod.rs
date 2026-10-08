@@ -56,15 +56,6 @@ use crate::toolset::{build_memory_tool, MEMORY_TOOL_NAME};
 /// tool with `host.cli[].timeout_secs`, within the host foreground maximum.
 const DEFAULT_CLI_TIMEOUT_SECS: u64 = 10;
 
-/// A resolved plugin tool's installed identity: enough for the reconciler to
-/// tell an install, an update and a removal apart without reading the plugin
-/// store again.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PluginRecordIdentity {
-    pub(crate) version: String,
-    pub(crate) digest: String,
-}
-
 #[derive(Clone)]
 pub struct ToolSurface {
     host_tools: ToolSet,
@@ -98,13 +89,14 @@ pub struct ToolSurface {
     /// plugin is a behavior change the reconciler sees (it feeds the runtime
     /// configuration fingerprint and the slot comparison through this struct's
     /// Debug), re-admitting a behavior whose build failed on the missing tool.
-    /// `None` records a not-installed or pin-mismatched plugin and never makes
-    /// a behavior unavailable: building tools stays the fail-closed gate. A
-    /// grant-only reinstall whose `(version, digest)` is unchanged does not
-    /// refresh the slot, so a new grant does not churn the fingerprint.
+    /// The whole installed record is kept, so a same-artifact reinstall that
+    /// changes what the built tool renders or enforces (instructions,
+    /// declaration, grant, model binding) refreshes the slot too. `None`
+    /// records a not-installed or pin-mismatched plugin and never makes a
+    /// behavior unavailable: building tools stays the fail-closed gate.
     pub(super) plugin_resolutions: Vec<(
         crate::document_config::PluginToolRef,
-        Option<PluginRecordIdentity>,
+        Option<crate::plugin::store::InstalledPlugin>,
     )>,
     pub(super) enable_skills: bool,
     pub(super) self_config: SelfConfigToolConfig,
@@ -214,7 +206,7 @@ impl ToolSurface {
         &self,
     ) -> &[(
         crate::document_config::PluginToolRef,
-        Option<PluginRecordIdentity>,
+        Option<crate::plugin::store::InstalledPlugin>,
     )] {
         &self.plugin_resolutions
     }

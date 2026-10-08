@@ -332,22 +332,6 @@ async fn a_documentless_pack_install_is_not_a_plugin_store_record() {
         .unwrap();
 }
 
-/// A removal with no record (a plugin installed before the home had a node)
-/// still writes, to wake the watcher, and leaves no record behind.
-#[tokio::test]
-async fn a_removal_without_a_record_leaves_none() {
-    let access = access().await;
-    let home = tempfile::tempdir().unwrap();
-    record_plugin_store_change(&access, OWNER, home.path(), "acme/demo", None)
-        .await
-        .unwrap();
-    let rows = access
-        .execute("{ PackInstallation { _docID } }")
-        .await
-        .unwrap();
-    assert_eq!(rows["data"]["PackInstallation"], json!([]));
-}
-
 async fn installation_doc_id(access: &ConfigAccess) -> String {
     access
         .execute("{ PackInstallation { _docID } }")

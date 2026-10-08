@@ -733,19 +733,15 @@ fn resolve_plugin_identities(
     plugin_tools: &[crate::document_config::PluginToolRef],
 ) -> Vec<(
     crate::document_config::PluginToolRef,
-    Option<super::PluginRecordIdentity>,
+    Option<crate::plugin::store::InstalledPlugin>,
 )> {
     plugin_tools
         .iter()
         .map(|plugin| {
-            let identity = plugins
+            let record = plugins
                 .resolve(&plugin.plugin, plugin.digest.as_deref())
-                .ok()
-                .map(|record| super::PluginRecordIdentity {
-                    version: record.version,
-                    digest: record.digest,
-                });
-            (plugin.clone(), identity)
+                .ok();
+            (plugin.clone(), record)
         })
         .collect()
 }

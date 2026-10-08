@@ -540,8 +540,9 @@ pub(crate) async fn install_in_txn(
 /// removal deletes by them); only installed plugin names join its plugins.
 /// Otherwise the record is marked `plugin_store`: the installed-pack listings
 /// skip it, and it goes once the store holds none of `coordinate`'s plugins.
-/// A removal with no record at all (the plugin was installed before the home
-/// had a node) still writes one and deletes it again, so it wakes too.
+/// A removal with no record (installed before the home had a node) writes
+/// nothing; the next call of the removed plugin fails closed at
+/// `PluginExecutor::run`.
 pub async fn record_plugin_store_change(
     access: &ConfigAccess,
     owner: &str,
@@ -553,7 +554,7 @@ pub async fn record_plugin_store_change(
         && crate::plugin::store::list_records(home)?
             .iter()
             .any(|plugin| plugin.owner_pack_coordinate.as_deref() == Some(coordinate));
-    let pulsed = access
+    access
         .transact("pack.record_plugin_store", |txn| {
             Box::pin(async move {
                 let prior = read_record(txn, owner, coordinate).await?;
@@ -561,26 +562,22 @@ pub async fn record_plugin_store_change(
                 let own = prior.doc_id.is_none() || prior.plugin_store;
                 match installed {
                     Some(pack) if own => {
-                        write_record_in_txn(txn, owner, pack, &prior, documents, false, true)
-                            .await?;
-                        return Ok(false);
+                        return write_record_in_txn(
+                            txn, owner, pack, &prior, documents, false, true,
+                        )
+                        .await
                     }
-                    None if prior.doc_id.is_none() => {
-                        let pulse = PackIdentity {
-                            coordinate: coordinate.to_owned(),
-                            version: String::new(),
-                            digest: String::new(),
-                            plugins: Vec::new(),
-                            dependencies: Vec::new(),
-                        };
-                        write_record_in_txn(txn, owner, &pulse, &prior, documents, false, true)
-                            .await?;
-                        return Ok(true);
-                    }
+                    None if prior.doc_id.is_none() => return Ok(()),
                     None if own && !retained => {
-                        remove_record_in_txn(txn, owner, coordinate, &prior, DriftPolicy::Refuse)
-                            .await?;
-                        return Ok(false);
+                        return remove_record_in_txn(
+                            txn,
+                            owner,
+                            coordinate,
+                            &prior,
+                            DriftPolicy::Refuse,
+                        )
+                        .await
+                        .map(|_| ());
                     }
                     _ => {}
                 }
@@ -608,24 +605,10 @@ pub async fn record_plugin_store_change(
                     false,
                     plugin_store,
                 )
-                .await?;
-                Ok(false)
+                .await
             })
         })
-        .await?;
-    if pulsed {
-        access
-            .transact("pack.record_plugin_store", |txn| {
-                Box::pin(async move {
-                    let prior = read_record(txn, owner, coordinate).await?;
-                    remove_record_in_txn(txn, owner, coordinate, &prior, DriftPolicy::Refuse)
-                        .await
-                        .map(|_| ())
-                })
-            })
-            .await?;
-    }
-    Ok(())
+        .await
 }
 
 /// Whether an installation record row is a plugin-store record

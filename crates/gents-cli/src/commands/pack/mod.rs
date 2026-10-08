@@ -948,8 +948,13 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                     .collect(),
                 installed_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             };
+            // The node record goes last, in one transaction: a failure
+            // before it leaves the node untouched, and undoing the store and
+            // home record restores everything else.
+            let prior_record = gents::pack::read_home_install(&home, &record.coordinate)?;
             let recorded = async {
                 bind_plugin_slots(&home, pack.manifest(), slot_owner.as_deref(), &requested)?;
+                gents::pack::write_home_install(&home, &record)?;
                 if !record.plugins.is_empty() {
                     let identity = gents::pack::PackIdentity::new(
                         pack.manifest(),
@@ -958,23 +963,21 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                     );
                     record_plugin_store_change(&home, &record.coordinate, Some(&identity)).await?;
                 }
-                gents::pack::write_home_install(&home, &record)
+                anyhow::Ok(())
             }
             .await;
             if let Err(error) = recorded {
                 rollback_pack_plugin_records(&home, &rollback);
-                // Bring the node record back in line with the restored store,
-                // so a failed install leaves no record of itself.
-                if !record.plugins.is_empty() {
-                    if let Err(undo) =
-                        record_plugin_store_change(&home, &record.coordinate, None).await
-                    {
-                        tracing::error!(
-                            coordinate = %record.coordinate,
-                            error = %undo,
-                            "failed to undo the plugin-store record of a failed pack install",
-                        );
-                    }
+                let restored = match &prior_record {
+                    Some(prior) => gents::pack::write_home_install(&home, prior),
+                    None => gents::pack::forget_home_install(&home, &record.coordinate),
+                };
+                if let Err(restore) = restored {
+                    tracing::error!(
+                        coordinate = %record.coordinate,
+                        error = %restore,
+                        "failed to restore the pack install record after a failed pack install",
+                    );
                 }
                 return Err(error);
             }

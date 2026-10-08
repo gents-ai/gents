@@ -2277,14 +2277,8 @@ async fn plugin_resolution_surfaces(
     );
     assert_eq!(
         installed.plugin_resolutions(),
-        &[(
-            plugin_ref,
-            Some(crate::tool_surface::PluginRecordIdentity {
-                version: record.version.clone(),
-                digest: record.digest.clone(),
-            })
-        )],
-        "an installed plugin records its version and digest"
+        &[(plugin_ref, Some(record.clone()))],
+        "an installed plugin records its installed record"
     );
     (behavior, absent, installed)
 }
@@ -2343,4 +2337,28 @@ async fn a_changed_plugin_resolution_changes_the_fingerprint_and_recreates_the_s
     );
     let _ = shutdown_tx.send(true);
     retire_slot(slot);
+
+    // A same-artifact reinstall with a changed declaration is a change too:
+    // the built tool renders and enforces it.
+    let mut reinstalled = installed_surface
+        .plugin_resolutions()
+        .first()
+        .and_then(|(_, record)| record.clone())
+        .expect("installed record");
+    reinstalled.declaration.description = "lists files, reworded".to_owned();
+    let home = tempfile::tempdir().unwrap();
+    crate::plugin::store::write_record(home.path(), &reinstalled).unwrap();
+    let plugins = crate::plugin::executor::PluginExecutor::new(Some(home.path().to_path_buf()));
+    let reinstalled_surface = Arc::new(
+        behavior
+            .tools
+            .resolve(node.as_ref(), behavior.agent_did(), &plugins)
+            .await
+            .unwrap(),
+    );
+    assert_ne!(
+        snapshot_for(reinstalled_surface).configuration_fingerprint(),
+        installed_snapshot.configuration_fingerprint(),
+        "a same-artifact reinstall that changes the declaration must refresh the slot"
+    );
 }

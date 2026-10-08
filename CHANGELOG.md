@@ -12,8 +12,10 @@ source consistency checks, not a separate runtime compatibility version.
   runtime configuration fingerprint and the slot comparison. A plugins pack
   install, `gents plugin install` and their removes now write or delete a
   `PackInstallation` record marked by the new `plugin_store` field after
-  the plugin store changes, which wakes the reconciler; a removal with no
-  record still writes one and deletes it. Installed-pack listings and
+  the plugin store changes, which wakes the reconciler. Each plugin call
+  re-reads its installed record, so a removed or replaced plugin fails
+  closed on its next call even when its artifact is cached, and a changed
+  grant or declaration is admitted again. Installed-pack listings and
   `gents pack outdated`/`update` skip such records, and `gents pack remove`
   refers them to `gents plugin remove`. An uninitialized home records
   nothing. The demotion log names installing a missing plugin as the fix.
