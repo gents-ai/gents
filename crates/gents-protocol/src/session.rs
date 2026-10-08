@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// One session, owned by a principal and derived from one behavior.
+/// One session, owned by a principal and selected from one agent.
 /// `_docID` and revision metadata belong to the database envelope.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
