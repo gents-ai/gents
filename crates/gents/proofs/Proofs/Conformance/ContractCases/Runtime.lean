@@ -5,15 +5,15 @@ import Proofs.Conformance.ContractCases.Types
 namespace Conformance.ContractCases
 
 def runtimeResolvedA : ResolvedSnapshot :=
-  { defaultBehavior := 10, runnable := {10}, unavailable := ∅
+  { defaultAgent := 10, runnable := {10}, unavailable := ∅
   , dependenciesSatisfied := {10} }
 
 def runtimeResolvedB : ResolvedSnapshot :=
-  { defaultBehavior := 20, runnable := {20}, unavailable := {10}
+  { defaultAgent := 20, runnable := {20}, unavailable := {10}
   , dependenciesSatisfied := {20} }
 
 def runtimeResolvedMissingDependency : ResolvedSnapshot :=
-  { defaultBehavior := 20, runnable := {20}, unavailable := {10}
+  { defaultAgent := 20, runnable := {20}, unavailable := {10}
   , dependenciesSatisfied := ∅ }
 
 def runtimeBoot : RuntimeState :=
@@ -40,8 +40,8 @@ def runtimeWithInFlight : RuntimeState :=
   , inFlight := {500}
   , requestGeneration := Function.update runtimeRouterObserved.requestGeneration 500 2
   , requestSession := Function.update runtimeRouterObserved.requestSession 500 100
-  , requestBehavior := Function.update runtimeRouterObserved.requestBehavior 500 20
-  , sessionBehavior := Function.update runtimeRouterObserved.sessionBehavior 100 (some 20)
+  , requestAgent := Function.update runtimeRouterObserved.requestAgent 500 20
+  , sessionAgent := Function.update runtimeRouterObserved.sessionAgent 100 (some 20)
   }
 
 def runtimeCaseFromStep
@@ -51,13 +51,13 @@ def runtimeCaseFromStep
     (trackedRequestId : RequestId := 0)
     (trackedSessionId : SessionId := 0) : RuntimeReconcileCase :=
   let requested := match action with
-    | .acceptRequest _ _ _ behavior => some behavior
+    | .acceptRequest _ _ _ agent => some agent
     | _ => none
   match RuntimeState.step? pre action with
   | some post =>
-      { requestedBehavior := requested
-      , preDefaultBehavior := pre.active.defaultBehavior
-      , preSessionBehavior := pre.sessionBehavior trackedSessionId
+      { requestedAgent := requested
+      , preDefaultAgent := pre.active.defaultAgent
+      , preSessionAgent := pre.sessionAgent trackedSessionId
       , preRunnable := pre.effectiveDispatchers.sort (· ≤ ·)
       , name := name
       , action := actionName
@@ -78,16 +78,16 @@ def runtimeCaseFromStep
       , trackedSessionId := trackedSessionId
       , trackedRequestGeneration := post.requestGeneration trackedRequestId
       , trackedRequestSession := post.requestSession trackedRequestId
-      , trackedRequestBehavior := post.requestBehavior trackedRequestId
-      , trackedSessionBehavior :=
-          match post.sessionBehavior trackedSessionId with
+      , trackedRequestAgent := post.requestAgent trackedRequestId
+      , trackedSessionAgent :=
+          match post.sessionAgent trackedSessionId with
           | some agentId => agentId
           | none => 0
       }
   | none =>
-      { requestedBehavior := requested
-      , preDefaultBehavior := pre.active.defaultBehavior
-      , preSessionBehavior := pre.sessionBehavior trackedSessionId
+      { requestedAgent := requested
+      , preDefaultAgent := pre.active.defaultAgent
+      , preSessionAgent := pre.sessionAgent trackedSessionId
       , preRunnable := pre.effectiveDispatchers.sort (· ≤ ·)
       , name := name
       , action := actionName
@@ -108,33 +108,33 @@ def runtimeCaseFromStep
       , trackedSessionId := trackedSessionId
       , trackedRequestGeneration := 0
       , trackedRequestSession := 0
-      , trackedRequestBehavior := 0
-      , trackedSessionBehavior := 0
+      , trackedRequestAgent := 0
+      , trackedSessionAgent := 0
       }
 
-def runtimeTwoBehaviors : RuntimeState := RuntimeState.bootState
-  { defaultBehavior := 10, runnable := {10, 20}, unavailable := ∅,
+def runtimeTwoAgents : RuntimeState := RuntimeState.bootState
+  { defaultAgent := 10, runnable := {10, 20}, unavailable := ∅,
     dependenciesSatisfied := {10, 20} }
 
 def runtimeExplicitSelectionCases : List RuntimeReconcileCase :=
-  [ runtimeCaseFromStep "default-A-explicit-B-binds-B" "acceptRequest" runtimeTwoBehaviors
+  [ runtimeCaseFromStep "default-A-explicit-B-binds-B" "acceptRequest" runtimeTwoAgents
       (.acceptRequest .ready 100 500 20) 500 100
   , runtimeCaseFromStep "existing-A-requested-B-rejected" "acceptRequest"
-      { runtimeTwoBehaviors with sessionBehavior := fun _ => some 10 }
+      { runtimeTwoAgents with sessionAgent := fun _ => some 10 }
       (.acceptRequest .ready 100 500 20) 500 100
   , runtimeCaseFromStep "existing-A-requested-A-accepted" "acceptRequest"
-      { runtimeTwoBehaviors with sessionBehavior := fun _ => some 10 }
+      { runtimeTwoAgents with sessionAgent := fun _ => some 10 }
       (.acceptRequest .ready 100 500 10) 500 100
-  , runtimeCaseFromStep "unknown-selection-never-falls-back" "acceptRequest" runtimeTwoBehaviors
+  , runtimeCaseFromStep "unknown-selection-never-falls-back" "acceptRequest" runtimeTwoAgents
       (.acceptRequest .ready 100 500 999) 500 100
   , runtimeCaseFromStep "unobserved-generation-rejects-explicit-request" "acceptRequest"
       runtimePublishedBeforeRouter (.acceptRequest .ready 100 500 20) 500 100
   , runtimeCaseFromStep "demoted-selection-never-falls-back" "acceptRequest"
-      { runtimeTwoBehaviors with startupDemoted := {20} }
+      { runtimeTwoAgents with startupDemoted := {20} }
       (.acceptRequest .ready 100 500 20) 500 100 ]
 
 theorem explicit_selection_cases_pinned : runtimeExplicitSelectionCases.map
-    (fun c => (c.legal, c.trackedRequestBehavior, c.trackedSessionBehavior)) =
+    (fun c => (c.legal, c.trackedRequestAgent, c.trackedSessionAgent)) =
     [(true, 20, 20), (false, 0, 0), (true, 10, 10), (false, 0, 0),
      (false, 0, 0), (false, 0, 0)] := by native_decide
 
@@ -202,7 +202,7 @@ def clientAgentReadinessCase
   let unavailableSet : Finset AgentId := if unavailable then {20} else ∅
   let demotedSet : Finset AgentId := if startupDemoted then {20} else ∅
   let resolved : ResolvedSnapshot :=
-    { defaultBehavior := 20
+    { defaultAgent := 20
     , runnable := runnableSet
     , unavailable := unavailableSet
     , dependenciesSatisfied := runnableSet }
@@ -214,7 +214,7 @@ def clientAgentReadinessCase
     , startupDemoted := demotedSet
     , readyGenerations := {activeGeneration, routerGeneration}
     , liveGenerations := {activeGeneration, routerGeneration}
-    , sessionBehavior := Function.update runtimeBoot.sessionBehavior 100 (some 20) }
+    , sessionAgent := Function.update runtimeBoot.sessionAgent 100 (some 20) }
   let observation := match observationKind with
     | "observed" =>
         RuntimeState.ClientAgentReadiness.ClientNodeObservation.observed process state

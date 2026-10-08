@@ -38,7 +38,7 @@ end ReconcilePhase
 
 structure ResolvedSnapshot where
   /-- Upstream chooser metadata; request admission always requires its own explicit selection. -/
-  defaultBehavior : AgentId
+  defaultAgent : AgentId
   runnable : Finset AgentId
   unavailable : Finset AgentId
   /-- Agents whose declared runtime dependencies were present while the
@@ -49,7 +49,7 @@ structure ResolvedSnapshot where
 
 instance : Repr ResolvedSnapshot where
   reprPrec s _ :=
-    "{ defaultBehavior := " ++ repr s.defaultBehavior ++
+    "{ defaultAgent := " ++ repr s.defaultAgent ++
       ", runnableCard := " ++ repr s.runnable.card ++
       ", unavailableCard := " ++ repr s.unavailable.card ++
       ", dependenciesSatisfiedCard := " ++ repr s.dependenciesSatisfied.card ++ " }"
@@ -59,7 +59,7 @@ namespace ResolvedSnapshot
 def wellFormed (s : ResolvedSnapshot) : Prop :=
   Disjoint s.runnable s.unavailable ∧
     s.runnable ⊆ s.dependenciesSatisfied ∧
-    s.defaultBehavior ∈ s.runnable ∪ s.unavailable
+    s.defaultAgent ∈ s.runnable ∪ s.unavailable
 
 instance (s : ResolvedSnapshot) : Decidable s.wellFormed := by
   unfold wellFormed
@@ -69,7 +69,7 @@ end ResolvedSnapshot
 
 structure ActiveRuntimeSnapshot where
   generation : Generation
-  defaultBehavior : AgentId
+  defaultAgent : AgentId
   runnable : Finset AgentId
   unavailable : Finset AgentId
   dependenciesSatisfied : Finset AgentId
@@ -79,7 +79,7 @@ structure ActiveRuntimeSnapshot where
 instance : Repr ActiveRuntimeSnapshot where
   reprPrec s _ :=
     "{ generation := " ++ repr s.generation ++
-      ", defaultBehavior := " ++ repr s.defaultBehavior ++
+      ", defaultAgent := " ++ repr s.defaultAgent ++
       ", runnableCard := " ++ repr s.runnable.card ++
       ", unavailableCard := " ++ repr s.unavailable.card ++
       ", dependenciesSatisfiedCard := " ++ repr s.dependenciesSatisfied.card ++
@@ -92,7 +92,7 @@ def wellFormed (s : ActiveRuntimeSnapshot) : Prop :=
     s.dispatchers = s.runnable ∧
     Disjoint s.runnable s.unavailable ∧
     s.runnable ⊆ s.dependenciesSatisfied ∧
-    s.defaultBehavior ∈ s.runnable ∪ s.unavailable
+    s.defaultAgent ∈ s.runnable ∪ s.unavailable
 
 instance (s : ActiveRuntimeSnapshot) : Decidable s.wellFormed := by
   unfold wellFormed
@@ -105,7 +105,7 @@ def ResolvedSnapshot.activate
     (generation : Generation) :
     ActiveRuntimeSnapshot :=
   { generation := generation
-  , defaultBehavior := resolved.defaultBehavior
+  , defaultAgent := resolved.defaultAgent
   , runnable := resolved.runnable
   , unavailable := resolved.unavailable
   , dependenciesSatisfied := resolved.dependenciesSatisfied
@@ -140,8 +140,8 @@ structure RuntimeState where
   inFlight : Finset RequestId
   requestGeneration : RequestId → Generation
   requestSession : RequestId → SessionId
-  requestBehavior : RequestId → AgentId
-  sessionBehavior : SessionId → Option AgentId
+  requestAgent : RequestId → AgentId
+  sessionAgent : SessionId → Option AgentId
 
 namespace RuntimeState
 
@@ -156,32 +156,32 @@ def bindSessionIfNeeded
     (sessionId : SessionId)
     (agentId : AgentId) :
     SessionId → Option AgentId :=
-  match s.sessionBehavior sessionId with
-  | some _ => s.sessionBehavior
-  | none => Function.update s.sessionBehavior sessionId (some agentId)
+  match s.sessionAgent sessionId with
+  | some _ => s.sessionAgent
+  | none => Function.update s.sessionAgent sessionId (some agentId)
 
 theorem bindSessionIfNeeded_requested
     (s : RuntimeState) (sessionId : SessionId) (requested : AgentId)
-    (h : (s.sessionBehavior sessionId).all (· == requested) = true) :
+    (h : (s.sessionAgent sessionId).all (· == requested) = true) :
     s.bindSessionIfNeeded sessionId requested sessionId = some requested := by
   unfold bindSessionIfNeeded
-  cases hs : s.sessionBehavior sessionId <;> simp_all
+  cases hs : s.sessionAgent sessionId <;> simp_all
 
 theorem bindSessionIfNeeded_other
     {s : RuntimeState}
     {sessionId other : SessionId}
     {agentId : AgentId}
     (h_other : other ≠ sessionId) :
-    s.bindSessionIfNeeded sessionId agentId other = s.sessionBehavior other := by
+    s.bindSessionIfNeeded sessionId agentId other = s.sessionAgent other := by
   unfold bindSessionIfNeeded
-  cases h : s.sessionBehavior sessionId <;> simp [h, Function.update, h_other]
+  cases h : s.sessionAgent sessionId <;> simp [h, Function.update, h_other]
 
 theorem bindSessionIfNeeded_eq_self_of_bound
     {s : RuntimeState}
     {sessionId : SessionId}
     {bound requested : AgentId}
-    (h_bound : s.sessionBehavior sessionId = some bound) :
-    s.bindSessionIfNeeded sessionId requested = s.sessionBehavior := by
+    (h_bound : s.sessionAgent sessionId = some bound) :
+    s.bindSessionIfNeeded sessionId requested = s.sessionAgent := by
   funext sid
   unfold bindSessionIfNeeded
   simp [h_bound]
@@ -212,7 +212,7 @@ def CanAdmitRequest
   requestId ∉ s.accepted ∧
     requestId ∉ s.inFlight ∧
     AgentAdmissible process s requested ∧
-    (s.sessionBehavior sessionId).all (· == requested) = true
+    (s.sessionAgent sessionId).all (· == requested) = true
 
 instance
     (process : ProcessState)
@@ -396,7 +396,7 @@ theorem ready_implies_runtime_admission_when_fresh
     {sessionId : SessionId}
     {requestId : RequestId}
     {requested : AgentId}
-    (hBinding : (s.sessionBehavior sessionId).all (· == requested) = true)
+    (hBinding : (s.sessionAgent sessionId).all (· == requested) = true)
     (hReady : project (.observed process s) requested .backendTemporarilyUnavailable = .ready)
     (hUnaccepted : requestId ∉ s.accepted)
     (hNotInFlight : requestId ∉ s.inFlight) :
@@ -408,7 +408,7 @@ end ClientAgentReadiness
 def coherent (s : RuntimeState) : Prop :=
   s.active.wellFormed ∧
     s.lastResolved.wellFormed ∧
-    s.active.defaultBehavior = s.lastResolved.defaultBehavior ∧
+    s.active.defaultAgent = s.lastResolved.defaultAgent ∧
     s.active.runnable = s.lastResolved.runnable ∧
     s.active.unavailable = s.lastResolved.unavailable ∧
     s.active.generation ∈ s.liveGenerations ∧
@@ -421,7 +421,7 @@ def coherent (s : RuntimeState) : Prop :=
         s.observedResolved = some resolved ∧ resolved.wellFormed) ∧
     (∀ rid, rid ∈ s.inFlight → s.requestGeneration rid ∈ s.liveGenerations) ∧
     (∀ rid, rid ∈ s.inFlight →
-      s.sessionBehavior (s.requestSession rid) = some (s.requestBehavior rid))
+      s.sessionAgent (s.requestSession rid) = some (s.requestAgent rid))
 
 /-- `readyGenerations` is an internal transition guard, not an independent
 client-wire admission fact. In every coherent runtime state, an aligned router
@@ -449,8 +449,8 @@ def bootState (resolved : ResolvedSnapshot) : RuntimeState :=
   , inFlight := ∅
   , requestGeneration := fun _ => 0
   , requestSession := fun _ => 0
-  , requestBehavior := fun _ => resolved.defaultBehavior
-  , sessionBehavior := fun _ => none
+  , requestAgent := fun _ => resolved.defaultAgent
+  , sessionAgent := fun _ => none
   }
 
 theorem bootState_coherent

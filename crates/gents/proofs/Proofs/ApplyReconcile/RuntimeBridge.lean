@@ -55,7 +55,7 @@ def snapshotFromDesired (desired : DocRef → Option DesiredFields)
     (runtimeAvailable : Finset AgentId) : ResolvedSnapshot :=
   let dependencies := resolvedAgentIds desired decode owner names encode
   let runnable := dependencies ∩ runtimeAvailable
-  { defaultBehavior := defaultAgent
+  { defaultAgent := defaultAgent
     runnable
     unavailable := names.image encode \ runnable
     dependenciesSatisfied := dependencies }
