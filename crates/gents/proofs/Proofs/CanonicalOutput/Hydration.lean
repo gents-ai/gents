@@ -86,7 +86,7 @@ inductive AccessState where
 structure AuthorizationScope where
   peer : String
   requester : String
-  agent : String
+  node : String
   session : String
   nativeSession : SessionId
   deriving DecidableEq, Repr
