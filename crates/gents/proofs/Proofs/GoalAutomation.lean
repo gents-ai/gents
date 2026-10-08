@@ -109,9 +109,9 @@ def validTaskGoalDeclaration (declaration : TaskGoalDeclaration) : Bool :=
       !(canonicalObjective objective).isEmpty && validBudget declaration.goalTokenBudget
 
 /-- A durable trigger fire must supply a stable fire key. The runtime-facing
-    encoding is length-prefixed so the same principal/Task/fire tuple
+    encoding is length-prefixed so the same node/Task/fire tuple
     deterministically recovers the same session and request retry identities
-    after a crash without colliding with another principal's Task. -/
+    after a crash without colliding with another node's Task. -/
 structure TaskFireIdentity where
   sessionId : String
   requestId : String
@@ -167,9 +167,9 @@ structure TaskFireRecoveryDecision where
   deriving DecidableEq, Repr
 
 /-- Classify the request returned by the globally deterministic request-id
-    lookup. Principal DID is part of the expected identity and binding, so a
+    lookup. Node DID is part of the expected identity and binding, so a
     foreign or otherwise mismatched row conflicts rather than being recovered
-    for the local principal. -/
+    for the local node. -/
 def decideTaskFireRecovery (expected : TaskGoalRequestBinding)
     (state : TaskFireRecoveryState) : TaskFireRecoveryDecision :=
   match state.request with

@@ -8,7 +8,7 @@ private def baselineItem (status : Status) (receipt : String) : Item :=
   { identity :=
       { itemKey := "notice"
         requesterDid := "owner"
-        nodeDid := "agent"
+        nodeDid := "node"
         sourceKind := .session
         sourceId := "source"
         kind := .gate }
@@ -16,12 +16,12 @@ private def baselineItem (status : Status) (receipt : String) : Item :=
     resolvedDocId := receipt }
 
 private def baselineEnvelope : ReplyEnvelope :=
-  { docId := "mailbox-doc", handling := .startRequest, targetNodeDid := "agent", agentId := "repair",
+  { docId := "mailbox-doc", handling := .startRequest, targetNodeDid := "node", agentId := "repair",
     sessionId := some "session", deadlineValid := true }
 
 private def baselineReply : ReplyEvidence :=
   { requestDocId := "request-doc", sourceDocId := "mailbox-doc", requesterDid := "owner",
-    nodeDid := "agent", agentId := "repair", sessionId := "session",
+    nodeDid := "node", agentId := "repair", sessionId := "session",
     authenticated := true, interactive := true }
 
 private def variants : List (String × ReplyEnvelope × ReplyEvidence) :=
@@ -41,7 +41,7 @@ private def variants : List (String × ReplyEnvelope × ReplyEvidence) :=
   , ("foreign-requester", baselineEnvelope, { baselineReply with requesterDid := "other" })
   , ("foreign-agent", baselineEnvelope, { baselineReply with nodeDid := "other" })
   , ("empty-agent", baselineEnvelope, { baselineReply with nodeDid := "" })
-  , ("wrong-behavior", baselineEnvelope, { baselineReply with agentId := "other" })
+  , ("wrong-agent", baselineEnvelope, { baselineReply with agentId := "other" })
   , ("wrong-session", baselineEnvelope, { baselineReply with sessionId := "other" })
   , ("wrong-source", baselineEnvelope, { baselineReply with sourceDocId := "other" })
   ]

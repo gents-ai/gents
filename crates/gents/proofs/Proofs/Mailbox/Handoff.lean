@@ -159,9 +159,9 @@ theorem successful_linked_reply_has_original_session_and_new_request
 def question (key doc : String) (request : RequestId)
     (session content : String) : CreateRequest :=
   { identity :=
-      { itemKey := key, requesterDid := "owner", nodeDid := "agent",
+      { itemKey := key, requesterDid := "owner", nodeDid := "node",
         sourceKind := .agent, sourceId := "condition-key", kind := .ask }
-    context := ⟨"owner", "agent"⟩
+    context := ⟨"owner", "node"⟩
     docId := doc
     handling := .startRequest
     sessionId := session
@@ -170,7 +170,7 @@ def question (key doc : String) (request : RequestId)
 
 def producer : Producer :=
   { requestId := 1, requestDocId := "parent-doc", sessionId := "session"
-    requesterDid := "owner", nodeDid := "agent"
+    requesterDid := "owner", nodeDid := "node"
     lease := { (RequestExecutionLease.initial Nat) with
       request := .processing, lease := .active 7 10 10,
       usedGenerations := [7], now := 5 }
@@ -188,7 +188,7 @@ theorem filed_question_precedes_owned_completion :
 
 theorem failed_filing_cannot_complete_handoff :
     (fileAndComplete? {} producer
-      { openQuestion with context := ⟨"foreign", "agent"⟩ } 7) = none := by
+      { openQuestion with context := ⟨"foreign", "node"⟩ } 7) = none := by
   native_decide
 
 /-- An old terminal condition row cannot masquerade as the current open
@@ -204,19 +204,19 @@ theorem terminal_old_question_cannot_satisfy_current_handoff :
 theorem foreign_agent_cannot_reuse_open_question :
     let stored := applyCreate {} openQuestion
     let foreign := { openQuestion with
-      identity := { openQuestion.identity with nodeDid := "other-agent" },
-      context := ⟨"owner", "other-agent"⟩ }
+      identity := { openQuestion.identity with nodeDid := "other-node" },
+      context := ⟨"owner", "other-node"⟩ }
     (storedCreateReceipt? stored foreign).isNone = true := by
   native_decide
 
 def replyEnvelope : ReplyEnvelope :=
   { docId := "mailbox-doc", handling := .startRequest,
-    targetNodeDid := "agent", agentId := "repair",
+    targetNodeDid := "node", agentId := "repair",
     sessionId := some "session", deadlineValid := true }
 
 def replyEvidence : ReplyEvidence :=
   { requestDocId := "reply-doc", sourceDocId := "mailbox-doc",
-    requesterDid := "owner", nodeDid := "agent", agentId := "repair",
+    requesterDid := "owner", nodeDid := "node", agentId := "repair",
     sessionId := "session", authenticated := true, interactive := true }
 
 theorem linked_reply_is_a_new_request_in_original_session :

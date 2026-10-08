@@ -1,18 +1,18 @@
 namespace Request.Projection
 
-/-- Admission is concerned with the principal/behavior binding, not with how
+/-- Admission is concerned with the node/agent binding, not with how
     many replicated projection documents currently carry that binding. -/
-def behaviorCompatible (requested : String) (persisted : List String) : Bool :=
+def agentCompatible (requested : String) (persisted : List String) : Bool :=
   persisted.all (· == requested)
 
 theorem duplicate_equal_bindings_are_compatible (requested : String) :
-    behaviorCompatible requested [requested, requested] = true := by
-  simp [behaviorCompatible]
+    agentCompatible requested [requested, requested] = true := by
+  simp [agentCompatible]
 
 theorem conflicting_binding_is_rejected (requested existing : String)
     (h : existing ≠ requested) :
-    behaviorCompatible requested [requested, existing] = false := by
-  simp [behaviorCompatible, h]
+    agentCompatible requested [requested, existing] = false := by
+  simp [agentCompatible, h]
 
 /-- Projection writes converge every replicated row's value. A missing
     projection is repaired by creating exactly one row; duplicates are updated
