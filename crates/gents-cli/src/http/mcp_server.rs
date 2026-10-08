@@ -202,6 +202,8 @@ impl ServerHandler for DefraQueryMcp {
 }
 
 const BEARER_REQUIRED: &str = "graph reads require a caller-signed DefraDB Bearer authorization minted for this request's host:port; query remains anonymous";
+const BEARER_SCHEME_REQUIRED: &str =
+    "graph reads forward the DefraDB bearer only with the `Bearer ` scheme (capital B)";
 
 /// An MCP route for one in-session graph read: the same name, description
 /// and parameter schema, answered by [`DefraQueryMcp::call_graph_read`].
@@ -257,7 +259,7 @@ async fn caller_graph_access(
         graphql.to_owned(),
         authorization,
     )
-    .map_err(|_| ErrorData::invalid_request(BEARER_REQUIRED, None))?;
+    .map_err(|_| ErrorData::invalid_request(BEARER_SCHEME_REQUIRED, None))?;
     Ok((
         gents::config_client::ConfigAccess::Graphql(endpoint),
         did.as_str().to_owned(),
@@ -386,6 +388,25 @@ mod tests {
             Some(bearer.as_str()),
             "the caller's bearer is forwarded unchanged and never re-minted"
         );
+    }
+
+    #[tokio::test]
+    async fn caller_graph_access_names_the_scheme_it_forwards() {
+        let keys = tempfile::tempdir().unwrap();
+        let caller =
+            gents::KeyIdentity::load_or_create(keys.path().join("caller.key"), None).unwrap();
+        let bearer =
+            gents::identity::defradb_bearer_authorization(caller.did(), "127.0.0.1:1").unwrap();
+        let lowercase = bearer.replacen("Bearer ", "bearer ", 1);
+        let parts = request_parts(&[
+            (axum::http::header::HOST, "127.0.0.1:1"),
+            (axum::http::header::AUTHORIZATION, lowercase.as_str()),
+        ]);
+        let refused = caller_graph_access(GRAPHQL, &parts)
+            .await
+            .err()
+            .expect("only the `Bearer` scheme is forwarded");
+        assert_eq!(refused.message, BEARER_SCHEME_REQUIRED);
     }
 
     #[tokio::test]
