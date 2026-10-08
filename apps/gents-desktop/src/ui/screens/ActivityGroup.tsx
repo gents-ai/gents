@@ -12,6 +12,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@gents/ui/components/collapsible";
+import { KEEP_DRAWN } from "@/lib/transcriptWindow";
 
 import { ToolIcon } from "./tool-icon";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
@@ -365,6 +366,8 @@ export function Reasoning({ text }: { text: string }) {
     <Collapsible
       ref={root}
       open={open}
+      /* an opened reasoning keeps its row drawn: its state lives here */
+      {...(open ? { [KEEP_DRAWN]: "" } : {})}
       onOpenChange={(next) => (next ? setOpen(true) : fold(() => setOpen(false)))}
       /* the answer is the thing a person came for, so it does not begin
          directly under the working-out that led to it */
