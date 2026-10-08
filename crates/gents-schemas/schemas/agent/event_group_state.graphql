@@ -1,4 +1,4 @@
-# One durable group clock per principal, typed consumer and membership configuration.
+# One durable group clock per node, typed consumer and membership configuration.
 type EventGroupState @branchable
     @index(fields: ["node_did", "group_key"], unique: true) {
     group_key: String @immutable

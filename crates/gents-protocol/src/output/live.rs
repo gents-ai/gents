@@ -2157,7 +2157,7 @@ mod tests {
         target_writer: OutputWriter,
     }
 
-    /// The observation's authorized agent DID for every fixture message.
+    /// The observation's authorized node DID for every fixture message.
     const NODE_DID: &str = "did:key:z6MkAgent";
 
     impl Default for Fixture {

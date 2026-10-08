@@ -75,7 +75,7 @@ type RenderedRequest @branchable @index(fields: ["node_did", "requester_did", "s
     model_name: String @immutable
     # Provider wire shape the request was sent on, e.g. openai_responses or
     # openai_chat_completions. Derived from the request path the transport
-    # actually posted to, not from behavior configuration.
+    # actually posted to, not from agent configuration.
     source: String @immutable
     # Version 1 stores canonical provider JSON directly. Version 2 stores a
     # versioned container with independently decodable, lossless full/delta

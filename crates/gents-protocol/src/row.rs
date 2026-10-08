@@ -11,7 +11,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::request_lifecycle::RequestLifecycleState;
 
-pub use crate::behavior_readiness::{
+pub use crate::node_readiness::{
     decode_node_readiness_snapshot, effective_agent_readiness_admission,
     is_behavior_unavailable_rejection, project_node_readiness, project_node_readiness_source,
     project_node_readiness_summary, AgentReadinessEntry, AgentReadinessSourceEntry,
@@ -173,7 +173,7 @@ pub struct AgentRequestRow {
     pub request_hop: Option<i64>,
     #[serde(default)]
     pub workspace_id: Option<String>,
-    /// Signed workspace reference scope, independent of the executing principal.
+    /// Signed workspace reference scope, independent of the executing node.
     #[serde(default)]
     pub workspace_owner_node_did: Option<String>,
     #[serde(default)]
