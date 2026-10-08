@@ -368,7 +368,7 @@ reads, but cannot replace authoritative recovery checks under the gate or introd
 a second durable progress record. Benchmark these costs in the implementation layer.
 
 Still open, for the first measurement on real DefraDB: whether the segment
-collection needs its `agent_did` / `requester_did` indexes or only the fields (reads
+collection needs its `node_did` / `requester_did` indexes or only the fields (reads
 are `request_doc_id` scans), and the default batch interval and size threshold.
 
 ## Client execution and output visibility

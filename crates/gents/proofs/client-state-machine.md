@@ -289,7 +289,7 @@ A compliant client MUST open its `EventName::Update` subscription before
 reading the initial snapshot and MUST drain the subscription continuously
 thereafter. Drop-counter signals (`Subscription::check_and_reset_dropped() > 0`)
 MUST trigger a scope-bounded resync, scoped to the currently-selected
-`agent_did` when one is set. Per-event patches MUST upsert by stable per-collection
+`node_did` when one is set. Per-event patches MUST upsert by stable per-collection
 key (the `*_merge_key` functions in `gents-desktop-core::client::store`),
 so that row-level merges converge to the same state a full reload would produce.
 
@@ -338,7 +338,7 @@ enforces these parts:
 list keeps all generated rows for TypeScript projection coverage; the desktop
 list contains selected-session rows that the Rust session-snapshot bridge can
 own directly, including the selected-but-absent snapshot case. Future shell
-changes that add workflow states, blocker reasons, behavior-mismatch handling,
+changes that add workflow states, blocker reasons, agent-mismatch handling,
 or transport coupling should extend `Proofs.ClientShell` first and update this
 generated contract surface in the same change. The emitted frontend and desktop
 ClientShell domains are also listed in `Proofs.Conformance.CoverageLedger`, so
