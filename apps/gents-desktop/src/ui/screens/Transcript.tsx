@@ -29,12 +29,19 @@ import {
 } from "@gents/ui/components/collapsible";
 import { Hint } from "./Hint";
 
-import { Thinking } from "./Thinking";
+import { ActivityLine } from "./Thinking";
 import { activityStatus } from "./activity-status";
 import { BehaviorAvatar } from "./parts";
 import { Markdown } from "./Markdown";
-import { StreamContext, StreamText } from "./StreamText";
-import { createHandoff, holdLive, type HeldLive } from "./stream-reveal";
+import { StreamText } from "./StreamText";
+import {
+  drawKey,
+  drawKeys,
+  holdLive,
+  noDrawKeys,
+  type DrawKeys,
+  type HeldLive,
+} from "./stream-reveal";
 import { type Workers } from "./workers";
 import { type ParentWork } from "./parentWork";
 import { WorkerActionsContext, type WorkerActions } from "./WorkerActions";
@@ -81,13 +88,9 @@ const ParentContext = createContext<ParentWork | null>(null);
 
 const TranscriptItem = memo(function TranscriptItem({
   item,
-  status = null,
   final = false,
 }: {
   item: RenderedTimelineItem;
-  /* the run's status while this is the live tail: what it is doing between
-     actions, or Stopping, from the activity-status owner */
-  status?: string | null;
   /* the answer a finished turn ended on: it carries the response actions */
   final?: boolean;
 }) {
@@ -135,48 +138,11 @@ const TranscriptItem = memo(function TranscriptItem({
       );
     }
     case "assistantMessage":
-      return (
-        /* a turn that thought and then acted leaves reasoning with nothing
-           said after it: that is a think, not an empty answer, so it carries
-           no action bar and no blank line where prose would be.
-
-           The answer sits wider apart than the rows around it: the column's
-           gap is even, which puts the thing a person came to read at the
-           same distance as a row of activity. */
-        <>
-          <AssistantMessage
-            className={item.content ? "py-4" : undefined}
-            actions={item.content && !final ? copyActions(item.content) : false}
-          >
-            {/* a provider that will not hand its reasoning over leaves a
-              placeholder, not prose: say so in a line rather than offer a
-              disclosure with an apology behind it */}
-            {readableReasoning(item.reasoning) ? (
-              <Reasoning text={readableReasoning(item.reasoning)!} />
-            ) : reasoningWithheld(item.reasoning) ? (
-              <p className="pb-2 text-xs text-muted-foreground">
-                Reasoning was not shared by the provider.
-              </p>
-            ) : null}
-            {item.content ? (
-              <AssistantContent itemKey={item.itemKey} content={item.content} />
-            ) : null}
-          </AssistantMessage>
-          {final && item.content ? <ResponseActions text={item.content} /> : null}
-        </>
-      );
+    case "liveAssistant":
+      return <Reply item={item} final={final} />;
     case "toolGroup":
       /* placed by the transcript into an ActivityGroup; never reaches here */
       return null;
-    case "liveAssistant":
-      return (
-        <div data-testid="live-assistant">
-          <AssistantMessage>
-            {item.content && <LiveContent content={item.content} />}
-            {status && <Thinking label={status} />}
-          </AssistantMessage>
-        </div>
-      );
   }
 });
 
@@ -231,26 +197,57 @@ function StoppedNotice({ cause }: { cause: DerivedCancelCauseView | null }) {
   );
 }
 
-/* The live tail's text, revealed at a steady pace, reporting what is on
-   screen so the message that replaces it can start from there. */
-function LiveContent({ content }: { content: string }) {
-  const stream = useContext(StreamContext);
-  return <StreamText text={content} onShown={stream?.handoff.noteShown} />;
+/* A reply, live or saved, drawn as one tree. The saved message that
+   replaces a live tail is drawn under the tail's key (`drawKey`), so this
+   same tree updates in place: nothing is removed and inserted under the
+   reader, and the text carries on revealing. A turn that thought and then
+   acted leaves reasoning with nothing said after it: that is a think, not
+   an empty answer, so it carries no action bar and no blank line where
+   prose would be. */
+function Reply({
+  item,
+  final,
+}: {
+  item: Extract<RenderedTimelineItem, { kind: "assistantMessage" | "liveAssistant" }>;
+  final: boolean;
+}) {
+  const live = item.kind === "liveAssistant";
+  return (
+    <div data-testid={live ? "live-assistant" : undefined}>
+      <AssistantMessage
+        /* the answer sits wider apart than the rows around it: the column's
+           gap is even, which puts the thing a person came to read at the
+           same distance as a row of activity */
+        className={item.content ? "py-4" : undefined}
+        actions={!live && item.content && !final ? copyActions(item.content) : false}
+      >
+        {/* a provider that will not hand its reasoning over leaves a
+            placeholder, not prose: say so in a line rather than offer a
+            disclosure with an apology behind it */}
+        {readableReasoning(item.reasoning) ? (
+          <Reasoning text={readableReasoning(item.reasoning)!} />
+        ) : reasoningWithheld(item.reasoning) ? (
+          <p className="pb-2 text-xs text-muted-foreground">
+            Reasoning was not shared by the provider.
+          </p>
+        ) : null}
+        {item.content ? <ReplyText content={item.content} live={live} /> : null}
+      </AssistantMessage>
+      {final && item.content ? <ResponseActions text={item.content} /> : null}
+    </div>
+  );
 }
 
-/* A settled message. One that arrived while this transcript was open and
-   continues what the live tail was showing picks up where it left off;
-   anything else — history, a message from elsewhere — is simply there. */
-function AssistantContent({ itemKey, content }: { itemKey: string; content: string }) {
-  const stream = useContext(StreamContext);
-  const [from] = useState(() =>
-    stream?.isNew(itemKey) ? stream.handoff.claim(itemKey, content) : null,
-  );
+/* A reply drawn while it was live reveals at a steady pace, on through the
+   message that replaces it; anything else — history, a message from
+   elsewhere — is simply there. */
+function ReplyText({ content, live }: { content: string; live: boolean }) {
+  const [revealing] = useState(live);
   /* No wrapper: prose-app spaces its blocks with `& > * + *`, so anything
      between it and the markdown makes every paragraph, heading and list
      lose its margins at once — silently, because the text still renders. */
-  if (from === null) return <Markdown>{content}</Markdown>;
-  return <StreamText text={content} startFrom={from} />;
+  if (!revealing) return <Markdown>{content}</Markdown>;
+  return <StreamText text={content} />;
 }
 
 /* Under a finished response the actions sit on the line below the answer
@@ -314,7 +311,6 @@ export const TranscriptPanel = memo(function TranscriptPanel({
 
   /* the latest request's terminal facts; the bridge sends no response row */
   const latest = session?.latestRequestOutcome;
-  const live = session?.timelineItems.find((item) => item.kind === "liveAssistant");
   const status = inFlight
     ? activityStatus(session?.timelineItems ?? [], stopping)
     : null;
@@ -342,22 +338,8 @@ export const TranscriptPanel = memo(function TranscriptPanel({
 
   /* Streaming continuity: the live text is kept on screen until the
      message that replaces it arrives (a projection can drop one before the
-     other lands), and the handoff carries how much was already shown. */
+     other lands), and that message is drawn under the live tail's key. */
   const sessionKey = session?.sessionId ?? null;
-  const stream = useMemo(() => {
-    const initial = new Set<string>();
-    let opened = false;
-    return {
-      handoff: createHandoff(),
-      isNew: (itemKey: string) => opened && !initial.has(itemKey),
-      open: (items: RenderedTimelineItem[]) => {
-        if (opened || items.length === 0) return;
-        for (const item of items) initial.add(item.itemKey);
-        opened = true;
-      },
-    };
-  }, [sessionKey]);
-  stream.open(visible);
   const heldRef = useRef<HeldLive | null>(null);
   const [heldExpiry, setHeldExpiry] = useState(0);
   const held = useMemo(
@@ -383,6 +365,12 @@ export const TranscriptPanel = memo(function TranscriptPanel({
     }, 3_000);
     return () => clearTimeout(timer);
   }, [holding]);
+  const keysRef = useRef<DrawKeys>(noDrawKeys(sessionKey));
+  const keys = useMemo(
+    () => drawKeys(keysRef.current, held.items, held.replacedBy, sessionKey),
+    [held, sessionKey],
+  );
+  keysRef.current = keys;
   const rendered = held.items;
   const entries = useMemo(() => groupTranscript(rendered), [rendered]);
   /* A turn's answer is the last thing it said before the person spoke
@@ -442,40 +430,32 @@ export const TranscriptPanel = memo(function TranscriptPanel({
           {loadingOlder ? "Loading older messages…" : null}
         </div>
       )}
-      <StreamContext.Provider value={stream}>
-        <WorkerActionsContext.Provider value={workerActions}>
-          <ParentContext.Provider value={parentWork}>
-            <GroupStateContext.Provider value={groupState}>
-              {entries.map((entry) =>
-                entry.kind === "item" ? (
-                  /* keyed for the pager, which holds the reader's place
+      <WorkerActionsContext.Provider value={workerActions}>
+        <ParentContext.Provider value={parentWork}>
+          <GroupStateContext.Provider value={groupState}>
+            {entries.map((entry) =>
+              entry.kind === "item" ? (
+                /* keyed for the pager, which holds the reader's place
                          by the row under their eye while older pages land */
-                  <div
-                    key={entry.key}
-                    data-timeline-key={entry.key}
-                    className="group/response"
-                  >
-                    <TranscriptItem
-                      item={entry.item}
-                      status={entry.item.kind === "liveAssistant" ? status : null}
-                      final={finalKeys.has(entry.key)}
-                    />
-                  </div>
-                ) : (
-                  <ActivityGroup key={entry.key} entry={entry} workers={workers} />
-                ),
-              )}
-            </GroupStateContext.Provider>
-            {continuing && showError && <FailedEarlier message={responseError} />}
-            {continuing &&
-              session?.timelineItems
-                .filter((item) => item.kind === "liveAssistant")
-                .map((item) => (
-                  <TranscriptItem key={item.itemKey} item={item} status={status} />
-                ))}
-          </ParentContext.Provider>
-        </WorkerActionsContext.Provider>
-      </StreamContext.Provider>
+                <div
+                  key={drawKey(keys, entry.item)}
+                  data-timeline-key={entry.key}
+                  className="group/response"
+                >
+                  <TranscriptItem item={entry.item} final={finalKeys.has(entry.key)} />
+                </div>
+              ) : (
+                <ActivityGroup key={entry.key} entry={entry} workers={workers} />
+              ),
+            )}
+          </GroupStateContext.Provider>
+          {continuing && showError && <FailedEarlier message={responseError} />}
+          {continuing &&
+            session?.timelineItems
+              .filter((item) => item.kind === "liveAssistant")
+              .map((item) => <TranscriptItem key={item.itemKey} item={item} />)}
+        </ParentContext.Provider>
+      </WorkerActionsContext.Provider>
       {wasInterrupted && !inFlight && (
         <StoppedNotice cause={session?.latestRequestOutcome?.cancelCause ?? null} />
       )}
@@ -500,11 +480,13 @@ export const TranscriptPanel = memo(function TranscriptPanel({
           )}
         </div>
       )}
-      {status && !live && (
-        <AssistantMessage>
-          <Thinking label={status} />
-        </AssistantMessage>
-      )}
+      {/* the run's line, in the place kept for it at the foot: laid out as a
+          reply is, but not one, so nothing reading the transcript counts it */}
+      <div className="relative min-w-0">
+        <div data-slot="activity-line" className="prose-app px-2">
+          <ActivityLine status={status} />
+        </div>
+      </div>
     </div>
   );
 });

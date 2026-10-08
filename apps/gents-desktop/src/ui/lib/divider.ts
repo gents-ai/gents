@@ -250,6 +250,8 @@ export function useDivider({
     dragging,
     /** a settle is under way */
     settling,
+    /** where a settle under way is heading; null when none is */
+    target: settling ? heading.current : null,
     /** resting at the far end with the pane hidden */
     paneHidden: atEnd.current && !dragging && !settling && pos >= end - 0.5,
     /** 0 inside the range, rising to 1 as the dock takes the pane's last stretch */

@@ -4,8 +4,6 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import { scrollParent } from "@gents/ui/conversation";
 
-import { distanceFromFoot } from "@/lib/scroll";
-
 /**
  * Whether the header has scrolled out of `scroller`, so a condensed one
  * sticks to the top. Give the returned ref to an element at the header's
@@ -33,9 +31,13 @@ export function useHeaderScrolledOut(scroller: HTMLElement | null) {
  * callback ref rather than an effect that would run once while it was
  * still absent. The height goes on the column, not the composer: a custom
  * property inherits down, and the blocks that need to clear it are the
- * composer's siblings.
+ * composer's siblings. Each change calls `settle`, the transcript's
+ * follow, so its view keeps its place in the same frame.
  */
-export function useComposerRoom(column: RefObject<HTMLElement | null>) {
+export function useComposerRoom(
+  column: RefObject<HTMLElement | null>,
+  settle: () => void,
+) {
   const cleanup = useRef<(() => void) | null>(null);
   return useCallback(
     (el: HTMLDivElement | null) => {
@@ -52,16 +54,11 @@ export function useComposerRoom(column: RefObject<HTMLElement | null>) {
           ? scroller.getBoundingClientRect().bottom
           : window.innerHeight;
         const gap = Math.max(0, Math.round(floor - el.getBoundingClientRect().top));
-        /* the transcript pins itself to the foot when a session opens, and
-           this measurement arrives after that: the room it reserves appears
-           underneath a view that has already stopped, leaving it exactly a
-           composer short of the end. A reader at the foot stays at the foot. */
-        const was = scroller && distanceFromFoot(scroller);
         column.current?.style.setProperty("--composer-h", `${gap}px`);
-        if (scroller && was !== null && was < 4)
-          requestAnimationFrame(() => {
-            scroller.scrollTop = scroller.scrollHeight;
-          });
+        /* The room is padding the transcript's content observer does not see,
+           and in WebKit a resize observed mid-notification lands a frame
+           late: settled here, the view keeps its place in this frame. */
+        settle();
       };
       publish();
       const size = new ResizeObserver(publish);
@@ -73,6 +70,6 @@ export function useComposerRoom(column: RefObject<HTMLElement | null>) {
         window.removeEventListener("resize", publish);
       };
     },
-    [column],
+    [column, settle],
   );
 }

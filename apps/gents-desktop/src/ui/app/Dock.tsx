@@ -208,17 +208,18 @@ export function DockTabs({
   return (
     <div
       data-testid="dock-tabs"
-      className="flex h-full min-w-0 flex-1 items-center gap-1 px-2"
+      className="flex h-full min-w-0 flex-1 items-center px-2"
     >
       {paneTab && (
         /* grows and fades in with the divider's last stretch, so it is in
-           place by the time the pane is gone; the width is the tab's own,
-           measured, scaled by how far along the stretch the divider is */
+           place by the time the pane is gone; its width and the space after
+           it are the tab's own, measured, scaled by how far along the stretch
+           the divider is, so at the stretch's start it takes no room at all */
         <div
           className="flex shrink-0 overflow-hidden"
           style={{
-            width: tabWidth ? Math.round(tabWidth * paneTab.progress) : undefined,
-            marginRight: Math.round(4 * paneTab.progress),
+            width: tabWidth ? tabWidth * paneTab.progress : undefined,
+            marginRight: 8 * paneTab.progress,
             opacity: paneTab.progress,
           }}
         >
@@ -326,7 +327,7 @@ export function DockTabs({
           variant="ghost"
           size="icon-sm"
           aria-label="Hide panel"
-          className="shrink-0"
+          className="ml-1 shrink-0"
           onClick={() => closeDock()}
         >
           <Columns2 />

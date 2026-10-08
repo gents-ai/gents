@@ -191,9 +191,12 @@ describe("long command output", () => {
 
     rerender(<ToolBody tool={running("a\nb")} />);
     grow();
-    expect(viewport.scrollTop).toBe(500);
+    /* the foot: the bottom of the output at the bottom of the box */
+    expect(viewport.scrollTop).toBe(500 - 160);
 
     act(() => {
+      /* the reader's own wheel, then the scroll it makes */
+      viewport.dispatchEvent(new Event("wheel"));
       viewport.scrollTop = 0;
       viewport.dispatchEvent(new Event("scroll"));
     });
