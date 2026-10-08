@@ -269,13 +269,13 @@ pub struct AgentRequestSigningFields<'a> {
 pub fn validate_signing_fields(request: &AgentRequestSigningFields<'_>) -> anyhow::Result<()> {
     for (name, value) in [
         ("request_id", request.request_id),
-        ("agent_did", request.agent_did),
+        ("node_did", request.node_did),
         ("session_id", request.session_id),
     ] {
         require_identifier(name, value)?;
     }
-    // Behavior selection is required even for new sessions.
-    require_identifier("behavior_id", request.behavior_id)?;
+    // Agent selection is required even for new sessions.
+    require_identifier("agent_id", request.agent_id)?;
     for (name, value) in [
         ("requester_did", request.requester_did),
         ("retry_parent_request", request.retry_parent_request),
@@ -305,10 +305,7 @@ pub fn validate_signing_fields(request: &AgentRequestSigningFields<'_>) -> anyho
             request.caused_by_parent_tool_call_doc_id,
         ),
         ("workspace_id", request.workspace_id),
-        (
-            "workspace_owner_agent_did",
-            request.workspace_owner_agent_did,
-        ),
+        ("workspace_owner_node_did", request.workspace_owner_node_did),
     ] {
         require_optional_identifier(name, value)?;
     }
@@ -325,7 +322,7 @@ pub fn validate_signing_fields(request: &AgentRequestSigningFields<'_>) -> anyho
     }
     validate_workspace_reference(
         request.workspace_id,
-        request.workspace_owner_agent_did,
+        request.workspace_owner_node_did,
         request.workspace_authority,
         request.workspace_seal_hash,
     )?;
@@ -572,9 +569,9 @@ impl AgentRequestAdmissionRecord {
         push_text(&mut fields, REQUEST_SIGNATURE_DOMAIN);
         push_text(&mut fields, request.request_id);
         push_text(&mut fields, request.purpose.as_str());
-        push_text(&mut fields, request.agent_did);
+        push_text(&mut fields, request.node_did);
         push_option(&mut fields, request.requester_did);
-        push_text(&mut fields, request.behavior_id);
+        push_text(&mut fields, request.agent_id);
         push_text(&mut fields, request.session_id);
         push_option(&mut fields, request.retry_parent_request);
         push_option(&mut fields, request.retry_parent_request_doc_id);
@@ -595,13 +592,13 @@ impl AgentRequestAdmissionRecord {
         push_i64(&mut fields, request.retry_count);
         push_i64(&mut fields, request.max_retries);
         push_option(&mut fields, request.valid_until);
-        push_text(&mut fields, &request.subagent_depth.to_string());
+        push_text(&mut fields, &request.request_hop.to_string());
         push_option(&mut fields, request.caused_by_parent_request_id);
         push_option(&mut fields, request.caused_by_parent_request_doc_id);
         push_option(&mut fields, request.caused_by_parent_tool_call_id);
         push_option(&mut fields, request.caused_by_parent_tool_call_doc_id);
         push_option(&mut fields, request.workspace_id);
-        push_option(&mut fields, request.workspace_owner_agent_did);
+        push_option(&mut fields, request.workspace_owner_node_did);
         push_option(&mut fields, request.workspace_authority);
         push_option(&mut fields, request.workspace_seal_hash);
         push_text(&mut fields, self.kind.as_str());
@@ -629,13 +626,13 @@ impl AgentRequestAdmissionRecord {
 /// owners still validate ACP, principal grants, lifecycle, placement and seal.
 pub fn validate_workspace_reference(
     workspace_id: Option<&str>,
-    owner_agent_did: Option<&str>,
+    owner_node_did: Option<&str>,
     authority: Option<&str>,
     seal_hash: Option<&str>,
 ) -> anyhow::Result<()> {
     require_optional_identifier("workspace_id", workspace_id)?;
-    require_optional_identifier("workspace_owner_agent_did", owner_agent_did)?;
-    match (workspace_id, owner_agent_did, authority) {
+    require_optional_identifier("workspace_owner_node_did", owner_node_did)?;
+    match (workspace_id, owner_node_did, authority) {
         (None, None, None) if seal_hash.is_none() => Ok(()),
         (Some(_), Some(_), Some(authority)) => require_enum(
             "workspace_authority",
@@ -839,9 +836,9 @@ impl AgentRequestCreate {
     pub fn base(
         purpose: RequestPurpose,
         request_id: impl Into<String>,
-        agent_did: impl Into<String>,
+        node_did: impl Into<String>,
         requester_did: impl Into<String>,
-        behavior_id: impl Into<String>,
+        agent_id: impl Into<String>,
         session_id: impl Into<String>,
         content: impl Into<String>,
         execution_origin: impl Into<String>,
@@ -853,9 +850,9 @@ impl AgentRequestCreate {
             retry_root_request: Some(request_id.clone()),
             request_id,
             purpose,
-            agent_did: agent_did.into(),
+            node_did: node_did.into(),
             requester_did: requester_did.into(),
-            behavior_id: behavior_id.into(),
+            agent_id: agent_id.into(),
             session_id: session_id.into(),
             retry_parent_request: None,
             retry_parent_request_doc_id: None,
@@ -873,13 +870,13 @@ impl AgentRequestCreate {
             retry_count: 0,
             max_retries: 3,
             valid_until: None,
-            subagent_depth: 0,
+            request_hop: 0,
             caused_by_parent_request_id: None,
             caused_by_parent_request_doc_id: None,
             caused_by_parent_tool_call_id: None,
             caused_by_parent_tool_call_doc_id: None,
             workspace_id: None,
-            workspace_owner_agent_did: None,
+            workspace_owner_node_did: None,
             workspace_authority: None,
             workspace_seal_hash: None,
             initial_lifecycle_state: RequestLifecycleState::Pending,
@@ -891,9 +888,9 @@ impl AgentRequestCreate {
         AgentRequestSigningFields {
             request_id: &self.request_id,
             purpose: self.purpose,
-            agent_did: &self.agent_did,
+            node_did: &self.node_did,
             requester_did: Some(&self.requester_did),
-            behavior_id: &self.behavior_id,
+            agent_id: &self.agent_id,
             session_id: &self.session_id,
             retry_parent_request: self.retry_parent_request.as_deref(),
             retry_parent_request_doc_id: self.retry_parent_request_doc_id.as_deref(),
@@ -912,13 +909,13 @@ impl AgentRequestCreate {
             retry_count: Some(self.retry_count),
             max_retries: Some(self.max_retries),
             valid_until: self.valid_until.as_deref(),
-            subagent_depth: self.subagent_depth,
+            request_hop: self.request_hop,
             caused_by_parent_request_id: self.caused_by_parent_request_id.as_deref(),
             caused_by_parent_request_doc_id: self.caused_by_parent_request_doc_id.as_deref(),
             caused_by_parent_tool_call_id: self.caused_by_parent_tool_call_id.as_deref(),
             caused_by_parent_tool_call_doc_id: self.caused_by_parent_tool_call_doc_id.as_deref(),
             workspace_id: self.workspace_id.as_deref(),
-            workspace_owner_agent_did: self.workspace_owner_agent_did.as_deref(),
+            workspace_owner_node_did: self.workspace_owner_node_did.as_deref(),
             workspace_authority: self.workspace_authority.as_deref(),
             workspace_seal_hash: self.workspace_seal_hash.as_deref(),
         }
@@ -950,9 +947,9 @@ impl AgentRequestCreate {
         };
         text(&mut fields, "request_id", &self.request_id);
         text(&mut fields, "purpose", self.purpose.as_str());
-        text(&mut fields, "agent_did", &self.agent_did);
+        text(&mut fields, "node_did", &self.node_did);
         text(&mut fields, "requester_did", &self.requester_did);
-        text(&mut fields, "behavior_id", &self.behavior_id);
+        text(&mut fields, "agent_id", &self.agent_id);
         text(&mut fields, "session_id", &self.session_id);
         optional_text(
             &mut fields,
@@ -1013,7 +1010,7 @@ impl AgentRequestCreate {
         fields.push(format!("retry_count: {}", self.retry_count));
         fields.push(format!("max_retries: {}", self.max_retries));
         optional_text(&mut fields, "valid_until", self.valid_until.as_deref());
-        fields.push(format!("subagent_depth: {}", self.subagent_depth));
+        fields.push(format!("request_hop: {}", self.request_hop));
         optional_text(
             &mut fields,
             "caused_by_parent_request_id",
@@ -1037,8 +1034,8 @@ impl AgentRequestCreate {
         optional_text(&mut fields, "workspace_id", self.workspace_id.as_deref());
         optional_text(
             &mut fields,
-            "workspace_owner_agent_did",
-            self.workspace_owner_agent_did.as_deref(),
+            "workspace_owner_node_did",
+            self.workspace_owner_node_did.as_deref(),
         );
         optional_text(
             &mut fields,
@@ -1213,14 +1210,14 @@ mod tests {
             .push('x'));
         changed!("purpose", |v: &mut AgentRequestCreate| v.purpose =
             RequestPurpose::TitleAudit);
-        changed!("agent_did", |v: &mut AgentRequestCreate| v
-            .agent_did
+        changed!("node_did", |v: &mut AgentRequestCreate| v
+            .node_did
             .push('x'));
         changed!("requester_did", |v: &mut AgentRequestCreate| v
             .requester_did
             .push('x'));
-        changed!("behavior_id", |v: &mut AgentRequestCreate| v
-            .behavior_id
+        changed!("agent_id", |v: &mut AgentRequestCreate| v
+            .agent_id
             .push('x'));
         changed!("session_id", |v: &mut AgentRequestCreate| v
             .session_id
@@ -1297,8 +1294,7 @@ mod tests {
             4);
         changed!("valid_until", |v: &mut AgentRequestCreate| v.valid_until =
             Some("2099-01-01T00:00:00Z".into()));
-        changed!("subagent_depth", |v: &mut AgentRequestCreate| v
-            .subagent_depth =
+        changed!("request_hop", |v: &mut AgentRequestCreate| v.request_hop =
             1);
         changed!(
             "caused_by_parent_request_id",
@@ -1321,8 +1317,8 @@ mod tests {
         changed!("workspace_id", |v: &mut AgentRequestCreate| v
             .workspace_id =
             Some("workspace".into()));
-        changed!("workspace_owner_agent_did", |v: &mut AgentRequestCreate| {
-            v.workspace_owner_agent_did = Some("did:other-owner".into())
+        changed!("workspace_owner_node_did", |v: &mut AgentRequestCreate| {
+            v.workspace_owner_node_did = Some("did:other-owner".into())
         });
         changed!("workspace_authority", |v: &mut AgentRequestCreate| v
             .workspace_authority =
@@ -1489,12 +1485,12 @@ mod tests {
         })
         .is_err());
 
-        for behavior in ["", " ", " default", "default "] {
+        for agent in ["", " ", " default", "default "] {
             let mut value = local_create();
-            value.behavior_id = behavior.into();
+            value.agent_id = agent.into();
             assert!(
                 value.graphql_input_fields().is_err(),
-                "explicit canonical behavior required"
+                "explicit canonical agent required"
             );
         }
         for hostile in [" request-1", "request-1 "] {
@@ -1616,7 +1612,7 @@ mod tests {
         for authority in ["readOnly", "readWrite", "integrate"] {
             let mut request = local_create();
             request.workspace_id = Some("workspace".into());
-            request.workspace_owner_agent_did = Some("did:owner".into());
+            request.workspace_owner_node_did = Some("did:owner".into());
             request.workspace_authority = Some(authority.to_string());
             assert!(
                 validate_signing_fields(&request.signing_fields()).is_ok(),

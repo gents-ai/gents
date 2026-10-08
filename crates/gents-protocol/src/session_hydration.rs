@@ -63,7 +63,7 @@ impl SessionHydrationReceipt {
                 version.as_str(),
                 &self.request_key,
                 &self.requester_did,
-                &self.agent_did,
+                &self.node_did,
                 &self.session_id,
                 &self.status,
                 &self.status_detail,
@@ -84,7 +84,7 @@ impl SessionHydrationReceipt {
             "session hydration receipt status is not terminal"
         );
         anyhow::ensure!(
-            self.signer_did == self.agent_did,
+            self.signer_did == self.node_did,
             "session hydration receipt signer does not own the target agent"
         );
         anyhow::ensure!(

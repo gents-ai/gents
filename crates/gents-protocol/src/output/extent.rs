@@ -188,7 +188,7 @@ mod tests {
         (
             id.into(),
             OutputSegment {
-                agent_did: "a".into(),
+                node_did: "a".into(),
                 requester_did: None,
                 session_id: "s".into(),
                 request_doc_id: "r".into(),

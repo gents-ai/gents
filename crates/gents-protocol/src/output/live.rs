@@ -612,7 +612,7 @@ fn lookup_observed<'a>(
         &facts,
         observation.denied_headers,
         doc_id,
-        observation.agent_did,
+        observation.node_did,
         observation.requester_did,
     )
     .map_err(|error| match error {
@@ -1393,7 +1393,7 @@ mod tests {
         (
             doc_id.to_string(),
             OutputSegment {
-                agent_did: "did:key:z6MkAgent".to_string(),
+                node_did: "did:key:z6MkAgent".to_string(),
                 requester_did: None,
                 session_id: "session-1".to_string(),
                 request_doc_id: "request-1".to_string(),
@@ -2158,7 +2158,7 @@ mod tests {
     }
 
     /// The observation's authorized agent DID for every fixture message.
-    const AGENT_DID: &str = "did:key:z6MkAgent";
+    const NODE_DID: &str = "did:key:z6MkAgent";
 
     impl Default for Fixture {
         fn default() -> Self {
@@ -2231,7 +2231,7 @@ mod tests {
                 TranscriptMessage {
                     message_key: format!("key-{id}"),
                     session_id: "session-1".to_string(),
-                    agent_did: "did:key:z6MkAgent".to_string(),
+                    node_did: "did:key:z6MkAgent".to_string(),
                     requester_did: None,
                     request_doc_id: Some("request-1".to_string()),
                     publication: MessagePublication::RequestExecution {
@@ -2267,7 +2267,7 @@ mod tests {
             let observation = LiveObservation {
                 request_doc_id: "request-1",
                 session_id: "session-1",
-                agent_did: AGENT_DID,
+                node_did: NODE_DID,
                 requester_did: self.requester_did,
                 target: LiveTarget {
                     request_doc_id: self.target_request_doc_id,
