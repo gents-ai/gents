@@ -39,7 +39,7 @@ def countActive (ownerId invocationId : String) (invs : List CallbackInvocation)
         decide (inv.invocationId = invocationId)).length
 
 /-- Row-level invocation uniqueness, not a single-runtime/host-identity guarantee.
-Concurrent use of one principal on multiple hosts is explicitly outside this model. -/
+Concurrent use of one node on multiple hosts is explicitly outside this model. -/
 def ClaimUnique (invs : List CallbackInvocation) : Prop :=
   invs.all (fun inv => decide (countActive inv.ownerNodeDid inv.invocationId invs ≤ 1)) = true
 

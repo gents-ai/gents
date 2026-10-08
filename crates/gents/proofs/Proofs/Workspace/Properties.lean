@@ -74,7 +74,7 @@ instance (w : IsolatedWorkspace) (b : WorkspaceBinding) :
   unfold IntegrateOk
   infer_instance
 
-/-- Principal ownership plus workspace lifecycle eligibility. Local filesystem
+/-- Node ownership plus workspace lifecycle eligibility. Local filesystem
 availability remains an execution observation; this is not a host fingerprint. -/
 def OwnerClaimable (nodeDid : String) (w : IsolatedWorkspace) : Prop :=
   w.ownerNodeDid = nodeDid ∧ WorkspaceState.bindable w.state

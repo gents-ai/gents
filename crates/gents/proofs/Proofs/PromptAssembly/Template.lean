@@ -46,51 +46,51 @@ theorem render_determined (t : Template) (b1 b2 : Binding)
 /-- Use the existing skill selector for reminder eligibility. The context's
 whitelist alone is insufficient: unavailable, foreign, and disabled skills do
 not contribute reminder slots. Tool authority remains the resolved ceiling. -/
-def activeSkills (context : Configuration.Context) (principal : String)
+def activeSkills (context : Configuration.Context) (node : String)
     (available : Finset Skills.Skill) : Finset Skills.Skill :=
   Skills.select available
-    { principal := principal, ceiling := context.toolNames.toFinset,
+    { node := node, ceiling := context.toolNames.toFinset,
       skillIds := context.skillIds.toFinset }
 
-theorem active_skill_owned_enabled (context : Configuration.Context) (principal : String)
+theorem active_skill_owned_enabled (context : Configuration.Context) (node : String)
     (available : Finset Skills.Skill) (skill : Skills.Skill)
-    (h : skill ∈ activeSkills context principal available) :
-    skill.owner = principal ∧ skill.enabled = true :=
-  Skills.select_respect_principal available _ h
+    (h : skill ∈ activeSkills context node available) :
+    skill.owner = node ∧ skill.enabled = true :=
+  Skills.select_respect_node available _ h
 
-theorem active_skill_whitelisted (context : Configuration.Context) (principal : String)
+theorem active_skill_whitelisted (context : Configuration.Context) (node : String)
     (available : Finset Skills.Skill) (skill : Skills.Skill)
-    (h : skill ∈ activeSkills context principal available) : skill.id ∈ context.skillIds := by
+    (h : skill ∈ activeSkills context node available) : skill.id ∈ context.skillIds := by
   have hs := Skills.select_ids_subset_whitelist available
-    { principal := principal, ceiling := context.toolNames.toFinset,
+    { node := node, ceiling := context.toolNames.toFinset,
       skillIds := context.skillIds.toFinset }
   simpa using hs (Finset.mem_image.mpr ⟨skill, h, rfl⟩)
 
 /-- Bind task variables only at the task-prompt slot of the existing assembler.
 Literal preamble content comes from the resolved context; reminder count comes
 from actual skill selection. Layer ordering remains owned by `assemble`. -/
-def bindTask (context : Configuration.Context) (principal : String)
+def bindTask (context : Configuration.Context) (node : String)
     (available : Finset Skills.Skill) (task : Template) (binding : Binding)
     (summaryCount conversationLen : Nat) : List (Slot × Option (Finset (VarRef × String))) :=
-  (assemble (activeSkills context principal available).card summaryCount conversationLen (some context.instructions)).map
+  (assemble (activeSkills context node available).card summaryCount conversationLen (some context.instructions)).map
     (fun slot => (slot, if slot = .prompt then some (render task binding) else none))
 
 /-- The actual assembled first slot contains the exact resolved instruction bytes
 and receives no task-variable substitutions. -/
-theorem assembled_preamble_literal (context : Configuration.Context) (principal : String)
+theorem assembled_preamble_literal (context : Configuration.Context) (node : String)
     (available : Finset Skills.Skill) (task : Template)
     (binding : Binding) (summaryCount conversationLen : Nat) :
-    (bindTask context principal available task binding summaryCount conversationLen).head? =
+    (bindTask context node available task binding summaryCount conversationLen).head? =
       some (.preamble (some context.instructions), none) := by
   simp [bindTask, assemble, perTurnRequest]
 
 /-- Changing invocation bindings cannot change any context/conversation slot or
 its literal payload. Only the prompt slot can acquire task substitution values. -/
-theorem task_binding_preserves_context (context : Configuration.Context) (principal : String)
+theorem task_binding_preserves_context (context : Configuration.Context) (node : String)
     (available : Finset Skills.Skill) (task : Template)
     (a b : Binding) (summaryCount conversationLen : Nat) :
-    ((bindTask context principal available task a summaryCount conversationLen).filter (fun item => item.1 != .prompt)) =
-      ((bindTask context principal available task b summaryCount conversationLen).filter (fun item => item.1 != .prompt)) := by
+    ((bindTask context node available task a summaryCount conversationLen).filter (fun item => item.1 != .prompt)) =
+      ((bindTask context node available task b summaryCount conversationLen).filter (fun item => item.1 != .prompt)) := by
   unfold bindTask
   rw [List.filter_map, List.filter_map]
   apply List.map_congr_left
@@ -100,10 +100,10 @@ theorem task_binding_preserves_context (context : Configuration.Context) (princi
 
 /-- Task substitutions land at the final task-prompt slot, rather than being
 silently discarded to satisfy the literal-context guarantee. -/
-theorem assembled_task_rendered (context : Configuration.Context) (principal : String)
+theorem assembled_task_rendered (context : Configuration.Context) (node : String)
     (available : Finset Skills.Skill) (task : Template)
     (binding : Binding) (summaryCount conversationLen : Nat) :
-    (bindTask context principal available task binding summaryCount conversationLen).getLast? =
+    (bindTask context node available task binding summaryCount conversationLen).getLast? =
       some (.prompt, some (render task binding)) := by
   simp only [bindTask, assemble, perTurnRequest, List.map_cons, List.map_append,
     List.map_singleton, List.map_nil, reduceCtorEq, ↓reduceIte]
@@ -111,27 +111,27 @@ theorem assembled_task_rendered (context : Configuration.Context) (principal : S
 
 /-- The derived structural sequence is exactly the existing assembler, with
 skill slots counted from the owned, enabled selection, never raw references. -/
-theorem bound_task_uses_existing_assembler (context : Configuration.Context) (principal : String)
+theorem bound_task_uses_existing_assembler (context : Configuration.Context) (node : String)
     (available : Finset Skills.Skill) (task : Template)
     (binding : Binding) (summaryCount conversationLen : Nat) :
-    (bindTask context principal available task binding summaryCount conversationLen).map Prod.fst =
-      assemble (activeSkills context principal available).card summaryCount conversationLen (some context.instructions) := by
+    (bindTask context node available task binding summaryCount conversationLen).map Prod.fst =
+      assemble (activeSkills context node available).card summaryCount conversationLen (some context.instructions) := by
   simp [bindTask, List.map_map, Function.comp_def]
 
 /-- Adding a disabled skill cannot add reminders, even if its ID is selected. -/
-theorem disabled_skill_adds_no_reminders (context : Configuration.Context) (principal : String)
+theorem disabled_skill_adds_no_reminders (context : Configuration.Context) (node : String)
     (available : Finset Skills.Skill) (skill : Skills.Skill) (h : skill.enabled = false)
     (task : Template) (binding : Binding) (summaryCount conversationLen : Nat) :
-    bindTask context principal (insert skill available) task binding summaryCount conversationLen =
-      bindTask context principal available task binding summaryCount conversationLen := by
+    bindTask context node (insert skill available) task binding summaryCount conversationLen =
+      bindTask context node available task binding summaryCount conversationLen := by
   simp [bindTask, activeSkills, Skills.select, Finset.filter_insert, h]
 
-/-- A foreign skill cannot add reminders to this principal's execution. -/
-theorem foreign_skill_adds_no_reminders (context : Configuration.Context) (principal : String)
-    (available : Finset Skills.Skill) (skill : Skills.Skill) (h : skill.owner ≠ principal)
+/-- A foreign skill cannot add reminders to this node's execution. -/
+theorem foreign_skill_adds_no_reminders (context : Configuration.Context) (node : String)
+    (available : Finset Skills.Skill) (skill : Skills.Skill) (h : skill.owner ≠ node)
     (task : Template) (binding : Binding) (summaryCount conversationLen : Nat) :
-    bindTask context principal (insert skill available) task binding summaryCount conversationLen =
-      bindTask context principal available task binding summaryCount conversationLen := by
+    bindTask context node (insert skill available) task binding summaryCount conversationLen =
+      bindTask context node available task binding summaryCount conversationLen := by
   simp [bindTask, activeSkills, Skills.select, Finset.filter_insert, h]
 
 end PromptAssembly.Template

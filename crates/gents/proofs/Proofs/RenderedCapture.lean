@@ -87,7 +87,7 @@ abbrev NodeDid := Nat
 /-- Identity of exactly one provider attempt.
 
 The five components are the ones `RenderedRequestContext` plus the owned loop
-already carry: the agent principal, the session, the exact request `_docID`, the
+already carry: the node, the session, the exact request `_docID`, the
 completion turn, and the attempt within that turn. Equality is componentwise —
 there is no delimiter, and therefore no delimiter collision. -/
 structure CaptureKey where
