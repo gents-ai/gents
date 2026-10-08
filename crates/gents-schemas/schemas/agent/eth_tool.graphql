@@ -1,6 +1,6 @@
-type EthTool @branchable @index(fields: ["agent_did", "tool_id"], unique: true) {
+type EthTool @branchable @index(fields: ["node_did", "tool_id"], unique: true) {
     tool_id: String
-    agent_did: String @index
+    node_did: String @index
     display_name: String
     enabled: Boolean @index
     # Logical endpoint: one chain + one HTTP JSON-RPC URL per document.

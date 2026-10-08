@@ -1,8 +1,8 @@
 type ChainKeyBinding @branchable
-    @index(fields: ["agent_did", "binding_id"], unique: true)
-    @index(fields: ["agent_did", "address"], unique: true) {
+    @index(fields: ["node_did", "binding_id"], unique: true)
+    @index(fields: ["node_did", "address"], unique: true) {
     binding_id: String
-    agent_did: String @index
+    node_did: String @index
     address: String @index
     key_backend: String
     attestation: String
