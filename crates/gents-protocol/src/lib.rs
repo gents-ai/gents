@@ -10,7 +10,6 @@ pub mod message;
 pub mod network_token;
 pub mod output;
 pub mod peer_schema;
-pub mod persona;
 pub mod rendered_request;
 pub mod request_admission;
 pub mod request_input;
