@@ -26,7 +26,7 @@ def wakeDocumentBindingValid (world : World) (message : MessageEnvelope)
     (notified : BackgroundCompletion.NotifiedCompletion)
     (wake : SessionQueue.QueueEntry) (binding : WakeDocumentBinding) : Bool :=
   binding.authenticated && binding.agent == queue.scope.agent &&
-    binding.agent == world.principal && binding.session == queue.sessionId &&
+    binding.agent == world.nodeDid && binding.session == queue.sessionId &&
     binding.session == world.sessionId && binding.entry == wake &&
     message.header.request == some binding.wakeDocument &&
     binding.notificationMessageId == notified.completion.notificationMessageId &&
@@ -82,7 +82,7 @@ def publishAndEnqueue? (before : World) (document : DocId)
       let tool ← ownedToolByDocument? execution document
       if tool.context.awaitMode != .background then none
       if ToolDelivery.deliveryShape? message document != some .backgroundNotification then none
-      if queue.sessionId != execution.sessionId || queue.scope.agent != execution.principal then none
+      if queue.sessionId != execution.sessionId || queue.scope.agent != execution.nodeDid then none
       if binding.entry != wake || wake.source != .backgroundCompletion ||
           !wake.coalesceWellFormed queue.sessionId then none
       let completion : BackgroundCompletion.TerminalCompletion :=

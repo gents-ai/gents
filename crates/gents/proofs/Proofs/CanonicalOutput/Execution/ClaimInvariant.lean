@@ -82,14 +82,14 @@ private theorem preserve_from_control
     (hrequest : after.requestId = before.requestId)
     (hsession : after.sessionId = before.sessionId)
     (hpurpose : after.purpose = before.purpose)
-    (hprincipal : after.principal = before.principal)
+    (hnodeDid : after.nodeDid = before.nodeDid)
     (hclaimed : after.claimed = before.claimed)
     (hactive : after.queue.active = before.queue.active)
     (hretry : after.retry.request = before.retry.request) : ClaimCoherent after := by
   rcases coherent with hi | ⟨binding, hb, hready, hr⟩
   · exact Or.inl ⟨hclaimed.trans hi.1, fun hp => hactive.trans (hi.2 (hpurpose.symm.trans hp))⟩
   · refine Or.inr ⟨binding, hclaimed.trans hb, ?_, hretry.trans hr⟩
-    simpa [Handover.claimReady, hrequest, hsession, hpurpose, hprincipal, hactive]
+    simpa [Handover.claimReady, hrequest, hsession, hpurpose, hnodeDid, hactive]
       using hready
 
 theorem finish_preserves_claimCoherent
@@ -170,14 +170,14 @@ private theorem policy_preserves_retry_request
           cases ht
           rfl
 
-private theorem fold_preserves_purpose_principal {α : Type}
+private theorem fold_preserves_purpose_nodeDid {α : Type}
     (step : World → α → World)
     (hstep : ∀ world item,
       (step world item).purpose = world.purpose ∧
-      (step world item).principal = world.principal)
+      (step world item).nodeDid = world.nodeDid)
     (items : List α) (world : World) :
     (items.foldl step world).purpose = world.purpose ∧
-    (items.foldl step world).principal = world.principal := by
+    (items.foldl step world).nodeDid = world.nodeDid := by
   induction items generalizing world with
   | nil => exact ⟨rfl, rfl⟩
   | cons item rest ih =>
@@ -185,39 +185,39 @@ private theorem fold_preserves_purpose_principal {α : Type}
       have hr := ih (step world item)
       exact ⟨hr.1.trans hs.1, hr.2.trans hs.2⟩
 
-private theorem accountOwnedTools_preserves_purpose_principal
+private theorem accountOwnedTools_preserves_purpose_nodeDid
     (world : World) (generation : Generation) (interruptRunning : Bool) :
     (accountOwnedTools world generation interruptRunning).purpose = world.purpose ∧
-    (accountOwnedTools world generation interruptRunning).principal = world.principal := by
+    (accountOwnedTools world generation interruptRunning).nodeDid = world.nodeDid := by
   unfold accountOwnedTools
-  apply fold_preserves_purpose_principal
+  apply fold_preserves_purpose_nodeDid
   intro current original
   exact ⟨rfl, rfl⟩
 
-private theorem accountMetadataOwnedTools_preserves_purpose_principal
+private theorem accountMetadataOwnedTools_preserves_purpose_nodeDid
     (world : World) (generation : Generation) :
     (accountMetadataOwnedTools world generation).purpose = world.purpose ∧
-    (accountMetadataOwnedTools world generation).principal = world.principal := by
+    (accountMetadataOwnedTools world generation).nodeDid = world.nodeDid := by
   unfold accountMetadataOwnedTools
-  apply fold_preserves_purpose_principal
+  apply fold_preserves_purpose_nodeDid
   intro current original
   exact ⟨rfl, rfl⟩
 
-private theorem preparedRecoveryWorld_preserves_purpose_principal
+private theorem preparedRecoveryWorld_preserves_purpose_nodeDid
     (world : World) (prepared : RecoveryPrepared) (expected : Generation) :
     (preparedRecoveryWorld world prepared expected).purpose = world.purpose ∧
-    (preparedRecoveryWorld world prepared expected).principal = world.principal := by
+    (preparedRecoveryWorld world prepared expected).nodeDid = world.nodeDid := by
   unfold preparedRecoveryWorld
-  exact accountOwnedTools_preserves_purpose_principal _ expected true
+  exact accountOwnedTools_preserves_purpose_nodeDid _ expected true
 
-private theorem evaluate_preserves_purpose_principal
+private theorem evaluate_preserves_purpose_nodeDid
     (operation : Gate.Operation) (before after : World)
     (h : Gate.evaluate operation before = .ok after) :
-    after.purpose = before.purpose ∧ after.principal = before.principal := by
+    after.purpose = before.purpose ∧ after.nodeDid = before.nodeDid := by
   have hc := Gate.evaluate_success_core operation before after h
   cases operation <;> simp only [Gate.evaluateCore] at hc
   all_goals first
-    | exact ToolDelivery.tool_write_preserves_purpose_principal
+    | exact ToolDelivery.tool_write_preserves_purpose_nodeDid
         (mapError_success Gate.Error.delivery _ _ hc)
     | skip
   case compact cursor =>
@@ -241,8 +241,8 @@ private theorem evaluate_preserves_purpose_principal
     have hcomposed := mapError_success Gate.Error.delivery _ _ hc
     obtain ⟨closed, hclose, hdeliver⟩ := ToolDelivery.completeAndDeliver_success
       before after document authority record message hcomposed
-    have hfirst := ToolDelivery.tool_write_preserves_purpose_principal hclose
-    have hsecond := ToolDelivery.tool_write_preserves_purpose_principal hdeliver
+    have hfirst := ToolDelivery.tool_write_preserves_purpose_nodeDid hclose
+    have hsecond := ToolDelivery.tool_write_preserves_purpose_nodeDid hdeliver
     exact ⟨hsecond.1.trans hfirst.1, hsecond.2.trans hfirst.2⟩
   all_goals
     have hcore := mapError_success Gate.Error.execution _ _ hc
@@ -260,24 +260,24 @@ private theorem evaluate_preserves_purpose_principal
   all_goals
     cases hcore
     first
-      | exact preparedRecoveryWorld_preserves_purpose_principal _ _ _
-      | exact accountMetadataOwnedTools_preserves_purpose_principal _ _
-      | exact accountOwnedTools_preserves_purpose_principal _ _ _
+      | exact preparedRecoveryWorld_preserves_purpose_nodeDid _ _ _
+      | exact accountMetadataOwnedTools_preserves_purpose_nodeDid _ _
+      | exact accountOwnedTools_preserves_purpose_nodeDid _ _ _
 
-private theorem commit_preserves_purpose_principal
+private theorem commit_preserves_purpose_nodeDid
     (before after : World) (actor : Gate.Actor) (now : Time)
     (operation : Gate.Operation)
     (h : Gate.commit before actor now operation = some after) :
-    after.purpose = before.purpose ∧ after.principal = before.principal := by
+    after.purpose = before.purpose ∧ after.nodeDid = before.nodeDid := by
   obtain ⟨execution, he, rfl⟩ := Gate.commit_reads_current_world before after actor now operation h
-  exact evaluate_preserves_purpose_principal operation (Gate.atTime before now) execution he
+  exact evaluate_preserves_purpose_nodeDid operation (Gate.atTime before now) execution he
 
-private theorem background_preserves_purpose_principal
+private theorem background_preserves_purpose_nodeDid
     (before after : World) (actor : Gate.Actor) (now : Time)
     (document : DocId) (message : MessageEnvelope)
     (wake : SessionQueue.QueueEntry) (binding : WakeDocumentBinding)
     (h : BackgroundGate.commit before actor now document message wake binding = some after) :
-    after.purpose = before.purpose ∧ after.principal = before.principal := by
+    after.purpose = before.purpose ∧ after.nodeDid = before.nodeDid := by
   unfold BackgroundGate.commit at h
   split at h <;> try contradiction
   cases hp : BackgroundContinuation.publishAndEnqueue?
@@ -286,17 +286,17 @@ private theorem background_preserves_purpose_principal
   | some result =>
       simp [hp] at h
       rcases h with ⟨⟨⟨⟨hbefore, _⟩, _⟩, _⟩, rfl⟩
-      have hf := ToolDelivery.wake_notification_preserves_purpose_principal
+      have hf := ToolDelivery.wake_notification_preserves_purpose_nodeDid
         result.before result.execution result.document result.binding result.message result.published
       exact ⟨by simpa [hbefore] using hf.1, by simpa [hbefore] using hf.2⟩
 
-private theorem goal_preserves_purpose_principal
+private theorem goal_preserves_purpose_nodeDid
     (goal : GoalAutomation.OperatorResume.Snapshot) (before : World) (actor : Gate.Actor)
     (now : Time) (request : GoalAutomation.OperatorResume.ClaimedRequest)
     (binding : GoalContinuation.Binding) (entry : SessionQueue.QueueEntry)
     (result : GoalContinuation.Result)
     (h : GoalContinuation.publishGoalChild? goal before actor now request binding entry = some result) :
-    result.after.purpose = before.purpose ∧ result.after.principal = before.principal := by
+    result.after.purpose = before.purpose ∧ result.after.nodeDid = before.nodeDid := by
   unfold GoalContinuation.publishGoalChild? at h
   dsimp only at h
   repeat' first | contradiction |
@@ -306,12 +306,12 @@ private theorem goal_preserves_purpose_principal
   cases h
   exact ⟨rfl, rfl⟩
 
-private theorem restart_preserves_purpose_principal
+private theorem restart_preserves_purpose_nodeDid
     (before after : World) (actor : Gate.Actor) (now : Time) (document : DocId)
     (binding : RestartRecovery.RestartBinding) (closing : Segment)
     (wake : SessionQueue.QueueEntry) (notificationBinding : WakeDocumentBinding)
     (h : RestartRecovery.commit before actor now document binding closing wake notificationBinding = some after) :
-    after.purpose = before.purpose ∧ after.principal = before.principal := by
+    after.purpose = before.purpose ∧ after.nodeDid = before.nodeDid := by
   obtain ⟨result, _, hc, hn, he, hafter⟩ :=
     RestartRecovery.successful_commit_effect _ _ _ _ _ _ _ _ _ h
   subst after
@@ -319,8 +319,8 @@ private theorem restart_preserves_purpose_principal
     result.closed document binding.notification wake notificationBinding before.queue
       result.continuation hn
   rw [he] at hpublished
-  have hclose := ToolDelivery.tool_write_preserves_purpose_principal hc
-  have hnotify := ToolDelivery.wake_notification_preserves_purpose_principal
+  have hclose := ToolDelivery.tool_write_preserves_purpose_nodeDid hc
+  have hnotify := ToolDelivery.wake_notification_preserves_purpose_nodeDid
     result.closed result.execution document notificationBinding binding.notification hpublished
   exact ⟨hnotify.1.trans hclose.1, hnotify.2.trans hclose.2⟩
 
@@ -334,7 +334,7 @@ theorem Trace.claimCoherent {before after : World}
       have hi := Gate.successful_commit_preserves_request_identity _ _ actor now
         (CompletionRetry.CanonicalGate.gateOperation operation)
         (provider_commit_is_actual_gate_commit _ _ actor now operation h)
-      have hp := commit_preserves_purpose_principal _ _ actor now
+      have hp := commit_preserves_purpose_nodeDid _ _ actor now
         (CompletionRetry.CanonicalGate.gateOperation operation)
         (provider_commit_is_actual_gate_commit _ _ actor now operation h)
       exact preserve_from_control coherent hi.1 hi.2 hp.1 hp.2 hc.1
@@ -346,7 +346,7 @@ theorem Trace.claimCoherent {before after : World}
         (by simpa using congrArg World.requestId he)
         (by simpa using congrArg World.sessionId he)
         (by simpa using congrArg World.purpose he)
-        (by simpa using congrArg World.principal he)
+        (by simpa using congrArg World.nodeDid he)
         (by simpa using congrArg World.claimed he)
         (by simpa using congrArg (fun w => w.queue.active) he)
         (policy_preserves_retry_request before view now operation h)
@@ -355,7 +355,7 @@ theorem Trace.claimCoherent {before after : World}
       split at h <;> try contradiction
       have hc := Gate.commit_preserves_composed_control before view actor now operation.val h
       have hi := Gate.successful_commit_preserves_request_identity before view actor now operation.val h
-      have hp := commit_preserves_purpose_principal before view actor now operation.val h
+      have hp := commit_preserves_purpose_nodeDid before view actor now operation.val h
       exact preserve_from_control coherent hi.1 hi.2 hp.1 hp.2 hc.2.1
         (congrArg SessionQueue.SessionQueueState.active hc.1) (congrArg CompletionRetry.State.request hc.2.2)
   | acquire before view actor independent h =>
@@ -387,21 +387,21 @@ theorem Trace.claimCoherent {before after : World}
   | wake before after actor now document message entry binding h =>
       have hf := BackgroundGate.successful_commit_preserves_claim_control
         before after actor now document message entry binding h
-      have hp := background_preserves_purpose_principal
+      have hp := background_preserves_purpose_nodeDid
         before after actor now document message entry binding h
       exact preserve_from_control coherent hf.1 hf.2.1 hp.1 hp.2 hf.2.2.1 hf.2.2.2.2
         (congrArg CompletionRetry.State.request hf.2.2.2.1)
   | goal before goal actor now request binding entry result h =>
       have hf := GoalContinuation.successful_publication_preserves_claim_control
         goal before actor now request binding entry result h
-      have hp := goal_preserves_purpose_principal
+      have hp := goal_preserves_purpose_nodeDid
         goal before actor now request binding entry result h
       exact preserve_from_control coherent hf.1 hf.2.1 hp.1 hp.2 hf.2.2.1 hf.2.2.2.2
         (congrArg CompletionRetry.State.request hf.2.2.2.1)
   | restart before after actor now document binding closing wake notificationBinding h =>
       have hf := RestartRecovery.successful_commit_preserves_claim_control
         before after actor now document binding closing wake notificationBinding h
-      have hp := restart_preserves_purpose_principal
+      have hp := restart_preserves_purpose_nodeDid
         before after actor now document binding closing wake notificationBinding h
       exact preserve_from_control coherent hf.1 hf.2.1 hp.1 hp.2 hf.2.2.1 hf.2.2.2.2
         (congrArg CompletionRetry.State.request hf.2.2.2.1)

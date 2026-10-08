@@ -38,7 +38,7 @@ def parentLease : RequestExecutionLease.World Generation :=
   , continuationCount := 0, tokenChargeCount := 0 }
 
 def parentWorld : World :=
-  { requestId := 10, sessionId := 1, purpose := .normal, principal := 1
+  { requestId := 10, sessionId := 1, purpose := .normal, nodeDid := 1
   , lease := parentLease, segments := [], messages := [], transcript := transcript
   , compactionCursor := none, toolContexts := []
   , terminalSelection := some .noMessage }

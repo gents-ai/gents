@@ -31,7 +31,7 @@ structure RestartBinding where
 def restartBindingValid (before : World) (document : DocId)
     (binding : RestartBinding) : Bool :=
   !binding.observation.executionRegistered && binding.authenticated &&
-    binding.document == document && binding.agent == before.principal &&
+    binding.document == document && binding.agent == before.nodeDid &&
     binding.session == before.sessionId
 
 def closeAction : Recovery.ToolRecoveryCause → ToolExecution.ToolCallContext.Action

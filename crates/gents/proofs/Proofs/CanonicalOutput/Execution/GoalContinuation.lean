@@ -38,7 +38,7 @@ structure Binding where
 
 def bindingValid (world : World) (snapshot : Snapshot)
     (request : ClaimedRequest) (binding : Binding) : Bool :=
-  binding.authenticated && binding.executionAgent == world.principal &&
+  binding.authenticated && binding.executionAgent == world.nodeDid &&
     binding.executionSession == world.sessionId &&
     binding.goalDocument == request.binding.goal &&
     binding.goalOwner == request.binding.owner &&
@@ -106,7 +106,7 @@ def publishGoalChild? (goal : Snapshot) (state : World)
   let world := state
   if state.purpose != .normal || !gateHeld state actor now ||
       !bindingValid world goal request binding ||
-      state.queue.scope.agent != world.principal ||
+      state.queue.scope.agent != world.nodeDid ||
       state.queue.sessionId != world.sessionId ||
       binding.childRequester != state.queue.scope.requester ||
       !goalEntryValid world request binding entry then none
