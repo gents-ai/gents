@@ -398,7 +398,7 @@ def taskGoalPublicationCasesJson : String :=
 structure TaskGoalRecoveryCase where
   name : String
   agentDid : String
-  behaviorId : String
+  agentId : String
   taskId : String
   fireKey : String
   request : Option GoalAutomation.TaskGoalRequestBinding
@@ -407,36 +407,36 @@ structure TaskGoalRecoveryCase where
 
 def taskGoalRecoveryCases : List TaskGoalRecoveryCase :=
   let agentDid := "did:key:z-feature-owner"
-  let behaviorId := "feature-engineer"
+  let agentId := "feature-engineer"
   let taskId := "feature-implementation"
   let fireKey := "schedule:2026-09-02T12:00:00Z"
   let expected := GoalAutomation.expectedTaskGoalRequestBinding
-    agentDid behaviorId taskId fireKey
-  [ { name := "request_absent_has_nothing_to_checkpoint", agentDid, behaviorId, taskId, fireKey
+    agentDid agentId taskId fireKey
+  [ { name := "request_absent_has_nothing_to_checkpoint", agentDid, agentId, taskId, fireKey
       request := none, durableGoalPresent := false, creationClaimPresent := false }
-  , { name := "matching_request_with_metadata_recovers", agentDid, behaviorId, taskId, fireKey
+  , { name := "matching_request_with_metadata_recovers", agentDid, agentId, taskId, fireKey
       request := some expected, durableGoalPresent := true, creationClaimPresent := true }
-  , { name := "matching_request_without_goal_recovers", agentDid, behaviorId, taskId, fireKey
+  , { name := "matching_request_without_goal_recovers", agentDid, agentId, taskId, fireKey
       request := some expected, durableGoalPresent := false, creationClaimPresent := true }
-  , { name := "matching_request_without_claim_recovers", agentDid, behaviorId, taskId, fireKey
+  , { name := "matching_request_without_claim_recovers", agentDid, agentId, taskId, fireKey
       request := some expected, durableGoalPresent := true, creationClaimPresent := false }
   , { name := "matching_request_without_goal_or_claim_recovers",
-      agentDid, behaviorId, taskId, fireKey
+      agentDid, agentId, taskId, fireKey
       request := some expected, durableGoalPresent := false, creationClaimPresent := false }
   , { name := "mismatched_principal_conflicts",
-      agentDid, behaviorId, taskId, fireKey
+      agentDid, agentId, taskId, fireKey
       request := some { expected with agentDid := "did:key:z-other-owner" }
       durableGoalPresent := false, creationClaimPresent := false }
-  , { name := "mismatched_behavior_conflicts", agentDid, behaviorId, taskId, fireKey
-      request := some { expected with behaviorId := "other-behavior" }
+  , { name := "mismatched_behavior_conflicts", agentDid, agentId, taskId, fireKey
+      request := some { expected with agentId := "other-behavior" }
       durableGoalPresent := false, creationClaimPresent := false }
-  , { name := "mismatched_session_conflicts", agentDid, behaviorId, taskId, fireKey
+  , { name := "mismatched_session_conflicts", agentDid, agentId, taskId, fireKey
       request := some { expected with sessionId := "other-session" }
       durableGoalPresent := false, creationClaimPresent := false }
-  , { name := "mismatched_request_id_conflicts", agentDid, behaviorId, taskId, fireKey
+  , { name := "mismatched_request_id_conflicts", agentDid, agentId, taskId, fireKey
       request := some { expected with requestId := "other-request" }
       durableGoalPresent := false, creationClaimPresent := false }
-  , { name := "mismatched_retry_key_conflicts", agentDid, behaviorId, taskId, fireKey
+  , { name := "mismatched_retry_key_conflicts", agentDid, agentId, taskId, fireKey
       request := some { expected with retryKey := "other-retry" }
       durableGoalPresent := false, creationClaimPresent := false }
   ]
@@ -448,19 +448,19 @@ def taskFireRecoveryDispositionName : GoalAutomation.TaskFireRecoveryDisposition
 
 def taskGoalRecoveryCaseJson (w : TaskGoalRecoveryCase) : String :=
   let expected := GoalAutomation.expectedTaskGoalRequestBinding
-    w.agentDid w.behaviorId w.taskId w.fireKey
+    w.agentDid w.agentId w.taskId w.fireKey
   let decision := GoalAutomation.decideTaskFireRecovery expected
     ⟨w.request, w.durableGoalPresent, w.creationClaimPresent⟩
   "{"
     ++ "\"name\":" ++ jsonString w.name ++ ","
     ++ "\"agent_did\":" ++ jsonString w.agentDid ++ ","
-    ++ "\"behavior_id\":" ++ jsonString w.behaviorId ++ ","
+    ++ "\"behavior_id\":" ++ jsonString w.agentId ++ ","
     ++ "\"task_id\":" ++ jsonString w.taskId ++ ","
     ++ "\"fire_key\":" ++ jsonString w.fireKey ++ ","
     ++ "\"request_present\":" ++ boolString w.request.isSome ++ ","
     ++ "\"request_binding_matches\":" ++ boolString (w.request == some expected) ++ ","
     ++ "\"observed_agent_did\":" ++ goalOptionalStringJson (w.request.map (·.agentDid)) ++ ","
-    ++ "\"observed_behavior_id\":" ++ goalOptionalStringJson (w.request.map (·.behaviorId)) ++ ","
+    ++ "\"observed_behavior_id\":" ++ goalOptionalStringJson (w.request.map (·.agentId)) ++ ","
     ++ "\"observed_session_id\":" ++ goalOptionalStringJson (w.request.map (·.sessionId)) ++ ","
     ++ "\"observed_request_id\":" ++ goalOptionalStringJson (w.request.map (·.requestId)) ++ ","
     ++ "\"observed_retry_key\":" ++ goalOptionalStringJson (w.request.map (·.retryKey)) ++ ","
@@ -585,13 +585,13 @@ def goalReadinessGateCases : List GoalReadinessGateCase :=
   , { name := "ready_completed_attempt_continues_and_clears_retries", observation := .ready true,
       settled := true, cause := .attempt, input := activeInput .completed 1 }
   , { name := "readiness_rejection_while_waiting_is_uncharged", observation := .unknown,
-      settled := false, cause := .behaviorUnavailable, input := activeInput .failed 1 }
+      settled := false, cause := .agentUnavailable, input := activeInput .failed 1 }
   , { name := "readiness_rejection_after_recovery_continues_uncharged", observation := .ready true,
-      settled := true, cause := .behaviorUnavailable, input := activeInput .failed 1 }
+      settled := true, cause := .agentUnavailable, input := activeInput .failed 1 }
   , { name := "readiness_rejection_at_exhausted_budget_does_not_pause", observation := .ready true,
-      settled := true, cause := .behaviorUnavailable, input := activeInput .failed 2 }
+      settled := true, cause := .agentUnavailable, input := activeInput .failed 2 }
   , { name := "readiness_rejection_over_token_budget_requests_wrapup", observation := .ready true,
-      settled := true, cause := .behaviorUnavailable, input := activeInput .failed 1 true }
+      settled := true, cause := .agentUnavailable, input := activeInput .failed 1 true }
   , { name := "executed_failure_is_charged", observation := .ready true,
       settled := true, cause := .attempt, input := activeInput .failed 0 }
   , { name := "executed_failure_exhausts_bound", observation := .ready true,
@@ -601,14 +601,14 @@ def goalReadinessGateCases : List GoalReadinessGateCase :=
   , { name := "exhausted_failure_pauses_without_readiness", observation := .unavailable,
       settled := true, cause := .attempt, input := activeInput .failed 2 }
   , { name := "readiness_rejected_wrapup_reissues_uncharged", observation := .ready true,
-      settled := true, cause := .behaviorUnavailable, input := pendingWrapupInput .failed 1 }
+      settled := true, cause := .agentUnavailable, input := pendingWrapupInput .failed 1 }
   , { name := "settled_unavailable_abandons_pending_wrapup", observation := .unavailable,
       settled := true, cause := .attempt, input := pendingWrapupInput .failed 0 }
   , { name := "existing_child_is_never_duplicated", observation := .ready true,
-      settled := true, cause := .behaviorUnavailable,
+      settled := true, cause := .agentUnavailable,
       input := activeInput .failed 0 (child := true) }
   , { name := "stale_readiness_defers_rejection_reissue", observation := .ready false,
-      settled := true, cause := .behaviorUnavailable, input := activeInput .failed 1 }
+      settled := true, cause := .agentUnavailable, input := activeInput .failed 1 }
   , { name := "stale_readiness_still_decides_an_executed_attempt", observation := .ready false,
       settled := true, cause := .attempt, input := activeInput .failed 0 }
   , { name := "busy_session_never_continues", observation := .unavailable,
@@ -629,12 +629,12 @@ def readinessName : Readiness → String
 
 def readinessCauseName : Cause → String
   | .attempt => "attempt"
-  | .behaviorUnavailable => "behavior_unavailable"
+  | .agentUnavailable => "behavior_unavailable"
 
 def gatedName : Gated → String
   | .decided decision => decisionName decision
   | .awaitReadiness => "await_readiness"
-  | .behaviorUnavailable => "behavior_unavailable"
+  | .agentUnavailable => "behavior_unavailable"
 
 def goalReadinessGateCaseJson (w : GoalReadinessGateCase) : String :=
   let readiness := observe w.observation w.settled

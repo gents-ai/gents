@@ -4,8 +4,6 @@ abbrev PeerId := Nat
 
 abbrev NodeDid := Nat
 
-abbrev AgentId := String
-
 /-- `latestObservedRequest` is the request of the session's current turn and
 `latestTurn` its state. `queuedRequests` are requests admitted behind that
 turn and not yet claimed, in queue order. They do not become the current turn

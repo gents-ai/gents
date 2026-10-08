@@ -350,12 +350,12 @@ theorem plugin_resource_within_host (baseline requested ceiling : Nat) :
   exact Nat.min_le_right _ _
 
 /-- Plugin inference is an optional capability, separate from required behavior inference. -/
-def pluginModelSlotAllowed (declared optional behaviorFree : Bool) : Bool :=
-  declared && optional && behaviorFree
+def pluginModelSlotAllowed (declared optional agentFree : Bool) : Bool :=
+  declared && optional && agentFree
 
-theorem plugin_model_slot_optional (declared optional behaviorFree : Bool)
-    (h : pluginModelSlotAllowed declared optional behaviorFree = true) : optional = true := by
-  cases declared <;> cases optional <;> cases behaviorFree <;> simp_all [pluginModelSlotAllowed]
+theorem plugin_model_slot_optional (declared optional agentFree : Bool)
+    (h : pluginModelSlotAllowed declared optional agentFree = true) : optional = true := by
+  cases declared <;> cases optional <;> cases agentFree <;> simp_all [pluginModelSlotAllowed]
 
 /-- How much of a bound folder a plugin call uses. `read` is below `readWrite`,
 so a grant of `readWrite` also serves a reading call. -/

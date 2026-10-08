@@ -43,16 +43,16 @@ instance (desired : DocRef → Option DesiredFields) (decode : RegistryDecoder)
 
 def resolvedAgentIds (desired : DocRef → Option DesiredFields)
     (decode : RegistryDecoder) (owner : String) (names : Finset String)
-    (encode : String → BehaviorId) : Finset BehaviorId :=
+    (encode : String → AgentId) : Finset AgentId :=
   (names.filter (configurationReady desired decode owner)).image encode
 
 /-- Runtime availability remains an observation of its existing owner. Successful
 configuration resolution supplies dependencies; it does not invent availability. -/
 def snapshotFromDesired (desired : DocRef → Option DesiredFields)
     (decode : RegistryDecoder) (owner : String) (names : Finset String)
-    (encode : String → BehaviorId) (_hencode : Function.Injective encode)
-    (defaultAgent : BehaviorId)
-    (runtimeAvailable : Finset BehaviorId) : ResolvedSnapshot :=
+    (encode : String → AgentId) (_hencode : Function.Injective encode)
+    (defaultAgent : AgentId)
+    (runtimeAvailable : Finset AgentId) : ResolvedSnapshot :=
   let dependencies := resolvedAgentIds desired decode owner names encode
   let runnable := dependencies ∩ runtimeAvailable
   { defaultBehavior := defaultAgent
@@ -62,15 +62,15 @@ def snapshotFromDesired (desired : DocRef → Option DesiredFields)
 
 def LiveState.toResolvedSnapshot (L : LiveState)
     (decode : RegistryDecoder) (owner : String) (names : Finset String)
-    (encode : String → BehaviorId) (hencode : Function.Injective encode)
-    (defaultAgent : BehaviorId)
-    (runtimeAvailable : Finset BehaviorId) : ResolvedSnapshot :=
+    (encode : String → AgentId) (hencode : Function.Injective encode)
+    (defaultAgent : AgentId)
+    (runtimeAvailable : Finset AgentId) : ResolvedSnapshot :=
   snapshotFromDesired L.desired decode owner names encode hencode defaultAgent runtimeAvailable
 
 /-- Injectivity prevents different authored names from sharing a lifecycle identity. -/
 theorem resolved_id_iff (desired : DocRef → Option DesiredFields)
     (decode : RegistryDecoder) (owner name : String) (names : Finset String)
-    (encode : String → BehaviorId) (hencode : Function.Injective encode) :
+    (encode : String → AgentId) (hencode : Function.Injective encode) :
     encode name ∈ resolvedAgentIds desired decode owner names encode ↔
       name ∈ names ∧ configurationReady desired decode owner name := by
   simp only [resolvedAgentIds, Finset.mem_image, Finset.mem_filter]
@@ -84,8 +84,8 @@ theorem resolved_id_iff (desired : DocRef → Option DesiredFields)
 
 theorem runnable_iff (desired : DocRef → Option DesiredFields)
     (decode : RegistryDecoder) (owner name : String) (names : Finset String)
-    (encode : String → BehaviorId) (hencode : Function.Injective encode)
-    (defaultAgent : BehaviorId) (runtimeAvailable : Finset BehaviorId) :
+    (encode : String → AgentId) (hencode : Function.Injective encode)
+    (defaultAgent : AgentId) (runtimeAvailable : Finset AgentId) :
     encode name ∈ (snapshotFromDesired desired decode owner names encode hencode
       defaultAgent runtimeAvailable).runnable ↔
       (name ∈ names ∧ configurationReady desired decode owner name) ∧
@@ -97,8 +97,8 @@ theorem runnable_iff (desired : DocRef → Option DesiredFields)
 exactly the common resolver; document presence cannot override its rejection. -/
 theorem rejected_configuration_not_runnable (desired : DocRef → Option DesiredFields)
     (decode : RegistryDecoder) (owner name : String) (names : Finset String)
-    (encode : String → BehaviorId) (hencode : Function.Injective encode)
-    (defaultAgent : BehaviorId) (runtimeAvailable : Finset BehaviorId)
+    (encode : String → AgentId) (hencode : Function.Injective encode)
+    (defaultAgent : AgentId) (runtimeAvailable : Finset AgentId)
     (err : Configuration.ResolveError)
     (h : Configuration.resolveAgent (decode desired) owner name = .error err) :
     encode name ∉ (snapshotFromDesired desired decode owner names encode hencode
@@ -108,9 +108,9 @@ theorem rejected_configuration_not_runnable (desired : DocRef → Option Desired
 
 theorem snapshot_coverage (desired : DocRef → Option DesiredFields)
     (decode : RegistryDecoder) (owner : String) (names : Finset String)
-    (encode : String → BehaviorId) (hencode : Function.Injective encode)
-    (defaultAgent : BehaviorId)
-    (runtimeAvailable : Finset BehaviorId) :
+    (encode : String → AgentId) (hencode : Function.Injective encode)
+    (defaultAgent : AgentId)
+    (runtimeAvailable : Finset AgentId) :
     let snapshot := snapshotFromDesired desired decode owner names encode hencode
       defaultAgent runtimeAvailable
     snapshot.runnable ∪ snapshot.unavailable = names.image encode := by
@@ -123,8 +123,8 @@ A configured default must belong to the classified agent set; it need not be
 ready when its configuration or runtime resources are unavailable. -/
 theorem snapshot_wellFormed (desired : DocRef → Option DesiredFields)
     (decode : RegistryDecoder) (owner : String) (names : Finset String)
-    (encode : String → BehaviorId) (hencode : Function.Injective encode)
-    (defaultAgent : BehaviorId) (runtimeAvailable : Finset BehaviorId)
+    (encode : String → AgentId) (hencode : Function.Injective encode)
+    (defaultAgent : AgentId) (runtimeAvailable : Finset AgentId)
     (hdefault : defaultAgent ∈ names.image encode) :
     (snapshotFromDesired desired decode owner names encode hencode
       defaultAgent runtimeAvailable).wellFormed := by

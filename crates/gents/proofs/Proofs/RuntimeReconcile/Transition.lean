@@ -57,7 +57,7 @@ inductive Transition : RuntimeState → RuntimeState → Prop where
       post = { pre with routerObservedGeneration := pre.active.generation } →
       Transition pre post
   | accept_request {pre post : RuntimeState} (process : ProcessState)
-      (sessionId : SessionId) (requestId : RequestId) (requested : BehaviorId) :
+      (sessionId : SessionId) (requestId : RequestId) (requested : AgentId) :
       CanAdmitRequest process pre sessionId requestId requested →
       post =
         { pre with
