@@ -48,13 +48,13 @@ def IdentityStructuralCase.wellFormed (c : IdentityStructuralCase) : Bool :=
   decide c.world.WellFormed
 
 def structuralCases : List IdentityStructuralCase :=
-  [ { name        := "amy_general_and_amy_code_share_principal"
+  [ { name        := "amy_general_and_amy_code_share_node"
     , nodes       := [{ did := amyDid, enabled := true }]
     , agents      :=
         [ { id := "amy-general", node := amyDid, enabled := true }
         , { id := "amy-code",    node := amyDid, enabled := true } ]
     }
-  , { name        := "amy_rumination_separate_principal"
+  , { name        := "amy_rumination_separate_node"
     , nodes       :=
         [ { did := amyDid,        enabled := true }
         , { did := ruminationDid, enabled := true } ]
@@ -62,18 +62,18 @@ def structuralCases : List IdentityStructuralCase :=
         [ { id := "amy-general",     node := amyDid,        enabled := true }
         , { id := "amy-rumination",  node := ruminationDid, enabled := true } ]
     }
-  , { name        := "dangling_behavior_fk_violates"
+  , { name        := "dangling_agent_fk_violates"
     , nodes       := [{ did := amyDid, enabled := true }]
     , agents      :=
         [ { id := "orphan", node := ghostDid, enabled := true } ]
     }
-  , { name        := "duplicate_behavior_id_violates"
+  , { name        := "duplicate_agent_id_violates"
     , nodes       := [{ did := amyDid, enabled := true }]
     , agents      :=
         [ { id := "amy-general", node := amyDid, enabled := true }
         , { id := "amy-general", node := amyDid, enabled := false } ]
     }
-  , { name := "same_behavior_label_across_principals_allowed"
+  , { name := "same_agent_label_across_nodes_allowed"
     , nodes := [{ did := amyDid, enabled := true }, { did := ruminationDid, enabled := true }]
     , agents := [{ id := "coding", node := amyDid, enabled := true },
                     { id := "coding", node := ruminationDid, enabled := true }] }
@@ -170,7 +170,7 @@ def grant (node permission : String) : PermissionGrantCase :=
 
 def identityPermissionCases : List IdentityPermissionCase :=
   [ mkIdentityPermissionCase
-      "same_principal_row_owner_grant_allows_shared_behaviors"
+      "same_node_row_owner_grant_allows_shared_agents"
       [amyNode]
       [amyGeneralAgent, amyCodeAgent]
       [grant amyDid amyRowReadPermission]
@@ -179,7 +179,7 @@ def identityPermissionCases : List IdentityPermissionCase :=
       amyDid "amy-general"
       amyDid "amy-code"
   , mkIdentityPermissionCase
-      "separate_principal_without_grant_blocks_peer"
+      "separate_node_without_grant_blocks_peer"
       [amyNode, ruminationNode]
       [amyGeneralAgent, amyRuminationAgent]
       [grant amyDid amyRowReadPermission]
@@ -188,7 +188,7 @@ def identityPermissionCases : List IdentityPermissionCase :=
       amyDid "amy-general"
       ruminationDid "amy-rumination"
   , mkIdentityPermissionCase
-      "separate_principal_with_grant_allows_peer"
+      "separate_node_with_grant_allows_peer"
       [amyNode, ruminationNode]
       [amyGeneralAgent, amyRuminationAgent]
       [ grant amyDid amyRowReadPermission
@@ -198,7 +198,7 @@ def identityPermissionCases : List IdentityPermissionCase :=
       amyDid "amy-general"
       ruminationDid "amy-rumination"
   , mkIdentityPermissionCase
-      "scoped_behavior_lookup_selects_declared_principal"
+      "scoped_agent_lookup_selects_declared_node"
       [amyNode, ruminationNode]
       [amyGeneralAgent, amyCodeAgent, amyRuminationAgent]
       [grant ruminationDid ruminationRowReadPermission]
@@ -211,7 +211,7 @@ def identityPermissionCases : List IdentityPermissionCase :=
 theorem structural_scope_cases_pinned : structuralCases.map (·.wellFormed) =
     [true, true, false, false, true] := by native_decide
 
-/-- Same label never borrows the other principal's ACP grant, regardless of
+/-- Same label never borrows the other node's ACP grant, regardless of
 query ordering. Ambiguous same-owner documents fail resolution. -/
 def sharedLabelAgents : List AgentCase :=
   [{ id := "coding", node := amyDid, enabled := true },
@@ -226,7 +226,7 @@ def scopedSelectionCases : List IdentityPermissionCase :=
       [amyNode, ruminationNode] sharedLabelAgents.reverse
       [grant amyDid amyRowReadPermission] amyRowReadPermission amyDid
       amyDid "coding" ruminationDid "coding"
-  , mkIdentityPermissionCase "unknown-owner-does-not-select-other-principal"
+  , mkIdentityPermissionCase "unknown-owner-does-not-select-other-node"
       [amyNode, ruminationNode] sharedLabelAgents
       [grant amyDid amyRowReadPermission] amyRowReadPermission amyDid
       ghostDid "coding" amyDid "coding"
@@ -254,21 +254,21 @@ def nodeCaseJson (c : NodeCase) : String :=
 def agentCaseJson (c : AgentCase) : String :=
   "{"
     ++ "\"id\":" ++ jsonString c.id ++ ","
-    ++ "\"principal\":" ++ jsonString c.node ++ ","
+    ++ "\"node\":" ++ jsonString c.node ++ ","
     ++ "\"enabled\":" ++ boolString c.enabled
     ++ "}"
 
 def permissionGrantCaseJson (c : PermissionGrantCase) : String :=
   "{"
-    ++ "\"principal\":" ++ jsonString c.node ++ ","
+    ++ "\"node\":" ++ jsonString c.node ++ ","
     ++ "\"permission\":" ++ jsonString c.permission
     ++ "}"
 
 def identityStructuralCaseJson (c : IdentityStructuralCase) : String :=
   "{"
     ++ "\"name\":" ++ jsonString c.name ++ ","
-    ++ "\"principals\":" ++ jsonArray (c.nodes.map nodeCaseJson) ++ ","
-    ++ "\"behaviors\":" ++ jsonArray (c.agents.map agentCaseJson) ++ ","
+    ++ "\"nodes\":" ++ jsonArray (c.nodes.map nodeCaseJson) ++ ","
+    ++ "\"agents\":" ++ jsonArray (c.agents.map agentCaseJson) ++ ","
     ++ "\"well_formed\":" ++ boolString c.wellFormed
     ++ "}"
 
@@ -278,24 +278,24 @@ def structuralCasesJson : String :=
 def identityPermissionCaseJson (c : IdentityPermissionCase) : String :=
   "{"
     ++ "\"name\":" ++ jsonString c.name ++ ","
-    ++ "\"principals\":" ++ jsonArray (c.nodes.map nodeCaseJson) ++ ","
-    ++ "\"behaviors\":" ++ jsonArray (c.agents.map agentCaseJson) ++ ","
+    ++ "\"nodes\":" ++ jsonArray (c.nodes.map nodeCaseJson) ++ ","
+    ++ "\"agents\":" ++ jsonArray (c.agents.map agentCaseJson) ++ ","
     ++ "\"grants\":" ++ jsonArray (c.grants.map permissionGrantCaseJson) ++ ","
     ++ "\"permission\":" ++ jsonString c.permission ++ ","
     ++ "\"row_owner\":" ++ jsonString c.rowOwner ++ ","
-    ++ "\"actor_principal\":" ++ jsonString c.actorNode ++ ","
-    ++ "\"actor_behavior\":" ++ jsonString c.actorAgent ++ ","
-    ++ "\"peer_principal\":" ++ jsonString c.peerNode ++ ","
-    ++ "\"peer_behavior\":" ++ jsonString c.peerAgent ++ ","
-    ++ "\"expected_actor_principal\":"
+    ++ "\"actor_node\":" ++ jsonString c.actorNode ++ ","
+    ++ "\"actor_agent\":" ++ jsonString c.actorAgent ++ ","
+    ++ "\"peer_node\":" ++ jsonString c.peerNode ++ ","
+    ++ "\"peer_agent\":" ++ jsonString c.peerAgent ++ ","
+    ++ "\"expected_actor_node\":"
       ++ (c.expectedActorNode.map jsonString |>.getD "null") ++ ","
-    ++ "\"expected_peer_principal\":"
+    ++ "\"expected_peer_node\":"
       ++ (c.expectedPeerNode.map jsonString |>.getD "null") ++ ","
     ++ "\"expected_actor_allowed\":"
       ++ boolString c.expectedActorAllowed ++ ","
     ++ "\"expected_peer_allowed\":"
       ++ boolString c.expectedPeerAllowed ++ ","
-    ++ "\"same_principal\":" ++ boolString c.sameNode ++ ","
+    ++ "\"same_node\":" ++ boolString c.sameNode ++ ","
     ++ "\"expected_decisions_equal\":"
       ++ boolString c.expectedDecisionsEqual
     ++ "}"
@@ -311,11 +311,11 @@ structure IdentityContract where
   deriving Repr
 
 def identityContracts : List IdentityContract :=
-  [ { name      := "identity.respects_principal_boundary"
+  [ { name      := "identity.respects_node_boundary"
     , statement :=
-        "Target contract: resolve behaviors by (agent_did, behavior_id). " ++
-        "For any two AgentBehavior rows b1, b2 with " ++
-        "b1.agent_did == b2.agent_did, the runtime supplies the same " ++
+        "Target contract: resolve agents by (node_did, agent_id). " ++
+        "For any two Agent rows b1, b2 with " ++
+        "b1.node_did == b2.node_did, the runtime supplies the same " ++
         "Identity::Authenticated(did) as the actor for any DefraDB ACP " ++
         "check, so any DID-keyed permission decision returns identical " ++
         "results."

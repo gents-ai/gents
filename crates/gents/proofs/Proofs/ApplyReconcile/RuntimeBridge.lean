@@ -13,13 +13,13 @@ abbrev RegistryDecoder := (DocRef → Option DesiredFields) → Configuration.Re
 
 /-- Preserve authored IDs. The lifecycle model uses abstract Nat identities;
 callers must supply an injective encoding when relating those identities to names. -/
-def Manifest.behaviorNames (m : Manifest) (owner : String) : Finset String :=
-  (m.support.filter (fun d => d.collection = .agentBehavior ∧ d.agentDid = owner)).image DocRef.id
+def Manifest.agentNames (m : Manifest) (owner : String) : Finset String :=
+  (m.support.filter (fun d => d.collection = .agent ∧ d.nodeDid = owner)).image DocRef.id
 
-/-- Equal labels from other principals cannot replace this owner's lookup. -/
-theorem mem_behaviorNames_iff (m : Manifest) (owner name : String) :
-    name ∈ m.behaviorNames owner ↔ (m.docs ⟨.agentBehavior, name, owner⟩).isSome = true := by
-  simp only [Manifest.behaviorNames, Finset.mem_image, Finset.mem_filter]
+/-- Equal labels from other nodes cannot replace this owner's lookup. -/
+theorem mem_agentNames_iff (m : Manifest) (owner name : String) :
+    name ∈ m.agentNames owner ↔ (m.docs ⟨.agent, name, owner⟩).isSome = true := by
+  simp only [Manifest.agentNames, Finset.mem_image, Finset.mem_filter]
   constructor
   · rintro ⟨⟨collection, id, agent⟩, ⟨hm, hc, ho⟩, hn⟩
     cases hc
@@ -27,21 +27,21 @@ theorem mem_behaviorNames_iff (m : Manifest) (owner name : String) :
     cases ho
     exact (m.support_iff _).mp hm
   · intro h
-    exact ⟨⟨.agentBehavior, name, owner⟩, ⟨(m.support_iff _).mpr h, rfl, rfl⟩, rfl⟩
+    exact ⟨⟨.agent, name, owner⟩, ⟨(m.support_iff _).mpr h, rfl, rfl⟩, rfl⟩
 
-/-- A present behavior is configuration-ready only when the common resolver
+/-- A present agent is configuration-ready only when the common resolver
 produces its complete context and inference selection. -/
 def configurationReady (desired : DocRef → Option DesiredFields)
     (decode : RegistryDecoder) (owner name : String) : Prop :=
-  (desired ⟨.agentBehavior, name, owner⟩).isSome = true ∧
-    (Configuration.resolveBehavior (decode desired) owner name).toOption.isSome = true
+  (desired ⟨.agent, name, owner⟩).isSome = true ∧
+    (Configuration.resolveAgent (decode desired) owner name).toOption.isSome = true
 
 instance (desired : DocRef → Option DesiredFields) (decode : RegistryDecoder)
     (owner name : String) : Decidable (configurationReady desired decode owner name) := by
   unfold configurationReady
   infer_instance
 
-def resolvedBehaviorIds (desired : DocRef → Option DesiredFields)
+def resolvedAgentIds (desired : DocRef → Option DesiredFields)
     (decode : RegistryDecoder) (owner : String) (names : Finset String)
     (encode : String → BehaviorId) : Finset BehaviorId :=
   (names.filter (configurationReady desired decode owner)).image encode
@@ -51,11 +51,11 @@ configuration resolution supplies dependencies; it does not invent availability.
 def snapshotFromDesired (desired : DocRef → Option DesiredFields)
     (decode : RegistryDecoder) (owner : String) (names : Finset String)
     (encode : String → BehaviorId) (_hencode : Function.Injective encode)
-    (defaultBehavior : BehaviorId)
+    (defaultAgent : BehaviorId)
     (runtimeAvailable : Finset BehaviorId) : ResolvedSnapshot :=
-  let dependencies := resolvedBehaviorIds desired decode owner names encode
+  let dependencies := resolvedAgentIds desired decode owner names encode
   let runnable := dependencies ∩ runtimeAvailable
-  { defaultBehavior
+  { defaultBehavior := defaultAgent
     runnable
     unavailable := names.image encode \ runnable
     dependenciesSatisfied := dependencies }
@@ -63,17 +63,17 @@ def snapshotFromDesired (desired : DocRef → Option DesiredFields)
 def LiveState.toResolvedSnapshot (L : LiveState)
     (decode : RegistryDecoder) (owner : String) (names : Finset String)
     (encode : String → BehaviorId) (hencode : Function.Injective encode)
-    (defaultBehavior : BehaviorId)
+    (defaultAgent : BehaviorId)
     (runtimeAvailable : Finset BehaviorId) : ResolvedSnapshot :=
-  snapshotFromDesired L.desired decode owner names encode hencode defaultBehavior runtimeAvailable
+  snapshotFromDesired L.desired decode owner names encode hencode defaultAgent runtimeAvailable
 
 /-- Injectivity prevents different authored names from sharing a lifecycle identity. -/
 theorem resolved_id_iff (desired : DocRef → Option DesiredFields)
     (decode : RegistryDecoder) (owner name : String) (names : Finset String)
     (encode : String → BehaviorId) (hencode : Function.Injective encode) :
-    encode name ∈ resolvedBehaviorIds desired decode owner names encode ↔
+    encode name ∈ resolvedAgentIds desired decode owner names encode ↔
       name ∈ names ∧ configurationReady desired decode owner name := by
-  simp only [resolvedBehaviorIds, Finset.mem_image, Finset.mem_filter]
+  simp only [resolvedAgentIds, Finset.mem_image, Finset.mem_filter]
   constructor
   · rintro ⟨other, ⟨hn, hr⟩, he⟩
     have heq := hencode he
@@ -85,9 +85,9 @@ theorem resolved_id_iff (desired : DocRef → Option DesiredFields)
 theorem runnable_iff (desired : DocRef → Option DesiredFields)
     (decode : RegistryDecoder) (owner name : String) (names : Finset String)
     (encode : String → BehaviorId) (hencode : Function.Injective encode)
-    (defaultBehavior : BehaviorId) (runtimeAvailable : Finset BehaviorId) :
+    (defaultAgent : BehaviorId) (runtimeAvailable : Finset BehaviorId) :
     encode name ∈ (snapshotFromDesired desired decode owner names encode hencode
-      defaultBehavior runtimeAvailable).runnable ↔
+      defaultAgent runtimeAvailable).runnable ↔
       (name ∈ names ∧ configurationReady desired decode owner name) ∧
         encode name ∈ runtimeAvailable := by
   simp only [snapshotFromDesired, Finset.mem_inter,
@@ -98,42 +98,42 @@ exactly the common resolver; document presence cannot override its rejection. -/
 theorem rejected_configuration_not_runnable (desired : DocRef → Option DesiredFields)
     (decode : RegistryDecoder) (owner name : String) (names : Finset String)
     (encode : String → BehaviorId) (hencode : Function.Injective encode)
-    (defaultBehavior : BehaviorId) (runtimeAvailable : Finset BehaviorId)
+    (defaultAgent : BehaviorId) (runtimeAvailable : Finset BehaviorId)
     (err : Configuration.ResolveError)
-    (h : Configuration.resolveBehavior (decode desired) owner name = .error err) :
+    (h : Configuration.resolveAgent (decode desired) owner name = .error err) :
     encode name ∉ (snapshotFromDesired desired decode owner names encode hencode
-      defaultBehavior runtimeAvailable).runnable := by
+      defaultAgent runtimeAvailable).runnable := by
   rw [runnable_iff desired decode owner name names encode hencode]
   simp [configurationReady, h, Except.toOption]
 
 theorem snapshot_coverage (desired : DocRef → Option DesiredFields)
     (decode : RegistryDecoder) (owner : String) (names : Finset String)
     (encode : String → BehaviorId) (hencode : Function.Injective encode)
-    (defaultBehavior : BehaviorId)
+    (defaultAgent : BehaviorId)
     (runtimeAvailable : Finset BehaviorId) :
     let snapshot := snapshotFromDesired desired decode owner names encode hencode
-      defaultBehavior runtimeAvailable
+      defaultAgent runtimeAvailable
     snapshot.runnable ∪ snapshot.unavailable = names.image encode := by
   apply Finset.union_sdiff_of_subset
   exact Finset.Subset.trans Finset.inter_subset_left
     (Finset.image_subset_image (Finset.filter_subset _ _))
 
 /-- The resolver-backed partition satisfies the existing activation contract.
-A configured default must belong to the classified behavior set; it need not be
+A configured default must belong to the classified agent set; it need not be
 ready when its configuration or runtime resources are unavailable. -/
 theorem snapshot_wellFormed (desired : DocRef → Option DesiredFields)
     (decode : RegistryDecoder) (owner : String) (names : Finset String)
     (encode : String → BehaviorId) (hencode : Function.Injective encode)
-    (defaultBehavior : BehaviorId) (runtimeAvailable : Finset BehaviorId)
-    (hdefault : defaultBehavior ∈ names.image encode) :
+    (defaultAgent : BehaviorId) (runtimeAvailable : Finset BehaviorId)
+    (hdefault : defaultAgent ∈ names.image encode) :
     (snapshotFromDesired desired decode owner names encode hencode
-      defaultBehavior runtimeAvailable).wellFormed := by
+      defaultAgent runtimeAvailable).wellFormed := by
   refine ⟨?_, Finset.inter_subset_left, ?_⟩
   · apply Finset.disjoint_left.mpr
     intro bid hrun hunavailable
     exact (Finset.mem_sdiff.mp hunavailable).2 hrun
   · rw [snapshot_coverage desired decode owner names encode hencode
-      defaultBehavior runtimeAvailable]
+      defaultAgent runtimeAvailable]
     exact hdefault
 
 end ApplyReconcile
