@@ -626,7 +626,7 @@ Provider-input assembly for Claude: the body's `system[]` order and tools omissi
 | `Proofs/Eval.lean` | Eval core contract (#1515): closed outcome-kind vocabulary, provider reasons, the projection onto evidence classes, the theorem that no subject-causable outcome is excluded from the denominator, and monotone case-class reduction. Checks, numeric reducers and the runner are refinement boundaries |
 | `Proofs/Optimization.lean` | Configuration optimization (#1455) on the eval contract: worst-case unknown imputation, integer sufficiency and non-regression gates over per-case paired sums, the cost sub-gate, the ordered decision, the rule that too few cases can never be accepted, and the length-guarded job journal with bounded rounds. The permutation test, eval runs and the proposer are refinement boundaries |
 | `Proofs/SelfConfig.lean` | Barrel for agent self-configuration patch semantics: field partitions, merge, write step, and guardrails (#654), and the per-grant operator-grant guard |
-| `Proofs/SelfConfig/AgentDecision.lean` | Create, edit and disable decisions over the node's Agent catalog: protected (Engineer) agents are never edited or disabled, the default agent is never disabled, and a new agent takes an unused id. Create input requires a nonblank published profile, a prompt (or an enabled clone source); edit fields are omitted/clear/set patch entries (profile cannot be cleared); `agentOperationAdmitted` composes the catalog decision with these input predicates, and `materializedAgent` admits only through it before default promotion and `Configuration.resolveAgent` (disable starts no session). Executable regressions in `SelfConfig/Cases`; generated `agent_decision_cases` rows carry `create_input` and `edit_patch` and have no Rust consumer yet (ledger follow-up). |
+| `Proofs/SelfConfig/AgentDecision.lean` | Create, edit and disable decisions over the node's Agent catalog: protected (Engineer) agents are never edited or disabled, the default agent is never disabled, and a new agent takes an unused id. Create input requires a nonblank published profile, a prompt (or an enabled clone source); edit fields are omitted/clear/set patch entries (profile cannot be cleared); `agentOperationAdmitted` composes the catalog decision with these input predicates, and `materializedAgent` admits only through it before default promotion and `Configuration.resolveAgent` (disable starts no session). Executable regressions in `SelfConfig/Cases`; generated `agent_decision_cases` rows carry `create_input` and `edit_patch`, and `agent_materialization_cases` rows carry the `materializedAgent` session (or null). Neither has a Rust consumer yet (ledger follow-ups). |
 | `Proofs/SelfConfig/Selection.lean` | Scoped sibling-tools operation: omission preserves the stored selection, explicit network selection only narrows, and protected, shared or foreign-owner targets are refused. Generated `sibling_tools_cases` have no Rust consumer yet (ledger follow-up). |
 | `Proofs/Triggers.lean` | Barrel for trigger types, dispatch, reachability, serial, latest-only, and lineage proofs |
 | `Proofs/Triggers/Identity.lean` | Canonical fire identity framing and injectivity; owner, trigger, collection and physical document identity feed request, session and outcome IDs. |
@@ -1689,7 +1689,7 @@ Sandbox cases additionally cover available and unavailable artifact enforcement.
 The unavailable-host admission case drives the production workspace resolver
 with an injected host observation, rather than only testing a later launch
 selector. Unsupported hosts reject before binding or provider dispatch.
-The contextual requested mode is already met with behavior and operator ceilings;
+The contextual requested mode is already met with agent and operator ceilings;
 an active binding and current live, uncanceled execution are constructor
 preconditions. Persistent LSP starts are initially denied before pool lookup in
 artifact context; supporting their longer lifetime requires preserving the same
@@ -1824,61 +1824,3 @@ explicit conflicts are checked before this attenuation; no ReadOnly fallback
 is invented. Exact root identity inheritance applies only to destinations with
 a workspace authority. Matching identity hints are discarded for a no-authority
 destination; an explicit nonempty authority conflicts and is denied.
-
-## PersonaRequest accounting
-
-Successors of `PeerRegistryDiscovery/PersonaRequest.lean`. Cases: `SelfConfig.ContractCases.agent_decision_cases_regressions` (JSON `agent_decision_cases`), `agent_materialization_cases_regressions`.
-
-| Old | Successor |
-| --- | --- |
-| `Op` | `SelfConfig.AgentOp`; inputs carried by `SelfConfig.AgentOperation` |
-| `Request` | `SelfConfig.AgentOperation` with `target`, `makeDefault` |
-| `BehaviorCatalog` | `SelfConfig.AgentCatalog` |
-| `Catalog.profiles` | `profiles` argument of `agentOperationAdmitted` |
-| `Catalog.roots`, `Catalog.rootPolicyConfigured` | arguments of `RootAdmission.rootSelectionOk` |
-| `Catalog.agents` | dropped: the actor is the node itself |
-| `Catalog.authorization`, `EnrollmentAuthorization`, `enrollmentAuthorizationOk` | dropped: authority is document ACP on the node DID |
-| `AuthorityKind`, `localSelfAuthorizationOk`, `authorizationOk` | dropped: no signed command exists |
-| `agentOk` | dropped: no foreign actor can be named |
-| `admits` | `SelfConfig.agentOperationAdmitted` |
-| `opOk` | `SelfConfig.agentDecision` ∧ `SelfConfig.agentOperationInputOk` |
-| `targetBehaviorId` | dropped: every operation carries the Agent id as `target` |
-| `FieldUpdate`, `FieldUpdate.apply` | `SelfConfig.PatchOp` (absent / `clear` / `set`), `SelfConfig.applyPatch` |
-| `omitted_field_preserves` | `SelfConfig.omitted_field_preserved` |
-| `explicit_clear_is_distinct` | `SelfConfig.explicit_clear_removes_writable`, `SelfConfig.explicit_set_replaces_writable` |
-| `nameOk` | conjunct of `SelfConfig.agentCreateInputOk` |
-| `createPromptOk` | conjunct of `SelfConfig.agentCreateInputOk`; `fresh_create_requires_prompt` |
-| `profileOk` | conjunct of `SelfConfig.agentCreateInputOk` |
-| `cloneOk` | conjunct of `SelfConfig.agentCreateInputOk`; `clone_requires_enabled_source` |
-| `presetKnown`, `presetCreateOk`, `createModeOk`, `editPresetOk` | dropped: Tools authority is authored as a Tools document |
-| `rootSelectionOk`, `rootOk` | `RootAdmission.rootSelectionOk` |
-| `rootEditSelectionOk`, `editRootOk` | `RootAdmission.rootEditSelectionOk` |
-| `behaviorPresent` | `SelfConfig.AgentCatalog.present` |
-| `behaviorMutable` | `SelfConfig.AgentCatalog.mutable` |
-| `editNameOk` | `SelfConfig.editNameOk` |
-| `editPromptOk` | `SelfConfig.editPromptOk` |
-| `editProfileOk` | `SelfConfig.editProfileOk`; `profile_clear_rejected` |
-| edit conjuncts of `opOk` | `SelfConfig.agentEditFieldsOk`; `admitted_edit_fields_ok`, `materialized_edit_fields_ok` |
-| `asNameOnlyEdit` | `SelfConfig.AgentOperation.edit { name := some (.set name) }` |
-| `asProfileOnlyEdit` | `SelfConfig.AgentOperation.edit { profile := some (.set profile) }` |
-| `name_only_edit_does_not_require_profile` | `SelfConfig.name_only_edit_does_not_require_profile` |
-| `profile_only_edit_preserves_other_fields` | `SelfConfig.single_field_edit_preserves_others` |
-| `admitted_create_profile` | `SelfConfig.admitted_create_profile` (over `agentOperationAdmitted`) |
-| `blank_create_profile_rejected` | `SelfConfig.blank_create_profile_rejected`, `unpublished_create_profile_rejected` |
-| `admitted_preset_create_has_prompt` | `SelfConfig.admitted_create_input_ok`, `materialized_create_input_ok`, `fresh_create_requires_prompt` |
-| `protected_edit_or_disable_rejected` | `SelfConfig.protected_edit_or_disable_rejected` |
-| `default_disable_rejected` | `SelfConfig.default_disable_rejected` |
-| `defaultBehaviorAfter` | `SelfConfig.defaultAgentAfter` |
-| `requested_promotion_selects_applied_behavior` | `SelfConfig.requested_promotion_selects_applied_agent` |
-| `omitted_promotion_keeps_existing_default` | `SelfConfig.omitted_promotion_keeps_default` |
-| `materializedSession` | `SelfConfig.materializedAgent` |
-| `materializedSession_iff` | `SelfConfig.materializedAgent_iff` |
-| `disable_has_no_materialized_session` | `SelfConfig.disable_materializes_nothing` |
-| `unauthorized_command_resolves_nothing` | dropped: no command authorization; `rejected_operation_materializes_nothing` covers rejected admission |
-| `unknown_agent_resolves_nothing` | dropped: no foreign actor can be named |
-| `unsigned_local_command_denied`, `cross_principal_local_command_denied` | dropped: no signed command exists |
-| `selectedToolFlag`, `omitted_tool_selection_preserves`, `explicit_tool_selection_wins` | same names in `SelfConfig/Selection` |
-| `selectedNetworkMode`, `networkSelectionAllowed`, `omitted_network_selection_preserves`, `only_disabled_network_selection_admitted` | same names in `SelfConfig/Selection` |
-| `admitted_network_selection_does_not_widen` | `SelfConfig.sibling_tools_operation_narrows_network` |
-| `siblingToolsAllowed`, `protected_sibling_tools_denied`, `unshared_owned_sibling_tools_allowed` | same names in `SelfConfig/Selection` |
-| `graphToolPresented`, `graph_tools_without_configuration`, `configuration_does_not_grant_graph_tools` | same names in `SelfConfig/Selection` |

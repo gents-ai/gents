@@ -32,30 +32,66 @@ private def agentEditPatchJson (f : AgentEditFields) : String :=
   jsonArray (entries.filterMap fun (k, op) => op.map fun op =>
     selfConfigPatchEntryJson (k, op.value))
 
-private def agentDecisionCaseJson (w : AgentDecisionWitness) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString w.row.name ++ ","
-    ++ "\"agents\":" ++ jsonArray (w.row.catalog.agents.map fun a =>
+/-- The decision inputs shared by `agent_decision_cases` and
+`agent_materialization_cases`, without a closing brace. -/
+private def agentDecisionRowFields (r : AgentDecisionRow) : String :=
+    "\"name\":" ++ jsonString r.name ++ ","
+    ++ "\"agents\":" ++ jsonArray (r.catalog.agents.map fun a =>
         "{\"agent_id\":" ++ jsonString a.1 ++ ",\"enabled\":" ++ agentBool a.2 ++ "}") ++ ","
-    ++ "\"protected_ids\":" ++ jsonStringArray w.row.catalog.protectedIds ++ ","
-    ++ "\"default_id\":" ++ (match w.row.catalog.defaultId with
+    ++ "\"protected_ids\":" ++ jsonStringArray r.catalog.protectedIds ++ ","
+    ++ "\"default_id\":" ++ (match r.catalog.defaultId with
         | some id => jsonString id
         | none => "null") ++ ","
-    ++ "\"published_profiles\":" ++ jsonStringArray w.row.profiles ++ ","
-    ++ "\"operation\":" ++ jsonString (agentOpName w.row.operation.op) ++ ","
-    ++ "\"target\":" ++ jsonString w.row.target ++ ","
-    ++ "\"make_default\":" ++ agentBool w.row.makeDefault ++ ","
-    ++ "\"create_input\":" ++ (match w.row.operation with
+    ++ "\"published_profiles\":" ++ jsonStringArray r.profiles ++ ","
+    ++ "\"operation\":" ++ jsonString (agentOpName r.operation.op) ++ ","
+    ++ "\"target\":" ++ jsonString r.target ++ ","
+    ++ "\"make_default\":" ++ agentBool r.makeDefault ++ ","
+    ++ "\"create_input\":" ++ (match r.operation with
         | .create i => agentCreateInputJson i
         | _ => "null") ++ ","
-    ++ "\"edit_patch\":" ++ (match w.row.operation with
+    ++ "\"edit_patch\":" ++ (match r.operation with
         | .edit f => agentEditPatchJson f
-        | _ => "null") ++ ","
+        | _ => "null")
+
+private def agentDecisionCaseJson (w : AgentDecisionWitness) : String :=
+  "{" ++ agentDecisionRowFields w.row ++ ","
     ++ "\"accepted\":" ++ agentBool w.accepted
   ++ "}"
 
 def agentDecisionCasesJson : String :=
   jsonArray (agentDecisionCases.map agentDecisionCaseJson)
+
+private def effortName : Configuration.ReasoningEffort → String
+  | .none => "none"
+  | .minimal => "minimal"
+  | .low => "low"
+  | .medium => "medium"
+  | .high => "high"
+  | .xhigh => "xhigh"
+  | .max => "max"
+  | .ultra => "ultra"
+
+private def resolvedSessionJson : Option Configuration.ResolvedSessionConfig → String
+  | none => "null"
+  | some r =>
+    "{"
+      ++ "\"instructions\":" ++ jsonString r.context.instructions ++ ","
+      ++ "\"skill_ids\":" ++ jsonStringArray r.context.skillIds ++ ","
+      ++ "\"tool_names\":" ++ jsonStringArray r.context.toolNames ++ ","
+      ++ "\"backend_id\":" ++ jsonString r.inference.backendId ++ ","
+      ++ "\"model\":" ++ jsonString r.inference.model ++ ","
+      ++ "\"effort\":" ++ jsonOptionalString (r.inference.effort.map effortName)
+    ++ "}"
+
+/-- Rows are `materializedAgent` over the shared decision inputs; `session` is
+the model's resolved configuration or null when nothing is materialized. -/
+def agentMaterializationCasesJson : String :=
+  jsonArray (agentMaterializationScenarios.map fun r =>
+    "{" ++ agentDecisionRowFields { r.decision with name := r.name } ++ ","
+      ++ "\"session\":" ++ resolvedSessionJson
+        (materializedAgent r.decision.profiles r.decision.catalog r.decision.operation
+          r.decision.target r.decision.makeDefault workerCandidate "node")
+    ++ "}")
 
 private def networkName : CommandPolicy.NetworkMode → String
   | .inherit => "inherit"

@@ -826,8 +826,8 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerWithFollowUp
       "readiness_publication_cases"
       "ReadinessPublicationCases"
-      "behavior_readiness_publisher::tests::generated_readiness_publication_traces_write_only_semantic_changes"
-      "The native consumer drives semantic state changes and idle time through a controlled writer. Durable DefraDB publication and host/process failure behavior are not exercised by this writer fixture.")
+      "node_readiness_publisher::tests::generated_readiness_publication_traces_write_only_semantic_changes"
+      "Pending the node readiness publisher rename (L3). The native consumer drives semantic state changes and idle time through a controlled writer. Durable DefraDB publication and host/process failure behavior are not exercised by this writer fixture.")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (followUpCoverage
       "apply_reconcile_cases"
@@ -904,6 +904,11 @@ def caseCoverage : List CoverageEntry :=
       "agent_decision_cases"
       "AgentDecisionCases"
       "Verdicts of SelfConfig.agentOperationAdmitted for create, edit and disable over the Agent catalog (protected Engineer, default agent, missing and existing ids), each create input (profile, prompt, clone source) and each edit patch field (display_name, system_prompt, inference_profile_id). No Rust consumer is bound yet; the self-config agent management owner must replay these rows, including create_input and edit_patch, instead of keeping a parallel policy.")
+      "self-config" [Surface.agentFacing]
+  , tagged (followUpCoverage
+      "agent_materialization_cases"
+      "AgentMaterializationCases"
+      "Verdicts of SelfConfig.materializedAgent over the shared decision inputs: the resolved session configuration (context and inference) or null when the operation materializes nothing (rejected create, profile clear, disable). No Rust consumer is bound yet; the self-config agent management owner must replay these rows through the production resolver instead of keeping a parallel policy.")
       "self-config" [Surface.agentFacing]
   , tagged (followUpCoverage
       "sibling_tools_cases"
@@ -1062,10 +1067,11 @@ def caseCoverage : List CoverageEntry :=
       "ClientSessionTurnCases"
       "gents_desktop_bridge::snapshot::tests::session_state::session_snapshot_binds_generated_session_turn_cases")
       "client-shell" [Surface.operatorUi]
-  , tagged (consumerCoverage
+  , tagged (consumerWithFollowUp
       "client_agent_readiness_cases"
       "ClientAgentReadinessCases"
-      "conformance::client_runtime::generated_behavior_readiness_cases_drive_the_production_projector")
+      "conformance::client_runtime::generated_agent_readiness_cases_drive_the_production_projector"
+      "Pending: L2 renames the consumer test and L3 the production projector it drives.")
       "runtime-reconcile" [Surface.operatorUi]
   , tagged (consumerCoverage
       "live_overlay_cases"
@@ -1919,8 +1925,8 @@ def caseCoverage : List CoverageEntry :=
       "isolated-workspaces" [Surface.runtimeInternal]
 
   , tagged (consumerWithFollowUp "runtime_cases" "RuntimeReconcileCases"
-      "agent::runtime::tests::behavior_resolution::explicit_behavior_resolution_matches_lean_binding_cases"
-      "Exercises explicit request/session agent binding. Readiness, atomic admission and generation lifetime remain router-owner obligations.")
+      "agent::runtime::tests::agent_resolution::explicit_agent_resolution_matches_lean_binding_cases"
+      "Pending the L3 test rename. Exercises explicit request/session agent binding. Readiness, atomic admission and generation lifetime remain router-owner obligations.")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp "request_input_cases" "RequestInputCases"
       "conformance::request_input::lean_request_inputs_decode_without_losing_explicit_issuance_facts"

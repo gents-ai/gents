@@ -214,7 +214,7 @@ def examples : List (Target × FieldKey × FieldValue) :=
 def examplesToRows : List CaseRow := examples.map fun (t, k, v) =>
   { name := t.collectionName ++ "_configured_field_accepted"
   , target := t, guarded := false, validates := true
-  , doc := [(t.uniqueField, "doc-1"), ("node_did", "did:key:agent-a")]
+  , doc := [(t.uniqueField, "doc-1"), ("node_did", "did:key:node-a")]
   , patch := [(k, some v)] }
 
 /-- One provider with two accounts, another with its original and a second
@@ -230,16 +230,16 @@ def profileBackends : List (String × String × String) :=
 def scenarios : List CaseRow := examplesToRows ++
   [ { name := "agent_owner_patch_rejected"
     , target := .agent, guarded := false, validates := true
-    , doc := [("node_did", "did:key:agent-a")]
-    , patch := [("node_did", some "did:key:agent-b")] }
+    , doc := [("node_did", "did:key:node-a")]
+    , patch := [("node_did", some "did:key:node-b")] }
   , { name := "agent_invalid_reference_rejected"
     , target := .agent, guarded := false, validates := false
     , doc := [("context_id", "context-1")]
     , patch := [("context_id", some "missing-context")] }
   , { name := "datastore_owner_patch_rejected"
     , target := .datastoreToolSurface, guarded := false, validates := true
-    , doc := [("surface_id", "jobs"), ("node_did", "did:key:agent-a")]
-    , patch := [("node_did", some "did:key:agent-b")] }
+    , doc := [("surface_id", "jobs"), ("node_did", "did:key:node-a")]
+    , patch := [("node_did", some "did:key:node-b")] }
   , { name := "datastore_invalid_entries_rejected"
     , target := .datastoreToolSurface, guarded := false, validates := false
     , doc := [("surface_id", "jobs"), ("entries", "valid")]

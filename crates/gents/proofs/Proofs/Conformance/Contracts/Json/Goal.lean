@@ -340,7 +340,7 @@ def taskGoalPublicationCases : List TaskGoalPublicationCase :=
       declaration := ⟨some "implement feature", some 1000⟩ }
   , { name := "maximum_budget_uses_atomic_goal_publication", nodeDid, taskId, fireKey
       declaration := ⟨some "implement feature", some GoalAutomation.maxTokenBudget⟩ }
-  , { name := "same_task_fire_is_scoped_to_other_principal",
+  , { name := "same_task_fire_is_scoped_to_other_node",
       nodeDid := "did:key:z-other-feature-owner", taskId, fireKey
       declaration := ⟨some "implement feature", none⟩ }
   , { name := "blank_objective_cannot_publish", nodeDid, taskId, fireKey
@@ -423,7 +423,7 @@ def taskGoalRecoveryCases : List TaskGoalRecoveryCase :=
   , { name := "matching_request_without_goal_or_claim_recovers",
       nodeDid, agentId, taskId, fireKey
       request := some expected, durableGoalPresent := false, creationClaimPresent := false }
-  , { name := "mismatched_principal_conflicts",
+  , { name := "mismatched_node_conflicts",
       nodeDid, agentId, taskId, fireKey
       request := some { expected with nodeDid := "did:key:z-other-owner" }
       durableGoalPresent := false, creationClaimPresent := false }

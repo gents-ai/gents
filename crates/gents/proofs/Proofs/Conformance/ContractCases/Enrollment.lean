@@ -366,7 +366,7 @@ def enrollmentOffer : Offer :=
   { offerId := "offer-1", challenge := "challenge-1"
   , networkId := "network-1", adminDid := "did:key:admin"
   , serverPeer := "server-peer", serverTicketPeer := "server-peer"
-  , resolvedServerDid := "did:key:admin", ownerNode := "did:key:agent"
+  , resolvedServerDid := "did:key:admin", ownerNode := "did:key:node"
   , profile := "client", schemaCompatible := true, adminSigned := true, fresh := true }
 
 def unsignedEnrollmentRequest : Request :=
@@ -376,7 +376,7 @@ def unsignedEnrollmentRequest : Request :=
   , serverPeer := "server-peer", candidateDid := "did:key:candidate"
   , candidatePeer := "candidate-peer", observedCandidatePeer := "candidate-peer"
   , resolvedCandidateDid := "did:key:candidate", candidateTicketPeer := "candidate-peer"
-  , ownerNode := "did:key:agent", profile := "client"
+  , ownerNode := "did:key:node", profile := "client"
   , clientNonce := "nonce-1", issuedAt := "1", expiresAt := "2"
   , candidateSigned := true, fresh := true }
 
@@ -761,7 +761,7 @@ def enrollmentCases : List EnrollmentCase :=
   let unsignedRevocation := { enrollmentRevocation with adminSigned := false }
   let wrongBindingRevocation := { enrollmentRevocation with memberPeer := "foreign-peer" }
   let replacementOffer := { enrollmentOffer with
-    offerId := "offer-2", challenge := "challenge-2", ownerNode := "did:key:agent-2" }
+    offerId := "offer-2", challenge := "challenge-2", ownerNode := "did:key:node-2" }
   let replacementUnsigned := { unsignedEnrollmentRequest with
     requestId := "request-2", offerId := replacementOffer.offerId,
     challenge := replacementOffer.challenge, candidatePeer := "candidate-peer-2",
