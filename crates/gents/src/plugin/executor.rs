@@ -283,6 +283,11 @@ impl PluginExecutor {
             .and_then(|context| context.workspace_cwd.clone())
             .or_else(|| tool_root.map(Path::to_path_buf));
         let session_id = session.and_then(|context| context.session_id);
+        // Bind against the record the call will run (see `run`).
+        let record = &self.resolve(
+            &format!("{}/{}", record.namespace, record.name),
+            Some(&record.digest),
+        )?;
         let context = BindContext {
             workdir: workdir.as_deref(),
             session_id: session_id.as_deref(),

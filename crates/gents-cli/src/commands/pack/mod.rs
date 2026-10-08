@@ -585,6 +585,20 @@ pub(crate) async fn record_plugin_store_change(
     gents::pack::record_plugin_store_change(&access, &owner, home, coordinate, installed).await
 }
 
+/// Reports a failed node notification after a plugin removal as a warning:
+/// the store change already happened and cannot be retried, and a call of a
+/// removed plugin fails closed on its own.
+pub(crate) fn warn_on_unrecorded_removal(coordinate: &str, recorded: Result<()>) {
+    if let Err(error) = recorded {
+        tracing::warn!(
+            coordinate,
+            error = %error,
+            "plugins removed, but the node was not told: a running runtime keeps the removed \
+             tools listed (their calls fail) until it restarts or its configuration changes",
+        );
+    }
+}
+
 /// The owner whose profiles `requested` names for a plugins pack's model
 /// slots, after checking each slot exists and its profile can serve a plugin;
 /// `None` when nothing is requested, which opens no store.
@@ -916,6 +930,14 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
             // by name (`gents plugin run <name>`) as one installed on its
             // own. A failure past this point (the record write) must not
             // leave the plugins installed above orphaned.
+            let prior_record = gents::pack::read_home_install(
+                &home,
+                &format!(
+                    "{}/{}",
+                    pack.manifest().metadata.namespace,
+                    pack.manifest().name
+                ),
+            )?;
             let rollback = snapshot_pack_plugin_records(&home, pack.manifest());
             let installed_plugins = install_pack_plugins(
                 &home,
@@ -951,7 +973,6 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
             // The node record goes last, in one transaction: a failure
             // before it leaves the node untouched, and undoing the store and
             // home record restores everything else.
-            let prior_record = gents::pack::read_home_install(&home, &record.coordinate)?;
             let recorded = async {
                 bind_plugin_slots(&home, pack.manifest(), slot_owner.as_deref(), &requested)?;
                 gents::pack::write_home_install(&home, &record)?;

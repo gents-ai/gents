@@ -210,7 +210,10 @@ async fn remove_home_install(
         release_plugin_records(home, coordinate, &record.plugins, &mut plugin_digests)?;
     let plugin_bytes = plugin_release_result(home, &plugin_digests)?;
     if !record.plugins.is_empty() {
-        super::record_plugin_store_change(home, coordinate, None).await?;
+        super::warn_on_unrecorded_removal(
+            coordinate,
+            super::record_plugin_store_change(home, coordinate, None).await,
+        );
     }
 
     // Forget the record before scanning for unreferenced archives: the scan
