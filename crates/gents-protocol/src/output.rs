@@ -208,7 +208,7 @@ pub enum StreamPayload {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OutputSegment {
-    pub agent_did: String,
+    pub node_did: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requester_did: Option<String>,
     pub session_id: String,
@@ -445,7 +445,7 @@ pub struct TranscriptMessage {
     /// authored key, or provider-turn coordinate).
     pub message_key: String,
     pub session_id: String,
-    pub agent_did: String,
+    pub node_did: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requester_did: Option<String>,
     /// Exact request this message belongs to, not necessarily the request that

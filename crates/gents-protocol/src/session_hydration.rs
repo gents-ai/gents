@@ -43,7 +43,7 @@ pub struct SessionHydrationReceipt {
     pub version: u8,
     pub request_key: String,
     pub requester_did: String,
-    pub agent_did: String,
+    pub node_did: String,
     pub session_id: String,
     pub status: String,
     pub status_detail: String,
