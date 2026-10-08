@@ -537,7 +537,7 @@ The current proof suite covers twenty practical areas:
     the tool result before terminalization. The model supplies a matching
     `Item` to the reply owner but does not prove that projection from the
     stored row; the native fixture uses a local-self requester, so distinct
-    requester/agent DIDs are not covered. Negative handoff guards remain
+    requester/node DIDs are not covered. Negative handoff guards remain
     model-only; generic Ask/Gate notifications do not automatically complete
     a request.
 20. Request execution leases (#1341, #1571): opaque fresh ownership generations,
@@ -1171,7 +1171,7 @@ materialize it scope by the dispatching agent's `node_did`, and a
 claimed/processing row past its claim deadline (+grace) projects as terminal
 (the owning loop enforces the same deadline in-memory, so such a row is a
 wedged orphan, not an in-flight run). Both halves are fenced by the
-scheduling conformance tests (`serial_gate_is_scoped_by_agent_did`,
+scheduling conformance tests (`serial_gate_is_scoped_by_node_did`,
 `serial_gate_ignores_expired_claims`,
 `supersede_only_touches_own_agent_requests`); see the docstrings on
 `Proofs/Triggers/Types.lean`'s `AgentRequest.isTerminal` and `SystemState`.

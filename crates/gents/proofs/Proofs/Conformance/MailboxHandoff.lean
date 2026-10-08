@@ -26,11 +26,11 @@ private def cases : List Case :=
   , { name := "tool-owner-mismatch", producer :=
         { Handoff.producer with tool := { Handoff.producer.tool with requestId := 2 } } }
   , { name := "producer-agent-mismatch", producer :=
-        { Handoff.producer with nodeDid := "other-agent" } }
+        { Handoff.producer with nodeDid := "other-node" } }
   , { name := "producer-requester-mismatch", producer :=
         { Handoff.producer with requesterDid := "other-requester" } }
   , { name := "unstamped", question :=
-        { openQuestion with context := ⟨"foreign", "agent"⟩ } }
+        { openQuestion with context := ⟨"foreign", "node"⟩ } }
   , { name := "terminal-old-row", registry := staleRegistry,
       producer := { Handoff.producer with requestId := 2, sessionId := "old-session", tool :=
         { Handoff.producer.tool with requestId := 2 } },
@@ -38,8 +38,8 @@ private def cases : List Case :=
   , { name := "wrong-reply-source", reply :=
         { replyEvidence with sourceDocId := "other" } }
   , { name := "wrong-reply-target", envelope :=
-        { replyEnvelope with targetNodeDid := "other-agent" }, reply :=
-        { replyEvidence with nodeDid := "other-agent" } }
+        { replyEnvelope with targetNodeDid := "other-node" }, reply :=
+        { replyEvidence with nodeDid := "other-node" } }
   , { name := "wrong-reply-session", envelope :=
         { replyEnvelope with sessionId := some "other" } }
   , { name := "same-physical-request", reply :=

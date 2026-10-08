@@ -123,7 +123,7 @@ def agentRequestAdmissionCases : List AgentRequestAdmissionCase :=
   , requestAdmissionCase "peer-authority-denied"
       { requestAdmissionBase .peer with
           requesterMatchesTarget := false, peerAuthorityAllows := false }
-  , requestAdmissionCase "peer-same-principal-is-not-peer"
+  , requestAdmissionCase "peer-same-node-is-not-peer"
       { requestAdmissionBase .peer with
           requesterMatchesTarget := true, peerAuthorityAllows := true }
   , requestAdmissionCase "peer-forged-signer"

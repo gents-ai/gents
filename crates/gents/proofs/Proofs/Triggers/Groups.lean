@@ -94,7 +94,7 @@ theorem fixed_nonpositive_rejected (n : Int) (h : n <= 0)
 
 
 /-!
-Typed delivery consumer under its owner principal. Both consumer kinds share
+Typed delivery consumer under its owner node. Both consumer kinds share
 the one durable first-seen/quiescence clock keyed by `EventGroupKey`; there is
 no separate callback grouping clock and `CallbackResult` is not a clock.
 -/
@@ -112,7 +112,7 @@ def EventConsumer.kind : EventConsumer → String
   | .trigger _ => "trigger"
   | .callbackBinding _ => "callback_binding"
 
-/-- Durable group identity: owner principal, typed consumer, effective delivery
+/-- Durable group identity: owner node, typed consumer, effective delivery
 configuration key, correlation. -/
 structure EventGroupKey where
   nodeDid : String
