@@ -1,5 +1,6 @@
 import Proofs.SelfConfig.Theorems
 import Proofs.SelfConfig.Auth
+import Proofs.SelfConfig.AgentDecision
 
 namespace SelfConfig.ContractCases
 
@@ -54,12 +55,12 @@ def decodeReach (doc : Doc) : Option Reach := do
     | some "true" | none => some true
     | some "false" => some false
     | _ => none
-  let setupTag ← match doc "tags" with
-    | some "[\"gents:setup-steward\"]" => some true
-    | some "[\"gents:setup-steward\",\"ui:engineer\"]" => some true
+  let engineerTag ← match doc "tags" with
+    | some "[\"gents:engineer\"]" => some true
+    | some "[\"gents:engineer\",\"ui:engineer\"]" => some true
     | some "[]" | some "[\"ui:engineer\"]" | none => some false
     | _ => none
-  pure { enabled, setupTag }
+  pure { enabled, engineerTag }
 
 /-- Fixture decoder for the exact backend auth texts used below. -/
 def decodeAuthText : String → Option Configuration.BackendAuth
@@ -234,16 +235,16 @@ def scenarios : List CaseRow := examplesToRows ++
         some "{\"enable_self_config\":true,\"self_config_no_lockout\":true,\"self_config_categories\":[\"tools\"]}")] }
   , { name := "agent_guarded_self_disable_rejected"
     , target := .agent, guarded := true, validates := true
-    , doc := [("agent_id", "default"), ("tags", "[\"gents:setup-steward\"]")]
+    , doc := [("agent_id", "default"), ("tags", "[\"gents:engineer\"]")]
     , patch := [("enabled", some "false")] }
-  , { name := "agent_guarded_setup_tag_removal_rejected"
+  , { name := "agent_guarded_engineer_tag_removal_rejected"
     , target := .agent, guarded := true, validates := true
-    , doc := [("agent_id", "default"), ("tags", "[\"gents:setup-steward\"]")]
+    , doc := [("agent_id", "default"), ("tags", "[\"gents:engineer\"]")]
     , patch := [("tags", some "[\"ui:engineer\"]")] }
   , { name := "agent_guarded_tag_addition_accepted"
     , target := .agent, guarded := true, validates := true
-    , doc := [("agent_id", "default"), ("tags", "[\"gents:setup-steward\"]")]
-    , patch := [("tags", some "[\"gents:setup-steward\",\"ui:engineer\"]")] }
+    , doc := [("agent_id", "default"), ("tags", "[\"gents:engineer\"]")]
+    , patch := [("tags", some "[\"gents:engineer\",\"ui:engineer\"]")] }
   , { name := "task_targeting_invoker_unguarded_accepted"
     , target := .task, guarded := false, validates := true
     , doc := [("task_id", "engineer-inbox"), ("agent_id", "default")]
@@ -343,6 +344,55 @@ theorem self_config_cases_cover_rejections :
 theorem self_config_cases_cover_all_targets :
     allTargets.all (fun t =>
       selfConfigCases.any (fun w => decide (w.row.target = t))) = true := by
+  native_decide
+
+structure AgentDecisionRow where
+  name : String
+  catalog : AgentCatalog
+  op : AgentOp
+  target : String
+  makeDefault : Bool := false
+  deriving Repr
+
+structure AgentDecisionWitness where
+  row : AgentDecisionRow
+  accepted : Bool
+  deriving Repr
+
+def agentCatalog : AgentCatalog :=
+  { agents := [("default", true), ("engineer", true), ("worker", true), ("idle", false)]
+  , protectedIds := ["engineer"]
+  , defaultId := some "default" }
+
+def agentDecisionScenarios : List AgentDecisionRow :=
+  [ { name := "agent_default_disable_rejected"
+    , catalog := agentCatalog, op := .disable, target := "default" }
+  , { name := "agent_protected_edit_rejected"
+    , catalog := agentCatalog, op := .edit, target := "engineer" }
+  , { name := "agent_protected_disable_rejected"
+    , catalog := agentCatalog, op := .disable, target := "engineer" }
+  , { name := "agent_non_default_disable_accepted"
+    , catalog := agentCatalog, op := .disable, target := "worker" }
+  , { name := "agent_disable_while_designating_default_rejected"
+    , catalog := agentCatalog, op := .disable, target := "worker", makeDefault := true }
+  , { name := "agent_unprotected_edit_accepted"
+    , catalog := agentCatalog, op := .edit, target := "worker" }
+  , { name := "agent_edit_missing_rejected"
+    , catalog := agentCatalog, op := .edit, target := "ghost" }
+  , { name := "agent_create_fresh_id_accepted"
+    , catalog := agentCatalog, op := .create, target := "reviewer" }
+  , { name := "agent_create_existing_id_rejected"
+    , catalog := agentCatalog, op := .create, target := "worker" } ]
+
+def agentDecisionCases : List AgentDecisionWitness :=
+  agentDecisionScenarios.map fun r =>
+    { row := r, accepted := agentDecision r.catalog r.op r.target r.makeDefault }
+
+/-- Regression expectations, checked against model execution. -/
+theorem agent_decision_cases_regressions :
+    (agentDecisionCases.filter (·.accepted)).map (·.row.name) =
+      ["agent_non_default_disable_accepted", "agent_unprotected_edit_accepted",
+       "agent_create_fresh_id_accepted"] := by
   native_decide
 
 end SelfConfig.ContractCases
