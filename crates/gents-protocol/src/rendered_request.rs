@@ -18,7 +18,14 @@ use crate::message::{Message, ToolResultContent, UserContent};
 
 /// Capture format version stamped onto every row. Bump when the columns or the
 /// storage encoding a reader must understand changes.
-pub const CAPTURE_VERSION: u32 = 2;
+///
+/// v1 stores the canonical provider JSON directly. v2 stores a container whose
+/// payloads are independently decodable full/delta records. v3 (#2333) stores a
+/// container whose payloads are manifests of content-defined byte blocks, so a
+/// later capture re-references the blocks it shares with an earlier one instead
+/// of re-signing the whole conversation; rows written as v1 or v2 keep decoding
+/// through their own arms forever.
+pub const CAPTURE_VERSION: u32 = 3;
 
 /// Provenance manifest version. Bump when `ProvenanceManifest`'s serialized
 /// shape changes. A reader that does not know this number must report

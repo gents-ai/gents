@@ -6,7 +6,7 @@
    the behavior is already on screen. */
 import { useState, type ReactElement } from "react";
 import { ArrowUpRight } from "lucide-react";
-import type { DeploymentView } from "@source-inc/gents-desktop-client";
+import type { NodeView } from "../../hooks/fleetStore";
 import {
   HoverCard,
   HoverCardContent,
@@ -16,6 +16,9 @@ import { cn } from "@gents/ui/lib/utils";
 import { href } from "@/lib/router";
 import { behaviorReadiness } from "@/lib/behavior-readiness";
 import { access, bashAccess, behaviorName, fileAccess, network } from "./behavior";
+import { agentOf } from "@/lib/agents";
+import { useHomeDid, useToolAuthority } from "@/hooks/useClient";
+import { isWorkingNode } from "@/lib/nodes";
 
 function Line({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -29,25 +32,41 @@ function Line({ label, children }: { label: string; children: React.ReactNode })
 const shortDid = (did: string) =>
   did.length > 22 ? `${did.slice(0, 12)}…${did.slice(-4)}` : did;
 
+/* What a node may touch. The tool root and ceiling this machine was set up
+   with are its own node's; any other node says it through its default
+   behavior's environment. */
+function NodeReach({ deployment }: { deployment: NodeView }) {
+  const homeDid = useHomeDid();
+  const own = useToolAuthority();
+  const { root, ceiling } = isWorkingNode(deployment, homeDid)
+    ? own
+    : { root: null, ceiling: null };
+  const env =
+    deployment.behaviorEnvironments.find((e) => e.isDefault) ??
+    deployment.behaviorEnvironments[0];
+  return (
+    <>
+      <Line label="Can touch">{root ?? env?.workspaceRoot ?? "—"}</Line>
+      <Line label="At most">
+        {ceiling ? access(ceiling) : env ? access(env.fileAccess) : "—"}
+        {env ? `, ${network(env.networkAccess)}` : ""}
+      </Line>
+    </>
+  );
+}
+
 export function AgentHoverCard({
   deployment,
-  root,
-  ceiling,
   side = "right",
   children,
 }: {
-  deployment: DeploymentView;
-  root?: string | null;
-  ceiling?: string | null;
+  deployment: NodeView;
   /** where the card opens; the default suits the rail and lists, a
       neighbor that must stay hoverable wants 'bottom' */
   side?: "right" | "bottom" | "top" | "left";
   children: ReactElement;
 }) {
   const online = deployment.dialSucceeded;
-  const env =
-    deployment.behaviorEnvironments.find((e) => e.isDefault) ??
-    deployment.behaviorEnvironments[0];
   return (
     <HoverCard>
       <HoverCardTrigger delay={500} render={children} />
@@ -67,11 +86,7 @@ export function AgentHoverCard({
           </span>
         </div>
         <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">
-          <Line label="Can touch">{root ?? env?.workspaceRoot ?? "—"}</Line>
-          <Line label="At most">
-            {ceiling ? access(ceiling) : env ? access(env.fileAccess) : "—"}
-            {env ? `, ${network(env.networkAccess)}` : ""}
-          </Line>
+          <NodeReach deployment={deployment} />
           <Line label="Behaviors">{deployment.behaviors.length}</Line>
           <Line label="Tasks">{deployment.tasks.length}</Line>
           <Line label="Inference">{deployment.inferenceBackends.length}</Line>
@@ -94,14 +109,14 @@ export function BehaviorHoverCard({
   side = "right",
   children,
 }: {
-  deployment: DeploymentView | null;
+  deployment: NodeView | null;
   behaviorId: string | null;
   description?: string;
   side?: "right" | "bottom" | "top" | "left";
   children: ReactElement;
 }) {
   const [open, setOpen] = useState(false);
-  const b = deployment?.behaviors.find((x) => x.behaviorId === behaviorId);
+  const b = agentOf(deployment, behaviorId);
   const env = deployment?.behaviorEnvironments.find((e) => e.behaviorId === behaviorId);
   if (!deployment || !b) return children;
   const readiness = behaviorReadiness(deployment, b.behaviorId);

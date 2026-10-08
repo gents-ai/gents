@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { render, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
+import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 import type {
   CausedRequestView,
@@ -18,6 +19,11 @@ import {
   type Workers,
 } from "../src/ui/screens/workers";
 import { WorkerActionsContext } from "../src/ui/screens/WorkerActions";
+import { node, renderIn, testApp } from "./app-fixture";
+import { deployment } from "./config-panel-wiring/fixtures";
+
+/* the rows read the selected node from the app */
+const render = (ui: ReactElement) => renderIn(testApp(), ui);
 
 const call = (
   statusKind = "running",
@@ -104,17 +110,20 @@ function renderStep(
 describe("a subagent row", () => {
   it("shows the request this row's call caused, not the session's latest", () => {
     /* the session is working on a later request; this call's has finished */
-    expect(workerNow(call(), reached(caused("child-req", "completed")))).toEqual({
+    expect(
+      workerNow(call(), reached(caused("child-req", "completed")), Date.now()),
+    ).toEqual({
       tone: "done",
       text: "finished",
     });
-    expect(workerNow(call(), reached(caused("child-req", "processing"))).tone).toBe(
-      "running",
-    );
+    expect(
+      workerNow(call(), reached(caused("child-req", "processing")), Date.now()).tone,
+    ).toBe("running");
   });
 
   it("reads the caused request's lifecycle", () => {
-    const at = (state: string) => workerNow(call(), reached(caused("r", state)));
+    const at = (state: string) =>
+      workerNow(call(), reached(caused("r", state)), Date.now());
     expect(at("pending").text).toBe("waiting for the agent to pick it up");
     expect(at("processing").tone).toBe("running");
     expect(at("completed").tone).toBe("done");
@@ -125,18 +134,23 @@ describe("a subagent row", () => {
 
   it("never infers replication from a missing message count", () => {
     for (const state of ["processing", "completed", "pending"]) {
-      expect(workerNow(call(), reached(caused("r", state))).text).not.toMatch(/sync/i);
+      expect(
+        workerNow(call(), reached(caused("r", state)), Date.now()).text,
+      ).not.toMatch(/sync/i);
     }
   });
 
   it("never reads the tool call's own status as a live request", () => {
-    expect(workerNow(call("success"), null)).toEqual({ tone: "done", text: "sent" });
-    expect(workerNow(call("error"), null).tone).toBe("failed");
-    expect(workerNow(call("unknown"), null)).toEqual({
+    expect(workerNow(call("success"), null, Date.now())).toEqual({
+      tone: "done",
+      text: "sent",
+    });
+    expect(workerNow(call("error"), null, Date.now()).tone).toBe("failed");
+    expect(workerNow(call("unknown"), null, Date.now())).toEqual({
       tone: "unknown",
       text: "state unknown",
     });
-    expect(workerNow(call("running"), null)).toEqual({
+    expect(workerNow(call("running"), null, Date.now())).toEqual({
       tone: "running",
       text: "starting",
     });
@@ -249,6 +263,31 @@ describe("subagent list", () => {
     );
     expect(screen.getByText("Subagents")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Reviewer/ })).toBeInTheDocument();
+  });
+
+  it("names each subagent's behavior from the selected node, outside the transcript", () => {
+    const named = subagent("completed");
+    named.summary = { ...named.summary!, behaviorId: "reviewer" };
+    const app = testApp({
+      deployments: [
+        node({
+          behaviors: [
+            {
+              ...deployment.behaviors[0],
+              behaviorId: "reviewer",
+              displayName: "Code Reviewer",
+            },
+          ],
+        }),
+      ],
+    });
+    renderIn(
+      app,
+      <SubagentList
+        workers={workersWith(reached(caused("child-req", "completed"), named))}
+      />,
+    );
+    expect(screen.getByText("Cr")).toBeInTheDocument();
   });
 
   it("renders nothing for a session that started no other session", () => {

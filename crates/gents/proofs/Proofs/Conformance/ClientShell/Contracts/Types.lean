@@ -42,7 +42,6 @@ structure ClientShellContractCase where
   frontendClientAvailable : Bool
   frontendSelectedAgentDid : Option AgentDid
   frontendSelectedSessionId : Option SessionId
-  frontendComposerNonEmpty : Bool
   frontendSending : Bool
   frontendSessionPresent : Bool
   frontendSessionId : Option SessionId

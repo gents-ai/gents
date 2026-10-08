@@ -2,20 +2,16 @@
    node, with its state and a way in. The same lineage the sessions list
    folds under a parent, shown flat beside the parent. */
 import type { SurfaceContext } from "@/app/surfaces";
-import { useShellContext } from "@/app/ShellContext";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { href } from "@/lib/router";
-import { nodeOfSession, workersBySession } from "@/lib/nodes";
+import { nodeOfSession } from "@/lib/nodes";
 import { NodeBehaviorStack } from "./NodeBehaviorStack";
 import { SessionStatus } from "./SessionStatus";
-import { when } from "./time";
+import { Age } from "./time";
+import { useFleet, workersOfId } from "../hooks/useFleet";
 
 export function WorkersSurface({ sessionId }: SurfaceContext) {
-  const shell = useShellContext();
-  const workers = sessionId
-    ? (workersBySession(shell.deployments).get(sessionId) ?? [])
-    : [];
-  const held = new Set(shell.holds.flatMap((h) => (h.sessionId ? [h.sessionId] : [])));
+  const workers = useFleet((s) => workersOfId(s, sessionId));
   return (
     <ScrollArea className="h-full">
       <div className="px-3 py-2">
@@ -31,18 +27,15 @@ export function WorkersSurface({ sessionId }: SurfaceContext) {
                 href={href({ name: "session", sessionId: w.sessionId })}
                 className="-mx-1 grid grid-cols-[auto_1fr_auto_auto] items-center gap-3 rounded-lg px-2 py-2 text-sm hover:bg-accent"
               >
-                <SessionStatus turnState={w.turnState} held={held.has(w.sessionId)} />
+                <SessionStatus turnState={w.turnState} />
                 <span className="truncate">{w.title ?? "Untitled"}</span>
                 <NodeBehaviorStack
-                  nodes={shell.deployments}
-                  homeDid={shell.snapshot?.bootstrap.initAgentDid}
                   nodeDid={nodeOfSession(w)}
                   behaviorId={w.behaviorId}
-                  deployment={shell.selectedDeployment}
                   size="sm"
                 />
                 <span className="w-8 text-right text-xs text-muted-foreground">
-                  {when(w.updatedAt)}
+                  <Age iso={w.updatedAt} />
                 </span>
               </a>
             </li>

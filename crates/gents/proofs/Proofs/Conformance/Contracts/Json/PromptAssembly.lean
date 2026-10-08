@@ -16,6 +16,40 @@ def routingAffinityCasesJson : String := jsonArray (routingAffinityCases.map fun
   ",\"expected_session\":" ++ jsonOptionalString row.expected.session ++
   ",\"expected_token\":" ++ jsonOptionalString row.expected.token ++ "}")
 
+def retryFrontierCasesJson : String := jsonArray (
+  [("before-input", true, true, true, false, false, false),
+   ("ready", true, true, true, false, false, true),
+   ("live-parent", false, true, true, false, false, true),
+   ("foreign-requester", true, true, false, false, false, true),
+   ("unsettled", true, true, true, true, false, true),
+   ("background", true, true, true, true, true, true),
+   ("resend", true, false, true, false, false, true),
+   ("resend-other-requester", true, false, false, false, false, true)].map
+    fun (name, scopedTerminal, sameSession, sameRequester, running, background, published) =>
+      "{\"name\":" ++ jsonString name ++
+      ",\"scoped_terminal\":" ++ toString scopedTerminal ++
+      ",\"same_session\":" ++ toString sameSession ++
+      ",\"same_requester\":" ++ toString sameRequester ++
+      ",\"running\":" ++ toString running ++
+      ",\"background\":" ++ toString background ++
+      ",\"published\":" ++ toString published ++ ",\"expected\":" ++
+      (match PromptAssembly.CurrentInput.admitResume scopedTerminal sameSession sameRequester
+        (PromptAssembly.CurrentInput.settledForResume running background) published with
+       | some result => toString result
+       | none => "null") ++ "}")
+
+def retryEntryCasesJson : String := jsonArray (
+  [ (false, ([] : List Nat), (none : Option Nat)), (false, [1, 2, 3], none),
+    (true, [1], none), (true, [1, 2, 3], none), (true, [1, 2, 3, 4], none),
+    (true, [1, 2, 3], some 11), (false, [1], some 11) ].map fun (resume, history, context) =>
+    "{\"resume\":" ++ toString resume ++
+    ",\"history\":" ++ jsonArray (history.map toString) ++
+    ",\"context\":" ++ (match context with | some n => toString n | none => "null") ++
+    ",\"authored\":9,\"expected\":" ++
+      jsonArray ((PromptAssembly.CurrentInput.entryWithContext resume history 9 10 context
+        (history.getLast? == some 4)).map toString) ++
+    ",\"publish\":" ++ toString (PromptAssembly.CurrentInput.publishesAuthoredInput resume) ++ "}")
+
 def currentInputCaseJson (witness : CurrentInputCase) : String :=
   "{\"name\":" ++ jsonString witness.name ++
   ",\"current_request\":" ++ jsonString witness.currentRequest ++

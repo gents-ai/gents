@@ -558,10 +558,10 @@ jobs:
       - name: Build desktop packages
         run: npm run build:packages
 
-      - name: Install Playwright browser
+      - name: Install Playwright browsers
         if: matrix.suite == 'browser'
         working-directory: apps/gents-desktop
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install --with-deps chromium webkit
 
       - name: Check desktop formatting
         if: matrix.suite == 'unit'

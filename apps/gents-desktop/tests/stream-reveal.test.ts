@@ -6,12 +6,22 @@ import type { RenderedTimelineItem } from "@source-inc/gents-desktop-client";
 import { describe, expect, it } from "vitest";
 import {
   closeOpenFence,
-  createHandoff,
+  drawKey,
+  drawKeys,
   holdLive,
   initialReveal,
+  noDrawKeys,
   revealedText,
+  withSentTurns,
+  type LocalTurn,
   stepReveal,
 } from "@/screens/stream-reveal";
+import {
+  assistantMessage,
+  liveAssistant,
+  pendingUserTurn,
+  userMessage,
+} from "./timeline-fixture";
 
 const FRAME = 16;
 
@@ -123,48 +133,29 @@ describe("what is drawn", () => {
   });
 });
 
-describe("the handoff from live tail to message", () => {
-  it("carries what was on screen to the message that continues it", () => {
-    const h = createHandoff();
-    h.noteShown("The export route reads ");
-    expect(h.claim("m1", "The export route reads from the cache.")).toBe(22);
+const live = (content: string | null): RenderedTimelineItem =>
+  liveAssistant({
+    kind: "liveAssistant",
+    itemKey: "live-r1",
+    content,
+    reasoning: null,
   });
-
-  it("gives the same answer twice, for a render that runs twice", () => {
-    const h = createHandoff();
-    h.noteShown("Hello there");
-    expect(h.claim("m1", "Hello there, friend")).toBe(11);
-    expect(h.claim("m1", "Hello there, friend")).toBe(11);
+const message = (content: string): RenderedTimelineItem =>
+  assistantMessage({
+    kind: "assistantMessage",
+    itemKey: "a-r1",
+    sequence: 2,
+    content,
+    reasoning: null,
+    timestamp: null,
   });
-
-  it("does not claim a message that says something else", () => {
-    const h = createHandoff();
-    h.noteShown("Hello there");
-    expect(h.claim("m2", "Something unrelated")).toBeNull();
-  });
-});
-
-const live = (content: string | null): RenderedTimelineItem => ({
-  kind: "liveAssistant",
-  itemKey: "live-r1",
-  content,
-  reasoning: null,
-});
-const message = (content: string): RenderedTimelineItem => ({
-  kind: "assistantMessage",
-  itemKey: "a-r1",
-  sequence: 2,
-  content,
-  reasoning: null,
-  timestamp: null,
-});
-const person: RenderedTimelineItem = {
+const person: RenderedTimelineItem = userMessage({
   kind: "userMessage",
   itemKey: "u1",
   sequence: 1,
   content: "Explain the export route.",
   timestamp: null,
-};
+});
 
 describe("holding the live text through the gap", () => {
   it("records the live text while it streams", () => {
@@ -175,11 +166,13 @@ describe("holding the live text through the gap", () => {
   it("puts it back under the same key when the tail is dropped first", () => {
     const held = holdLive([person, live("The export route")], null).held;
     const out = holdLive([person], held);
-    expect(out.items.at(-1)).toMatchObject({
-      kind: "liveAssistant",
-      itemKey: "live-r1",
-      content: "The export route",
-    });
+    expect(out.items.at(-1)).toMatchObject(
+      liveAssistant({
+        kind: "liveAssistant",
+        itemKey: "live-r1",
+        content: "The export route",
+      }),
+    );
   });
 
   it("refills a tail whose text was cleared, keeping its key", () => {
@@ -220,6 +213,111 @@ describe("holding the live text through the gap", () => {
       held,
     );
     expect(out.held).toBeNull();
+    expect(out.replacedBy).toBe("a-r1");
     expect(out.items).toHaveLength(2);
+  });
+});
+
+describe("the keys replies are drawn under", () => {
+  it("draws the message that replaces a live tail under the tail's key", () => {
+    const streaming = drawKeys(
+      noDrawKeys("s"),
+      [person, live("The export")],
+      undefined,
+      "s",
+    );
+    const tailKey = drawKey(streaming, live("The export"));
+    const saved = message("The export route reads from the cache.");
+    const replaced = drawKeys(streaming, [person, saved], "a-r1", "s");
+    expect(drawKey(replaced, saved)).toBe(tailKey);
+  });
+
+  it("gives the next turn's tail a key of its own", () => {
+    const first = drawKeys(noDrawKeys("s"), [live("One")], undefined, "s");
+    const saved = drawKeys(first, [message("One")], "a-r1", "s");
+    const next = drawKeys(saved, [message("One"), live("Two")], undefined, "s");
+    expect(drawKey(next, live("Two"))).not.toBe(drawKey(next, message("One")));
+  });
+
+  it("gives the same keys to a render that runs twice", () => {
+    const streaming = drawKeys(noDrawKeys("s"), [live("One")], undefined, "s");
+    const once = drawKeys(streaming, [message("One")], "a-r1", "s");
+    const twice = drawKeys(once, [message("One")], "a-r1", "s");
+    expect(drawKey(twice, message("One"))).toBe(drawKey(once, message("One")));
+  });
+
+  it("draws the app's copy and the pending turn under the request they share", () => {
+    const local = pendingUserTurn({
+      itemKey: "local:r2",
+      requestId: "r2",
+      content: "again",
+    });
+    const pending = pendingUserTurn({
+      itemKey: "pending-r2",
+      requestId: "r2",
+      content: "again",
+    });
+    const keys = noDrawKeys("s");
+    expect(drawKey(keys, local)).toBe("turn:r2");
+    expect(drawKey(keys, pending)).toBe("turn:r2");
+  });
+
+  it("draws a saved message under the request as the bridge names it there", () => {
+    const saved = userMessage({
+      kind: "userMessage",
+      itemKey: "u2",
+      requestId: "doc-r2",
+      sequence: 3,
+      content: "again",
+      timestamp: null,
+    });
+    expect(drawKey(noDrawKeys("s"), saved)).toBe("turn:doc-r2");
+  });
+
+  it("starts again for another session", () => {
+    const streaming = drawKeys(noDrawKeys("a"), [live("One")], undefined, "a");
+    const saved = drawKeys(streaming, [message("One")], "a-r1", "a");
+    const other = drawKeys(saved, [message("One")], undefined, "b");
+    expect(drawKey(other, message("One"))).toBe("a-r1");
+  });
+});
+
+describe("the rows drawn for sent messages", () => {
+  const local: LocalTurn = {
+    sessionId: "s",
+    requestId: "r2",
+    content: "again",
+    selectedSkillIds: [],
+    lifecycleState: "pending",
+    createdAt: null,
+  };
+  const pending = pendingUserTurn({
+    itemKey: "pending-r2",
+    requestId: "r2",
+    content: "again",
+  });
+
+  it("draws the app's own copy of a message the moment it is sent", () => {
+    const rows = withSentTurns([person], local, "s");
+    expect(rows.map((row) => row.itemKey)).toEqual(["u1", "local:r2"]);
+  });
+
+  it("puts the copy before the live reply that follows it", () => {
+    const rows = withSentTurns([person, live("On it")], local, "s");
+    expect(rows.map((row) => row.kind)).toEqual([
+      "userMessage",
+      "pendingUserTurn",
+      "liveAssistant",
+    ]);
+  });
+
+  it("shows the bridge's pending turn in place of the copy", () => {
+    expect(
+      withSentTurns([person, pending], local, "s").map((row) => row.itemKey),
+    ).toEqual(["u1", "pending-r2"]);
+  });
+
+  it("never shows one session's message in another", () => {
+    expect(withSentTurns([person], local, "other")).toEqual([person]);
   });
 });

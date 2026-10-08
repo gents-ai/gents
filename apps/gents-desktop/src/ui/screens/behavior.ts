@@ -1,4 +1,5 @@
-import type { DeploymentView } from "@source-inc/gents-desktop-client";
+import type { NodeView } from "../../hooks/fleetStore";
+import { agentOf } from "@/lib/agents";
 
 /* two-letter initials on a pastel chip; the ink stays fixed like a marker */
 /* a leading article is not a name: "The Engineer" is En, not Te */
@@ -13,33 +14,9 @@ export function initials(name: string) {
   ).replace(/^(.)(.)$/, (_, a: string, b: string) => a.toUpperCase() + b.toLowerCase());
 }
 
-export function behaviorName(
-  behaviorId: string | null,
-  deployment: DeploymentView | null,
-) {
-  return (
-    deployment?.behaviors.find((b) => b.behaviorId === behaviorId)?.displayName ??
-    "Default"
-  );
+export function behaviorName(behaviorId: string | null, deployment: NodeView | null) {
+  return agentOf(deployment, behaviorId)?.displayName ?? "Default";
 }
-
-/* A pastel per behavior: one lightness and chroma, a hue spread around
-   the wheel by the golden angle so neighboring names never share a
-   tint. Deep green ink (marker-foreground) reads on every hue. */
-export function chipColor(name: string, hue?: number | null) {
-  return `oklch(0.9 0.09 ${behaviorHue(name, hue).toFixed(1)})`;
-}
-/* the same hue, deep enough to read as a ring on either ground */
-export function ringColor(name: string, hue?: number | null) {
-  return `oklch(0.72 0.14 ${behaviorHue(name, hue).toFixed(1)})`;
-}
-function behaviorHue(name: string, hue?: number | null) {
-  let h = 0;
-  for (const c of name) h = (h * 31 + c.charCodeAt(0)) >>> 0;
-  return hue ?? (h * 137.508) % 360;
-}
-/* the hues a person can pick instead, evenly around the wheel */
-export const SWATCH_HUES = Array.from({ length: 12 }, (_, i) => i * 30);
 
 /* The bridge's labels, as a person would say them. Files and bash come
    from the desktop's file_access_label / bash_access_label ("off",
@@ -62,9 +39,19 @@ export const access = (mode: string) =>
     "read-only": "read files",
     off: "not touch files",
   })[mode] ?? mode;
+const NETWORK: Record<string, string> = {
+  enabled: "the network",
+  inherit: "the network (inherited)",
+};
 export const network = (mode: string | null | undefined) =>
-  mode === "enabled"
-    ? "the network"
-    : mode === "inherit"
-      ? "the network (inherited)"
-      : "no network";
+  (mode && NETWORK[mode]) || "no network";
+
+/* the access modes at a glance, short enough for one line */
+const SHORT: Record<string, string> = {
+  "read / write": "rw",
+  "read-only": "ro",
+  unrestricted: "any",
+  off: "off",
+};
+export const shortAccess = (mode: string | null | undefined) =>
+  SHORT[mode ?? "off"] ?? mode;

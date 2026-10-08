@@ -84,6 +84,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_arrival_checkpoints_preserve_committed_delivery_across_crashes",
         },
         ConformanceConsumer::RustTest {
+            id: "trigger_engine::tests::durable_contract::generated_callback_arrival_checkpoints_use_invocation_receipts",
+            package: "gents",
+            source_path: "crates/gents/src/trigger_engine/tests/durable_contract.rs",
+            module_path: "trigger_engine::tests::durable_contract",
+            function: "generated_callback_arrival_checkpoints_use_invocation_receipts",
+        },
+        ConformanceConsumer::RustTest {
             id: "trigger_engine::tests::durable_contract::generated_terminal_outcome_action_traces_use_native_owners",
             package: "gents",
             source_path: "crates/gents/src/trigger_engine/tests/durable_contract.rs",

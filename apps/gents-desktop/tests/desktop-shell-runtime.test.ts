@@ -1,24 +1,15 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
 import {
   applySessionLiveDelta,
   desktopUpdateRefreshScope,
-  dismissMailboxItemAndClearMatchingRoute,
   sessionLiveDeltaRequest,
 } from "../src/hooks/desktopShellRuntime";
 import {
   mergeOlderSessionTimelinePage,
   mergeSessionTipSnapshot,
 } from "../src/hooks/desktopTimelinePaging";
-
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((next) => {
-    resolve = next;
-  });
-  return { promise, resolve };
-}
 
 describe("desktopUpdateRefreshScope", () => {
   it("uses ordinary store wakes to probe the canonical live cursor", () => {
@@ -30,38 +21,6 @@ describe("desktopUpdateRefreshScope", () => {
     );
     expect(desktopUpdateRefreshScope("store", "session-1", null)).toBe("full");
     expect(desktopUpdateRefreshScope("config", null, null)).toBe("full");
-  });
-});
-
-describe("dismissMailboxItemAndClearMatchingRoute", () => {
-  it("preserves a newer compose route while an older dismissal is in flight", async () => {
-    const pass = deferred();
-    let currentRouteItemId: string | null = "item-a";
-    const clearMatchingRoute = vi.fn();
-    const dismissal = dismissMailboxItemAndClearMatchingRoute(
-      "item-a",
-      () => pass.promise,
-      () => currentRouteItemId,
-      clearMatchingRoute,
-    );
-
-    currentRouteItemId = "item-b";
-    pass.resolve();
-    await dismissal;
-
-    expect(clearMatchingRoute).not.toHaveBeenCalled();
-  });
-
-  it("clears the compose route when the dismissed item is still current", async () => {
-    const clearMatchingRoute = vi.fn();
-    await dismissMailboxItemAndClearMatchingRoute(
-      "item-a",
-      async () => {},
-      () => "item-a",
-      clearMatchingRoute,
-    );
-
-    expect(clearMatchingRoute).toHaveBeenCalledOnce();
   });
 });
 
@@ -251,6 +210,7 @@ function session(
     turnState: "running",
     latestRequestId: "request-1",
     retryEligibility: { eligible: false, denialReason: "notFailed" },
+    latestRequestOutcome: null,
     pendingTurn: null,
     context: {
       estimatedDurableTokens: 0,
@@ -295,6 +255,7 @@ describe("session timeline page merging", () => {
         itemKey: "pending-r2",
         requestId: "r2",
         content: "repeat",
+        selectedSkillIds: [],
         lifecycleState: "pending",
         createdAt: null,
       },
@@ -333,6 +294,7 @@ describe("session timeline page merging", () => {
       itemKey: "pending-r",
       requestId: "r",
       content: "repeat",
+      selectedSkillIds: [],
       lifecycleState: "processing",
       createdAt: null,
     });
@@ -372,6 +334,7 @@ describe("session timeline page merging", () => {
         itemKey: "pending-r",
         requestId: "r",
         content: "same text",
+        selectedSkillIds: [],
         lifecycleState: "pending",
         createdAt: null,
       });
@@ -544,6 +507,33 @@ describe("session timeline page merging", () => {
     const afterTipRefresh = mergeSessionTipSnapshot(merged, refreshedTip);
     expect(afterTipRefresh.timelinePage?.oldestItemKey).toBe("tools-7");
     expect(afterTipRefresh.timelinePage?.hasOlder).toBe(true);
+  });
+
+  it("never adds rows above the first one shown when the tip starts earlier", () => {
+    /* the live tail left the end of the newest page, so the page reaches
+       one row further back */
+    const current = session(["k2", "k3", "live-assistant"], {
+      totalItems: 4,
+      pageItems: 3,
+      hasOlder: true,
+      hasNewer: false,
+      oldestItemKey: "k2",
+      newestItemKey: "live-assistant",
+    });
+    const tip = session(["k1", "k2", "k3"], {
+      totalItems: 3,
+      pageItems: 3,
+      hasOlder: false,
+      hasNewer: false,
+      oldestItemKey: "k1",
+      newestItemKey: "k3",
+    });
+
+    const merged = mergeSessionTipSnapshot(current, tip);
+
+    expect(merged.timelineItems.map((item) => item.itemKey)).toEqual(["k2", "k3"]);
+    expect(merged.timelinePage?.hasOlder).toBe(true);
+    expect(merged.timelinePage?.oldestItemKey).toBe("k2");
   });
 
   it("keeps an exhausted older-page boundary across a tip refresh", () => {

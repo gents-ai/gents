@@ -31,6 +31,7 @@ use super::p2p_ops;
 use super::ClientCore;
 #[cfg(test)]
 use super::ClientPeerStatus;
+use crate::client::peer_directory::RemovalCause;
 
 const REQUEST_PATCH_SIGNATURE_CAPACITY: usize = 2_048;
 
@@ -1070,7 +1071,7 @@ impl ClientCore {
         let peer_id = normalize_required("peer_id", peer_id)?;
         let removal = self
             .route_manager
-            .remove_peer(&self.sync_state, peer_id)
+            .remove_peer(&self.sync_state, peer_id, RemovalCause::Operator)
             .await?;
         let removed = removal.record;
         let warning = match removal.cleanup_error {

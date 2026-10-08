@@ -249,6 +249,8 @@ pub struct LoopConfig {
     pub reduction_chain_keys: Vec<String>,
     /// Turn index to resume at an unconsumed durable checkpoint.
     pub initial_turn_index: usize,
+    /// The entry prompt is already durable; do not publish it as new authored input.
+    pub resume_from_history: bool,
     pub context_window: usize,
     pub compaction_threshold: f64,
     pub retry_policy: CompletionRetryPolicy,

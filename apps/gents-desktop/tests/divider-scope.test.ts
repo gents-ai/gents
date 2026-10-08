@@ -78,3 +78,40 @@ describe("the dock divider after unmount", () => {
     expect(onClosed).not.toHaveBeenCalled();
   });
 });
+
+describe("the dock divider when the window resizes", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("keeps a dock that settled during the resize inside the new range", () => {
+    const frames = new Map<number, FrameRequestCallback>();
+    let next = 0;
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      frames.set(++next, cb);
+      return next;
+    });
+    vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
+    /* runs the spring to rest, a frame at a time */
+    const settle = () => {
+      for (let t = 16; frames.size > 0 && t < 10_000; t += 16)
+        act(() => {
+          const due = [...frames];
+          frames.clear();
+          for (const [, frame] of due) frame(t);
+        });
+    };
+    const { result, rerender } = renderHook(
+      (props: { open: boolean; container: number }) =>
+        useDivider({ ...base, scope: "session:a", ...props }),
+      { initialProps: { open: false, container: 1600 } },
+    );
+    rerender({ open: true, container: 1600 });
+    expect(result.current.settling).toBe(true);
+    /* the window narrows while the dock is still opening toward 520 */
+    rerender({ open: true, container: 800 });
+    settle();
+
+    expect(result.current.settling).toBe(false);
+    expect(result.current.pos).toBe(result.current.max);
+    expect(result.current.max).toBeLessThan(520);
+  });
+});

@@ -5,6 +5,7 @@ import {
   sessionHydrationLabel,
   sessionHydrationNeedsRetry,
   visibleSessionHydration,
+  type VisibleSessionHydration,
 } from "../src/lib/sessionHydration";
 
 function hydration(
@@ -20,6 +21,10 @@ function hydration(
     ...overrides,
   };
 }
+
+/* a hydration the screen shows: one of the phases it names */
+const visible = (overrides: Partial<VisibleSessionHydration> = {}) =>
+  ({ ...hydration(), phase: "serving", ...overrides }) as VisibleSessionHydration;
 
 describe("visibleSessionHydration", () => {
   it("keeps requested, serving, complete, and failed for the selected session", () => {
@@ -67,25 +72,23 @@ describe("sessionHydrationLabel", () => {
   it("names requested, N of M, complete, and failed states", () => {
     expect(
       sessionHydrationLabel(
-        hydration({ phase: "requested", mergedCount: 0, servedCount: null }),
+        visible({ phase: "requested", mergedCount: 0, servedCount: null }),
       ),
     ).toBe("Fetching session history");
-    expect(sessionHydrationLabel(hydration())).toBe(
-      "Fetching session history · 4 of 11",
-    );
+    expect(sessionHydrationLabel(visible())).toBe("Fetching session history · 4 of 11");
     expect(
       sessionHydrationLabel(
-        hydration({ mergedCount: 124, coveredCount: 47, servedCount: 47 }),
+        visible({ mergedCount: 124, coveredCount: 47, servedCount: 47 }),
       ),
     ).toBe("Fetching session history · 47 of 47");
     expect(
       sessionHydrationLabel(
-        hydration({ servedCount: null, mergedCount: 3, coveredCount: 3 }),
+        visible({ servedCount: null, mergedCount: 3, coveredCount: 3 }),
       ),
     ).toBe("Fetching session history · 3 documents so far");
     expect(
       sessionHydrationLabel(
-        hydration({
+        visible({
           phase: "complete",
           mergedCount: 124,
           coveredCount: 47,
@@ -93,10 +96,10 @@ describe("sessionHydrationLabel", () => {
         }),
       ),
     ).toBe("Session history loaded · 47 of 47");
-    expect(sessionHydrationLabel(hydration({ phase: "failed" }))).toBe(
+    expect(sessionHydrationLabel(visible({ phase: "failed" }))).toBe(
       "Couldn't fetch the rest of this session",
     );
-    expect(sessionHydrationNeedsRetry(hydration({ phase: "failed" }))).toBe(true);
-    expect(sessionHydrationNeedsRetry(hydration())).toBe(false);
+    expect(sessionHydrationNeedsRetry(visible({ phase: "failed" }))).toBe(true);
+    expect(sessionHydrationNeedsRetry(visible())).toBe(false);
   });
 });

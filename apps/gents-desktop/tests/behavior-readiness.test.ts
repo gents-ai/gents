@@ -51,7 +51,7 @@ function deployment(
     // Remote clients do not receive backend configuration. A ready runtime
     // projection remains sufficient without reconstructing backend state.
     inferenceBackends: [],
-  } as DeploymentView;
+  } as unknown as DeploymentView;
 }
 
 function unavailable(reason: BehaviorUnavailableReasonView): DeploymentView {
@@ -221,7 +221,6 @@ describe("selectedBehaviorReadinessDecision", () => {
         clientAvailable: true,
         selectedAgentDid: remote.agentDid,
         selectedSessionId: null,
-        draft: "hello",
         sending: false,
         session: null,
         selectedSessionSummary: null,
@@ -230,9 +229,9 @@ describe("selectedBehaviorReadinessDecision", () => {
       });
 
       if (blockedReason === null) {
-        expect(projection.sendStatus).toEqual({ kind: "ready" });
+        expect(projection.nonEmptyContentSendStatus).toEqual({ kind: "ready" });
       } else {
-        expect(projection.sendStatus).toMatchObject({
+        expect(projection.nonEmptyContentSendStatus).toMatchObject({
           kind: "disabled",
           reason: blockedReason,
         });

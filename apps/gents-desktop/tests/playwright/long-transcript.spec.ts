@@ -46,6 +46,8 @@ test.describe("a long transcript", () => {
           '[data-slot="scroll-area-viewport"]',
         ) as HTMLElement;
         const rowsBefore = scroller.querySelectorAll("[data-timeline-key]").length;
+        /* as a reader does: their own wheel, then the scroll it makes */
+        scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -1 }));
         scroller.scrollTop = 0;
         const first = scroller.querySelector<HTMLElement>("[data-timeline-key]")!;
         return {

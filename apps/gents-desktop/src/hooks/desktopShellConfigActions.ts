@@ -1,426 +1,111 @@
-import type { Dispatch, SetStateAction } from "react";
-
 import type {
-  AgentConfigSaveRequest,
-  DefaultBehaviorSetRequest,
-  BackendSaveRequest,
-  ConfigComponentsPatchRequest,
-  ConfigComponentsApplyRequest,
-  ContextDeleteRequest,
-  BehaviorSaveRequest,
   CodexLoginResult,
   DesktopApiAdapter,
-  InferenceProbeResult,
-  InferenceProfileSaveRequest,
-  SkillDeleteRequest,
-  SkillSaveRequest,
-  ToolsSaveRequest,
-  ToolServiceSaveRequest,
+  DesktopClientSnapshot,
   ToolServiceTestRequest,
   ToolServiceTestResult,
-  TaskDeleteRequest,
-  ScheduleDeleteRequest,
-  EventSourceDeleteRequest,
-  TriggerDeleteRequest,
-  BackendDeleteRequest,
-  InferenceProfileDeleteRequest,
-  ToolsDeleteRequest,
-  ToolServiceDeleteRequest,
-  BehaviorDeleteRequest,
 } from "@source-inc/gents-desktop-client";
+
+import { actionFailure, shownFailure } from "./desktopShellRuntime";
+
+/** Each configuration change the bridge takes, as a failure names it. */
+const CHANGES = {
+  saveAgentConfig: "save the agent",
+  setDefaultBehavior: "set the default behavior",
+  saveBehaviorConfig: "save the behavior",
+  deleteBehaviorConfig: "delete the behavior",
+  saveSkillConfig: "save the skill",
+  deleteSkillConfig: "delete the skill",
+  deleteContextConfig: "delete the context",
+  saveTaskConfig: "save the task",
+  deleteTaskConfig: "delete the task",
+  saveScheduleConfig: "save the schedule",
+  deleteScheduleConfig: "delete the schedule",
+  saveTriggerConfig: "save the trigger",
+  deleteTriggerConfig: "delete the trigger",
+  saveEventSourceConfig: "save the event source",
+  deleteEventSourceConfig: "delete the event source",
+  saveBackendConfig: "save the backend",
+  deleteBackendConfig: "delete the backend",
+  saveInferenceProfileConfig: "save the inference profile",
+  deleteInferenceProfileConfig: "delete the inference profile",
+  saveToolsConfig: "save the tools",
+  deleteToolsConfig: "delete the tools",
+  saveToolServiceConfig: "save the tool service",
+  deleteToolServiceConfig: "delete the tool service",
+  patchConfigComponents: "save the configuration",
+  applyConfigComponents: "apply the configuration",
+} as const satisfies Partial<Record<keyof DesktopApiAdapter, string>>;
+
+export type ConfigChange = keyof typeof CHANGES;
+export type ConfigRequest<K extends ConfigChange> = Parameters<DesktopApiAdapter[K]>[0];
 
 type ConfigActionParams = {
   api: DesktopApiAdapter;
-  setError: Dispatch<SetStateAction<string | null>>;
-  setSavingBehaviorConfig: Dispatch<SetStateAction<boolean>>;
-  setSavingConfig: Dispatch<SetStateAction<boolean>>;
+  /** shows a failed action to the person, once */
+  reportFailure: (message: string) => void;
   mutateSnapshot: <T>(operation: () => Promise<T>) => Promise<T>;
 };
 
 export function createDesktopShellConfigActions({
   api,
-  setError,
-  setSavingBehaviorConfig,
-  setSavingConfig,
+  reportFailure,
   mutateSnapshot,
 }: ConfigActionParams) {
-  async function onSaveAgentConfig(request: AgentConfigSaveRequest) {
-    setSavingConfig(true);
-    setError(null);
+  async function changeConfig<K extends ConfigChange>(
+    change: K,
+    request: ConfigRequest<K>,
+    label: string = CHANGES[change],
+  ): Promise<DesktopClientSnapshot> {
+    const write = api[change] as (
+      request: ConfigRequest<K>,
+    ) => Promise<DesktopClientSnapshot>;
     try {
-      const next = await mutateSnapshot(() => api.saveAgentConfig(request));
-      return next;
-    } catch (err) {
-      setError(String(err));
-      throw err;
-    } finally {
-      setSavingConfig(false);
+      return await mutateSnapshot(() => write(request));
+    } catch (error) {
+      reportFailure(actionFailure(label, error));
+      throw shownFailure(error);
     }
   }
 
-  async function onSetDefaultBehavior(request: DefaultBehaviorSetRequest) {
-    setSavingConfig(true);
-    setError(null);
+  /** A call that stores nothing: reported the same way, without a re-read. */
+  async function call<T>(label: string, run: () => Promise<T>) {
     try {
-      return await mutateSnapshot(() => api.setDefaultBehavior(request));
-    } catch (err) {
-      setError(String(err));
-      throw err;
-    } finally {
-      setSavingConfig(false);
-    }
-  }
-
-  async function onSaveBehaviorConfig(request: BehaviorSaveRequest) {
-    setSavingBehaviorConfig(true);
-    setSavingConfig(true);
-    setError(null);
-    try {
-      const next = await mutateSnapshot(() => api.saveBehaviorConfig(request));
-      return next;
-    } catch (err) {
-      setError(String(err));
-      throw err;
-    } finally {
-      setSavingBehaviorConfig(false);
-      setSavingConfig(false);
-    }
-  }
-
-  async function onSaveSkillConfig(request: SkillSaveRequest) {
-    setSavingConfig(true);
-    setError(null);
-    try {
-      const next = await mutateSnapshot(() => api.saveSkillConfig(request));
-      return next;
-    } catch (err) {
-      setError(String(err));
-      throw err;
-    } finally {
-      setSavingConfig(false);
-    }
-  }
-
-  async function onDeleteSkillConfig(request: SkillDeleteRequest) {
-    setSavingConfig(true);
-    setError(null);
-    try {
-      const next = await mutateSnapshot(() => api.deleteSkillConfig(request));
-      return next;
-    } catch (err) {
-      setError(String(err));
-      throw err;
-    } finally {
-      setSavingConfig(false);
-    }
-  }
-
-  async function onDeleteContextConfig(request: ContextDeleteRequest) {
-    setSavingConfig(true);
-    setError(null);
-    try {
-      return await mutateSnapshot(() => api.deleteContextConfig(request));
-    } catch (err) {
-      setError(String(err));
-      throw err;
-    } finally {
-      setSavingConfig(false);
-    }
-  }
-
-  async function onDeleteTaskConfig(request: TaskDeleteRequest) {
-    setSavingConfig(true);
-    setError(null);
-    try {
-      const next = await mutateSnapshot(() => api.deleteTaskConfig(request));
-      return next;
-    } catch (err) {
-      setError(String(err));
-      throw err;
-    } finally {
-      setSavingConfig(false);
-    }
-  }
-
-  async function onDeleteScheduleConfig(request: ScheduleDeleteRequest) {
-    setSavingConfig(true);
-    setError(null);
-    try {
-      const next = await mutateSnapshot(() => api.deleteScheduleConfig(request));
-      return next;
-    } catch (err) {
-      setError(String(err));
-      throw err;
-    } finally {
-      setSavingConfig(false);
-    }
-  }
-
-  async function onDeleteEventSourceConfig(request: EventSourceDeleteRequest) {
-    setSavingConfig(true);
-    setError(null);
-    try {
-      const next = await mutateSnapshot(() => api.deleteEventSourceConfig(request));
-      return next;
-    } catch (err) {
-      setError(String(err));
-      throw err;
-    } finally {
-      setSavingConfig(false);
-    }
-  }
-
-  async function onDeleteTriggerConfig(request: TriggerDeleteRequest) {
-    setSavingConfig(true);
-    setError(null);
-    try {
-      const next = await mutateSnapshot(() => api.deleteTriggerConfig(request));
-      return next;
-    } catch (err) {
-      setError(String(err));
-      throw err;
-    } finally {
-      setSavingConfig(false);
-    }
-  }
-
-  async function onDeleteBackendConfig(request: BackendDeleteRequest) {
-    setSavingConfig(true);
-    setError(null);
-    try {
-      const next = await mutateSnapshot(() => api.deleteBackendConfig(request));
-      return next;
-    } catch (err) {
-      setError(String(err));
-      throw err;
-    } finally {
-      setSavingConfig(false);
-    }
-  }
-
-  async function onDeleteInferenceProfileConfig(
-    request: InferenceProfileDeleteRequest,
-  ) {
-    setSavingConfig(true);
-    setError(null);
-    try {
-      const next = await mutateSnapshot(() =>
-        api.deleteInferenceProfileConfig(request),
-      );
-      return next;
-    } catch (err) {
-      setError(String(err));
-      throw err;
-    } finally {
-      setSavingConfig(false);
-    }
-  }
-
-  async function onDeleteToolsConfig(request: ToolsDeleteRequest) {
-    setSavingConfig(true);
-    setError(null);
-    try {
-      const next = await mutateSnapshot(() => api.deleteToolsConfig(request));
-      return next;
-    } catch (err) {
-      setError(String(err));
-      throw err;
-    } finally {
-      setSavingConfig(false);
-    }
-  }
-
-  async function onDeleteToolServiceConfig(request: ToolServiceDeleteRequest) {
-    setSavingConfig(true);
-    setError(null);
-    try {
-      const next = await mutateSnapshot(() => api.deleteToolServiceConfig(request));
-      return next;
-    } catch (err) {
-      setError(String(err));
-      throw err;
-    } finally {
-      setSavingConfig(false);
-    }
-  }
-
-  async function onDeleteBehaviorConfig(request: BehaviorDeleteRequest) {
-    setSavingConfig(true);
-    setError(null);
-    try {
-      const next = await mutateSnapshot(() => api.deleteBehaviorConfig(request));
-      return next;
-    } catch (err) {
-      setError(String(err));
-      throw err;
-    } finally {
-      setSavingConfig(false);
-    }
-  }
-
-  async function onSaveBackendConfig(request: BackendSaveRequest) {
-    setSavingConfig(true);
-    setError(null);
-    try {
-      const next = await mutateSnapshot(() => api.saveBackendConfig(request));
-      return next;
-    } catch (err) {
-      setError(String(err));
-      throw err;
-    } finally {
-      setSavingConfig(false);
-    }
-  }
-
-  async function onPatchConfigComponents(request: ConfigComponentsPatchRequest) {
-    setSavingConfig(true);
-    setError(null);
-    try {
-      const next = await mutateSnapshot(() => api.patchConfigComponents(request));
-      return next;
-    } catch (err) {
-      setError(String(err));
-      throw err;
-    } finally {
-      setSavingConfig(false);
-    }
-  }
-
-  async function onApplyConfigComponents(request: ConfigComponentsApplyRequest) {
-    setSavingConfig(true);
-    setError(null);
-    try {
-      const next = await mutateSnapshot(() => api.applyConfigComponents(request));
-      return next;
-    } catch (err) {
-      setError(String(err));
-      throw err;
-    } finally {
-      setSavingConfig(false);
-    }
-  }
-
-  async function onProbeInferenceEndpoint(
-    endpoint: string,
-  ): Promise<InferenceProbeResult> {
-    return api.probeInferenceEndpoint(endpoint);
-  }
-
-  async function onCodexLogin(agentDid: string): Promise<CodexLoginResult> {
-    setError(null);
-    try {
-      return await api.codexLogin(agentDid);
-    } catch (err) {
-      setError(String(err));
-      throw err;
-    }
-  }
-
-  async function onCancelCodexLogin(): Promise<void> {
-    // Best-effort abort of a sign-in whose browser was closed; a failure here
-    // (e.g. nothing in flight) must never block closing the wizard.
-    try {
-      await api.cancelCodexLogin();
-    } catch {}
-  }
-
-  async function onGrokLogin(agentDid: string) {
-    setError(null);
-    try {
-      return await api.grokLogin(agentDid);
-    } catch (err) {
-      setError(String(err));
-      throw err;
-    }
-  }
-
-  async function onCancelGrokLogin(): Promise<void> {
-    try {
-      await api.cancelGrokLogin();
-    } catch {}
-  }
-
-  async function onSaveInferenceProfileConfig(request: InferenceProfileSaveRequest) {
-    setSavingConfig(true);
-    setError(null);
-    try {
-      const next = await mutateSnapshot(() => api.saveInferenceProfileConfig(request));
-      return next;
-    } catch (err) {
-      setError(String(err));
-      throw err;
-    } finally {
-      setSavingConfig(false);
-    }
-  }
-
-  async function onSaveToolsConfig(request: ToolsSaveRequest) {
-    setSavingConfig(true);
-    setError(null);
-    try {
-      const next = await mutateSnapshot(() => api.saveToolsConfig(request));
-      return next;
-    } catch (err) {
-      setError(String(err));
-      throw err;
-    } finally {
-      setSavingConfig(false);
-    }
-  }
-
-  async function onSaveToolServiceConfig(request: ToolServiceSaveRequest) {
-    setSavingConfig(true);
-    setError(null);
-    try {
-      const next = await mutateSnapshot(() => api.saveToolServiceConfig(request));
-      return next;
-    } catch (err) {
-      setError(String(err));
-      throw err;
-    } finally {
-      setSavingConfig(false);
-    }
-  }
-
-  async function onTestToolService(
-    request: ToolServiceTestRequest,
-  ): Promise<ToolServiceTestResult> {
-    setError(null);
-    try {
-      return await api.testToolService(request);
-    } catch (err) {
-      setError(String(err));
-      throw err;
+      return await run();
+    } catch (error) {
+      reportFailure(actionFailure(label, error));
+      throw shownFailure(error);
     }
   }
 
   return {
-    onSaveAgentConfig,
-    onSetDefaultBehavior,
-    onSaveBackendConfig,
-    onPatchConfigComponents,
-    onApplyConfigComponents,
-    onSaveBehaviorConfig,
-    onDeleteSkillConfig,
-    onDeleteContextConfig,
-    onDeleteTaskConfig,
-    onDeleteScheduleConfig,
-    onDeleteEventSourceConfig,
-    onDeleteTriggerConfig,
-    onDeleteBackendConfig,
-    onDeleteInferenceProfileConfig,
-    onDeleteToolsConfig,
-    onDeleteToolServiceConfig,
-    onDeleteBehaviorConfig,
-    onProbeInferenceEndpoint,
-    onCodexLogin,
-    onCancelCodexLogin,
-    onGrokLogin,
-    onCancelGrokLogin,
-    onSaveInferenceProfileConfig,
-    onSaveSkillConfig,
-    onSaveToolsConfig,
-    onSaveToolServiceConfig,
-    onTestToolService,
+    /**
+     * A configuration change: the bridge's write, then a fresh read once it
+     * lands, and one report naming what failed: the change's own name, or
+     * what the person did when the screen knows it better (a switch turned
+     * on writes a patch). The caller still sees the failure, to keep what
+     * the person typed.
+     */
+    changeConfig,
+    /** Signs the agent in to Codex in the browser; nothing is stored here.
+        A failure is reported once, then rethrown. */
+    codexLogin: (agentDid: string): Promise<CodexLoginResult> =>
+      call("sign in to Codex", () => api.codexLogin(agentDid)),
+    /** Abandons a Codex sign-in whose browser was closed. Best effort: a
+        failure (nothing in flight, say) never blocks closing the wizard. */
+    cancelCodexLogin: (): Promise<void> => api.cancelCodexLogin().catch(() => {}),
+    /** Signs the agent in to Grok in the browser; nothing is stored here.
+        A failure is reported once, then rethrown. */
+    grokLogin: (agentDid: string) =>
+      call("sign in to Grok", () => api.grokLogin(agentDid)),
+    /** Abandons a Grok sign-in whose browser was closed. Best effort, as
+        for Codex. */
+    cancelGrokLogin: (): Promise<void> => api.cancelGrokLogin().catch(() => {}),
+    /** Tries a tool service's connection without saving it. A failure is
+        reported once, then rethrown. */
+    testToolService: (
+      request: ToolServiceTestRequest,
+    ): Promise<ToolServiceTestResult> =>
+      call("test the tool service", () => api.testToolService(request)),
   };
 }

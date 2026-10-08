@@ -1250,9 +1250,23 @@ async fn validate_startup_snapshot(
         let blocking = unavailable
             .iter()
             .filter(|(_, reason)| !is_degraded_startup_unavailable_reason(reason.public_reason))
-            .map(|(behavior_id, reason)| format!("{behavior_id}: {}", reason.public_message()))
             .collect::<Vec<_>>();
         if !blocking.is_empty() {
+            // The bail and the persisted runtime status carry only the
+            // presentation-safe reason; the diagnostic is operator-local and
+            // must not leak into either, so it is only logged here.
+            for (behavior_id, reason) in &blocking {
+                tracing::error!(
+                    behavior_id = %behavior_id,
+                    public_reason = ?reason.public_reason,
+                    diagnostic = %reason.diagnostic,
+                    "behavior unavailable at startup blocks the agent from starting"
+                );
+            }
+            let blocking = blocking
+                .iter()
+                .map(|(behavior_id, reason)| format!("{behavior_id}: {}", reason.public_message()))
+                .collect::<Vec<_>>();
             anyhow::bail!(
                 "agent {} has no runnable behaviors at startup due to invalid configuration ({})",
                 agent.agent_did(),

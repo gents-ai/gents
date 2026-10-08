@@ -450,6 +450,7 @@ pub fn build_request(
     created_at: String,
 ) -> AgentRequest {
     AgentRequest {
+        retry_parent_request_doc_id: None,
         purpose: gents_protocol::request_admission::RequestPurpose::Normal,
         doc_id,
         request_id,

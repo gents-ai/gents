@@ -1,20 +1,8 @@
 import { expect, test as base, type Page, type TestInfo } from "@playwright/test";
 
-export type HarnessScenario =
-  | "default"
-  | "empty-fleet"
-  | "loading"
-  | "bridge-unavailable"
-  | "save-error"
-  | "backend-health-error"
-  | "backend-unavailable"
-  | "mailbox-overflow"
-  | "long-content"
-  | "active-turn"
-  | "coding"
-  | "session-hydration"
-  | "sync-offline"
-  | "sync-failed";
+import type { DesktopUiHarnessScenario } from "../ui-harness/desktopHarness";
+
+export type HarnessScenario = DesktopUiHarnessScenario;
 
 export const PEER_ID = "peer-bombadil-local";
 

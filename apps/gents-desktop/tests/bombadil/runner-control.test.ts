@@ -43,7 +43,7 @@ describe("Bombadil watchdog recovery", () => {
         }
         return child;
       },
-      stopTimedOutChild: (child: FakeChild) => {
+      stopTimedOutChild: async (child: FakeChild) => {
         stopped.push(child.pid);
         child.finish(null, "SIGKILL");
       },
@@ -79,7 +79,7 @@ describe("Bombadil watchdog recovery", () => {
         attempts += 1;
         return new FakeChild(250 + attempts);
       },
-      stopTimedOutChild: (child: FakeChild) => {
+      stopTimedOutChild: async (child: FakeChild) => {
         stopped += 1;
         child.finish(null, "SIGKILL");
       },

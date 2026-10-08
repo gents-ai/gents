@@ -1,0 +1,11 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    /* tests import the .mjs scripts they cover; their types are inferred,
+       not checked */
+    "allowJs": true
+  },
+  "include": ["../src", "."],
+  "exclude": []
+}

@@ -1,11 +1,11 @@
 import { renderHook } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
+import { node, testApp, withApp } from "./app-fixture";
 import type {
   LinkedSessionView,
   SessionProvenanceView,
   SessionSummary,
 } from "@source-inc/gents-desktop-client";
-import type { Shell } from "@/hooks/useShell";
 
 import { useParentWork } from "../src/ui/screens/parentWork";
 
@@ -67,36 +67,28 @@ const view = (
   calls: [],
 });
 
-function shellFor(sessions: SessionSummary[] = [parent, other, child]) {
-  return {
-    selectedSessionId: "session-child",
-    selectedDeployment: {
-      agentDid: AGENT,
-      sessions,
-      behaviors: [],
-      behaviorConfigs: [],
-    },
-  } as unknown as Shell;
+/* the parent work of the child session, selected on the agent's node */
+function parentWorkOf(provenance: SessionProvenanceView | null) {
+  const app = testApp({
+    deployments: [node({ agentDid: AGENT, sessions: [parent, other, child] })],
+    selection: { agentDid: AGENT, sessionId: "session-child" },
+  });
+  return renderHook(() => useParentWork(provenance), { wrapper: withApp(app) });
 }
 
 describe("the sessions that sent work into this one", () => {
   it("names the session the lineage owner says started it", () => {
-    const { result } = renderHook(() =>
-      useParentWork(shellFor(), view(link("session-parent"))),
-    );
+    const { result } = parentWorkOf(view(link("session-parent")));
     expect(result.current.parent?.sessionId).toBe("session-parent");
     expect(result.current.parent?.summary?.title).toBe("Lead");
   });
 
   it("marks each turn by the session that sent it", () => {
-    const { result } = renderHook(() =>
-      useParentWork(
-        shellFor(),
-        view(link("session-parent"), [
-          ["req-child", link("session-parent")],
-          ["req-child-2", link("session-other")],
-        ]),
-      ),
+    const { result } = parentWorkOf(
+      view(link("session-parent"), [
+        ["req-child", link("session-parent")],
+        ["req-child-2", link("session-other")],
+      ]),
     );
     expect(result.current.hasSenders).toBe(true);
     expect(result.current.sentBy("req-child")?.sessionId).toBe("session-parent");
@@ -107,16 +99,16 @@ describe("the sessions that sent work into this one", () => {
   });
 
   it("does not guess a parent when the session was not started by another", () => {
-    const { result } = renderHook(() =>
-      useParentWork(shellFor(), view(null, [["req-child", link("session-parent")]])),
+    const { result } = parentWorkOf(
+      view(null, [["req-child", link("session-parent")]]),
     );
     expect(result.current.parent).toBeNull();
     expect(result.current.sentBy("req-child")?.sessionId).toBe("session-parent");
   });
 
   it("matches a sender's summary by its full scope", () => {
-    const { result } = renderHook(() =>
-      useParentWork(shellFor(), view(link("session-parent", "did:key:someone-else"))),
+    const { result } = parentWorkOf(
+      view(link("session-parent", "did:key:someone-else")),
     );
     expect(result.current.parent).toEqual({
       sessionId: "session-parent",
@@ -126,7 +118,7 @@ describe("the sessions that sent work into this one", () => {
   });
 
   it("has nothing to say without provenance", () => {
-    const { result } = renderHook(() => useParentWork(shellFor(), null));
+    const { result } = parentWorkOf(null);
     expect(result.current.parent).toBeNull();
     expect(result.current.hasSenders).toBe(false);
   });

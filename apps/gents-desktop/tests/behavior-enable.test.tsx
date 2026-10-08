@@ -1,21 +1,21 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { Shell } from "../src/ui/hooks/useShell";
 import { BehaviorsPanel } from "../src/ui/screens/agent/BehaviorsPanel";
-import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
+import { deployment } from "./config-panel-wiring/fixtures";
+import { renderIn, testApp } from "./app-fixture";
 
 const toast = vi.hoisted(() => vi.fn());
 vi.mock("sonner", () => ({ toast }));
 
-function shellWith(patch: ReturnType<typeof vi.fn>) {
+/* the panel under an app whose failed actions are toasted, as the root's */
+function renderPanel(patch: ReturnType<typeof vi.fn>, node: typeof deployment) {
   const api = { patchConfigComponents: patch };
-  return {
-    api,
-    snapshot: { bootstrap },
-    applyConfig: (run: (bridge: typeof api) => Promise<unknown>) => run(api),
-  } as unknown as Shell;
+  return renderIn(
+    testApp({ api, reportFailure: toast }),
+    <BehaviorsPanel deployment={node} />,
+  );
 }
 
 const withOps = (changes: Partial<(typeof deployment.behaviors)[number]>) => ({
@@ -32,12 +32,7 @@ beforeEach(() => vi.clearAllMocks());
 describe("enabling a behavior", () => {
   it("enables a behavior with no context directly", async () => {
     const patch = vi.fn().mockResolvedValue({});
-    render(
-      <BehaviorsPanel
-        shell={shellWith(patch)}
-        deployment={withOps({ enabled: false, contextId: null })}
-      />,
-    );
+    renderPanel(patch, withOps({ enabled: false, contextId: null }));
     const toggle = screen.getAllByRole("switch", { name: "Ops is disabled" })[0]!;
     expect(toggle).not.toHaveAttribute("aria-disabled");
     await userEvent.setup().click(toggle);
@@ -56,17 +51,14 @@ describe("enabling a behavior", () => {
     const refusal =
       'AgentBehavior ops field context_id references missing AgentContext "gone" within agent_did did:key:z6MkAgent';
     const patch = vi.fn().mockRejectedValue(new Error(refusal));
-    render(
-      <BehaviorsPanel
-        shell={shellWith(patch)}
-        deployment={withOps({ enabled: false, contextId: "gone" })}
-      />,
-    );
+    renderPanel(patch, withOps({ enabled: false, contextId: "gone" }));
     await userEvent
       .setup()
       .click(screen.getAllByRole("switch", { name: "Ops is disabled" })[0]!);
     await waitFor(() =>
       expect(toast).toHaveBeenCalledWith(`Couldn’t turn it on: ${refusal}`),
     );
+    /* the action reports it; the switch's own catch does not again (#2043) */
+    expect(toast).toHaveBeenCalledTimes(1);
   });
 });

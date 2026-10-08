@@ -11,7 +11,9 @@ vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 import { AllowedFoldersPanel } from "../src/ui/screens/agent/AllowedFoldersPanel";
 
 describe("AllowedFoldersPanel", () => {
-  beforeEach(() => call.mockReset());
+  beforeEach(() => {
+    call.mockReset();
+  });
 
   it("says none are added and that the working folder is readable", async () => {
     call.mockResolvedValue({ dirs: [] });

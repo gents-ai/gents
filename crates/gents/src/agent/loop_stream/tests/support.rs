@@ -463,6 +463,7 @@ pub(super) fn config(max_turns: usize) -> LoopConfig {
         active_reduction_keys: Vec::new(),
         reduction_chain_keys: Vec::new(),
         initial_turn_index: 0,
+        resume_from_history: false,
         context_window: crate::config::DEFAULT_CONTEXT_WINDOW,
         compaction_threshold: crate::config::DEFAULT_COMPACTION_THRESHOLD,
         retry_policy: crate::agent::completion_retry::CompletionRetryPolicy::scheduled_default(),

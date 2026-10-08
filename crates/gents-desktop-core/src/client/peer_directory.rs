@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeSet,
     fs::{File, OpenOptions, TryLockError},
     io::Write,
     path::{Path, PathBuf},
@@ -159,11 +160,51 @@ impl PeerRecord {
     }
 }
 
+/// A locally ended enrollment authorization generation. The signed durable
+/// documents stay replicated; this records only this desktop's removal, so
+/// the reconciler cannot reinstall the same generation while its lease still
+/// reads as current.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct RetiredEnrollment {
+    network_id: String,
+    server_peer: String,
+    request_digest: String,
+    authorization_sequence: u64,
+    authorization_expires_at: String,
+}
+
+impl RetiredEnrollment {
+    fn from_record(record: &PeerRecord) -> Option<Self> {
+        if !record.is_enrollment() {
+            return None;
+        }
+        Some(Self {
+            network_id: record.pairing_network_id.clone()?,
+            server_peer: record.peer_id.clone(),
+            request_digest: record.enrollment_request_digest.clone()?,
+            authorization_sequence: record.enrollment_authorization_sequence?,
+            authorization_expires_at: record.enrollment_authorization_expires_at.clone()?,
+        })
+    }
+}
+
+/// Why a peer leaves the directory. Only an operator's removal retires an
+/// enrollment generation: reconciliation also removes a peer whose authority
+/// is current but whose route receipt is momentarily unobserved, and that
+/// peer must reinstall once the receipt returns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::client) enum RemovalCause {
+    Operator,
+    Reconciliation,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct StoredPeerDirectory {
     peers: Vec<PeerRecord>,
     #[serde(default)]
     pending_removals: Vec<PeerRecord>,
+    #[serde(default)]
+    retired_enrollments: Vec<RetiredEnrollment>,
 }
 
 #[derive(Debug, Clone)]
@@ -171,6 +212,7 @@ pub(crate) struct PeerDirectory {
     path: PathBuf,
     peers: Vec<PeerRecord>,
     pending_removals: Vec<PeerRecord>,
+    retired_enrollments: Vec<RetiredEnrollment>,
     _lease: Arc<File>,
     #[cfg(test)]
     persist_barrier: Option<PersistBarrier>,
@@ -216,6 +258,7 @@ impl PeerDirectory {
                     path,
                     peers: stored.peers,
                     pending_removals: stored.pending_removals,
+                    retired_enrollments: stored.retired_enrollments,
                     _lease: lease,
                     #[cfg(test)]
                     persist_barrier: None,
@@ -252,6 +295,32 @@ impl PeerDirectory {
         self.pending_removals
             .iter()
             .any(|pending| pending == expected)
+    }
+
+    pub(in crate::client) fn retired_enrollment_digests(&self) -> BTreeSet<String> {
+        self.retired_enrollments
+            .iter()
+            .map(|retired| retired.request_digest.clone())
+            .collect()
+    }
+
+    /// Drop retirements whose enrolled server no longer has a current
+    /// durable authorization. Lease expiry and revocation end the
+    /// generation and prune the retirement with it; an absent route receipt
+    /// must not, because the generation it named still reads current.
+    pub(in crate::client) async fn prune_retired_enrollments(
+        &mut self,
+        authority_server_peers: &BTreeSet<String>,
+    ) -> Result<()> {
+        let mut candidate = self.clone();
+        let before = candidate.retired_enrollments.len();
+        candidate
+            .retired_enrollments
+            .retain(|retired| authority_server_peers.contains(&retired.server_peer));
+        if candidate.retired_enrollments.len() != before {
+            self.commit(candidate).await?;
+        }
+        Ok(())
     }
 
     pub(in crate::client) async fn upsert_local_standard_peer(
@@ -321,6 +390,13 @@ impl PeerDirectory {
         );
         let authorization_expires_at =
             normalize_non_empty("authorization_expires_at", authorization_expires_at)?;
+        anyhow::ensure!(
+            !self
+                .retired_enrollments
+                .iter()
+                .any(|retired| retired.request_digest == request_digest),
+            "enrollment authorization generation {request_digest} was removed locally; a new enrollment is required"
+        );
 
         let mut candidate = self.clone();
         let managed = candidate
@@ -526,6 +602,7 @@ impl PeerDirectory {
     pub(in crate::client) async fn queue_removal(
         &mut self,
         expected: &PeerRecord,
+        cause: RemovalCause,
     ) -> Result<Option<PeerRecord>> {
         let mut candidate = self.clone();
         let Some(index) = candidate.peers.iter().position(|record| record == expected) else {
@@ -536,6 +613,14 @@ impl PeerDirectory {
             .pending_removals
             .retain(|record| record.peer_id != removed.peer_id);
         candidate.pending_removals.push(removed.clone());
+        if let Some(retired) =
+            RetiredEnrollment::from_record(&removed).filter(|_| cause == RemovalCause::Operator)
+        {
+            candidate
+                .retired_enrollments
+                .retain(|existing| existing.request_digest != retired.request_digest);
+            candidate.retired_enrollments.push(retired);
+        }
         candidate.sort_records();
         self.commit(candidate).await?;
         Ok(Some(removed))
@@ -604,6 +689,7 @@ impl PeerDirectory {
         let bytes = serde_json::to_vec_pretty(&StoredPeerDirectory {
             peers: self.peers.clone(),
             pending_removals: self.pending_removals.clone(),
+            retired_enrollments: self.retired_enrollments.clone(),
         })?;
         let parent = self.path.parent().unwrap_or_else(|| Path::new("."));
         let mut staged = tempfile::NamedTempFile::new_in(parent)
@@ -721,6 +807,7 @@ mod tests {
         assert!(validate_fresh_directory(&StoredPeerDirectory {
             peers: vec![unscoped],
             pending_removals: Vec::new(),
+            retired_enrollments: Vec::new(),
         })
         .is_err());
     }
@@ -794,7 +881,10 @@ mod tests {
         let mut directory = PeerDirectory::load(&path).await.unwrap();
         let record = PeerRecord::new("Amy", "iroh://amy", "did:test:amy");
         directory.upsert(record.clone()).await.unwrap();
-        directory.queue_removal(&record).await.unwrap();
+        directory
+            .queue_removal(&record, RemovalCause::Operator)
+            .await
+            .unwrap();
 
         tokio::fs::remove_file(&path).await.unwrap();
         tokio::fs::create_dir(&path).await.unwrap();
@@ -851,6 +941,103 @@ mod tests {
 
         assert_eq!(directory.records()[0].label, "Alpha");
         assert_eq!(directory.records()[1].label, "Zulu");
+    }
+
+    #[tokio::test]
+    async fn removing_an_enrollment_peer_retires_its_authorization_generation() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path().join("peers.json");
+        let mut directory = PeerDirectory::load(&path).await.unwrap();
+        directory
+            .upsert_enrollment_peer(
+                "server-peer",
+                "Enrolled server",
+                "iroh://ticket",
+                "did:key:owner",
+                "network-a",
+                "request-a",
+                "digest-a",
+                "did:key:admin",
+                7,
+                "2099-09-29T00:00:00Z",
+            )
+            .await
+            .unwrap();
+        let removed = directory.records()[0].clone();
+        directory
+            .queue_removal(&removed, RemovalCause::Operator)
+            .await
+            .unwrap()
+            .expect("enrollment record is removed");
+
+        let error = directory
+            .upsert_enrollment_peer(
+                "server-peer",
+                "Enrolled server",
+                "iroh://ticket",
+                "did:key:owner",
+                "network-a",
+                "request-a",
+                "digest-a",
+                "did:key:admin",
+                7,
+                "2099-09-29T00:00:00Z",
+            )
+            .await
+            .expect_err("a locally removed generation must not be reinstalled");
+        assert!(
+            error
+                .to_string()
+                .contains("was removed locally; a new enrollment is required"),
+            "{error}"
+        );
+        let stored = read_stored_directory(&path).await.unwrap();
+        assert_eq!(
+            stored
+                .retired_enrollments
+                .iter()
+                .map(|retired| retired.request_digest.as_str())
+                .collect::<Vec<_>>(),
+            vec!["digest-a"],
+            "removal and retirement must persist in one commit"
+        );
+
+        drop(directory);
+        let mut directory = PeerDirectory::load(&path).await.unwrap();
+        assert_eq!(
+            directory.retired_enrollment_digests(),
+            BTreeSet::from(["digest-a".to_string()]),
+            "a retirement survives a restart"
+        );
+        directory
+            .upsert_enrollment_peer(
+                "server-peer",
+                "Enrolled server",
+                "iroh://ticket",
+                "did:key:owner",
+                "network-a",
+                "request-b",
+                "digest-b",
+                "did:key:admin",
+                8,
+                "2099-10-29T00:00:00Z",
+            )
+            .await
+            .expect("a new enrollment generation installs again");
+
+        directory
+            .prune_retired_enrollments(&BTreeSet::new())
+            .await
+            .unwrap();
+        assert!(
+            directory.retired_enrollment_digests().is_empty(),
+            "a retirement ends with the durable authorization it named"
+        );
+        assert!(read_stored_directory(&path)
+            .await
+            .unwrap()
+            .retired_enrollments
+            .is_empty());
     }
 
     #[tokio::test]

@@ -14,14 +14,14 @@ import {
 import { Spinner } from "@gents/ui/components/spinner";
 import { cn } from "@gents/ui/lib/utils";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
-import type { Shell } from "@/hooks/useShell";
-import { useShellContext } from "@/app/ShellContext";
 import { dockScopeOf, useDockFor } from "@/app/workspace";
 import type { SurfaceContext } from "@/app/surfaces";
 import { useNow } from "@/lib/clock";
 import { duration } from "./tool-summary";
 import { ToolBody, ToolSummary } from "./tool-views";
 import { ToolIcon } from "./tool-icon";
+import { useSessionFacts } from "../hooks/useSelectedSession";
+import { useView } from "@/app/AppContext";
 
 function Entry({
   tool,
@@ -66,35 +66,28 @@ function Entry({
   );
 }
 
-/* the trace as a registered surface: the shell from context, the close
-   through the workspace, so the dock and the phone sheet mount the same thing */
+/* the trace as a registered surface, closed through the workspace, so the
+   dock and the phone sheet mount the same thing */
 export function TraceSurface({ sessionId }: SurfaceContext) {
-  const shell = useShellContext();
   const { closeTab: closeTraceTab } = useDockFor(dockScopeOf("session", sessionId));
-  return (
-    <TracePanel shell={shell} onClose={() => closeTraceTab("trace")} chrome={false} />
-  );
+  return <TracePanel onClose={() => closeTraceTab("trace")} chrome={false} />;
 }
 
 export function TracePanel({
-  shell,
   onClose,
   chrome = true,
 }: {
-  shell: Shell;
   onClose: () => void;
   /** the card and its header; off when the dock draws them */
   chrome?: boolean;
 }) {
-  const session = shell.selectedSession;
-  const tools =
-    session?.timelineItems.flatMap((i) => (i.kind === "toolGroup" ? i.tools : [])) ??
-    [];
-  const running = shell.selectedTrackedRequestId !== null;
-  const [openKey, setOpenKey] = useState<string | null>(null);
-
+  const trackedRequestId = useView((view) => view.trackedRequestId);
+  /* the tool list is kept when the session is written, so a streamed chunk
+     does not rebuild it */
+  const tools = useSessionFacts()?.tools ?? NO_TOOLS;
+  const running = trackedRequestId !== null;
   /* every entry starts collapsed; only the reader opens one */
-  const effectiveOpen = openKey;
+  const [openKey, setOpenKey] = useState<string | null>(null);
 
   return (
     <aside
@@ -132,7 +125,7 @@ export function TracePanel({
             <Entry
               key={t.itemKey}
               tool={t}
-              open={effectiveOpen === t.itemKey}
+              open={openKey === t.itemKey}
               onOpenChange={(o) => setOpenKey(o ? t.itemKey : null)}
             />
           ))}
@@ -165,3 +158,5 @@ function Took({ tool }: { tool: RenderedToolCallView }) {
     </span>
   );
 }
+
+const NO_TOOLS: readonly RenderedToolCallView[] = [];

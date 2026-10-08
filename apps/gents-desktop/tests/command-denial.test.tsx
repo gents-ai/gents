@@ -22,7 +22,6 @@ function deniedToolView(denial?: CommandDenialView): RenderedToolCallView {
   return {
     itemKey: "tool-1",
     toolName: "bash_read_only · sed",
-    status: "failed",
     statusKind: "error",
     presentation: {
       kind: "generic",
@@ -39,6 +38,7 @@ function timeline(tool: RenderedToolCallView): RenderedTimelineItem[] {
   return [
     {
       kind: "toolGroup",
+      messageSequence: null,
       itemKey: "group-1",
       tools: [tool],
     },
