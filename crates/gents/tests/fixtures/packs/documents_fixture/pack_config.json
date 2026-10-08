@@ -45,6 +45,7 @@
       "event_source_id": "fixture-worker",
       "display_name": "fixture-worker",
       "source_collection": "FixtureJob",
+      "correlation_field": "job_id",
       "event_kind": "created",
       "filter": "{ status: { _eq: \"ready\" } }"
     }

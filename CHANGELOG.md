@@ -6,6 +6,12 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- A scenario pack whose expected trigger's event source has no
+  correlation_field is now refused at load — by `gents pack check` and by
+  `gents pack scenario run`/`seed` — naming the trigger and event source
+  (#2339). A run awaits its stages by the seeded job id, which only a
+  correlation_field puts on the fired request, so such a pack previously
+  ran until its await timeout expired.
 - `gents config apply` and `gents server --apply-root` no longer refuse
   configurations the runtime serves: the pre-flight's `{{ doc.* }}`
   template-field check is now the publication owner's rule, so a
