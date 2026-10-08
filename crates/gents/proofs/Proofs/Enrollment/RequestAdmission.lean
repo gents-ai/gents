@@ -382,7 +382,7 @@ def requestGoalInputAllowed (request : AgentRequestSemantics)
 skills, cwd escape, or runtime queue origins. The observed session agent is
 resolved by the session owner; blank/mismatched selection cannot be repaired by
 falling back to the node name. New-session creation passes its selected
-behavior through the same boundary. -/
+agent through the same boundary. -/
 def agentRequestClaimable
     (s : State) (request : AgentRequestSemantics) (admission : AgentRequestAdmission)
     (enrollmentRequest : Option Request) (decision : Option Decision)
@@ -452,9 +452,9 @@ theorem title_requires_runtime_parent_only
   | some parent =>
     simp only [titlePurposeAllowed, hparent] at htitle
     rcases htitle with ⟨hkind, hsource, hrequester, hsigner, _, hinput, _, _, _,
-      _, _, _, hfields, _, hagent, hsession, hbehavior, _, _, _⟩
+      _, _, _, hfields, _, hagent, hsession, hagentSelected, _, _, _⟩
     exact ⟨hkind, hsource, hrequester, hsigner, hinput,
-      evidence, parent, rfl, hparent, hfields, hagent, hsession, hbehavior⟩
+      evidence, parent, rfl, hparent, hfields, hagent, hsession, hagentSelected⟩
 
 theorem goal_input_requires_runtime_control (input : RequestInput)
     (facts : GoalContinuationInput) (kind : AgentRequestAdmissionKind)

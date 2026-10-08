@@ -427,8 +427,8 @@ def taskGoalRecoveryCases : List TaskGoalRecoveryCase :=
       nodeDid, agentId, taskId, fireKey
       request := some { expected with nodeDid := "did:key:z-other-owner" }
       durableGoalPresent := false, creationClaimPresent := false }
-  , { name := "mismatched_behavior_conflicts", nodeDid, agentId, taskId, fireKey
-      request := some { expected with agentId := "other-behavior" }
+  , { name := "mismatched_agent_conflicts", nodeDid, agentId, taskId, fireKey
+      request := some { expected with agentId := "other-agent" }
       durableGoalPresent := false, creationClaimPresent := false }
   , { name := "mismatched_session_conflicts", nodeDid, agentId, taskId, fireKey
       request := some { expected with sessionId := "other-session" }
@@ -576,11 +576,11 @@ def goalReadinessGateCases : List GoalReadinessGateCase :=
       settled := true, cause := .attempt, input := activeInput .completed }
   , { name := "backend_recovery_defers_even_when_settled", observation := .backendRecovering,
       settled := true, cause := .attempt, input := activeInput .completed }
-  , { name := "unsettled_invalid_behavior_defers", observation := .unavailable,
+  , { name := "unsettled_invalid_agent_defers", observation := .unavailable,
       settled := false, cause := .attempt, input := activeInput .completed }
-  , { name := "settled_invalid_behavior_stops_active_goal", observation := .unavailable,
+  , { name := "settled_invalid_agent_stops_active_goal", observation := .unavailable,
       settled := true, cause := .attempt, input := activeInput .completed }
-  , { name := "settled_unassigned_behavior_stops_active_goal", observation := .unassigned,
+  , { name := "settled_unassigned_agent_stops_active_goal", observation := .unassigned,
       settled := true, cause := .attempt, input := activeInput .completed }
   , { name := "ready_completed_attempt_continues_and_clears_retries", observation := .ready true,
       settled := true, cause := .attempt, input := activeInput .completed 1 }
@@ -629,12 +629,12 @@ def readinessName : Readiness → String
 
 def readinessCauseName : Cause → String
   | .attempt => "attempt"
-  | .agentUnavailable => "behavior_unavailable"
+  | .agentUnavailable => "agent_unavailable"
 
 def gatedName : Gated → String
   | .decided decision => decisionName decision
   | .awaitReadiness => "await_readiness"
-  | .agentUnavailable => "behavior_unavailable"
+  | .agentUnavailable => "agent_unavailable"
 
 def goalReadinessGateCaseJson (w : GoalReadinessGateCase) : String :=
   let readiness := observe w.observation w.settled

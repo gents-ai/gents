@@ -1874,7 +1874,7 @@ def caseCoverage : List CoverageEntry :=
 
   , tagged (consumerWithFollowUp "runtime_cases" "RuntimeReconcileCases"
       "agent::runtime::tests::behavior_resolution::explicit_behavior_resolution_matches_lean_binding_cases"
-      "Exercises explicit request/session behavior binding. Readiness, atomic admission and generation lifetime remain router-owner obligations.")
+      "Exercises explicit request/session agent binding. Readiness, atomic admission and generation lifetime remain router-owner obligations.")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp "request_input_cases" "RequestInputCases"
       "conformance::request_input::lean_request_inputs_decode_without_losing_explicit_issuance_facts"
