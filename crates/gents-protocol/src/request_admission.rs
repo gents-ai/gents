@@ -146,7 +146,7 @@ pub struct AgentRequestAdmissionObservation {
     pub target_policy_allows: bool,
     /// The target's `PeerAdmissionAuthority` ACP authorizes the requester DID.
     pub peer_authority_allows: bool,
-    /// `subagent_depth <= AgentPrincipal.max_request_hop` for the target.
+    /// `request_hop <= Node.max_request_hop` for the target.
     pub hop_within_bound: bool,
 }
 
@@ -233,9 +233,9 @@ pub fn project_agent_request_admission_disposition(
 pub struct AgentRequestSigningFields<'a> {
     pub request_id: &'a str,
     pub purpose: RequestPurpose,
-    pub agent_did: &'a str,
+    pub node_did: &'a str,
     pub requester_did: Option<&'a str>,
-    pub behavior_id: &'a str,
+    pub agent_id: &'a str,
     pub session_id: &'a str,
     pub retry_parent_request: Option<&'a str>,
     pub retry_parent_request_doc_id: Option<&'a str>,
@@ -254,14 +254,14 @@ pub struct AgentRequestSigningFields<'a> {
     pub retry_count: Option<i64>,
     pub max_retries: Option<i64>,
     pub valid_until: Option<&'a str>,
-    pub subagent_depth: u32,
+    pub request_hop: u32,
     pub caused_by_parent_request_id: Option<&'a str>,
     pub caused_by_parent_request_doc_id: Option<&'a str>,
     pub caused_by_parent_tool_call_id: Option<&'a str>,
     pub caused_by_parent_tool_call_doc_id: Option<&'a str>,
     pub workspace_id: Option<&'a str>,
     /// Principal scope copied from the verified workspace/source, not a host identity.
-    pub workspace_owner_agent_did: Option<&'a str>,
+    pub workspace_owner_node_did: Option<&'a str>,
     pub workspace_authority: Option<&'a str>,
     pub workspace_seal_hash: Option<&'a str>,
 }
@@ -794,9 +794,9 @@ fn encode_length(length: usize, output: &mut Vec<u8>) {
 pub struct AgentRequestCreate {
     pub request_id: String,
     pub purpose: RequestPurpose,
-    pub agent_did: String,
+    pub node_did: String,
     pub requester_did: String,
-    pub behavior_id: String,
+    pub agent_id: String,
     pub session_id: String,
     pub retry_parent_request: Option<String>,
     pub retry_parent_request_doc_id: Option<String>,
@@ -815,7 +815,7 @@ pub struct AgentRequestCreate {
     pub retry_count: i64,
     pub max_retries: i64,
     pub valid_until: Option<String>,
-    pub subagent_depth: u32,
+    pub request_hop: u32,
     pub caused_by_parent_request_id: Option<String>,
     pub caused_by_parent_request_doc_id: Option<String>,
     pub caused_by_parent_tool_call_id: Option<String>,
@@ -823,7 +823,7 @@ pub struct AgentRequestCreate {
     pub workspace_id: Option<String>,
     /// Signed principal scope; present exactly when workspace_id is present.
     /// Issuance validates this against the existing workspace or authenticated source.
-    pub workspace_owner_agent_did: Option<String>,
+    pub workspace_owner_node_did: Option<String>,
     pub workspace_authority: Option<String>,
     pub workspace_seal_hash: Option<String>,
     pub initial_lifecycle_state: RequestLifecycleState,

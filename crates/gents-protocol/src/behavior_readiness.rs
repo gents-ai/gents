@@ -1,6 +1,6 @@
-//! Canonical runtime-authored behavior-readiness wire contract.
+//! Canonical runtime-authored agent-readiness wire contract.
 //!
-//! Runtime configuration is never treated as proof that a behavior can accept
+//! Runtime configuration is never treated as proof that an agent can accept
 //! work. The source projector admits only installed dispatchers not vetoed by
 //! explicit unavailability or a generation-owned startup demotion. The client
 //! projector then fails closed on missing, malformed, non-ready, or generation-
@@ -11,10 +11,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-pub const BEHAVIOR_READINESS_FORMAT_VERSION: u32 = 1;
+pub const AGENT_READINESS_FORMAT_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum BehaviorReadinessProcessState {
+pub enum AgentReadinessProcessState {
     #[serde(rename = "uninitialized")]
     Uninitialized,
     #[serde(rename = "recovering")]
@@ -27,7 +27,7 @@ pub enum BehaviorReadinessProcessState {
     Shutdown,
 }
 
-impl BehaviorReadinessProcessState {
+impl AgentReadinessProcessState {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Uninitialized => "uninitialized",
@@ -45,14 +45,14 @@ impl BehaviorReadinessProcessState {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum BehaviorReadinessState {
+pub enum AgentReadinessState {
     Ready,
     Unavailable,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum BehaviorReadinessUnavailableReason {
+pub enum AgentReadinessUnavailableReason {
     BehaviorDisabled,
     RuntimeConfigurationInvalid,
     BackendNotConfigured,
@@ -65,7 +65,7 @@ pub enum BehaviorReadinessUnavailableReason {
     ExecutorStartFailed,
 }
 
-impl BehaviorReadinessUnavailableReason {
+impl AgentReadinessUnavailableReason {
     /// Stable presentation-safe admission message. Resolver diagnostics are
     /// deliberately excluded from durable request state and client views.
     pub const fn public_message(self) -> &'static str {
@@ -97,7 +97,7 @@ impl BehaviorReadinessUnavailableReason {
     ];
 }
 
-/// Routing's admission message for a behavior the active runtime does not assign.
+/// Routing's admission message for an agent the active runtime does not assign.
 pub const BEHAVIOR_NOT_ASSIGNED_MESSAGE: &str = "behavior is not assigned to this runtime";
 
 /// Whether `failure_reason` is exactly one of routing's pre-dispatch
@@ -112,43 +112,43 @@ pub fn is_behavior_unavailable_rejection(failure_reason: &str) -> bool {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct BehaviorReadinessEntry {
-    pub behavior_id: String,
-    pub state: BehaviorReadinessState,
-    pub reason: Option<BehaviorReadinessUnavailableReason>,
+pub struct AgentReadinessEntry {
+    pub agent_id: String,
+    pub state: AgentReadinessState,
+    pub reason: Option<AgentReadinessUnavailableReason>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct BehaviorReadinessSnapshot {
+pub struct AgentReadinessSnapshot {
     pub format_version: u32,
-    pub process_state: BehaviorReadinessProcessState,
+    pub process_state: AgentReadinessProcessState,
     pub active_generation: u64,
     pub router_generation: u64,
-    pub default_behavior_id: String,
-    pub behaviors: Vec<BehaviorReadinessEntry>,
+    pub default_agent_id: String,
+    pub agents: Vec<AgentReadinessEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BehaviorReadinessSourceEntry {
-    pub behavior_id: String,
+pub struct AgentReadinessSourceEntry {
+    pub agent_id: String,
     pub dispatcher_present: bool,
-    pub unavailable_reason: Option<BehaviorReadinessUnavailableReason>,
+    pub unavailable_reason: Option<AgentReadinessUnavailableReason>,
     pub startup_demoted: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EffectiveBehaviorReadinessAdmission {
+pub enum EffectiveAgentReadinessAdmission {
     Ready,
-    Unavailable(BehaviorReadinessUnavailableReason),
+    Unavailable(AgentReadinessUnavailableReason),
     Unassigned,
 }
 
-pub fn effective_behavior_readiness_admission(
+pub fn effective_agent_readiness_admission(
     dispatcher_present: bool,
-    unavailable_reason: Option<BehaviorReadinessUnavailableReason>,
+    unavailable_reason: Option<AgentReadinessUnavailableReason>,
     startup_demoted: bool,
-) -> EffectiveBehaviorReadinessAdmission {
+) -> EffectiveAgentReadinessAdmission {
     if startup_demoted {
         EffectiveBehaviorReadinessAdmission::Unavailable(
             BehaviorReadinessUnavailableReason::ExecutorStartFailed,
@@ -164,13 +164,13 @@ pub fn effective_behavior_readiness_admission(
 
 /// Pure source projector shared by the runtime publisher and Lean-generated
 /// conformance harness. Unavailability and startup demotion veto a dispatcher.
-pub fn project_behavior_readiness_source(
-    process_state: BehaviorReadinessProcessState,
+pub fn project_agent_readiness_source(
+    process_state: AgentReadinessProcessState,
     active_generation: u64,
     router_generation: u64,
     default_behavior_id: impl Into<String>,
-    sources: impl IntoIterator<Item = BehaviorReadinessSourceEntry>,
-) -> Result<BehaviorReadinessSnapshot, String> {
+    sources: impl IntoIterator<Item = AgentReadinessSourceEntry>,
+) -> Result<AgentReadinessSnapshot, String> {
     let default_behavior_id = default_behavior_id.into();
     if !is_canonical_id(&default_behavior_id) {
         return Err(format!(
@@ -230,15 +230,15 @@ pub fn project_behavior_readiness_source(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AgentBehaviorReadinessRow {
-    pub agent_did: String,
+pub struct NodeReadinessRow {
+    pub node_did: String,
     pub snapshot_json: String,
     pub updated_at: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum BehaviorReadinessUnknownReason {
+pub enum AgentReadinessUnknownReason {
     ReadinessMissing,
     ReadinessMalformed,
     ReadinessVersionUnsupported,
@@ -250,33 +250,33 @@ pub enum BehaviorReadinessUnknownReason {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ProjectedBehaviorReadiness {
+pub enum ProjectedAgentReadiness {
     Ready,
-    Unavailable(BehaviorReadinessUnavailableReason),
-    Unknown(BehaviorReadinessUnknownReason),
+    Unavailable(AgentReadinessUnavailableReason),
+    Unknown(AgentReadinessUnknownReason),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BehaviorReadinessProjection {
+pub struct AgentReadinessProjection {
     pub active_generation: Option<u64>,
     pub router_generation: Option<u64>,
-    pub default_behavior_id: Option<String>,
+    pub default_agent_id: Option<String>,
     pub updated_at: Option<String>,
-    pub unknown_reason: Option<BehaviorReadinessUnknownReason>,
-    pub behaviors: BTreeMap<String, ProjectedBehaviorReadiness>,
+    pub unknown_reason: Option<AgentReadinessUnknownReason>,
+    pub agents: BTreeMap<String, ProjectedAgentReadiness>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BehaviorReadinessSummary {
-    pub snapshot: BehaviorReadinessSnapshot,
+pub struct AgentReadinessSummary {
+    pub snapshot: AgentReadinessSnapshot,
     pub ready_count: usize,
-    pub unavailable_behaviors: BTreeMap<String, BehaviorReadinessUnavailableReason>,
+    pub unavailable_behaviors: BTreeMap<String, AgentReadinessUnavailableReason>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ProjectedBehaviorReadinessSummary {
-    Observed(BehaviorReadinessSummary),
-    Unknown(BehaviorReadinessUnknownReason),
+pub enum ProjectedAgentReadinessSummary {
+    Observed(AgentReadinessSummary),
+    Unknown(AgentReadinessUnknownReason),
 }
 
 fn is_canonical_id(value: &str) -> bool {
@@ -302,12 +302,12 @@ fn unknown_projection(
 
 /// Decode and validate the runtime-authored row without imposing admission.
 /// Operational views use this for lifecycle/generation observability while
-/// `project_behavior_readiness_summary` additionally requires Ready and an
+/// `project_agent_readiness_summary` additionally requires Ready and an
 /// aligned router generation.
-pub fn decode_behavior_readiness_snapshot(
-    row: &AgentBehaviorReadinessRow,
+pub fn decode_agent_readiness_snapshot(
+    row: &NodeReadinessRow,
     expected_agent_did: &str,
-) -> Result<BehaviorReadinessSnapshot, BehaviorReadinessUnknownReason> {
+) -> Result<AgentReadinessSnapshot, AgentReadinessUnknownReason> {
     if !is_canonical_id(expected_agent_did)
         || row.agent_did != expected_agent_did
         || !is_canonical_id(&row.agent_did)
@@ -347,11 +347,11 @@ pub fn decode_behavior_readiness_snapshot(
 /// closed and never manufacture behavior counts from configuration rows.
 /// The clock argument is retained for source compatibility; document age does
 /// not establish runtime liveness. Transport health has its own database owner.
-pub fn project_behavior_readiness_summary(
-    row: Option<&AgentBehaviorReadinessRow>,
+pub fn project_agent_readiness_summary(
+    row: Option<&NodeReadinessRow>,
     expected_agent_did: &str,
     _observed_at: DateTime<Utc>,
-) -> ProjectedBehaviorReadinessSummary {
+) -> ProjectedAgentReadinessSummary {
     let Some(row) = row else {
         return ProjectedBehaviorReadinessSummary::Unknown(
             BehaviorReadinessUnknownReason::ReadinessMissing,
@@ -397,13 +397,13 @@ pub fn project_behavior_readiness_summary(
 /// states. Configured identifiers are validated exactly, never normalized.
 /// Readiness changes only when the runtime publishes a semantic change.
 /// The clock argument is retained for source compatibility, not a liveness lease.
-pub fn project_behavior_readiness<'a>(
-    row: Option<&AgentBehaviorReadinessRow>,
+pub fn project_agent_readiness<'a>(
+    row: Option<&NodeReadinessRow>,
     expected_agent_did: &str,
     configured_behavior_ids: impl IntoIterator<Item = &'a str>,
     configured_default_behavior_id: Option<&str>,
     _observed_at: DateTime<Utc>,
-) -> BehaviorReadinessProjection {
+) -> AgentReadinessProjection {
     let mut behavior_ids = BTreeSet::new();
     let mut configured_ids_malformed = false;
     for behavior_id in configured_behavior_ids {
