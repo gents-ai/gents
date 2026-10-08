@@ -1284,7 +1284,7 @@ mod tests {
         (
             doc_id.to_string(),
             OutputSegment {
-                agent_did: "did:key:z6MkAgent".to_string(),
+                node_did: "did:key:z6MkAgent".to_string(),
                 requester_did: None,
                 session_id: "session-1".to_string(),
                 request_doc_id: "request-1".to_string(),
@@ -2031,7 +2031,7 @@ mod tests {
         TranscriptMessage {
             message_key: "message-1".to_owned(),
             session_id: "session-1".to_owned(),
-            agent_did: "did:key:z6MkAgent".to_owned(),
+            node_did: "did:key:z6MkAgent".to_owned(),
             requester_did: None,
             request_doc_id: Some("request-1".to_owned()),
             publication: MessagePublication::RequestExecution {

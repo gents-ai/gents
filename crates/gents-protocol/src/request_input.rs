@@ -1,4 +1,4 @@
-//! Typed invocation inputs. Configuration remains on the behavior/context/profile;
+//! Typed invocation inputs. Configuration remains on the agent/context/profile;
 //! these values describe one request and never widen its configured capabilities.
 
 use serde::{Deserialize, Serialize};
