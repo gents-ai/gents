@@ -213,7 +213,7 @@ fn request_ids_for_docs(rows: &[AgentRequestRow], docs: &[usize]) -> Vec<String>
 #[test]
 fn session_snapshot_binds_generated_session_turn_cases() {
     let cases = lean_vocab_test::lean_client_session_turn_cases();
-    assert_eq!(cases.len(), 12);
+    assert_eq!(cases.len(), 13);
     for case in cases {
         let rows = lean_session_rows("session-1", &case.rows);
         let newest = rows.last().expect("case has rows");

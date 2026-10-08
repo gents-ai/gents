@@ -54,6 +54,10 @@ def scenarios : List (String × List Row) :=
       , row 2 101 .terminal (queuedAfter := some 100)
       , row 3 102 .unclaimed (queuedAfter := some 101)
       , row 4 103 .unclaimed (queuedAfter := some 102) ])
+  , ("folded_into_retried_head_resolves_to_its_retry",
+      [ row 1 100 .terminal
+      , row 2 102 .active (retryParent := some 100)
+      , row 3 101 .terminal (foldedInto := some 1) (queuedAfter := some 100) ])
   , ("other_requester_predecessor_is_not_followed",
       [ row 1 100 .active (requester := 2)
       , row 2 101 .unclaimed (queuedAfter := some 100) ])
