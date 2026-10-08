@@ -44,9 +44,9 @@ structure TitleParentLink where
 the parent row. Its lifecycle state is intentionally not an admission input. -/
 structure TitleParentEvidence where
   link : TitleParentLink
-  agentDid : Did
+  nodeDid : Did
   sessionId : String
-  behaviorId : String
+  agentId : String
   logicalBindingCurrent : Bool
   physicalBindingCurrent : Bool
   deriving DecidableEq, Repr
@@ -60,14 +60,14 @@ def titleParentFields (link : TitleParentLink) : CanonicalFields :=
 
 /-- Exact immutable request semantics covered by the request signature. -/
 structure AgentRequestSemantics where
-  /-- Signed causal hop (`subagent_depth`, see `CausalHop`), encoded by
+  /-- Signed causal hop (`request_hop`, see `CausalHop`), encoded by
   `hopField` as the leading signed semantic field. -/
   hop : Nat := 0
   requestId : String
   purpose : RequestPurpose
   targetAgent : Did
   requesterDid : Did
-  behaviorId : String
+  agentId : String
   sessionId : String
   content : String
   input : RequestInput
@@ -83,7 +83,7 @@ structure AgentRequestSemantics where
 /-- Abstract signed element for the causal hop, the only hop in the signed
 fields. As with `titleParentFields`, these model bytes (one field whose length
 is the hop) are not the native signature payload: native signing encodes the
-hop through its existing decimal `subagent_depth` encoder, and the adapter maps
+hop through its existing decimal `request_hop` encoder, and the adapter maps
 the typed `hop` (emitted as a typed JSON field) to that encoder. Both encodings
 are injective, so a changed hop always changes the signed fields. -/
 def hopField (hop : Nat) : WireBytes := List.replicate hop 0
@@ -91,7 +91,7 @@ def hopField (hop : Nat) : WireBytes := List.replicate hop 0
 def agentRequestSemanticFields (request : AgentRequestSemantics) : CanonicalFields :=
   [hopField request.hop] ++ textFieldsToBytes
     [ request.requestId, request.purpose.toWire, request.targetAgent, request.requesterDid
-    , request.behaviorId, request.sessionId, request.content ] ++
+    , request.agentId, request.sessionId, request.content ] ++
   requestInputFields request.input ++ textFieldsToBytes
     [request.createdAt, request.triggerConfigDocumentId] ++
   request.retryFields ++ request.triggerFields ++ request.parentFields ++ requestWorkspaceFields request.workspace
@@ -269,9 +269,9 @@ def titlePurposeAllowed
           parent.link.requestId ≠ request.requestId ∧
           request.parentFields = titleParentFields parent.link ∧
           admission.sourceRequestId = parent.link.requestId ∧
-          parent.agentDid = request.targetAgent ∧
+          parent.nodeDid = request.targetAgent ∧
           parent.sessionId = request.sessionId ∧
-          parent.behaviorId = request.behaviorId ∧
+          parent.agentId = request.agentId ∧
           parent.logicalBindingCurrent = true ∧
           parent.physicalBindingCurrent = true ∧
           evidence.sourceDocumentBindingCurrent = true
@@ -390,7 +390,7 @@ def agentRequestClaimable
     (branchFieldsExact pendingDeadlineAbsent : Bool) (target : TargetAuthority)
     (sessionBehavior : String) (skillIds : List String)
     (cwdAllowed : String → Bool) (queueSourceAllowed : SessionQueue.QueueSource → Bool) : Prop :=
-  behaviorMatchesSession request.behaviorId sessionBehavior = true ∧
+  behaviorMatchesSession request.agentId sessionBehavior = true ∧
   inputWithinContext request.input skillIds cwdAllowed queueSourceAllowed = true ∧
   agentRequestAdmissible s request admission enrollmentRequest decision authorizationFresh
     runtimeEvidence branchFieldsExact pendingDeadlineAbsent target ∧
@@ -420,7 +420,7 @@ theorem claim_requires_authenticated_input
       sessionBehavior skills cwdAllowed queueAllowed) :
     admission.signatureValid = true ∧
     admission.signedFields = agentRequestAdmissionFields request admission ∧
-    behaviorMatchesSession request.behaviorId sessionBehavior = true ∧
+    behaviorMatchesSession request.agentId sessionBehavior = true ∧
     inputWithinContext request.input skills cwdAllowed queueAllowed = true := by
   exact ⟨h.2.2.1.1, h.2.2.1.2.1, h.1, h.2.1⟩
 
@@ -440,9 +440,9 @@ theorem title_requires_runtime_parent_only
     ∃ evidence parent,
       runtimeEvidence = some evidence ∧ evidence.titleParent = some parent ∧
       request.parentFields = titleParentFields parent.link ∧
-      parent.agentDid = request.targetAgent ∧
+      parent.nodeDid = request.targetAgent ∧
       parent.sessionId = request.sessionId ∧
-      parent.behaviorId = request.behaviorId := by
+      parent.agentId = request.agentId := by
   have htitle : titlePurposeAllowed request admission runtimeEvidence := by
     simpa [requestPurposeAllowed, hpurpose] using hadmit.2.2.2.2.2.1
   rcases runtimeEvidence with _ | evidence

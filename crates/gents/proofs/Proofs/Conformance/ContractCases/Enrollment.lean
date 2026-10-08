@@ -209,14 +209,14 @@ def titleParentLink : TitleParentLink :=
   { requestId := "p", documentId := "P" }
 
 def titleParentEvidence : TitleParentEvidence :=
-  { link := titleParentLink, agentDid := "a"
-  , sessionId := "s", behaviorId := "b"
+  { link := titleParentLink, nodeDid := "a"
+  , sessionId := "s", agentId := "b"
   , logicalBindingCurrent := true, physicalBindingCurrent := true }
 
 def titleRequest : AgentRequestSemantics :=
   { requestId := "t", purpose := .titleAudit
   , targetAgent := "a", requesterDid := "a"
-  , behaviorId := "b", sessionId := "s"
+  , agentId := "b", sessionId := "s"
   , content := "Generate a title", input := {}, createdAt := "2026-09-24T00:00:00Z"
   , triggerConfigDocumentId := "", retryFields := [], triggerFields := []
   , parentFields := titleParentFields titleParentLink, workspace := {} }
