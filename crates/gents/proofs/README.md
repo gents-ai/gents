@@ -1827,25 +1827,58 @@ destination; an explicit nonempty authority conflicts and is denied.
 
 ## PersonaRequest accounting
 
-`PeerRegistryDiscovery/PersonaRequest.lean` modeled signed cross-node persona commands and is deleted. Every item is re-homed (RH) to the SelfConfig agent-decision owners or dropped (DROP) because it only made sense for a command DTO carried between nodes. A node edits its own Agents through `SelfConfig.step` under document ACP, so there is no requester, enrollment, signature or foreign `agent_did`.
+Successors of `PeerRegistryDiscovery/PersonaRequest.lean`. Cases: `SelfConfig.ContractCases.agent_decision_cases_regressions` (JSON `agent_decision_cases`), `agent_materialization_cases_regressions`.
 
-| Old item | Disposition |
+| Old | Successor |
 | --- | --- |
-| `FieldUpdate`, `omitted_field_preserves`, `explicit_clear_is_distinct` | RH: patch entry absent/`clear`/`set` is the field-update vocabulary; `SelfConfig.omitted_field_preserved`, `explicit_clear_removes_writable`, `explicit_set_replaces_writable` |
-| `profile_only_edit_preserves_other_fields`, `asProfileOnlyEdit` | RH: `single_field_edit_preserves_others` |
-| `name_only_edit_does_not_require_profile`, `edit{Name,Prompt,Profile}Ok` | RH: `editNameOk`, `editPromptOk`, `editProfileOk`, `omitted_edit_fields_admitted`, `profile_clear_rejected`; cases `agent_edit_field_cases_regressions` |
-| `editPresetOk`, `presetKnown`, `presetCreateOk`, `createModeOk` preset arm, `admitted_preset_create_has_prompt` | RH for the prompt guarantee (`fresh_create_requires_prompt`); DROP preset names (composer DTO sugar: Tools authority is authored directly as a Tools document) |
-| `createPromptOk`, `cloneOk` | RH: `agentCreateInputOk`, `clone_requires_enabled_source`; cases `agent_create_input_cases_regressions` |
-| `profileOk`, `admitted_create_profile`, `blank_create_profile_rejected` | RH: `blank_create_profile_rejected`, `unpublished_create_profile_rejected` |
-| `nameOk` | RH: in `agentCreateInputOk` |
-| `behaviorPresent`, `behaviorMutable`, `opOk` (disable/edit), `protected_edit_or_disable_rejected`, `default_disable_rejected` | RH: `AgentCatalog.present/mutable`, `agentDecision` and its theorems (existed); cases `agent_decision_cases` |
-| `defaultBehaviorAfter`, `requested_promotion_selects_applied_behavior`, `omitted_promotion_keeps_existing_default` | RH: `defaultAgentAfter`, `requested_promotion_selects_applied_agent`, `omitted_promotion_keeps_default` |
-| `materializedSession`, `_iff`, `disable_has_no_materialized_session` | RH: `materializedAgent` over `Configuration.resolveAgent`, `materializedAgent_iff`, `disable_materializes_nothing`, `rejected_decision_materializes_nothing` |
-| `rootSelectionOk`, `rootOk` | RH: `RootAdmission.rootSelectionOk` (existed) |
-| `rootEditSelectionOk`, `editRootOk` | RH: `RootAdmission.rootEditSelectionOk` |
-| `selectedToolFlag`, `selectedNetworkMode`, `networkSelectionAllowed` and their theorems, `siblingToolsAllowed` and theorems, `graphToolPresented` and theorems | RH: `SelfConfig/Selection` (existed); `admitted_network_selection_does_not_widen` is `sibling_tools_operation_narrows_network` |
-| `Op`, `Request`, `BehaviorCatalog`, `Catalog.{roots,rootPolicyConfigured,profiles}` | RH: `AgentOp`, `AgentCatalog`, `AgentCreateInput`; roots/profiles are explicit arguments |
-| `targetBehaviorId` | DROP: create and edit/disable all carry the Agent id as `target` |
-| `agentOk`, `unknown_agent_resolves_nothing`, `Catalog.agents` | DROP: the actor is the node itself; a request naming a foreign or phantom `agent_did` cannot exist |
-| `EnrollmentAuthorization`, `enrollmentAuthorizationOk`, `Catalog.authorization`, `unauthorized_command_resolves_nothing` | DROP: cross-node enrollment generations; authority is document ACP on the node's own DID |
-| `AuthorityKind`, `localSelfAuthorizationOk`, `authorizationOk`, `unsigned_local_command_denied`, `cross_principal_local_command_denied` | DROP: signature on a command DTO; there is no signed command, and no-lockout/ownership are `keepsControl` and the owner key |
+| `Op` | `SelfConfig.AgentOp`; inputs carried by `SelfConfig.AgentOperation` |
+| `Request` | `SelfConfig.AgentOperation` with `target`, `makeDefault` |
+| `BehaviorCatalog` | `SelfConfig.AgentCatalog` |
+| `Catalog.profiles` | `profiles` argument of `agentOperationAdmitted` |
+| `Catalog.roots`, `Catalog.rootPolicyConfigured` | arguments of `RootAdmission.rootSelectionOk` |
+| `Catalog.agents` | dropped: the actor is the node itself |
+| `Catalog.authorization`, `EnrollmentAuthorization`, `enrollmentAuthorizationOk` | dropped: authority is document ACP on the node DID |
+| `AuthorityKind`, `localSelfAuthorizationOk`, `authorizationOk` | dropped: no signed command exists |
+| `agentOk` | dropped: no foreign actor can be named |
+| `admits` | `SelfConfig.agentOperationAdmitted` |
+| `opOk` | `SelfConfig.agentDecision` ∧ `SelfConfig.agentOperationInputOk` |
+| `targetBehaviorId` | dropped: every operation carries the Agent id as `target` |
+| `FieldUpdate`, `FieldUpdate.apply` | `SelfConfig.PatchOp` (absent / `clear` / `set`), `SelfConfig.applyPatch` |
+| `omitted_field_preserves` | `SelfConfig.omitted_field_preserved` |
+| `explicit_clear_is_distinct` | `SelfConfig.explicit_clear_removes_writable`, `SelfConfig.explicit_set_replaces_writable` |
+| `nameOk` | conjunct of `SelfConfig.agentCreateInputOk` |
+| `createPromptOk` | conjunct of `SelfConfig.agentCreateInputOk`; `fresh_create_requires_prompt` |
+| `profileOk` | conjunct of `SelfConfig.agentCreateInputOk` |
+| `cloneOk` | conjunct of `SelfConfig.agentCreateInputOk`; `clone_requires_enabled_source` |
+| `presetKnown`, `presetCreateOk`, `createModeOk`, `editPresetOk` | dropped: Tools authority is authored as a Tools document |
+| `rootSelectionOk`, `rootOk` | `RootAdmission.rootSelectionOk` |
+| `rootEditSelectionOk`, `editRootOk` | `RootAdmission.rootEditSelectionOk` |
+| `behaviorPresent` | `SelfConfig.AgentCatalog.present` |
+| `behaviorMutable` | `SelfConfig.AgentCatalog.mutable` |
+| `editNameOk` | `SelfConfig.editNameOk` |
+| `editPromptOk` | `SelfConfig.editPromptOk` |
+| `editProfileOk` | `SelfConfig.editProfileOk`; `profile_clear_rejected` |
+| edit conjuncts of `opOk` | `SelfConfig.agentEditFieldsOk`; `admitted_edit_fields_ok`, `materialized_edit_fields_ok` |
+| `asNameOnlyEdit` | `SelfConfig.AgentOperation.edit { name := some (.set name) }` |
+| `asProfileOnlyEdit` | `SelfConfig.AgentOperation.edit { profile := some (.set profile) }` |
+| `name_only_edit_does_not_require_profile` | `SelfConfig.name_only_edit_does_not_require_profile` |
+| `profile_only_edit_preserves_other_fields` | `SelfConfig.single_field_edit_preserves_others` |
+| `admitted_create_profile` | `SelfConfig.admitted_create_profile` (over `agentOperationAdmitted`) |
+| `blank_create_profile_rejected` | `SelfConfig.blank_create_profile_rejected`, `unpublished_create_profile_rejected` |
+| `admitted_preset_create_has_prompt` | `SelfConfig.admitted_create_input_ok`, `materialized_create_input_ok`, `fresh_create_requires_prompt` |
+| `protected_edit_or_disable_rejected` | `SelfConfig.protected_edit_or_disable_rejected` |
+| `default_disable_rejected` | `SelfConfig.default_disable_rejected` |
+| `defaultBehaviorAfter` | `SelfConfig.defaultAgentAfter` |
+| `requested_promotion_selects_applied_behavior` | `SelfConfig.requested_promotion_selects_applied_agent` |
+| `omitted_promotion_keeps_existing_default` | `SelfConfig.omitted_promotion_keeps_default` |
+| `materializedSession` | `SelfConfig.materializedAgent` |
+| `materializedSession_iff` | `SelfConfig.materializedAgent_iff` |
+| `disable_has_no_materialized_session` | `SelfConfig.disable_materializes_nothing` |
+| `unauthorized_command_resolves_nothing` | dropped: no command authorization; `rejected_operation_materializes_nothing` covers rejected admission |
+| `unknown_agent_resolves_nothing` | dropped: no foreign actor can be named |
+| `unsigned_local_command_denied`, `cross_principal_local_command_denied` | dropped: no signed command exists |
+| `selectedToolFlag`, `omitted_tool_selection_preserves`, `explicit_tool_selection_wins` | same names in `SelfConfig/Selection` |
+| `selectedNetworkMode`, `networkSelectionAllowed`, `omitted_network_selection_preserves`, `only_disabled_network_selection_admitted` | same names in `SelfConfig/Selection` |
+| `admitted_network_selection_does_not_widen` | `SelfConfig.sibling_tools_operation_narrows_network` |
+| `siblingToolsAllowed`, `protected_sibling_tools_denied`, `unshared_owned_sibling_tools_allowed` | same names in `SelfConfig/Selection` |
+| `graphToolPresented`, `graph_tools_without_configuration`, `configuration_does_not_grant_graph_tools` | same names in `SelfConfig/Selection` |

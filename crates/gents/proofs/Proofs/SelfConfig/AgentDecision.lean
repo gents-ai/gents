@@ -165,6 +165,77 @@ theorem single_field_edit_preserves_others (t : Target) (doc : Doc) (e : PatchEn
   unfold applyEntry
   split <;> simp [h]
 
+/-! ## Operation admission -/
+
+/-- Edited Agent fields; `none` omits a field and keeps its stored value. -/
+structure AgentEditFields where
+  name : Option PatchOp := none
+  systemPrompt : Option PatchOp := none
+  profile : Option PatchOp := none
+  deriving DecidableEq, Repr
+
+def agentEditFieldsOk (profiles : List String) (f : AgentEditFields) : Bool :=
+  editNameOk f.name && editPromptOk f.systemPrompt && editProfileOk profiles f.profile
+
+/-- An agent management operation with the inputs its admission inspects. -/
+inductive AgentOperation where
+  | create (input : AgentCreateInput)
+  | edit (fields : AgentEditFields)
+  | disable
+  deriving DecidableEq, Repr
+
+def AgentOperation.op : AgentOperation → AgentOp
+  | .create _ => .create
+  | .edit _ => .edit
+  | .disable => .disable
+
+def agentOperationInputOk (profiles : List String) (c : AgentCatalog) :
+    AgentOperation → Bool
+  | .create i => agentCreateInputOk profiles c i
+  | .edit f => agentEditFieldsOk profiles f
+  | .disable => true
+
+/-- The single operation-admission owner: catalog decision and modeled inputs
+together. Materialization admits only through it, because canonical resolution
+accepts an absent context and so cannot restore the create-prompt guarantee. -/
+def agentOperationAdmitted (profiles : List String) (c : AgentCatalog)
+    (operation : AgentOperation) (target : String) (makeDefault : Bool) : Bool :=
+  agentDecision c operation.op target makeDefault && agentOperationInputOk profiles c operation
+
+theorem admitted_create_input_ok (profiles : List String) (c : AgentCatalog)
+    (i : AgentCreateInput) (target : String) (makeDefault : Bool)
+    (h : agentOperationAdmitted profiles c (.create i) target makeDefault = true) :
+    agentCreateDecision c target = true ∧ agentCreateInputOk profiles c i = true := by
+  simpa [agentOperationAdmitted, agentOperationInputOk, AgentOperation.op,
+    agentDecision] using h
+
+/-- Every admitted create, fresh or clone, names a nonblank published profile. -/
+theorem admitted_create_profile (profiles : List String) (c : AgentCatalog)
+    (i : AgentCreateInput) (target : String) (makeDefault : Bool)
+    (h : agentOperationAdmitted profiles c (.create i) target makeDefault = true) :
+    i.profile.trim ≠ "" ∧ i.profile ∈ profiles := by
+  have hi := (admitted_create_input_ok profiles c i target makeDefault h).2
+  simp only [agentCreateInputOk, Bool.and_eq_true, bne_iff_ne, ne_eq] at hi
+  exact ⟨hi.1.1.1.2, by simpa using hi.1.1.2⟩
+
+theorem admitted_edit_fields_ok (profiles : List String) (c : AgentCatalog)
+    (f : AgentEditFields) (target : String) (makeDefault : Bool)
+    (h : agentOperationAdmitted profiles c (.edit f) target makeDefault = true) :
+    agentEditDecision c target = true ∧ agentEditFieldsOk profiles f = true := by
+  simpa [agentOperationAdmitted, agentOperationInputOk, AgentOperation.op,
+    agentDecision] using h
+
+/-- A name-only edit omits the profile and is admitted without one. -/
+theorem name_only_edit_does_not_require_profile (profiles : List String)
+    (c : AgentCatalog) (target name : String) (makeDefault : Bool)
+    (hpresent : c.present target = true) (hp : target ∉ c.protectedIds)
+    (hname : name ≠ "") :
+    agentOperationAdmitted profiles c (.edit { name := some (.set name) }) target
+      makeDefault = true := by
+  simp [agentOperationAdmitted, agentOperationInputOk, AgentOperation.op, agentDecision,
+    agentEditFieldsOk, editNameOk, editPromptOk, editProfileOk,
+    unprotected_edit_accepted c target hpresent hp, hname]
+
 /-! ## Default selection and materialization -/
 
 /-- Default selection is part of the same admitted create/edit publication and
@@ -186,36 +257,79 @@ theorem omitted_promotion_keeps_default (preDefault applied : String) (op : Agen
 configuration, supplied by the shared authoring loader as a candidate registry.
 Disable is admitted but starts no session. Candidate construction is a loader
 refinement obligation. -/
-def materializedAgent (c : AgentCatalog) (op : AgentOp) (target : String)
-    (makeDefault : Bool) (candidate : Configuration.Registry) (node : String) :
+def materializedAgent (profiles : List String) (c : AgentCatalog)
+    (operation : AgentOperation) (target : String) (makeDefault : Bool)
+    (candidate : Configuration.Registry) (node : String) :
     Option Configuration.ResolvedSessionConfig :=
-  if agentDecision c op target makeDefault = true ∧ op ≠ .disable then
+  if agentOperationAdmitted profiles c operation target makeDefault = true
+      ∧ operation ≠ .disable then
     (Configuration.resolveAgent candidate node target).toOption
   else none
 
-theorem materializedAgent_iff (c : AgentCatalog) (op : AgentOp) (target : String)
-    (makeDefault : Bool) (candidate : Configuration.Registry) (node : String)
+theorem materializedAgent_iff (profiles : List String) (c : AgentCatalog)
+    (operation : AgentOperation) (target : String) (makeDefault : Bool)
+    (candidate : Configuration.Registry) (node : String)
     (session : Configuration.ResolvedSessionConfig) :
-    materializedAgent c op target makeDefault candidate node = some session ↔
-      agentDecision c op target makeDefault = true ∧ op ≠ .disable ∧
-      Configuration.resolveAgent candidate node target = .ok session := by
+    materializedAgent profiles c operation target makeDefault candidate node = some session ↔
+      agentOperationAdmitted profiles c operation target makeDefault = true
+        ∧ operation ≠ .disable
+        ∧ Configuration.resolveAgent candidate node target = .ok session := by
   unfold materializedAgent
-  by_cases h : agentDecision c op target makeDefault = true ∧ op ≠ .disable
+  by_cases h : agentOperationAdmitted profiles c operation target makeDefault = true
+      ∧ operation ≠ .disable
   · simp only [if_pos h]
     cases hr : Configuration.resolveAgent candidate node target <;>
       simp_all [Except.toOption]
   · simp only [if_neg h, reduceCtorEq]
     tauto
 
-theorem rejected_decision_materializes_nothing (c : AgentCatalog) (op : AgentOp)
-    (target : String) (makeDefault : Bool) (candidate : Configuration.Registry)
-    (node : String) (h : agentDecision c op target makeDefault = false) :
-    materializedAgent c op target makeDefault candidate node = none := by
+theorem rejected_operation_materializes_nothing (profiles : List String)
+    (c : AgentCatalog) (operation : AgentOperation) (target : String)
+    (makeDefault : Bool) (candidate : Configuration.Registry) (node : String)
+    (h : agentOperationAdmitted profiles c operation target makeDefault = false) :
+    materializedAgent profiles c operation target makeDefault candidate node = none := by
   simp [materializedAgent, h]
 
-theorem disable_materializes_nothing (c : AgentCatalog) (target : String)
-    (makeDefault : Bool) (candidate : Configuration.Registry) (node : String) :
-    materializedAgent c .disable target makeDefault candidate node = none := by
+theorem rejected_create_input_materializes_nothing (profiles : List String)
+    (c : AgentCatalog) (i : AgentCreateInput) (target : String) (makeDefault : Bool)
+    (candidate : Configuration.Registry) (node : String)
+    (h : agentCreateInputOk profiles c i = false) :
+    materializedAgent profiles c (.create i) target makeDefault candidate node = none :=
+  rejected_operation_materializes_nothing profiles c _ target makeDefault candidate node
+    (by simp [agentOperationAdmitted, agentOperationInputOk, h])
+
+theorem rejected_edit_fields_materialize_nothing (profiles : List String)
+    (c : AgentCatalog) (f : AgentEditFields) (target : String) (makeDefault : Bool)
+    (candidate : Configuration.Registry) (node : String)
+    (h : agentEditFieldsOk profiles f = false) :
+    materializedAgent profiles c (.edit f) target makeDefault candidate node = none :=
+  rejected_operation_materializes_nothing profiles c _ target makeDefault candidate node
+    (by simp [agentOperationAdmitted, agentOperationInputOk, h])
+
+theorem materialized_create_input_ok (profiles : List String) (c : AgentCatalog)
+    (i : AgentCreateInput) (target : String) (makeDefault : Bool)
+    (candidate : Configuration.Registry) (node : String)
+    (session : Configuration.ResolvedSessionConfig)
+    (h : materializedAgent profiles c (.create i) target makeDefault candidate node
+      = some session) :
+    agentCreateInputOk profiles c i = true :=
+  (admitted_create_input_ok profiles c i target makeDefault
+    ((materializedAgent_iff _ _ _ _ _ _ _ _).mp h).1).2
+
+theorem materialized_edit_fields_ok (profiles : List String) (c : AgentCatalog)
+    (f : AgentEditFields) (target : String) (makeDefault : Bool)
+    (candidate : Configuration.Registry) (node : String)
+    (session : Configuration.ResolvedSessionConfig)
+    (h : materializedAgent profiles c (.edit f) target makeDefault candidate node
+      = some session) :
+    agentEditFieldsOk profiles f = true :=
+  (admitted_edit_fields_ok profiles c f target makeDefault
+    ((materializedAgent_iff _ _ _ _ _ _ _ _).mp h).1).2
+
+theorem disable_materializes_nothing (profiles : List String) (c : AgentCatalog)
+    (target : String) (makeDefault : Bool) (candidate : Configuration.Registry)
+    (node : String) :
+    materializedAgent profiles c .disable target makeDefault candidate node = none := by
   simp [materializedAgent]
 
 end SelfConfig

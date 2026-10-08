@@ -521,10 +521,13 @@ theorem self_config_cases_cover_reselection :
         && w.accepted && !w.row.held.packInstall)) = true := by
   native_decide
 
+def publishedProfiles : List String := ["fast", "deep"]
+
 structure AgentDecisionRow where
   name : String
   catalog : AgentCatalog
-  op : AgentOp
+  profiles : List String := publishedProfiles
+  operation : AgentOperation
   target : String
   makeDefault : Bool := false
   deriving Repr
@@ -539,77 +542,152 @@ def agentCatalog : AgentCatalog :=
   , protectedIds := ["engineer"]
   , defaultId := some "default" }
 
+def emptyAgentCatalog : AgentCatalog :=
+  { agents := [], protectedIds := [], defaultId := none }
+
+def freshCreate : AgentCreateInput :=
+  { name := "reviewer", systemPrompt := "Review diffs.", profile := "fast" }
+
+/-- Rows cover the catalog decision for every operation and each create-input
+and edit-field predicate; verdicts come from `agentOperationAdmitted`. -/
 def agentDecisionScenarios : List AgentDecisionRow :=
   [ { name := "agent_default_disable_rejected"
-    , catalog := agentCatalog, op := .disable, target := "default" }
+    , catalog := agentCatalog, operation := .disable, target := "default" }
   , { name := "agent_protected_edit_rejected"
-    , catalog := agentCatalog, op := .edit, target := "engineer" }
+    , catalog := agentCatalog, operation := .edit { profile := some (.set "deep") }
+    , target := "engineer" }
   , { name := "agent_protected_disable_rejected"
-    , catalog := agentCatalog, op := .disable, target := "engineer" }
+    , catalog := agentCatalog, operation := .disable, target := "engineer" }
   , { name := "agent_non_default_disable_accepted"
-    , catalog := agentCatalog, op := .disable, target := "worker" }
+    , catalog := agentCatalog, operation := .disable, target := "worker" }
   , { name := "agent_disable_while_designating_default_rejected"
-    , catalog := agentCatalog, op := .disable, target := "worker", makeDefault := true }
+    , catalog := agentCatalog, operation := .disable, target := "worker", makeDefault := true }
   , { name := "agent_unprotected_edit_accepted"
-    , catalog := agentCatalog, op := .edit, target := "worker" }
+    , catalog := agentCatalog, operation := .edit { profile := some (.set "deep") }
+    , target := "worker" }
   , { name := "agent_edit_missing_rejected"
-    , catalog := agentCatalog, op := .edit, target := "ghost" }
+    , catalog := agentCatalog, operation := .edit { profile := some (.set "deep") }
+    , target := "ghost" }
+  , { name := "agent_edit_omitted_fields_accepted"
+    , catalog := agentCatalog, operation := .edit {}, target := "worker" }
+  , { name := "agent_edit_name_only_without_profile_accepted"
+    , catalog := agentCatalog, operation := .edit { name := some (.set "Worker") }
+    , target := "worker" }
+  , { name := "agent_edit_name_clear_accepted"
+    , catalog := agentCatalog, operation := .edit { name := some .clear }, target := "worker" }
+  , { name := "agent_edit_blank_name_rejected"
+    , catalog := agentCatalog, operation := .edit { name := some (.set "") }
+    , target := "worker" }
+  , { name := "agent_edit_blank_prompt_rejected"
+    , catalog := agentCatalog, operation := .edit { systemPrompt := some (.set "  ") }
+    , target := "worker" }
+  , { name := "agent_edit_profile_clear_rejected"
+    , catalog := agentCatalog, operation := .edit { profile := some .clear }
+    , target := "worker" }
+  , { name := "agent_edit_unpublished_profile_rejected"
+    , catalog := agentCatalog, operation := .edit { profile := some (.set "ghost") }
+    , target := "worker" }
   , { name := "agent_create_fresh_id_accepted"
-    , catalog := agentCatalog, op := .create, target := "reviewer" }
+    , catalog := agentCatalog, operation := .create freshCreate, target := "reviewer" }
   , { name := "agent_create_existing_id_rejected"
-    , catalog := agentCatalog, op := .create, target := "worker" } ]
+    , catalog := agentCatalog, operation := .create freshCreate, target := "worker" }
+  , { name := "agent_create_blank_profile_rejected"
+    , catalog := agentCatalog, operation := .create { freshCreate with profile := " " }
+    , target := "reviewer" }
+  , { name := "agent_create_unpublished_profile_rejected"
+    , catalog := agentCatalog, operation := .create { freshCreate with profile := "ghost" }
+    , target := "reviewer" }
+  , { name := "agent_create_fresh_without_prompt_rejected"
+    , catalog := agentCatalog, operation := .create { freshCreate with systemPrompt := " " }
+    , target := "reviewer" }
+  , { name := "agent_create_fresh_empty_prompt_empty_catalog_rejected"
+    , catalog := emptyAgentCatalog, profiles := ["fast"]
+    , operation := .create { name := "worker", systemPrompt := "", profile := "fast" }
+    , target := "worker" }
+  , { name := "agent_create_clone_inherits_prompt_accepted"
+    , catalog := agentCatalog
+    , operation := .create { freshCreate with systemPrompt := "", profile := "deep"
+                                            , cloneFrom := "worker" }
+    , target := "reviewer" }
+  , { name := "agent_create_clone_disabled_source_rejected"
+    , catalog := agentCatalog
+    , operation := .create { freshCreate with systemPrompt := "", profile := "deep"
+                                            , cloneFrom := "idle" }
+    , target := "reviewer" } ]
 
 def agentDecisionCases : List AgentDecisionWitness :=
   agentDecisionScenarios.map fun r =>
-    { row := r, accepted := agentDecision r.catalog r.op r.target r.makeDefault }
+    { row := r
+    , accepted := agentOperationAdmitted r.profiles r.catalog r.operation r.target
+        r.makeDefault }
 
 /-- Regression expectations, checked against model execution. -/
 theorem agent_decision_cases_regressions :
     (agentDecisionCases.filter (·.accepted)).map (·.row.name) =
       ["agent_non_default_disable_accepted", "agent_unprotected_edit_accepted",
-       "agent_create_fresh_id_accepted"] := by
+       "agent_edit_omitted_fields_accepted",
+       "agent_edit_name_only_without_profile_accepted", "agent_edit_name_clear_accepted",
+       "agent_create_fresh_id_accepted", "agent_create_clone_inherits_prompt_accepted"] := by
   native_decide
 
-structure AgentCreateInputRow where
+/-! ## Materialization through the admission owner -/
+
+/-- One node owning an enabled `worker` Agent with no context and the `fast`
+profile on an enabled backend, so canonical resolution succeeds for `worker`. -/
+def workerCandidate : Configuration.Registry :=
+  { tasks := fun _ _ => none
+  , agents := fun scope id =>
+      if scope = "node" ∧ id = "worker" then
+        some ⟨"node", { contextId := none, profileId := "fast", enabled := true }⟩
+      else none
+  , contexts := fun _ _ => none
+  , profiles := fun scope id =>
+      if scope = "node" ∧ id = "fast" then
+        some ⟨"node", { backendId := "local", model := "m", effort := none }⟩
+      else none
+  , backends := fun scope id =>
+      if scope = "node" ∧ id = "local" then some ⟨"node", { enabled := true }⟩ else none }
+
+structure AgentMaterializationRow where
   name : String
-  input : AgentCreateInput
-  deriving Repr
+  decision : AgentDecisionRow
 
-def publishedProfiles : List String := ["fast", "deep"]
+def agentMaterializationScenarios : List AgentMaterializationRow :=
+  [ { name := "materialize_fresh_create_without_prompt_nothing"
+    , decision :=
+        { name := "", catalog := emptyAgentCatalog, profiles := ["fast"]
+        , operation := .create { name := "worker", systemPrompt := "", profile := "fast" }
+        , target := "worker" } }
+  , { name := "materialize_fresh_create_with_prompt_session"
+    , decision :=
+        { name := "", catalog := emptyAgentCatalog, profiles := ["fast"]
+        , operation := .create { name := "worker", systemPrompt := "Work.", profile := "fast" }
+        , target := "worker" } }
+  , { name := "materialize_edit_profile_clear_nothing"
+    , decision :=
+        { name := "", catalog := agentCatalog, operation := .edit { profile := some .clear }
+        , target := "worker" } }
+  , { name := "materialize_edit_name_only_session"
+    , decision :=
+        { name := "", catalog := agentCatalog, operation := .edit { name := some (.set "W") }
+        , target := "worker" } }
+  , { name := "materialize_disable_nothing"
+    , decision :=
+        { name := "", catalog := agentCatalog, operation := .disable, target := "worker" } } ]
 
-def agentCreateInputScenarios : List AgentCreateInputRow :=
-  [ { name := "create_fresh_accepted"
-    , input := { name := "reviewer", systemPrompt := "Review diffs.", profile := "fast" } }
-  , { name := "create_blank_profile_rejected"
-    , input := { name := "reviewer", systemPrompt := "Review diffs.", profile := " " } }
-  , { name := "create_unpublished_profile_rejected"
-    , input := { name := "reviewer", systemPrompt := "Review diffs.", profile := "ghost" } }
-  , { name := "create_fresh_without_prompt_rejected"
-    , input := { name := "reviewer", systemPrompt := " ", profile := "fast" } }
-  , { name := "create_clone_inherits_prompt_accepted"
-    , input := { name := "reviewer", systemPrompt := "", profile := "deep",
-                 cloneFrom := "worker" } }
-  , { name := "create_clone_disabled_source_rejected"
-    , input := { name := "reviewer", systemPrompt := "", profile := "deep",
-                 cloneFrom := "idle" } } ]
+def agentMaterializationCases : List (String × Option Configuration.ResolvedSessionConfig) :=
+  agentMaterializationScenarios.map fun r =>
+    (r.name, materializedAgent r.decision.profiles r.decision.catalog r.decision.operation
+      r.decision.target r.decision.makeDefault workerCandidate "node")
 
-def agentCreateInputCases : List (String × Bool) :=
-  agentCreateInputScenarios.map fun r =>
-    (r.name, agentCreateInputOk publishedProfiles agentCatalog r.input)
-
-theorem agent_create_input_cases_regressions :
-    (agentCreateInputCases.filter (·.2)).map (·.1) =
-      ["create_fresh_accepted", "create_clone_inherits_prompt_accepted"] := by
-  native_decide
-
-/-- Edit-field admission: omitted, clear and set per field. -/
-theorem agent_edit_field_cases_regressions :
-    editProfileOk publishedProfiles none = true ∧
-    editProfileOk publishedProfiles (some .clear) = false ∧
-    editProfileOk publishedProfiles (some (.set "deep")) = true ∧
-    editProfileOk publishedProfiles (some (.set "ghost")) = false ∧
-    editNameOk (some (.set "")) = false ∧ editNameOk (some .clear) = true ∧
-    editPromptOk (some (.set "  ")) = false ∧ editPromptOk none = true := by
+/-- Regression expectations, checked against model execution. The rejected
+fresh create resolves canonically (absent context is permitted) yet
+materializes nothing. -/
+theorem agent_materialization_cases_regressions :
+    (agentMaterializationCases.filter (·.2.isSome)).map (·.1) =
+      ["materialize_fresh_create_with_prompt_session",
+       "materialize_edit_name_only_session"] ∧
+    (Configuration.resolveAgent workerCandidate "node" "worker").toOption.isSome = true := by
   native_decide
 
 end SelfConfig.ContractCases

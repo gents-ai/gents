@@ -520,10 +520,10 @@ def stateMachineCoverage : List CoverageEntry :=
   ]
 
 def caseCoverage : List CoverageEntry :=
-  [ tagged (consumerCoverage
+  [ tagged (followUpCoverage
       "root_admission_cases"
       "RootAdmissionCases"
-      "conformance::root_admission::generated_root_admission_cases_drive_production_root_policy")
+      "Pending consumer conformance::root_admission::generated_root_admission_cases_drive_production_root_policy: replay these rows through the production Tools root policy. No consumer at that path is bound yet.")
       "apply-reconcile" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "pairing_reconcile_cases"
@@ -903,7 +903,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (followUpCoverage
       "agent_decision_cases"
       "AgentDecisionCases"
-      "Model-executed create, edit and disable verdicts over the Agent catalog (protected Engineer, default agent, missing and existing ids). No Rust consumer is bound yet; the self-config agent management owner must replay these rows instead of keeping a parallel policy.")
+      "Verdicts of SelfConfig.agentOperationAdmitted for create, edit and disable over the Agent catalog (protected Engineer, default agent, missing and existing ids), each create input (profile, prompt, clone source) and each edit patch field (display_name, system_prompt, inference_profile_id). No Rust consumer is bound yet; the self-config agent management owner must replay these rows, including create_input and edit_patch, instead of keeping a parallel policy.")
       "self-config" [Surface.agentFacing]
   , tagged (followUpCoverage
       "sibling_tools_cases"
