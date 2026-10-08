@@ -145,6 +145,8 @@ def snapshotJson : String :=
       ++ Conformance.FoldQueueContracts.handoverCasesJson ++ ","
     ++ "\"fold_publication_cases\":"
       ++ Conformance.FoldQueueContracts.publicationCasesJson ++ ","
+    ++ "\"retry_selection_cases\":"
+      ++ Conformance.FoldQueueContracts.retrySelectionCasesJson ++ ","
     ++ "\"canonical_dispatch_observation_cases\":"
       ++ Conformance.DispatchObservationContracts.casesJson ++ ","
     ++ "\"canonical_spawned_target_rejection_cases\":"

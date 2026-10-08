@@ -302,7 +302,8 @@
       { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/Transition.lean", "symbol": "CanonicalOutput.Execution.reuseAuthored" },
       { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/HandoverCases.lean", "symbol": "CanonicalOutput.Execution.Handover.Cases.foldClaimCases" },
       { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/Transition.lean", "symbol": "CanonicalOutput.Execution.publishAuthoredComposed" },
-      { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/FoldPublicationCases.lean", "symbol": "CanonicalOutput.Execution.FoldPublication.cases" }
+      { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/FoldPublicationCases.lean", "symbol": "CanonicalOutput.Execution.FoldPublication.cases" },
+      { "file": "crates/gents/proofs/Proofs/PromptAssembly/CurrentInput.lean", "symbol": "PromptAssembly.CurrentInput.answersSelection" }
     ],
     "constructors": [
       "SessionQueue.Action.claimFolding",
@@ -312,7 +313,8 @@
       "fold_queue_cases",
       "handover_fold_cases",
       "fold_turn_input_cases",
-      "fold_publication_cases"
+      "fold_publication_cases",
+      "retry_selection_cases"
     ],
     "fixture_status": "concrete_inputs",
     "native_owner_paths": [

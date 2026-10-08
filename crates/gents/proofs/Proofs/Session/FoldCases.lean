@@ -1,4 +1,5 @@
 import Proofs.Session.Fold
+import Proofs.PromptAssembly.CurrentInput
 
 namespace SessionQueue.FoldCases
 
@@ -117,5 +118,28 @@ def turnInputCases : List (String × TurnInput String) :=
 
 example : turnInputCases.all (fun (_, input) =>
     input.providerInput == input.authored.map Prod.snd) = true := by native_decide
+
+/-- A user retry whose claim selected queued messages. Whether it resumes is
+`CurrentInput.admitResume` for a same-session, same-requester terminal
+parent with settled tools; which selected messages it answers is
+`CurrentInput.answersSelection`. -/
+structure RetrySelectionCase where
+  name : String
+  parentPublished : Bool
+  selected : List RequestId
+  deriving Repr
+
+def RetrySelectionCase.resume (value : RetrySelectionCase) : Bool :=
+  (PromptAssembly.CurrentInput.admitResume true true true true value.parentPublished).getD false
+
+def RetrySelectionCase.answered (value : RetrySelectionCase) : List RequestId :=
+  PromptAssembly.CurrentInput.answersSelection value.resume value.selected
+
+def retrySelectionCases : List RetrySelectionCase :=
+  [ ⟨"resumed_retry_leaves_its_selection_queued", true, [104]⟩
+  , ⟨"fresh_retry_answers_its_selection", false, [104]⟩ ]
+
+example : retrySelectionCases.map (fun c => (c.resume, c.answered)) =
+    [(true, []), (false, [104])] := by native_decide
 
 end SessionQueue.FoldCases

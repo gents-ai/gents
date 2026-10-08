@@ -108,4 +108,11 @@ def publicationCasesJson : String :=
     | none => "null"
     | some observations => jsonArray (observations.map publicationObservationJson)) ++ "}")
 
+def retrySelectionCasesJson : String := jsonArray (retrySelectionCases.map fun value =>
+  "{\"name\":" ++ jsonString value.name ++
+  ",\"parent_published\":" ++ jsonOptionalBool (some value.parentPublished) ++
+  ",\"selected\":" ++ jsonArray (value.selected.map toString) ++
+  ",\"resume\":" ++ jsonOptionalBool (some value.resume) ++
+  ",\"answered\":" ++ jsonArray (value.answered.map toString) ++ "}")
+
 end Conformance.FoldQueueContracts
