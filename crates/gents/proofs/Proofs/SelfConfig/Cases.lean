@@ -570,4 +570,46 @@ theorem agent_decision_cases_regressions :
        "agent_create_fresh_id_accepted"] := by
   native_decide
 
+structure AgentCreateInputRow where
+  name : String
+  input : AgentCreateInput
+  deriving Repr
+
+def publishedProfiles : List String := ["fast", "deep"]
+
+def agentCreateInputScenarios : List AgentCreateInputRow :=
+  [ { name := "create_fresh_accepted"
+    , input := { name := "reviewer", systemPrompt := "Review diffs.", profile := "fast" } }
+  , { name := "create_blank_profile_rejected"
+    , input := { name := "reviewer", systemPrompt := "Review diffs.", profile := " " } }
+  , { name := "create_unpublished_profile_rejected"
+    , input := { name := "reviewer", systemPrompt := "Review diffs.", profile := "ghost" } }
+  , { name := "create_fresh_without_prompt_rejected"
+    , input := { name := "reviewer", systemPrompt := " ", profile := "fast" } }
+  , { name := "create_clone_inherits_prompt_accepted"
+    , input := { name := "reviewer", systemPrompt := "", profile := "deep",
+                 cloneFrom := "worker" } }
+  , { name := "create_clone_disabled_source_rejected"
+    , input := { name := "reviewer", systemPrompt := "", profile := "deep",
+                 cloneFrom := "idle" } } ]
+
+def agentCreateInputCases : List (String × Bool) :=
+  agentCreateInputScenarios.map fun r =>
+    (r.name, agentCreateInputOk publishedProfiles agentCatalog r.input)
+
+theorem agent_create_input_cases_regressions :
+    (agentCreateInputCases.filter (·.2)).map (·.1) =
+      ["create_fresh_accepted", "create_clone_inherits_prompt_accepted"] := by
+  native_decide
+
+/-- Edit-field admission: omitted, clear and set per field. -/
+theorem agent_edit_field_cases_regressions :
+    editProfileOk publishedProfiles none = true ∧
+    editProfileOk publishedProfiles (some .clear) = false ∧
+    editProfileOk publishedProfiles (some (.set "deep")) = true ∧
+    editProfileOk publishedProfiles (some (.set "ghost")) = false ∧
+    editNameOk (some (.set "")) = false ∧ editNameOk (some .clear) = true ∧
+    editPromptOk (some (.set "  ")) = false ∧ editPromptOk none = true := by
+  native_decide
+
 end SelfConfig.ContractCases
