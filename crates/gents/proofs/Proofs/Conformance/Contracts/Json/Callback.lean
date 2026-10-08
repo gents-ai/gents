@@ -11,7 +11,7 @@ def callbackCaseJson (witness : Callback.Conformance.CallbackCase) : String :=
   "{"
     ++ "\"name\":" ++ jsonString witness.name ++ ","
     ++ "\"invocation_id\":" ++ jsonString witness.invocationId ++ ","
-    ++ "\"owner_agent_did\":" ++ jsonString witness.ownerAgentDid ++ ","
+    ++ "\"owner_node_did\":" ++ jsonString witness.ownerNodeDid ++ ","
     ++ "\"state\":" ++ jsonString witness.state.toDefraDB ++ ","
     ++ "\"journal\":"
       ++ jsonStringArray (witness.journal.map ActionJournalState.toDefraDB) ++ ","
@@ -26,7 +26,7 @@ def callbackCasesJson : String :=
 
 def callbackInvocationJson (inv : CallbackInvocation) : String :=
   "{\"invocation_id\":" ++ jsonString inv.invocationId
-    ++ ",\"owner_agent_did\":" ++ jsonString inv.ownerAgentDid
+    ++ ",\"owner_node_did\":" ++ jsonString inv.ownerNodeDid
     ++ ",\"input\":" ++ jsonString inv.input
     ++ ",\"origin_group_key\":" ++
       (inv.originGroupKey.map Conformance.EventGroupContracts.keyJson).getD "null"
