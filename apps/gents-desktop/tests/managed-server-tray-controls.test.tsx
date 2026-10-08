@@ -1,6 +1,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
+import { testApp } from "./app-fixture";
 import { useManagedServerTrayControls } from "../src/hooks/useManagedServerTrayControls";
 import { MANAGED_SERVER_TRAY_STOP_EVENT } from "../src/lib/managedServerTray";
 
@@ -64,11 +65,12 @@ describe("managed server tray control ownership", () => {
 
   it("subscribes all controls only in main through window-scoped listeners", async () => {
     const api = apiFixture();
-    renderHook(() => useManagedServerTrayControls(api));
+    const app = testApp({ api });
+    renderHook(() => useManagedServerTrayControls(app));
     expect(view.listen).toHaveBeenCalledTimes(3);
 
     view.label = "gents-view-1";
-    renderHook(() => useManagedServerTrayControls(api));
+    renderHook(() => useManagedServerTrayControls(app));
     expect(view.listen).toHaveBeenCalledTimes(3);
 
     const stop = view.listen.mock.calls.find(
@@ -88,7 +90,8 @@ describe("managed server tray control ownership", () => {
     const api = apiFixture();
     vi.mocked(api.stopManagedServer!).mockRejectedValue(new Error("service busy"));
     view.setFocus.mockRejectedValueOnce(new Error("focus denied"));
-    renderHook(() => useManagedServerTrayControls(api));
+    const app = testApp({ api });
+    renderHook(() => useManagedServerTrayControls(app));
     const stop = view.listen.mock.calls.find(
       ([event]) => event === MANAGED_SERVER_TRAY_STOP_EVENT,
     );
@@ -109,7 +112,8 @@ describe("managed server tray control ownership", () => {
       () => new Promise<() => void>((resolve) => resolvers.push(resolve)),
     );
     const cleanups = [vi.fn(), vi.fn(), vi.fn()];
-    const { unmount } = renderHook(() => useManagedServerTrayControls(apiFixture()));
+    const app = testApp({ api: apiFixture() });
+    const { unmount } = renderHook(() => useManagedServerTrayControls(app));
     unmount();
     await act(async () => {
       resolvers.forEach((resolve, index) => resolve(cleanups[index]));
@@ -120,7 +124,8 @@ describe("managed server tray control ownership", () => {
 
   it("does not subscribe outside Tauri", () => {
     delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
-    renderHook(() => useManagedServerTrayControls(apiFixture()));
+    const app = testApp({ api: apiFixture() });
+    renderHook(() => useManagedServerTrayControls(app));
     expect(view.listen).not.toHaveBeenCalled();
   });
 });

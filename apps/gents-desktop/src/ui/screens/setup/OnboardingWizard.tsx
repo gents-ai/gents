@@ -14,17 +14,12 @@ import {
   projectStartupLoadingStatus,
   type DesktopStartupPhase,
 } from "../../../lib/loadingStatus";
-import {
-  observeManagedServerOperation,
-  type ManagedServerWait,
-} from "../../../lib/managedServerStartup";
 import { SETUP_COMPLETE_DWELL_MS, SetupProgress } from "./SetupProgress";
 import { setupStewardPatches } from "@/lib/setupSteward";
 import { supportsLocalManagedServer } from "../../../lib/shellPlatform";
 import { AgentAvatar } from "@/screens/AgentAvatar";
 import { Mark } from "@/app/Mark";
-import { setupErrorMessage } from "@/lib/providerLogin";
-import { waitForManagedRuntimePairing } from "@/lib/managedRuntimeReadiness";
+import { setupErrorMessage } from "../../../lib/setupErrors";
 import { ManagedRuntimeAuthorityPicker } from "@/components/ManagedRuntimeAuthority";
 import { authoritiesEqual, authorityForSelection } from "@/lib/managedRuntimeAuthority";
 import { useApp } from "@/app/AppContext";
@@ -136,10 +131,8 @@ export function OnboardingWizard({
   provider?: ProviderId;
 }) {
   const bootstrap = useBootstrap();
-  const {
-    api,
-    actions: { initLocalRuntime, refreshSnapshot, changeConfig },
-  } = useApp();
+  const { api, stores, actions } = useApp();
+  const { initLocalRuntime, refreshSnapshot, changeConfig } = actions;
   const { diagnosticsHint } = useStartup();
   const { incompatibleHome } = useStartup();
   const [run, dispatch] = useReducer(runReducer, {
@@ -165,7 +158,7 @@ export function OnboardingWizard({
   const existingName = existingHome ? bootstrap?.initAgentName?.trim() || null : null;
   const agentName = existingName ?? name;
   const [homeRoot, setHomeRoot] = useState<string | null>(
-    api.managedServerStatus ? null : (bootstrap?.initToolRoot ?? null),
+    actions.localServerOffers.status ? null : (bootstrap?.initToolRoot ?? null),
   );
   const [toolCeiling, setToolCeiling] = useState<
     ManagedServerAuthorityInput["toolCeiling"]
@@ -174,7 +167,19 @@ export function OnboardingWizard({
     bootstrap?.initToolRoot ?? undefined,
   );
   const [authorityError, setAuthorityError] = useState<string | null>(null);
-  const [managedWait, setManagedWait] = useState<ManagedServerWait | null>(null);
+  const managedWait = stores.localServer.use.wait();
+  /* the folder the service suggests as the tool root, or why it cannot */
+  const readSuggestedRoot = () =>
+    actions.refreshLocalServer().then((status) => {
+      if (status?.suggestedToolRoot) setHomeRoot(status.suggestedToolRoot);
+      else
+        setAuthorityError(
+          status
+            ? "The user home directory is unavailable."
+            : (stores.localServer.getState().readFailure ??
+                "The user home directory is unavailable."),
+        );
+    });
   useEffect(() => {
     if (provisionedAt === null) return;
     const timer = window.setTimeout(
@@ -188,19 +193,16 @@ export function OnboardingWizard({
   const authority = authorityForSelection(toolCeiling, toolRoot);
 
   useEffect(() => {
-    if (step !== "welcome" || !allowLocal || !api.managedServerStatus || homeRoot)
+    if (
+      step !== "welcome" ||
+      !allowLocal ||
+      !actions.localServerOffers.status ||
+      homeRoot
+    )
       return;
-    const pending = api.managedServerStatus();
-    if (!pending) return;
-    void pending
-      .then((status) => {
-        if (status.suggestedToolRoot) setHomeRoot(status.suggestedToolRoot);
-        else setAuthorityError("The user home directory is unavailable.");
-      })
-      .catch((cause) =>
-        setAuthorityError(cause instanceof Error ? cause.message : String(cause)),
-      );
-  }, [api, homeRoot, step, allowLocal]);
+    void readSuggestedRoot();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [actions, homeRoot, step, allowLocal]);
 
   /* the node just set up, as the next read lists it: the local agent's own
      node, which a paired remote node may be listed before; an enrolment's
@@ -243,13 +245,8 @@ export function OnboardingWizard({
     dispatch({ type: "begun", phase: "checking-managed-server" });
     let failedPhase: FailedPhase = "managed-server-error";
     try {
-      if (api.startManagedServer) {
-        const startManagedServer = api.startManagedServer;
-        const status = await observeManagedServerOperation(
-          api,
-          () => startManagedServer(requestedName, authority),
-          setManagedWait,
-        );
+      if (actions.localServerOffers.start) {
+        const status = await actions.startLocalServer(requestedName, authority);
         if (status.agentName && status.agentName !== requestedName) {
           /* Welcome then shows the existing agent's name. */
           void refreshSnapshot();
@@ -287,10 +284,8 @@ export function OnboardingWizard({
         detail: ["configuration", `Saved the local connection to ${requestedName}`],
       });
       failedPhase = "client-error";
-      if (api.commitManagedServerAutoStart) {
-        await api.commitManagedServerAutoStart(requestedName);
-      }
-      await waitForManagedRuntimePairing(api);
+      await actions.commitLocalServerAutoStart(requestedName);
+      await actions.awaitLocalServerPairing();
       await finishProvisioning(nodeSetUp);
     } catch (e) {
       dispatch({ type: "failed", phase: failedPhase, error: setupErrorMessage(e) });
@@ -364,7 +359,7 @@ export function OnboardingWizard({
                   toolRoot={toolRoot}
                   onCeilingChange={setToolCeiling}
                   onRootChange={setSelectedDirectory}
-                  validateRoot={api.validateManagedServerRoot}
+                  validateRoot={actions.validateLocalServerRoot}
                   error={authorityError}
                   onError={setAuthorityError}
                 />
@@ -379,17 +374,7 @@ export function OnboardingWizard({
                         variant="outline"
                         onClick={() => {
                           setAuthorityError(null);
-                          void api
-                            .managedServerStatus?.()
-                            .then((status) => {
-                              if (status.suggestedToolRoot)
-                                setHomeRoot(status.suggestedToolRoot);
-                              else
-                                setAuthorityError(
-                                  "The user home directory is unavailable.",
-                                );
-                            })
-                            .catch((cause) => setAuthorityError(String(cause)));
+                          void readSuggestedRoot();
                         }}
                       >
                         Try again
@@ -495,7 +480,11 @@ export function OnboardingWizard({
           error={error}
           onRetry={() => dispatch({ type: "retried" })}
           onContinue={() => dispatch({ type: "continued" })}
-          onOpenLoginItems={api.openManagedServerLoginItems}
+          onOpenLoginItems={
+            actions.localServerOffers.loginItems
+              ? actions.openLocalServerLoginItems
+              : undefined
+          }
           diagnosticsHint={diagnosticsHint ?? bootstrap?.diagnosticsHint}
         />
       </Frame>

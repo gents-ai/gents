@@ -1,10 +1,13 @@
 import { useEffect } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 import { toast } from "sonner";
 
 import { describeManagedServerWait } from "../lib/managedServerStartup";
-import { installManagedServerTrayListeners } from "../lib/managedServerTray";
+import {
+  installManagedServerTrayListeners,
+  type TrayServer,
+} from "../lib/managedServerTray";
+import type { DesktopApp } from "./desktopApp";
 import {
   ownsAutomaticRecovery,
   supportsLocalManagedServer,
@@ -13,19 +16,20 @@ import {
 const TRAY_WAIT_TOAST = "managed-server-tray-wait";
 
 /** The native tray targets the one view that owns shared-backend recovery. */
-export function useManagedServerTrayControls(api: DesktopApiAdapter) {
+export function useManagedServerTrayControls({ actions, stores }: DesktopApp) {
   useEffect(() => {
     if (
       !ownsAutomaticRecovery() ||
       !supportsLocalManagedServer() ||
-      !api.managedServerStatus ||
+      !actions.localServerOffers.status ||
       !("__TAURI_INTERNALS__" in window)
     )
       return;
 
+    const server = trayServerFor({ actions, stores });
     const view = getCurrentWindow();
     return installManagedServerTrayListeners(
-      api,
+      server,
       (event, handler) => view.listen(event, handler),
       (message) => {
         void (async () => {
@@ -59,5 +63,30 @@ export function useManagedServerTrayControls(api: DesktopApiAdapter) {
         }
       },
     );
-  }, [api]);
+  }, [actions, stores]);
+}
+
+/** The local server as the menu bar commands use it, through its owner. */
+export function trayServerFor({
+  actions,
+  stores,
+}: Pick<DesktopApp, "actions" | "stores">): TrayServer {
+  return {
+    readStatus: async () => {
+      const status = await actions.refreshLocalServer();
+      if (status) return status;
+      throw new Error(
+        `Could not check the background agent: ${stores.localServer.getState().readFailure}`,
+      );
+    },
+    start: (agentName) => actions.startLocalServer(agentName),
+    stop: () => actions.stopLocalServer(),
+    restart: (agentName, authority) => actions.restartLocalServer(agentName, authority),
+    settle: (status) => actions.settleLocalServer(status),
+    offers: actions.localServerOffers,
+    watchWait: (listener) =>
+      stores.localServer.subscribe((state, prev) => {
+        if (state.wait !== prev.wait) listener(state.wait);
+      }),
+  };
 }

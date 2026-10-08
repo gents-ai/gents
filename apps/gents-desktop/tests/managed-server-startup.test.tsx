@@ -140,9 +140,9 @@ describe("managed server startup waits", () => {
       api: { restartManagedServer: vi.fn(async () => undefined) },
       supportsManagedServer: true,
     });
-    app.stores.client.setState({
-      startupPhase: "checking-managed-server",
-      managedServerWait: { kind: "updating", since: Date.now() - 400_000 },
+    app.stores.client.setState({ startupPhase: "checking-managed-server" });
+    app.stores.localServer.setState({
+      wait: { kind: "updating", since: Date.now() - 400_000 },
     });
     renderIn(app, <StartupScreen />);
     expect(screen.getByTestId("startup-screen")).toHaveTextContent("Updating data…");
@@ -375,9 +375,9 @@ describe("managed server startup waits", () => {
       api: { openManagedServerLoginItems: open },
       supportsManagedServer: true,
     });
-    app.stores.client.setState({
-      startupPhase: "checking-managed-server",
-      managedServerWait: { kind: "approval", since: Date.now() - 12_000 },
+    app.stores.client.setState({ startupPhase: "checking-managed-server" });
+    app.stores.localServer.setState({
+      wait: { kind: "approval", since: Date.now() - 12_000 },
     });
     const skip = vi
       .spyOn(app.lifecycle, "skipManagedServerWait")
@@ -398,9 +398,9 @@ describe("managed server startup waits", () => {
 
   it("names a booting runtime and how long it has waited instead of failing", () => {
     const app = testApp({ supportsManagedServer: true });
-    app.stores.client.setState({
-      startupPhase: "checking-managed-server",
-      managedServerWait: { kind: "booting", since: Date.now() - 75_000 },
+    app.stores.client.setState({ startupPhase: "checking-managed-server" });
+    app.stores.localServer.setState({
+      wait: { kind: "booting", since: Date.now() - 75_000 },
     });
     renderIn(app, <StartupScreen />);
     const screenText = screen.getByTestId("startup-screen");

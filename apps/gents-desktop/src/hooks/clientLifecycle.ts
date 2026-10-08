@@ -10,11 +10,7 @@ import {
   shouldAutoStartDesktopClient,
   type DesktopStartupPhase,
 } from "../lib/loadingStatus";
-import {
-  ManagedServerStartupError,
-  observeManagedServerOperation,
-  type ManagedServerWait,
-} from "../lib/managedServerStartup";
+import { ManagedServerStartupError } from "../lib/managedServerStartup";
 import { isMobileTauriShell, ownsAutomaticRecovery } from "../lib/shellPlatform";
 import {
   delay,
@@ -24,7 +20,7 @@ import {
 } from "./desktopShellRuntime";
 import { createSnapshotPublicationOwner } from "./desktopSnapshotPublication";
 import { applyFleetSnapshot, equal, shareUnchanged } from "./fleetStore";
-import { restoreManagedServer } from "./managedServerLifecycle";
+import type { LocalServerActions } from "./localServer";
 import { writeSession } from "./sessionStore";
 import type { ShellStores } from "./shellProjection";
 import { createIncompatibleHomeOps } from "./useIncompatibleHome";
@@ -32,6 +28,8 @@ import { clientStatus } from "./clientStore";
 
 type ClientLifecycleParams = {
   api: DesktopApiAdapter;
+  /** the local server's owner, which startup observes and restarts through */
+  localServer: Pick<LocalServerActions, "restoreLocalServer" | "restartLocalServer">;
   supportsManagedServer: boolean;
   stores: ShellStores;
   /** reads the selected session again after a restart */
@@ -56,6 +54,7 @@ export type ClientRecovery = {
  */
 export function createClientLifecycle({
   api,
+  localServer,
   supportsManagedServer,
   stores,
   refreshSession,
@@ -64,8 +63,6 @@ export function createClientLifecycle({
   const setError = (error: string | null) => clientStatus.setError(client, error);
   const setStarting = (starting: boolean) => clientStatus.setStarting(client, starting);
   const setStopping = (stopping: boolean) => client.setState({ stopping });
-  const setManagedServerWait = (managedServerWait: ManagedServerWait | null) =>
-    client.setState({ managedServerWait });
   const setManagedServerFailure = (
     managedServerFailure: ManagedServerStartupError | null,
   ) => client.setState({ managedServerFailure });
@@ -248,10 +245,7 @@ export function createClientLifecycle({
         managedServerWaitAbort = abort;
         setManagedServerFailure(null);
         try {
-          localServerAvailable = await restoreManagedServer(api, {
-            onWait: setManagedServerWait,
-            signal: abort.signal,
-          });
+          localServerAvailable = await localServer.restoreLocalServer(abort.signal);
         } catch (error) {
           // A legacy or broken ~/.gents must not block first-run setup or
           // already-saved remote peers. Surface the error after the app is up.
@@ -295,7 +289,6 @@ export function createClientLifecycle({
     const status = client.getState().managedServerFailure?.status;
     if (!status?.agentName || !status.effectiveToolCeiling || !api.restartManagedServer)
       return;
-    const restartManagedServer = api.restartManagedServer;
     const agentName = status.agentName;
     const authority = {
       toolCeiling: status.effectiveToolCeiling,
@@ -305,11 +298,7 @@ export function createClientLifecycle({
     setError(null);
     setStartupPhase("checking-managed-server");
     try {
-      await observeManagedServerOperation(
-        api,
-        () => restartManagedServer(agentName, authority),
-        setManagedServerWait,
-      );
+      await localServer.restartLocalServer(agentName, authority);
       await initializeDesktop();
     } catch (error) {
       setError(error instanceof Error ? error.message : String(error));

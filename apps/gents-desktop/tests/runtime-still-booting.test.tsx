@@ -17,6 +17,7 @@ const toast = vi.hoisted(() =>
 );
 vi.mock("sonner", () => ({ toast }));
 
+import { trayServerFor } from "../src/hooks/useManagedServerTrayControls";
 import {
   installManagedServerTrayListeners,
   MANAGED_SERVER_TRAY_RESTART_EVENT,
@@ -75,7 +76,7 @@ describe("runtimeStillBooting is a wait, not a failure", () => {
       }),
     } as unknown as DesktopApiAdapter;
     installManagedServerTrayListeners(
-      api,
+      trayServerFor(testApp({ api })),
       async (event, handler) => {
         handlers.set(event, handler);
         return () => {};
@@ -103,7 +104,7 @@ describe("runtimeStillBooting is a wait, not a failure", () => {
       restartManagedServer: vi.fn(),
     } as unknown as DesktopApiAdapter;
     installManagedServerTrayListeners(
-      api,
+      trayServerFor(testApp({ api })),
       async (event, handler) => {
         handlers.set(event, handler);
         return () => {};
@@ -133,7 +134,7 @@ describe("runtimeStillBooting is a wait, not a failure", () => {
     } as unknown as DesktopApiAdapter;
     const onWait = vi.fn();
     installManagedServerTrayListeners(
-      api,
+      trayServerFor(testApp({ api })),
       async (event, handler) => {
         handlers.set(event, handler);
         return () => {};

@@ -2,24 +2,21 @@
    and its defaults, and save them in one operator transaction. Shared by
    first run, setup re-entry and adding a backend from the agent screen.
    Provider/model guidance comes from the versioned Rust contract. */
-import { useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useEffect, useMemo, useReducer, useRef } from "react";
 import { KeyRound, Orbit, Server, Sparkles } from "lucide-react";
 import type { DesktopClientSnapshot } from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
 import { Spinner } from "@gents/ui/components/spinner";
-import { type ManagedServerWait } from "../../../lib/managedServerStartup";
 import { ManagedServerWaitNotice } from "./SetupProgress";
 import { supportsLocalManagedServer } from "../../../lib/shellPlatform";
 import {
-  bridgeErrorCode,
   CREDENTIAL_NOT_SAVED,
-  setupErrorMessage,
   watchProviderLoginUrl,
   PROVIDER_CREDENTIAL_KIND,
   type OauthProvider,
 } from "@/lib/providerLogin";
+import { bridgeErrorCode, setupErrorMessage } from "../../../lib/setupErrors";
 import { isLocalAgent } from "@/lib/firstRun";
-import { ensureManagedRuntimeServing } from "@/lib/managedRuntimeReadiness";
 import {
   currentInferenceDiscovery,
   inferenceDiscoveryKey,
@@ -83,10 +80,8 @@ export function InferenceSetup({
   provider?: ProviderId;
 }) {
   const bootstrap = useBootstrap();
-  const {
-    api,
-    actions: { changeConfig },
-  } = useApp();
+  const { api, stores, actions } = useApp();
+  const { changeConfig } = actions;
   const selectedNode = useSelectedNode();
   const allowLocal = supportsLocalManagedServer();
   const [form, dispatch] = useReducer(
@@ -94,7 +89,7 @@ export function InferenceSetup({
     fixedProvider,
     initialSetupForm,
   );
-  const [managedWait, setManagedWait] = useState<ManagedServerWait | null>(null);
+  const managedWait = stores.localServer.use.wait();
   const { catalog, error: catalogFailure, retry: retryCatalog } = useSetupCatalog();
   const busy = form.op !== null;
   const { error, runtimeGate, accountLabel } = form;
@@ -127,7 +122,7 @@ export function InferenceSetup({
   const requiresManagedRuntime = Boolean(
     checkRuntime &&
     allowLocal &&
-    api.managedServerStatus &&
+    actions.localServerOffers.status &&
     setupDeployment &&
     isLocalAgent(setupDeployment, bootstrap?.initAgentDid),
   );
@@ -135,9 +130,7 @@ export function InferenceSetup({
   const checkManagedRuntime = async () => {
     dispatch({ type: "runtimeGate", gate: "checking" });
     try {
-      await ensureManagedRuntimeServing(api, runtimeFallbackName, {
-        onWait: setManagedWait,
-      });
+      await actions.ensureLocalServerServing(runtimeFallbackName);
       dispatch({ type: "runtimeGate", gate: "ready" });
       /* Account lookup goes through the runtime, so repeat it once it serves. */
       if (setupAgentDidRef.current) void observeAccounts(setupAgentDidRef.current);
@@ -270,7 +263,7 @@ export function InferenceSetup({
     dispatch({ type: "opStarted", op: "retrySave" });
     try {
       if (requiresManagedRuntime) {
-        await ensureManagedRuntimeServing(api, runtimeFallbackName);
+        await actions.ensureLocalServerServing(runtimeFallbackName);
         dispatch({ type: "runtimeGate", gate: "ready" });
       }
       const account = await api.retrySaveProviderAccount(
@@ -548,7 +541,11 @@ export function InferenceSetup({
             {managedWait ? (
               <ManagedServerWaitNotice
                 wait={managedWait}
-                onOpenLoginItems={api.openManagedServerLoginItems}
+                onOpenLoginItems={
+                  actions.localServerOffers.loginItems
+                    ? actions.openLocalServerLoginItems
+                    : undefined
+                }
               />
             ) : null}
           </div>

@@ -115,7 +115,7 @@ function AppReactions({ app, bridge }: { app: DesktopApp; bridge: DesktopBridge 
   useDockVisit(route);
   useMobileVisualViewport();
   usePlatformSetup();
-  useManagedServerTrayControls(bridge.api);
+  useManagedServerTrayControls(app);
   return null;
 }
 

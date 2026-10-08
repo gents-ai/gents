@@ -1,11 +1,8 @@
 /* The OS-managed local agent service. The desktop observes and controls it,
    but does not own its process lifetime. */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import type {
-  ManagedServerStatus,
-  ManagedServerAuthorityInput,
-} from "@source-inc/gents-desktop-client";
+import type { ManagedServerAuthorityInput } from "@source-inc/gents-desktop-client";
 import { Badge } from "@gents/ui/components/badge";
 import { Button } from "@gents/ui/components/button";
 import { Spinner } from "@gents/ui/components/spinner";
@@ -19,66 +16,38 @@ import {
   LOGIN_ITEMS_PATH,
   describeManagedServerWait,
   managedServerWaitKind,
-  observeManagedServerOperation,
-  type ManagedServerWait,
 } from "../../../lib/managedServerStartup";
 import { Fact, Group, Row } from "./rows";
 import { useApp } from "@/app/AppContext";
+import { ManagedRuntimeUnavailableError } from "../../../lib/managedRuntimeReadiness";
 import { useStartup } from "@/hooks/useClient";
 
 export function LocalServer() {
-  const {
-    api,
-    stores,
-    actions: { refreshSnapshot },
-  } = useApp();
+  const { stores, actions } = useApp();
+  const { refreshSnapshot } = actions;
   const { incompatibleHome } = useStartup();
   const snapshot = stores.client.use.snapshot();
-  const [status, setStatus] = useState<ManagedServerStatus | null>(null);
-  const [statusError, setStatusError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const status = stores.localServer.use.status();
+  const readFailure = stores.localServer.use.readFailure();
+  const wait = stores.localServer.use.wait();
+  /* the tray, or startup, may be starting or stopping it */
+  const operating = stores.localServer.use.operation() !== null;
+  const statusError = readFailure
+    ? `Could not check the background agent: ${readFailure}`
+    : null;
+  const [acting, setBusy] = useState(false);
+  const busy = acting || operating;
   const [editingAuthority, setEditingAuthority] = useState(false);
   const [toolCeiling, setToolCeiling] =
     useState<ManagedServerAuthorityInput["toolCeiling"]>("readwrite");
   const [selectedDirectory, setSelectedDirectory] = useState<string | null>(null);
   const [authorityError, setAuthorityError] = useState<string | null>(null);
-  const [wait, setWait] = useState<ManagedServerWait | null>(null);
-  /* only the newest status asked for is shown: a read begun before a start,
-     stop or restart may answer after it with what it replaced */
-  const asked = useRef(0);
-  const ask = () => {
-    const read = ++asked.current;
-    return () => read === asked.current;
-  };
-  const load = () => {
-    const current = ask();
-    return api.managedServerStatus?.().then(
-      (next) => {
-        if (!current()) return;
-        setStatus(next);
-        setStatusError(null);
-      },
-      (error: unknown) => {
-        if (!current()) return;
-        setStatus(null);
-        setStatusError(`Could not check the background agent: ${String(error)}`);
-      },
-    );
-  };
-  useEffect(() => {
-    void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [snapshot]);
-  if (!api.managedServerStatus) return null;
-  const act = async (
-    label: string,
-    run: () => Promise<ManagedServerStatus> | undefined,
-  ) => {
+  useEffect(() => actions.watchLocalServer(), [actions]);
+  if (!actions.localServerOffers.status) return null;
+  const act = async (label: string, run: () => Promise<unknown>) => {
     setBusy(true);
-    const current = ask();
     try {
-      const next = await run();
-      if (next && current()) setStatus(next);
+      await run();
       await refreshSnapshot();
       toast(label);
     } catch (e) {
@@ -104,26 +73,22 @@ export function LocalServer() {
     setEditingAuthority(true);
   };
   const restartWithAuthority = async () => {
-    if (!authority || !api.restartManagedServer) return;
+    if (!authority || !actions.localServerOffers.restart) return;
     setBusy(true);
     setAuthorityError(null);
-    const current = ask();
     try {
-      const restartManagedServer = api.restartManagedServer;
-      let next = await observeManagedServerOperation(
-        api,
-        () => restartManagedServer(name, authority),
-        setWait,
-      );
-      if (current()) setStatus(next);
-      const deadline = Date.now() + 30_000;
-      while (!next.pairingReady && Date.now() < deadline) {
-        await new Promise((resolve) => window.setTimeout(resolve, 250));
-        next = (await api.managedServerStatus?.()) ?? next;
-        if (current()) setStatus(next);
-      }
+      let next = await actions.restartLocalServer(name, authority);
       if (!next.pairingReady) {
-        throw new Error("The runtime restarted, but background pairing is not ready.");
+        /* a status read that fails while waiting says why; the wait running
+           out is worded for a restart */
+        const paired = await actions
+          .awaitLocalServerPairing()
+          .catch((cause: unknown) => {
+            throw cause instanceof ManagedRuntimeUnavailableError
+              ? new Error("The runtime restarted, but background pairing is not ready.")
+              : cause;
+          });
+        if (paired) next = paired;
       }
       const confirmed = next.effectiveToolCeiling
         ? {
@@ -155,9 +120,7 @@ export function LocalServer() {
             size="sm"
             variant="outline"
             disabled={busy || status?.state === "external"}
-            onClick={() =>
-              void act("Agent stopped", () => api.stopManagedServer?.(false))
-            }
+            onClick={() => void act("Agent stopped", () => actions.stopLocalServer())}
           >
             {busy ? <Spinner /> : null} Stop agent
           </Button>
@@ -167,16 +130,7 @@ export function LocalServer() {
             variant="brand"
             disabled={busy || status?.state === "starting"}
             onClick={() =>
-              void act("Agent started", () => {
-                const startManagedServer = api.startManagedServer;
-                return startManagedServer
-                  ? observeManagedServerOperation(
-                      api,
-                      () => startManagedServer(name),
-                      setWait,
-                    )
-                  : undefined;
-              })
+              void act("Agent started", () => actions.startLocalServer(name))
             }
           >
             {busy || status?.state === "starting" ? <Spinner /> : null} Start agent
@@ -234,7 +188,7 @@ export function LocalServer() {
           disabled={busy || !status}
           onCheckedChange={(on) =>
             void act(on ? "Auto-start on" : "Auto-start off", () =>
-              api.setManagedServerAutoStart?.(on),
+              actions.setLocalServerAutoStart(on),
             )
           }
         />
@@ -275,7 +229,7 @@ export function LocalServer() {
             toolRoot={selectedDirectory}
             onCeilingChange={setToolCeiling}
             onRootChange={setSelectedDirectory}
-            validateRoot={api.validateManagedServerRoot}
+            validateRoot={actions.validateLocalServerRoot}
             error={authorityError}
             onError={setAuthorityError}
           />

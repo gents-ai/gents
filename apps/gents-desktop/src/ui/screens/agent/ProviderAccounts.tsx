@@ -11,11 +11,8 @@ import type {
 } from "@source-inc/gents-desktop-client";
 import { Badge } from "@gents/ui/components/badge";
 import { Button } from "@gents/ui/components/button";
-import {
-  bridgeErrorCode,
-  CREDENTIAL_NOT_SAVED,
-  setupErrorMessage,
-} from "@/lib/providerLogin";
+import { CREDENTIAL_NOT_SAVED } from "@/lib/providerLogin";
+import { bridgeErrorCode, setupErrorMessage } from "../../../lib/setupErrors";
 import { FactRow } from "./editors";
 import { ConfirmDelete } from "./ListDetail";
 import { Row } from "./rows";

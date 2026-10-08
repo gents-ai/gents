@@ -648,17 +648,13 @@ for (const [path, maximumLines] of [
    still do and are moving to owners. The list only shrinks: a listed file
    that no longer reaches the bridge must leave it. */
 const componentsReachingBridge = new Set([
-  "src/components/StartupScreen.tsx",
   "src/ui/app/platform.ts",
   "src/ui/app/SettingsMenu.tsx",
-  "src/ui/hooks/useClient.ts",
-  "src/ui/lib/managedRuntimeReadiness.ts",
   "src/ui/lib/pickDirectory.ts",
   "src/ui/lib/providerLogin.ts",
   "src/ui/lib/swipe-nav.ts",
   "src/ui/screens/agent/AgentCard.tsx",
   "src/ui/screens/agent/BackendEditor.tsx",
-  "src/ui/screens/agent/LocalServer.tsx",
   "src/ui/screens/agent/ProfileEditor.tsx",
   "src/ui/screens/agent/ProviderAccounts.tsx",
   "src/ui/screens/agent/ToolGroupControls.tsx",

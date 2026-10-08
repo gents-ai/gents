@@ -9,8 +9,8 @@ import {
   observeManagedServerOperation,
   unsettledManagedServerError,
   type ManagedServerWait,
-} from "../../lib/managedServerStartup";
-import { setupErrorMessage } from "./providerLogin";
+} from "./managedServerStartup";
+import { setupErrorMessage } from "./setupErrors";
 
 type ReadinessApi = Pick<
   DesktopApiAdapter,

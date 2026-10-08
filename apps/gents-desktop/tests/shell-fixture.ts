@@ -6,6 +6,8 @@ import type {
 } from "@source-inc/gents-desktop-client";
 
 import { createClientLifecycle } from "../src/hooks/clientLifecycle";
+import { createLocalServer } from "../src/hooks/localServer";
+import { createLocalServerStore } from "../src/hooks/localServerStore";
 import { createChatStore, type ChatState } from "../src/hooks/chatStore";
 import { createClientStore } from "../src/hooks/clientStore";
 import { applyFleetSnapshot, createFleetStore } from "../src/hooks/fleetStore";
@@ -99,8 +101,14 @@ export function lifecycleFor(
   stores.client.subscribe((state, prev) => {
     if (state.error !== prev.error) errors.push(state.error);
   });
+  const localServerStore = createLocalServerStore();
   const lifecycle = createClientLifecycle({
     api: api as DesktopApiAdapter,
+    localServer: createLocalServer({
+      api: api as DesktopApiAdapter,
+      store: localServerStore,
+      client: stores.client,
+    }),
     supportsManagedServer,
     stores,
     refreshSession: vi.fn(async () => null),
@@ -109,6 +117,7 @@ export function lifecycleFor(
   return {
     ...lifecycle,
     stores,
+    localServerStore,
     errors,
     get snapshot() {
       return stores.client.getState().snapshot;

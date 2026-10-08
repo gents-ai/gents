@@ -15,7 +15,7 @@ import type {
 } from "@source-inc/gents-desktop-client";
 import { Badge } from "@gents/ui/components/badge";
 import { Button } from "@gents/ui/components/button";
-import { setupErrorMessage } from "@/lib/providerLogin";
+import { setupErrorMessage } from "../../../lib/setupErrors";
 import { optionalInteger, requiredHttpUrl, str, useDraft, problemOf } from "./draft";
 import {
   ChoiceRow,

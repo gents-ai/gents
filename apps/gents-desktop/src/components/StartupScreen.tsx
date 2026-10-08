@@ -37,7 +37,7 @@ function useAside() {
 /** Where startup has got to, until the client is ready: each step, the
     managed server's wait, and on failure the ways on. */
 export function StartupScreen() {
-  const { api, lifecycle } = useApp();
+  const { actions, lifecycle } = useApp();
   const startup = useStartup();
   const aside = useAside();
   const waiting = startup.managedServerWait !== null;
@@ -52,7 +52,9 @@ export function StartupScreen() {
           Math.max(now, managedServerWait.since),
         )
       : null;
-  const openLoginItems = api.openManagedServerLoginItems;
+  const openLoginItems = actions.localServerOffers.loginItems
+    ? actions.openLocalServerLoginItems
+    : undefined;
   const skip = (testId: string) => (
     <Button
       variant="outline"

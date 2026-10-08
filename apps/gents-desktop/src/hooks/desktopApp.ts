@@ -13,6 +13,8 @@ import { createSessionReads } from "./sessionReads";
 import { createSessionStore, holdsRequest } from "./sessionStore";
 import { createProviderStore, type ProviderStore } from "./providerStore";
 import { createProviderReads } from "./providerReads";
+import { createLocalServer } from "./localServer";
+import { createLocalServerStore, type LocalServerStore } from "./localServerStore";
 import { createShellActions } from "./shellActions";
 import { createDraftStore } from "./draftStore";
 import type { ShellStores } from "./shellProjection";
@@ -40,7 +42,10 @@ export function createDesktopApp({
   supportsManagedServer = false,
   reportFailure,
 }: DesktopAppParams) {
-  const stores: ShellStores & { providers: ProviderStore } = {
+  const stores: ShellStores & {
+    providers: ProviderStore;
+    localServer: LocalServerStore;
+  } = {
     selection: createSelectionStore(),
     session: createSessionStore(),
     fleet: createFleetStore(),
@@ -49,6 +54,7 @@ export function createDesktopApp({
     ),
     chat: createChatStore(),
     providers: createProviderStore(),
+    localServer: createLocalServerStore(),
   };
   /** what the shell decides, kept in step with the stores */
   const view = createShellView(stores);
@@ -70,8 +76,14 @@ export function createDesktopApp({
     trackedRequestId,
     setError: (error) => clientStatus.setError(stores.client, error),
   });
+  const localServer = createLocalServer({
+    api,
+    store: stores.localServer,
+    client: stores.client,
+  });
   const lifecycle = createClientLifecycle({
     api,
+    localServer,
     supportsManagedServer,
     stores,
     refreshSession: reads.refreshSession,
@@ -86,6 +98,7 @@ export function createDesktopApp({
       reportFailure: reportAction,
     }),
     ...createProviderReads({ api, store: stores.providers, client: stores.client }),
+    ...localServer,
   };
   reconcileSelection(stores, actions.selectAgent);
   /* the composer's drafts, kept apart so a keystroke reaches only it */
