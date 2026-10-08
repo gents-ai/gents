@@ -1053,8 +1053,8 @@ def caseCoverage : List CoverageEntry :=
       "gents_desktop_bridge::snapshot::tests::session_state::session_snapshot_binds_generated_session_turn_cases")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "client_behavior_readiness_cases"
-      "ClientBehaviorReadinessCases"
+      "client_agent_readiness_cases"
+      "ClientAgentReadinessCases"
       "conformance::client_runtime::generated_behavior_readiness_cases_drive_the_production_projector")
       "runtime-reconcile" [Surface.operatorUi]
   , tagged (consumerCoverage
@@ -1439,8 +1439,8 @@ def caseCoverage : List CoverageEntry :=
       "Exercises the canonical persisted-attempt projector, followed by test-local phase/status mapping. Drive the gents-cli Codex shim mapping and local-interrupt override before claiming end-to-end shim projection coverage.")
       "codex-shim" [Surface.runtimeInternal]
   , tagged (followUpCoverage
-      "codex_shim_behavior_selection_cases"
-      "CodexShimBehaviorSelectionCases"
+      "codex_shim_agent_selection_cases"
+      "CodexShimAgentSelectionCases"
       "The conformance suite's copied mappings and fixture-field assertions do not exercise the gents-cli Codex shim owner. Route these generated inputs through its production projection before claiming adapter coverage.")
       "codex-shim" [Surface.api, Surface.runtimeInternal]
   , tagged (followUpCoverage
