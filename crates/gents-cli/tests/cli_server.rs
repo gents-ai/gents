@@ -3144,7 +3144,7 @@ async fn mcp_graph_tools_take_the_subject_did_from_the_bearer() -> Result<()> {
         .await?
         .map_err(|refusal| {
             anyhow::anyhow!(
-                "DefraDB refused another DID's listing, so a non-admin bearer cannot read the graph collections: stop and report it: {refusal}"
+                "DefraDB refused another DID's listing, so a non-admin bearer cannot read the graph collections: {refusal}"
             )
         })?;
     anyhow::ensure!(
