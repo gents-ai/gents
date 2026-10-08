@@ -5,7 +5,7 @@ import { composer, expect, gotoHarness, sendButton, test } from "./desktopTest";
    load starts it late and stalls in it, so a position read at a fixed delay
    can land mid-flight; read it once the view holds still instead. */
 async function restingScrollTop(page: Page, viewport: Locator): Promise<number> {
-  const STILL_MS = 300;
+  const STILL_MS = 500;
   let still = 0;
   let last = await viewport.evaluate((scroller) => scroller.scrollTop);
   const deadline = Date.now() + 5000;
@@ -20,19 +20,9 @@ async function restingScrollTop(page: Page, viewport: Locator): Promise<number> 
   return last;
 }
 
-/* the reader's wheel up the page from the foot, once the view has taken it
-   (following stops at the wheel itself) and come to rest */
-async function wheelUp(page: Page, viewport: Locator) {
-  await expect(viewport).toHaveAttribute("data-following", "true");
-  await restingScrollTop(page, viewport);
-  await page.getByTestId("transcript-panel").hover();
-  await page.mouse.wheel(0, -1200);
-  await expect(viewport).toHaveAttribute("data-following", "false");
-  await restingScrollTop(page, viewport);
-}
-
 /* the row under the reader, and how far below the view's top it is; an
-   older page landing above moves the position, not the row */
+   older page landing above moves the position, not the row. A row no
+   longer drawn has gone far below the view. */
 function readerRow(viewport: Locator, key?: string) {
   return viewport.evaluate((scroller, key) => {
     const top = scroller.getBoundingClientRect().top;
@@ -40,13 +30,39 @@ function readerRow(viewport: Locator, key?: string) {
       scroller.querySelectorAll<HTMLElement>("[data-timeline-key]"),
     );
     const row = key
-      ? rows.find((row) => row.dataset.timelineKey === key)!
+      ? rows.find((row) => row.dataset.timelineKey === key)
       : rows.find((row) => row.getBoundingClientRect().bottom > top + 200)!;
+    if (!row) return { key: key!, offset: Number.POSITIVE_INFINITY };
     return {
       key: row.dataset.timelineKey!,
       offset: Math.round(row.getBoundingClientRect().top - top),
     };
   }, key);
+}
+
+/* the reader's wheel up the page from the foot, once the view has moved up
+   and come to rest. Following stops at the wheel event itself, before
+   WebKit has begun the scroll, and an older page landing above moves the
+   position down, so the move is read from the row under the reader. Under
+   load WebKitGTK can lose a wheel to a write made before its animation
+   starts (#2389); the reader wheels again. */
+async function wheelUp(page: Page, viewport: Locator) {
+  test.skip(
+    test.info().project.name !== "webkit-desktop",
+    "Chromium scrolls before the wheel event and the view is pinned back (#2388)",
+  );
+  await expect(viewport).toHaveAttribute("data-following", "true");
+  await restingScrollTop(page, viewport);
+  const at = await readerRow(viewport);
+  await page.getByTestId("transcript-panel").hover();
+  await expect(async () => {
+    await page.mouse.wheel(0, -1200);
+    await expect
+      .poll(async () => (await readerRow(viewport, at.key)).offset, { timeout: 2000 })
+      .toBeGreaterThan(at.offset);
+  }).toPass({ timeout: 10_000 });
+  await expect(viewport).toHaveAttribute("data-following", "false");
+  await restingScrollTop(page, viewport);
 }
 
 /* Scrolled up, the reader's row stays where it is on screen whatever

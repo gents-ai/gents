@@ -352,6 +352,42 @@ describe("a reader's place through their own scroll", () => {
     expect(fixture.viewport.scrollTop).toBe(550);
   });
 
+  /* WebKitGTK under load stalls an animation between frames, past the
+     input's window */
+  it("holds where an animated scroll that stalls past its input window rests", async () => {
+    const fixture = readingFixture();
+    renderHook(() => useFollowTail(fixture.viewport, "session-1"));
+    act(() => {
+      fixture.viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -400 }));
+    });
+    await fixture.animate(800, 600, 200);
+    await act(async () => vi.advanceTimersByTimeAsync(500));
+    act(() => {
+      fixture.viewport.scrollTop = 450;
+      fixture.viewport.dispatchEvent(new Event("scroll"));
+    });
+    fixture.growAbove(100);
+    expect(fixture.viewport.scrollTop).toBe(550);
+  });
+
+  /* content shrinking below clamps the view up onto the foot */
+  it("puts back a clamp onto the foot just after the reader's upward scroll", async () => {
+    const fixture = readingFixture();
+    renderHook(() => useFollowTail(fixture.viewport, "session-1"));
+    act(() => {
+      fixture.viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -400 }));
+    });
+    await fixture.animate(800, 500, 200);
+    await act(async () => vi.advanceTimersByTimeAsync(400));
+    act(() => {
+      fixture.setHeight(600);
+      fixture.viewport.scrollTop = 400;
+      fixture.viewport.dispatchEvent(new Event("scroll"));
+    });
+    fixture.growAbove(0);
+    expect(fixture.viewport.scrollTop).toBe(500);
+  });
+
   /* the reply below streams between the animation's last frames */
   it("leaves the tail of an animated scroll to the reader when the reply below grows", async () => {
     const fixture = readingFixture();

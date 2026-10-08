@@ -110,6 +110,9 @@ function setScroll(el: HTMLElement, top: number) {
 const REPIN_PX = 24;
 /* how long after a wheel, touch or key a scroll still counts as the reader's */
 const INTENT_MS = 300;
+/* how long an animated scroll of the reader's may stall between frames and
+   still be theirs when it moves on (WebKitGTK under load) */
+const TAIL_MS = 1000;
 /* the line a reader's eye is on, this far below the scroller's top */
 const READING_LINE_PX = 72;
 const NAV_KEYS = new Set([
@@ -258,6 +261,9 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
       if (Math.abs(delta) >= 0.5) setScroll(scroller, scroller.scrollTop + delta);
     };
     let intentUntil = 0;
+    /* when and which way (+1 down, -1 up) the reader's own scroll last moved the view */
+    let tailAt = -Infinity;
+    let tailWay = 0;
     leaving.current = false;
     /* holding the scrollbar, the reader is placing the view themselves */
     let dragging = false;
@@ -341,15 +347,28 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
       dragging = false;
     };
     const onScroll = () => {
-      /* An animated scroll (WebKitGTK eases one wheel over 400-600 ms) goes
-         on moving the view after its input's window ends: each move of its
-         own carries the reader's intent on, so its tail is theirs too. A
-         position this module wrote is not such a move. */
+      /* An animated scroll (WebKitGTK eases one wheel over 400-600 ms, and
+         under load stalls between frames) goes on moving the view after its
+         input's window ends: each move of its own carries the reader's
+         intent on, so its tail is theirs too. A position this module wrote
+         is not such a move. Past the window, a move that carries on the
+         same way is the tail; one going up onto the foot is the browser
+         clamping, which an upward scroll never lands on. */
+      const now = performance.now();
+      const moved = Math.sign(
+        scroller.scrollTop - (settled.get(scroller) ?? scroller.scrollTop),
+      );
       if (
-        performance.now() <= intentUntil &&
-        scroller.scrollTop !== settled.get(scroller)
-      )
+        moved !== 0 &&
+        (now <= intentUntil ||
+          (now - tailAt <= TAIL_MS &&
+            moved === tailWay &&
+            (moved > 0 || distanceFromFoot(scroller) >= 0.5)))
+      ) {
         intend();
+        tailAt = now;
+        tailWay = moved;
+      }
       if (!dragging && performance.now() > intentUntil) return;
       setFollowing(!leaving.current && distanceFromFoot(scroller) <= REPIN_PX);
       if (!following.current) capture();
