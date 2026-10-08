@@ -41,14 +41,14 @@ def decodeControl (doc : Doc) : Option Control := do
         some (true, true, true)
     | none => some (false, false, true)
     | _ => none
-  let agents ← match doc "subagents" with
+  let agents ← match doc "agents" with
     | some "{\"enabled\":true}" => some true
     | some "{\"enabled\":false}" => some false
     | none => some false
     | _ => none
   pure { selfConfig, agents, noLockout, toolsAuthority }
 
-/-- Fixture decoder for the behavior values used below. -/
+/-- Fixture decoder for the agent values used below. -/
 def decodeReach (doc : Doc) : Option Reach := do
   let enabled ← match doc "enabled" with
     | some "true" | none => some true
@@ -73,16 +73,16 @@ def decodeAuthText : String → Option Configuration.BackendAuth
 def decodeAuth (doc : Doc) : Option Configuration.BackendAuth :=
   (doc "auth").bind decodeAuthText
 
-/-- The invoker-only no-lockout slice for Tools and Behavior targets. -/
+/-- The invoker-only no-lockout slice for Tools and Agent targets. -/
 def lockoutGuard (t : Target) (stored : Doc) : Doc → Bool :=
-  if t = .agentBehavior then keepsReach decodeReach stored
+  if t = .agent then keepsReach decodeReach stored
   else keepsControl decodeControl stored
 
 def rowBackendOf (r : CaseRow) (id : String) : Option (String × Configuration.BackendAuth) :=
   (r.backends.find? (·.1 = id)).bind fun (_, kind, auth) => (decodeAuthText auth).map (kind, ·)
 
 /-- A guarded row replays its target's typed guard: the no-lockout slice for
-Tools and Behavior, the auth fence for Backend and the account choice fence
+Tools and Agent, the auth fence for Backend and the account choice fence
 for Profile (default = the original account), which Rust enforces in
 `validate` on every model write rather than only under no-lockout. -/
 def caseGuard (r : CaseRow) (stored : Doc) : Doc → Bool :=
@@ -131,11 +131,11 @@ def buildWitness (r : CaseRow) : CaseWitness :=
 /-- Values are decoded group values abstracted as strings; nested validation
 is supplied to `step`, using the same owner as ordinary configuration. -/
 def examples : List (Target × FieldKey × FieldValue) :=
-  [ (.agentBehavior, "context_id", "context-1")
+  [ (.agent, "context_id", "context-1")
   , (.agentContext, "system_prompt", "You are concise.")
   , (.compaction, "threshold", "0.75")
   , (.tools, "host", "{root: /workspace}")
-  , (.subagentTarget, "behavior_id", "gatekeeper")
+  , (.agentTarget, "agent_id", "gatekeeper")
   , (.skill, "instructions", "Read the checklist before reviewing.")
   , (.datastoreToolSurface, "entries", "[{tool_name: submit_job, collection: Job}]")
   , (.inferenceProfile, "model_name", "model-1")
@@ -152,7 +152,7 @@ def examples : List (Target × FieldKey × FieldValue) :=
 def examplesToRows : List CaseRow := examples.map fun (t, k, v) =>
   { name := t.collectionName ++ "_configured_field_accepted"
   , target := t, guarded := false, validates := true
-  , doc := [(t.uniqueField, "doc-1"), ("agent_did", "did:key:agent-a")]
+  , doc := [(t.uniqueField, "doc-1"), ("node_did", "did:key:agent-a")]
   , patch := [(k, some v)] }
 
 /-- One provider with two accounts, another with its original and a second
@@ -166,18 +166,18 @@ def profileBackends : List (String × String × String) :=
   , ("\"local\"", "OpenAiCompatible", "{\"kind\":\"environment\",\"variable\":\"KEY\"}") ]
 
 def scenarios : List CaseRow := examplesToRows ++
-  [ { name := "behavior_owner_patch_rejected"
-    , target := .agentBehavior, guarded := false, validates := true
-    , doc := [("agent_did", "did:key:agent-a")]
-    , patch := [("agent_did", some "did:key:agent-b")] }
-  , { name := "behavior_invalid_reference_rejected"
-    , target := .agentBehavior, guarded := false, validates := false
+  [ { name := "agent_owner_patch_rejected"
+    , target := .agent, guarded := false, validates := true
+    , doc := [("node_did", "did:key:agent-a")]
+    , patch := [("node_did", some "did:key:agent-b")] }
+  , { name := "agent_invalid_reference_rejected"
+    , target := .agent, guarded := false, validates := false
     , doc := [("context_id", "context-1")]
     , patch := [("context_id", some "missing-context")] }
   , { name := "datastore_owner_patch_rejected"
     , target := .datastoreToolSurface, guarded := false, validates := true
-    , doc := [("surface_id", "jobs"), ("agent_did", "did:key:agent-a")]
-    , patch := [("agent_did", some "did:key:agent-b")] }
+    , doc := [("surface_id", "jobs"), ("node_did", "did:key:agent-a")]
+    , patch := [("node_did", some "did:key:agent-b")] }
   , { name := "datastore_invalid_entries_rejected"
     , target := .datastoreToolSurface, guarded := false, validates := false
     , doc := [("surface_id", "jobs"), ("entries", "valid")]
@@ -202,17 +202,17 @@ def scenarios : List CaseRow := examplesToRows ++
   , { name := "tools_guarded_agents_enable_accepted"
     , target := .tools, guarded := true, validates := true
     , doc := [("self_config", "{\"enable_self_config\":true}")]
-    , patch := [("subagents", some "{\"enabled\":true}")] }
+    , patch := [("agents", some "{\"enabled\":true}")] }
   , { name := "tools_guarded_agents_removal_rejected"
     , target := .tools, guarded := true, validates := true
     , doc := [("self_config", "{\"enable_self_config\":true}"),
-              ("subagents", "{\"enabled\":true}")]
-    , patch := [("subagents", some "{\"enabled\":false}")] }
+              ("agents", "{\"enabled\":true}")]
+    , patch := [("agents", some "{\"enabled\":false}")] }
   , { name := "tools_guarded_agents_clear_rejected"
     , target := .tools, guarded := true, validates := true
     , doc := [("self_config", "{\"enable_self_config\":true}"),
-              ("subagents", "{\"enabled\":true}")]
-    , patch := [("subagents", none)] }
+              ("agents", "{\"enabled\":true}")]
+    , patch := [("agents", none)] }
   , { name := "tools_guarded_self_config_clear_rejected"
     , target := .tools, guarded := true, validates := true
     , doc := [("self_config", "{\"enable_self_config\":true}")]
@@ -232,21 +232,21 @@ def scenarios : List CaseRow := examplesToRows ++
     , doc := [("self_config", "{\"enable_self_config\":true,\"self_config_no_lockout\":true}")]
     , patch := [("self_config",
         some "{\"enable_self_config\":true,\"self_config_no_lockout\":true,\"self_config_categories\":[\"tools\"]}")] }
-  , { name := "behavior_guarded_self_disable_rejected"
-    , target := .agentBehavior, guarded := true, validates := true
-    , doc := [("behavior_id", "default"), ("tags", "[\"gents:setup-steward\"]")]
+  , { name := "agent_guarded_self_disable_rejected"
+    , target := .agent, guarded := true, validates := true
+    , doc := [("agent_id", "default"), ("tags", "[\"gents:setup-steward\"]")]
     , patch := [("enabled", some "false")] }
-  , { name := "behavior_guarded_setup_tag_removal_rejected"
-    , target := .agentBehavior, guarded := true, validates := true
-    , doc := [("behavior_id", "default"), ("tags", "[\"gents:setup-steward\"]")]
+  , { name := "agent_guarded_setup_tag_removal_rejected"
+    , target := .agent, guarded := true, validates := true
+    , doc := [("agent_id", "default"), ("tags", "[\"gents:setup-steward\"]")]
     , patch := [("tags", some "[\"ui:engineer\"]")] }
-  , { name := "behavior_guarded_tag_addition_accepted"
-    , target := .agentBehavior, guarded := true, validates := true
-    , doc := [("behavior_id", "default"), ("tags", "[\"gents:setup-steward\"]")]
+  , { name := "agent_guarded_tag_addition_accepted"
+    , target := .agent, guarded := true, validates := true
+    , doc := [("agent_id", "default"), ("tags", "[\"gents:setup-steward\"]")]
     , patch := [("tags", some "[\"gents:setup-steward\",\"ui:engineer\"]")] }
   , { name := "task_targeting_invoker_unguarded_accepted"
     , target := .task, guarded := false, validates := true
-    , doc := [("task_id", "engineer-inbox"), ("behavior_id", "default")]
+    , doc := [("task_id", "engineer-inbox"), ("agent_id", "default")]
     , patch := [("prompt_template", some "Review {{ doc.outcome }}")] }
   , { name := "backend_observation_patch_rejected"
     , target := .inferenceBackend, guarded := false, validates := true
