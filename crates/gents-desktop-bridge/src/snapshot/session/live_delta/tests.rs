@@ -85,24 +85,8 @@ fn delta(store: &ClientStore, cursor: &str) -> SessionLiveDeltaView {
 
 #[test]
 fn generated_live_cursor_contract() {
-    let proofs = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../gents/proofs");
-    let output = std::process::Command::new("lake")
-        .args([
-            "env",
-            "lean",
-            "--run",
-            "Proofs/Conformance/ClientObservationOrdering.lean",
-        ])
-        .current_dir(proofs)
-        .output()
-        .expect("execute Lean live cursor owner");
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let data: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let cases = data["liveDeltas"].as_array().unwrap();
+    let data = gents_lean_contract::load_contract_snapshot::<serde_json::Value>().unwrap();
+    let cases = data["client_live_delta_cases"].as_array().unwrap();
     assert_eq!(cases.len(), 18);
     for case in cases {
         let base = case["base"].as_u64().map(|v| v.to_string());

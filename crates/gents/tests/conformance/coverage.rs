@@ -969,6 +969,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "DesktopClientShellCases".to_string(),
         ));
     }
+    if !snapshot.client_live_delta_cases.is_empty() {
+        emitted.insert((
+            "client_live_delta_cases".to_string(),
+            "ClientLiveDeltaCases".to_string(),
+        ));
+    }
     if !snapshot.request_lifecycle_operator_ui_cases.is_empty() {
         emitted.insert((
             "request_lifecycle_operator_ui_cases".to_string(),

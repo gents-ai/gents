@@ -50,6 +50,7 @@ import Proofs.CompletionRetry.Contracts
 import Proofs.Conformance.Triggers.Contracts
 import Proofs.Conformance.EventGroups
 import Proofs.Conformance.ClientShell.Contracts
+import Proofs.Conformance.ClientLiveDelta
 import Proofs.ApplyReconcile.ContractCases
 import Proofs.Conformance.Deviations
 import Proofs.Conformance.CoverageLedger
@@ -220,6 +221,8 @@ def snapshotJson : String :=
       ++ Conformance.ClientShellContracts.desktopClientShellCasesJson ++ ","
     ++ "\"request_lifecycle_operator_ui_cases\":"
       ++ Conformance.ClientShellContracts.requestLifecycleOperatorUiCasesJson ++ ","
+    ++ "\"client_live_delta_cases\":"
+      ++ Conformance.ClientLiveDeltaContracts.casesJson ++ ","
     ++ "\"startup_readiness_cases\":"
       ++ startupReadinessCasesJson ++ ","
     ++ "\"readiness_publication_cases\":"

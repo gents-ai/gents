@@ -153,9 +153,11 @@ export function createSessionReads({
     const requestId = trackedRequestId();
     if (!current || !requestId || !api.fetchSessionLiveDelta) return false;
     // A delta covers only the live overlay. Enforce history reconciliation at
-    // this shared event/poll entry so a continuous wake stream cannot starve it.
-    const reconcileMs = timingConfig().activeSessionPollMs ?? 1_500;
-    if (performance.now() - reconciledAt >= reconcileMs) return false;
+    // this shared event/poll entry so a continuous wake stream cannot starve
+    // it; a null period configures no periodic reconciliation.
+    const reconcileMs = timingConfig().activeSessionPollMs;
+    if (reconcileMs !== null && performance.now() - reconciledAt >= reconcileMs)
+      return false;
     const request = sessionLiveDeltaRequest(current, requestId);
     if (!request) return false;
     const capturedRefresh = refreshSeq;

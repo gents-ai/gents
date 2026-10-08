@@ -5,6 +5,7 @@ import type {
   DesktopSessionSnapshot,
   SessionLiveDeltaView,
 } from "@source-inc/gents-desktop-client";
+import { setDesktopShellTimingConfigForTests } from "../src/hooks/desktopShellRuntime";
 import { createSessionReads } from "../src/hooks/sessionReads";
 import { createSelectionStore } from "../src/hooks/selectionStore";
 import { createSessionStore, readSession } from "../src/hooks/sessionStore";
@@ -506,6 +507,46 @@ describe("createSessionReads", () => {
       await reads.refreshSession("session-1");
       expect(await reads.refreshSessionLiveDelta()).toBe(true);
     } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("keeps applying live reads when periodic reconciliation is disabled", async () => {
+    const clock = vi.spyOn(performance, "now").mockReturnValue(0);
+    setDesktopShellTimingConfigForTests({ activeSessionPollMs: null });
+    try {
+      const tip = session([], {
+        totalItems: 0,
+        pageItems: 0,
+        hasOlder: false,
+        hasNewer: false,
+        oldestItemKey: null,
+        newestItemKey: null,
+      });
+      tip.projectionRevision = { storeVersion: 1 };
+      tip.timelineItems = [
+        { kind: "liveAssistant", itemKey: "live", content: "hello", reasoning: null },
+      ];
+      const fetchSessionLiveDelta = vi.fn(async () => ({
+        outcome: "unchanged",
+        liveCursor: "cursor",
+        requestId: "request-1",
+        revision: { storeVersion: 2 },
+        turnState: "running",
+        status: null,
+        content: { mode: "unchanged", value: "", byteLen: 5, hash: "4f9f2cab" },
+        reasoning: { mode: "unchanged", value: "", byteLen: 0, hash: "811c9dc5" },
+      }));
+      const reads = readsFor({
+        fetchSessionSnapshot: async () => tip,
+        fetchSessionLiveDelta,
+      } as unknown as DesktopApiAdapter);
+      await reads.refreshSession("session-1");
+      clock.mockReturnValue(60_000);
+      expect(await reads.refreshSessionLiveDelta()).toBe(true);
+      expect(fetchSessionLiveDelta).toHaveBeenCalledTimes(1);
+    } finally {
+      setDesktopShellTimingConfigForTests(null);
       clock.mockRestore();
     }
   });
