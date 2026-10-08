@@ -416,187 +416,215 @@ async fn authored_keys(node: &EmbeddedNode, request_doc_id: &str) -> Vec<String>
 /// publications, then a reclaim under a new generation, republishes that input
 /// by reusing every accepted entry and consuming only what is still queued,
 /// leaving exactly one entry per key.
+/// Durable facts a rejected step must leave unchanged.
+async fn durable_facts(node: &EmbeddedNode, session_id: &str) -> serde_json::Value {
+    let session = escape_graphql_string(session_id);
+    let response = crate::graphql::graphql_with_transaction_retry(
+        node,
+        &format!(
+            r#"{{ AgentMessage(filter: {{ session_id: {{ _eq: "{session}" }} }}, order: {{ sequence: ASC }}) {{ _docID message_key sequence }}
+               AgentOutputSegment(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ _docID }}
+               AgentRequest(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ _docID lifecycle_state execution_generation superseded_by_request_doc_id }} }}"#
+        ),
+        "fold publication durable facts",
+    )
+    .await
+    .unwrap();
+    let mut data = response.data.unwrap();
+    for collection in ["AgentOutputSegment", "AgentRequest"] {
+        let rows = data[collection].as_array_mut().unwrap();
+        rows.sort_by_key(|row| row["_docID"].as_str().unwrap().to_owned());
+    }
+    data
+}
+
+/// Lean `FoldPublication.cases`: each composed script runs through the
+/// native claim, authored publication, provider publication, reclaim and
+/// terminal owners, and every step's acceptance, queue and authored keys
+/// match the model. A rejected step leaves durable state unchanged. A native
+/// terminal commit is the model's terminalize-then-finish boundary, so queue
+/// facts are compared after `finish`.
 #[tokio::test]
-async fn reclaimed_turn_reuses_published_input_once_per_key() {
-    for published_before_crash in 0..=3 {
-        let name = format!("reclaim-after-{published_before_crash}");
-        let db = test_db(&name).await;
-        let session_id = name.clone();
+async fn generated_fold_publication_scripts_bind_to_native_owners() {
+    use crate::lean_vocab_test::LeanFoldPublicationStep as Step;
+
+    let cases = crate::lean_vocab_test::lean_fold_publication_cases();
+    assert!(!cases.is_empty());
+    for case in cases {
+        let db = test_db(&case.name).await;
+        let session_id = format!("fold-publication-{}", case.name);
         let mut bound = HashMap::new();
-        for (arrival, (id, queued_after)) in [(101, None), (102, Some(101)), (103, Some(101))]
-            .into_iter()
-            .enumerate()
-        {
+        for (arrival, id) in [case.head, case.selected].into_iter().enumerate() {
             let entry = LeanFoldQueueEntry {
                 request_id: id,
                 execution_origin: "interactive".into(),
                 source: "user".into(),
                 policy: "append".into(),
-                queued_after,
-                requester_id: Some(1),
+                queued_after: Some(10),
+                requester_id: None,
                 turn_context: 0,
             };
             bound.insert(id, enqueue(&db, &session_id, &entry, arrival).await);
         }
+        let head_doc = bound[&case.head].clone();
         let writer = DefraStreamWriter::new(db.node.clone(), db.agent_did(), Duration::ZERO);
-        let inputs = |turn: &ActiveTurn, consumed: &[u64]| {
-            std::iter::once(("prompt".to_owned(), "message 101".to_owned()))
-                .chain(
-                    consumed
-                        .iter()
-                        .chain(turn.selected.iter())
-                        .map(|id| (folded_input_key(&bound[id]), format!("message {id}"))),
-                )
-                .collect::<Vec<_>>()
-        };
-
-        let mut first = claim_head(&db, &bound, 101, &[102, 103]).await;
-        assert_eq!(first.selected, [102, 103]);
+        let mut generations: HashMap<u64, ActiveTurn> = HashMap::new();
+        let mut first = claim_head(&db, &bound, case.head, &[case.selected]).await;
         first.begin(&writer).await;
-        for (key, content) in inputs(&first, &[]).into_iter().take(published_before_crash) {
-            writer
-                .publish_authored_message(
-                    &first.lifecycle,
-                    &key,
-                    &gents_protocol::message::Message::user(content),
-                )
-                .await
-                .unwrap();
-        }
-        let first_generation = first.lifecycle.execution_generation().unwrap().to_owned();
-        let reclaimed_request = first.lifecycle.request().clone();
-        drop(first);
-
-        // The lease is lost and the same physical request is claimed again.
-        crate::config_client::ConfigAccess::write_local_response(
-            &db.node,
-            "test.fold_reclaim",
-            &format!(
-                r#"mutation {{ update_AgentRequest(docID: "{}", input: {{ lifecycle_state: "pending" }}) {{ _docID }} }}"#,
-                escape_graphql_string(&bound[&101])
-            ),
-        )
-        .await
-        .unwrap();
-        let consumed = load_consumed_folded_inputs(
-            &db.node,
-            &crate::request_binding::load_agent_request_by_doc_id(&db.node, &bound[&101])
-                .await
-                .unwrap()
-                .unwrap(),
-        )
-        .await
-        .unwrap()
-        .into_iter()
-        .map(|input| input.request_id.parse::<u64>().unwrap())
-        .collect::<Vec<_>>();
-        let still_queued = [102, 103]
-            .into_iter()
-            .filter(|id| !consumed.contains(id))
-            .collect::<Vec<_>>();
-        let mut second = claim_request(&db, &bound, reclaimed_request, &still_queued).await;
-        assert_ne!(
-            second.lifecycle.execution_generation().unwrap(),
-            first_generation
-        );
-        assert_eq!(
-            second.selected, still_queued,
-            "{name}: reclaim selects what is queued"
-        );
-        second.begin(&writer).await;
-        let expected = inputs(&second, &consumed);
-        for (key, content) in &expected {
-            writer
-                .publish_authored_message(
-                    &second.lifecycle,
-                    key,
-                    &gents_protocol::message::Message::user(content.clone()),
-                )
-                .await
-                .unwrap();
-        }
-        let keys = authored_keys(&db.node, &bound[&101]).await;
-        assert_eq!(
-            keys,
-            expected
-                .iter()
-                .map(
-                    |(key, _)| crate::session::canonical_rows::authored_message_key(
-                        &bound[&101],
-                        key
+        generations.insert(8, first);
+        let scope: gents_protocol::rendered_request::CaptureScope = "inference.1".parse().unwrap();
+        assert_eq!(case.steps.len(), case.expected.len());
+        for (index, (step, expected)) in case.steps.iter().zip(&case.expected).enumerate() {
+            let before = durable_facts(&db.node, &session_id).await;
+            let accepted = match step {
+                Step::PublishPrompt { generation } | Step::PublishChangedPrompt { generation } => {
+                    let content = if matches!(step, Step::PublishPrompt { .. }) {
+                        "prompt"
+                    } else {
+                        "changed prompt"
+                    };
+                    writer
+                        .publish_authored_message(
+                            &generations[generation].lifecycle,
+                            "prompt",
+                            &gents_protocol::message::Message::user(content),
+                        )
+                        .await
+                        .is_ok()
+                }
+                Step::PublishFolded {
+                    generation,
+                    request_id,
+                } => writer
+                    .publish_authored_message(
+                        &generations[generation].lifecycle,
+                        &folded_input_key(&bound[request_id]),
+                        &gents_protocol::message::Message::user(format!("message {request_id}")),
                     )
-                )
-                .collect::<Vec<_>>(),
-            "{name}: exactly one entry per key, in order"
-        );
-        let rows = fold_rows(&db.node, &session_id).await;
-        for id in [102, 103] {
-            let row = rows.iter().find(|row| modeled_id(row) == id).unwrap();
-            assert_eq!(
-                row.lifecycle_state,
-                RequestLifecycleState::Superseded,
-                "{name}"
+                    .await
+                    .is_ok(),
+                Step::AcceptTurn { generation } => {
+                    writer
+                        .start_provider_attempt(&head_doc, 0, 0, scope.clone())
+                        .await;
+                    writer
+                        .publish_native_turn(
+                            &generations[generation].lifecycle,
+                            0,
+                            0,
+                            &gents_protocol::message::Message::assistant("answer"),
+                        )
+                        .await
+                        .is_ok()
+                }
+                Step::Recover { expected, fresh } => {
+                    let mut request = generations[expected].lifecycle.request().clone();
+                    request.deadline = None;
+                    crate::config_client::ConfigAccess::write_local_response(
+                        &db.node,
+                        "test.fold_publication_reclaim",
+                        &format!(
+                            r#"mutation {{ update_AgentRequest(docID: "{}", input: {{ lifecycle_state: "pending", deadline: null }}) {{ _docID }} }}"#,
+                            escape_graphql_string(&head_doc)
+                        ),
+                    )
+                    .await
+                    .unwrap();
+                    let still_queued = fold_rows(&db.node, &session_id)
+                        .await
+                        .iter()
+                        .filter(|row| {
+                            modeled_id(row) == case.selected
+                                && row.lifecycle_state == RequestLifecycleState::Pending
+                        })
+                        .map(modeled_id)
+                        .collect::<Vec<_>>();
+                    let mut reclaimed = claim_request(&db, &bound, request, &still_queued).await;
+                    reclaimed.begin(&writer).await;
+                    generations.insert(*fresh, reclaimed);
+                    true
+                }
+                Step::Terminalize { generation } => generations
+                    .get_mut(generation)
+                    .unwrap()
+                    .lifecycle
+                    .terminalize_owned(
+                        crate::lifecycle::RequestTerminalOutcome::Completed,
+                        gents_protocol::output::TerminalOutput::NoMessage,
+                        None,
+                    )
+                    .await
+                    .is_ok(),
+                Step::Finish => true,
+            };
+            let label = format!("{} step {index} {step:?}", case.name);
+            assert_eq!(accepted, expected.accepted, "{label}: acceptance");
+            if !accepted {
+                assert_eq!(
+                    durable_facts(&db.node, &session_id).await,
+                    before,
+                    "{label}: a rejected step leaves durable state unchanged"
+                );
+            }
+            let keys = authored_keys(&db.node, &head_doc)
+                .await
+                .into_iter()
+                .filter_map(|key| {
+                    key.strip_prefix(&crate::session::canonical_rows::authored_message_key(
+                        &head_doc, "",
+                    ))
+                    .map(str::to_owned)
+                })
+                .map(|key| {
+                    if key == folded_input_key(&bound[&case.selected]) {
+                        format!("folded:{}", case.selected)
+                    } else {
+                        key
+                    }
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(keys, expected.authored_keys, "{label}: authored keys");
+            if matches!(step, Step::Terminalize { .. }) {
+                continue;
+            }
+            let rows = fold_rows(&db.node, &session_id).await;
+            let state = |id: u64| {
+                rows.iter()
+                    .find(|row| modeled_id(row) == id)
+                    .unwrap()
+                    .lifecycle_state
+            };
+            let head_active = matches!(
+                state(case.head),
+                RequestLifecycleState::Claimed | RequestLifecycleState::Processing
             );
+            let latest = generations.keys().max().copied().unwrap();
+            let folding = if head_active {
+                generations[&latest]
+                    .selected
+                    .iter()
+                    .copied()
+                    .filter(|id| state(*id) == RequestLifecycleState::Pending)
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
+            let pending = [case.selected]
+                .into_iter()
+                .filter(|id| state(*id) == RequestLifecycleState::Pending && !folding.contains(id))
+                .collect::<Vec<_>>();
+            let terminal = [case.head, case.selected]
+                .into_iter()
+                .filter(|id| state(*id).is_terminal())
+                .collect::<Vec<_>>();
             assert_eq!(
-                row.superseded_by_request_doc_id.as_deref(),
-                Some(bound[&101].as_str())
+                head_active.then_some(case.head),
+                expected.active,
+                "{label}: active"
             );
+            assert_eq!(folding, expected.folding, "{label}: selected");
+            assert_eq!(pending, expected.pending, "{label}: pending");
+            assert_eq!(terminal, expected.terminal, "{label}: terminal");
         }
     }
-}
-
-/// A turn that fails before it publishes its selected messages leaves them
-/// queued: the next claim answers them.
-#[tokio::test]
-async fn early_failure_leaves_selected_messages_queued_for_the_next_turn() {
-    let db = test_db("fold-early-failure").await;
-    let session_id = "fold-early-failure".to_owned();
-    let mut bound = HashMap::new();
-    for (arrival, (id, queued_after)) in [(101, None), (102, Some(101)), (103, Some(101))]
-        .into_iter()
-        .enumerate()
-    {
-        let entry = LeanFoldQueueEntry {
-            request_id: id,
-            execution_origin: "interactive".into(),
-            source: "user".into(),
-            policy: "append".into(),
-            queued_after,
-            requester_id: Some(1),
-            turn_context: 0,
-        };
-        bound.insert(id, enqueue(&db, &session_id, &entry, arrival).await);
-    }
-    let mut first = claim_head(&db, &bound, 101, &[102, 103]).await;
-    assert_eq!(first.selected, [102, 103]);
-    // Workspace resolution or prompt preparation fails before publication.
-    first
-        .lifecycle
-        .terminalize_owned(
-            RequestTerminalOutcome::Failed,
-            gents_protocol::output::TerminalOutput::NoMessage,
-            Some("workspace unavailable"),
-        )
-        .await
-        .unwrap();
-    let rows = fold_rows(&db.node, &session_id).await;
-    for id in [102, 103] {
-        let row = rows.iter().find(|row| modeled_id(row) == id).unwrap();
-        assert_eq!(row.lifecycle_state, RequestLifecycleState::Pending);
-        assert!(
-            crate::lifecycle::folded_into(&gents_protocol::row::AgentRequestRow {
-                request_id: row.request_id.clone(),
-                lifecycle_state: Some(row.lifecycle_state),
-                failure_reason: row.failure_reason.clone(),
-                ..Default::default()
-            })
-            .is_none()
-        );
-    }
-    let next = claim_head(&db, &bound, 102, &[103]).await;
-    assert_eq!(
-        next.selected,
-        [103],
-        "the next turn answers the queued messages"
-    );
 }

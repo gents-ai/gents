@@ -1246,6 +1246,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_recovery_sweep_cases_drive_startup_recovery_contract",
         },
         ConformanceConsumer::RustTest {
+            id: "lifecycle::queue::tests::folding::generated_fold_publication_scripts_bind_to_native_owners",
+            package: "gents",
+            source_path: "crates/gents/src/lifecycle/queue/tests/folding.rs",
+            module_path: "lifecycle::queue::tests::folding",
+            function: "generated_fold_publication_scripts_bind_to_native_owners",
+        },
+        ConformanceConsumer::RustTest {
             id: "lifecycle::queue::tests::folding::generated_handover_fold_claims_bind_to_native_claims",
             package: "gents",
             source_path: "crates/gents/src/lifecycle/queue/tests/folding.rs",

@@ -1118,6 +1118,11 @@ def caseCoverage : List CoverageEntry :=
       "lifecycle::queue::tests::folding::generated_handover_fold_claims_bind_to_native_claims")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "fold_publication_cases"
+      "FoldPublicationCases"
+      "lifecycle::queue::tests::folding::generated_fold_publication_scripts_bind_to_native_owners")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "fold_turn_input_cases"
       "FoldTurnInputCases"
       "agent::loop_stream::tests::folded_prompts_publish_and_send_in_queue_order")

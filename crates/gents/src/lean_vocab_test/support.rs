@@ -220,6 +220,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) fold_queue_cases: Vec<LeanFoldQueueCase>,
     pub(crate) fold_turn_input_cases: Vec<LeanFoldTurnInputCase>,
     pub(crate) handover_fold_cases: Vec<LeanHandoverFoldCase>,
+    pub(crate) fold_publication_cases: Vec<LeanFoldPublicationCase>,
     pub(crate) canonical_worker_capacity_cases: Vec<LeanWorkerCapacityCase>,
     pub(crate) canonical_payload_presentation_cases: Vec<LeanPayloadPresentationCase>,
     pub(crate) terminal_diagnostic_presentation_cases: Vec<LeanTerminalDiagnosticPresentationCase>,
@@ -1838,6 +1839,45 @@ pub(crate) enum LeanFoldAuthoredKey {
     Context,
     Prompt,
     Folded { request_id: u64 },
+}
+
+pub(crate) fn lean_fold_publication_cases() -> &'static [LeanFoldPublicationCase] {
+    &lean_contract_snapshot().fold_publication_cases
+}
+
+/// `CanonicalOutput.Execution.FoldPublication`: composed claim, publication,
+/// recovery and finish scripts with the model's observation after each step.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanFoldPublicationCase {
+    pub(crate) name: String,
+    pub(crate) head: u64,
+    pub(crate) selected: u64,
+    pub(crate) steps: Vec<LeanFoldPublicationStep>,
+    pub(crate) expected: Vec<LeanFoldPublicationObservation>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum LeanFoldPublicationStep {
+    PublishPrompt { generation: u64 },
+    PublishChangedPrompt { generation: u64 },
+    PublishFolded { generation: u64, request_id: u64 },
+    AcceptTurn { generation: u64 },
+    Recover { expected: u64, fresh: u64 },
+    Terminalize { generation: u64 },
+    Finish,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanFoldPublicationObservation {
+    pub(crate) accepted: bool,
+    pub(crate) active: Option<u64>,
+    pub(crate) pending: Vec<u64>,
+    pub(crate) folding: Vec<u64>,
+    pub(crate) terminal: Vec<u64>,
+    pub(crate) authored_keys: Vec<String>,
 }
 
 pub(crate) fn lean_handover_fold_cases() -> &'static [LeanHandoverFoldCase] {

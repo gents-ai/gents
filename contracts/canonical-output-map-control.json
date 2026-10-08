@@ -300,7 +300,9 @@
       { "file": "crates/gents/proofs/Proofs/Session/FoldCases.lean", "symbol": "SessionQueue.FoldCases.cases" },
       { "file": "crates/gents/proofs/Proofs/Session/Fold.lean", "symbol": "SessionQueue.early_finish_restores_queue" },
       { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/Transition.lean", "symbol": "CanonicalOutput.Execution.reuseAuthored" },
-      { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/HandoverCases.lean", "symbol": "CanonicalOutput.Execution.Handover.Cases.foldClaimCases" }
+      { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/HandoverCases.lean", "symbol": "CanonicalOutput.Execution.Handover.Cases.foldClaimCases" },
+      { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/Transition.lean", "symbol": "CanonicalOutput.Execution.publishAuthoredComposed" },
+      { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/FoldPublicationCases.lean", "symbol": "CanonicalOutput.Execution.FoldPublication.cases" }
     ],
     "constructors": [
       "SessionQueue.Action.claimFolding",
@@ -309,14 +311,16 @@
     "generated_groups": [
       "fold_queue_cases",
       "handover_fold_cases",
-      "fold_turn_input_cases"
+      "fold_turn_input_cases",
+      "fold_publication_cases"
     ],
     "fixture_status": "concrete_inputs",
     "native_owner_paths": [
       "crates/gents/src/lifecycle/claim.rs",
       "crates/gents/src/lifecycle/queue/folding.rs",
       "crates/gents/src/streaming/canonical.rs",
-      "crates/gents-loop/src/loop_stream.rs"
+      "crates/gents-loop/src/loop_stream.rs",
+      "crates/gents/src/agent/daemon/inference.rs"
     ],
     "consumer_paths": [
       "crates/gents/src/lean_vocab_test/support.rs",
@@ -335,7 +339,11 @@
       "early_finish_returns_selection_to_queue",
       "finish_after_partial_publication_returns_the_rest",
       "handover_claim_selects_verified_run",
-      "A reclaimed generation reuses each accepted authored entry once and consumes only still-queued messages"
+      "full_publication_consumes_the_selection",
+      "partial_publication_returns_the_rest_on_finish",
+      "reclaim_reuses_accepted_input_under_the_live_lease",
+      "reclaim_between_publications_consumes_the_rest_once",
+      "provider_turn_replay_is_generation_bound"
     ],
     "retired_bindings": [],
     "admission": {

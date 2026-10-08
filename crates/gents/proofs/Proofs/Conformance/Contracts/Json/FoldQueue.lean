@@ -1,5 +1,5 @@
 import Proofs.Session.FoldCases
-import Proofs.CanonicalOutput.Execution.HandoverCases
+import Proofs.CanonicalOutput.Execution.FoldPublicationCases
 import Proofs.Conformance.Contracts.Json.Helpers
 
 namespace Conformance.FoldQueueContracts
@@ -72,5 +72,40 @@ def handoverCaseJson (value : FoldClaimCase) : String :=
 
 def handoverCasesJson : String :=
   jsonArray (CanonicalOutput.Execution.Handover.Cases.foldClaimCases.map handoverCaseJson)
+
+def publicationStepJson : CanonicalOutput.Execution.FoldPublication.Step → String
+  | .publishPrompt generation =>
+      "{\"kind\":\"publish_prompt\",\"generation\":" ++ toString generation ++ "}"
+  | .publishChangedPrompt generation =>
+      "{\"kind\":\"publish_changed_prompt\",\"generation\":" ++ toString generation ++ "}"
+  | .publishFolded generation requestId =>
+      "{\"kind\":\"publish_folded\",\"generation\":" ++ toString generation ++
+        ",\"request_id\":" ++ toString requestId ++ "}"
+  | .acceptTurn generation =>
+      "{\"kind\":\"accept_turn\",\"generation\":" ++ toString generation ++ "}"
+  | .recover expected fresh =>
+      "{\"kind\":\"recover\",\"expected\":" ++ toString expected ++
+        ",\"fresh\":" ++ toString fresh ++ "}"
+  | .terminalize generation =>
+      "{\"kind\":\"terminalize\",\"generation\":" ++ toString generation ++ "}"
+  | .finish => "{\"kind\":\"finish\"}"
+
+def publicationObservationJson
+    (value : CanonicalOutput.Execution.FoldPublication.Observation) : String :=
+  "{\"accepted\":" ++ jsonOptionalBool (some value.accepted) ++
+  ",\"active\":" ++ jsonOptionalNat value.active ++
+  ",\"pending\":" ++ jsonArray (value.pending.map toString) ++
+  ",\"folding\":" ++ jsonArray (value.folding.map toString) ++
+  ",\"terminal\":" ++ jsonArray (value.terminal.map toString) ++
+  ",\"authored_keys\":" ++ jsonArray (value.authoredKeys.map jsonString) ++ "}"
+
+def publicationCasesJson : String :=
+  jsonArray (CanonicalOutput.Execution.FoldPublication.cases.map fun (name, steps) =>
+  "{\"name\":" ++ jsonString name ++
+  ",\"head\":902,\"selected\":903" ++
+  ",\"steps\":" ++ jsonArray (steps.map publicationStepJson) ++
+  ",\"expected\":" ++ (match CanonicalOutput.Execution.FoldPublication.run steps with
+    | none => "null"
+    | some observations => jsonArray (observations.map publicationObservationJson)) ++ "}")
 
 end Conformance.FoldQueueContracts

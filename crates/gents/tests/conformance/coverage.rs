@@ -1051,6 +1051,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "FoldTurnInputCases".to_string(),
         ));
     }
+    if !snapshot.fold_publication_cases.is_empty() {
+        emitted.insert((
+            "fold_publication_cases".to_string(),
+            "FoldPublicationCases".to_string(),
+        ));
+    }
     if !snapshot.handover_fold_cases.is_empty() {
         emitted.insert((
             "handover_fold_cases".to_string(),
