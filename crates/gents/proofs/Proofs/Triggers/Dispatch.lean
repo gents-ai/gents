@@ -197,7 +197,7 @@ theorem event_dispatch_selects_configured_task (snap : TriggerSnapshot)
   simp [dispatch, hk, hi, ha]
 
 /-- Successful trigger execution has an owned, enabled Task and delegates its
-behavior to the canonical resolver. Trigger lineage cannot bypass task admission. -/
+agent to the canonical resolver. Trigger lineage cannot bypass task admission. -/
 theorem resolveDispatch_ok_iff (registry : Configuration.Registry)
     (scope : String) (snap : TriggerSnapshot) (intent : FireIntent)
     (session : Configuration.ResolvedSessionConfig) :

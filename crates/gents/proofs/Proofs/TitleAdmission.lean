@@ -25,7 +25,7 @@ structure RequestRowEvidence where
   physicalBindingCurrent : Bool
   branchFieldsExact : Bool
   pendingDeadlineAbsent : Bool
-  /-- The target principal's configured `max_request_hop`, read by the same
+  /-- The target node's configured `max_request_hop`, read by the same
   admission observation. -/
   maxRequestHop : Nat
 

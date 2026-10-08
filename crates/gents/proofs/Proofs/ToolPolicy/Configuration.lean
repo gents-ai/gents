@@ -37,7 +37,7 @@ theorem invalid_remote_selection_rejected (s : RemoteServiceTools)
     (h : ¬ s.backgroundNames ⊆ s.toolNames) : admitRemoteService s = none := by
   simp [admitRemoteService, RemoteServiceTools.valid, h]
 
-/-- Optional outages do not block behavior admission; required services must
+/-- Optional outages do not block agent admission; required services must
 be enabled and observed available. Invocation always applies both gates. -/
 def serviceReady (s : RemoteServiceTools) (enabled : Bool)
     (available : Option (Finset String)) : Bool :=
@@ -349,7 +349,7 @@ theorem plugin_resource_within_host (baseline requested ceiling : Nat) :
     effectivePluginResource baseline requested ceiling ≤ ceiling := by
   exact Nat.min_le_right _ _
 
-/-- Plugin inference is an optional capability, separate from required behavior inference. -/
+/-- Plugin inference is an optional capability, separate from required agent inference. -/
 def pluginModelSlotAllowed (declared optional agentFree : Bool) : Bool :=
   declared && optional && agentFree
 

@@ -36,7 +36,7 @@ def resolvePlugin (installs : PluginInstalls) (nodeDid plugin digest : String) :
 
 /-- A graph resolves a capability's target under that capability's node.
 Foreign capabilities are usable when authorized; no foreign config is installed
-or rewritten, and there is no graph-specific behavior/model override. -/
+or rewritten, and there is no graph-specific agent/model override. -/
 def resolveStage (capabilities : String → Option CapabilitySelection)
     (registry : Configuration.Registry) (installs : PluginInstalls)
     (caller capabilityId : String) :
