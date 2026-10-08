@@ -8,7 +8,7 @@ private def baselineItem (status : Status) (receipt : String) : Item :=
   { identity :=
       { itemKey := "notice"
         requesterDid := "owner"
-        agentDid := "agent"
+        nodeDid := "agent"
         sourceKind := .session
         sourceId := "source"
         kind := .gate }
@@ -16,18 +16,18 @@ private def baselineItem (status : Status) (receipt : String) : Item :=
     resolvedDocId := receipt }
 
 private def baselineEnvelope : ReplyEnvelope :=
-  { docId := "mailbox-doc", handling := .startRequest, targetAgentDid := "agent", agentId := "repair",
+  { docId := "mailbox-doc", handling := .startRequest, targetNodeDid := "agent", agentId := "repair",
     sessionId := some "session", deadlineValid := true }
 
 private def baselineReply : ReplyEvidence :=
   { requestDocId := "request-doc", sourceDocId := "mailbox-doc", requesterDid := "owner",
-    agentDid := "agent", agentId := "repair", sessionId := "session",
+    nodeDid := "agent", agentId := "repair", sessionId := "session",
     authenticated := true, interactive := true }
 
 private def variants : List (String × ReplyEnvelope × ReplyEvidence) :=
   [ ("matching", baselineEnvelope, baselineReply)
-  , ("routed-agent", { baselineEnvelope with targetAgentDid := "repair-agent" },
-      { baselineReply with agentDid := "repair-agent" })
+  , ("routed-agent", { baselineEnvelope with targetNodeDid := "repair-agent" },
+      { baselineReply with nodeDid := "repair-agent" })
   , ("ack", { baselineEnvelope with handling := .ack }, baselineReply)
   , ("write-document", { baselineEnvelope with handling := .writeDocument }, baselineReply)
   , ("expired-deadline", { baselineEnvelope with deadlineValid := false }, baselineReply)
@@ -39,8 +39,8 @@ private def variants : List (String × ReplyEnvelope × ReplyEvidence) :=
   , ("empty-request", baselineEnvelope, { baselineReply with requestDocId := "" })
   , ("empty-requester", baselineEnvelope, { baselineReply with requesterDid := "" })
   , ("foreign-requester", baselineEnvelope, { baselineReply with requesterDid := "other" })
-  , ("foreign-agent", baselineEnvelope, { baselineReply with agentDid := "other" })
-  , ("empty-agent", baselineEnvelope, { baselineReply with agentDid := "" })
+  , ("foreign-agent", baselineEnvelope, { baselineReply with nodeDid := "other" })
+  , ("empty-agent", baselineEnvelope, { baselineReply with nodeDid := "" })
   , ("wrong-behavior", baselineEnvelope, { baselineReply with agentId := "other" })
   , ("wrong-session", baselineEnvelope, { baselineReply with sessionId := "other" })
   , ("wrong-source", baselineEnvelope, { baselineReply with sourceDocId := "other" })
@@ -56,15 +56,15 @@ private def caseJson (item : Item) (name : String) (envelope : ReplyEnvelope)
   ",\"resolved_doc_id\":" ++ jsonString item.resolvedDocId ++
   ",\"handling\":" ++ jsonString envelope.handling.toDefraDB ++
   ",\"mailbox_doc_id\":" ++ jsonString envelope.docId ++
-  ",\"target_behavior_id\":" ++ jsonString envelope.agentId ++
-  ",\"target_agent_did\":" ++ jsonString envelope.targetAgentDid ++
+  ",\"target_agent_id\":" ++ jsonString envelope.agentId ++
+  ",\"target_node_did\":" ++ jsonString envelope.targetNodeDid ++
   ",\"bound_session_id\":" ++ (envelope.sessionId.map jsonString).getD "null" ++
   ",\"deadline_valid\":" ++ boolJson envelope.deadlineValid ++
   ",\"request_doc_id\":" ++ jsonString reply.requestDocId ++
   ",\"source_doc_id\":" ++ jsonString reply.sourceDocId ++
   ",\"requester_did\":" ++ jsonString reply.requesterDid ++
-  ",\"agent_did\":" ++ jsonString reply.agentDid ++
-  ",\"behavior_id\":" ++ jsonString reply.agentId ++
+  ",\"node_did\":" ++ jsonString reply.nodeDid ++
+  ",\"agent_id\":" ++ jsonString reply.agentId ++
   ",\"session_id\":" ++ jsonString reply.sessionId ++
   ",\"authenticated\":" ++ boolJson reply.authenticated ++
   ",\"interactive\":" ++ boolJson reply.interactive ++
