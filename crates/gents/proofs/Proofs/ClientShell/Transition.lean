@@ -36,7 +36,7 @@ def step
       { s with
           selection := { s.selection with session := none },
           workflow  := .idle }
-  | .user (.selectPrincipalRoute p a) =>
+  | .user (.selectNodeRoute p a) =>
       { s with
           selection := { s.selection with peer := some p, agent := some a, session := none },
           workflow  := .idle }

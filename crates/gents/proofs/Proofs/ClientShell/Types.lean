@@ -2,7 +2,9 @@ import Proofs.Client
 
 abbrev PeerId := Nat
 
-abbrev AgentDid := Nat
+abbrev NodeDid := Nat
+
+abbrev AgentId := String
 
 /-- `latestObservedRequest` is the request of the session's current turn and
 `latestTurn` its state. `queuedRequests` are requests admitted behind that
@@ -14,8 +16,8 @@ folded; each is answered by its claimed request and is never a turn.
 `SessionTurn.observe` computes all three from the session's request rows. -/
 structure SessionObservation where
   sessionId             : SessionId
-  agentDid              : AgentDid
-  behaviorId            : Option BehaviorId
+  nodeDid               : NodeDid
+  agentId               : Option AgentId
   latestObservedRequest : Option RequestId
   latestTurn            : Option ClientTurnState
   queuedRequests        : List RequestId := []
@@ -46,19 +48,19 @@ inductive TransportHealth where
 
 structure Selection where
   peer    : Option PeerId
-  agent   : Option AgentDid
+  agent   : Option NodeDid
   session : Option SessionId
   deriving DecidableEq, Repr
 
 inductive BlockedReason where
   | clientOffline
-  | behaviorMismatch (requested existing : BehaviorId)
+  | agentMismatch (requested existing : AgentId)
   | mutationRejected
   deriving DecidableEq, Repr
 
 inductive SubmissionWorkflow where
   | idle
-  | submitting (agent : AgentDid) (session : Option SessionId)
+  | submitting (agent : NodeDid) (session : Option SessionId)
   | awaiting   (session : SessionId) (request : RequestId)
   | blocked    (reason  : BlockedReason)
   deriving DecidableEq, Repr
@@ -77,7 +79,7 @@ def initial : ShellState :=
 end ShellState
 
 inductive UserAction where
-  | selectPrincipalRoute (peer : PeerId) (agent : AgentDid)
+  | selectNodeRoute (peer : PeerId) (agent : NodeDid)
   | selectSession    (session : SessionId)
   | requestNewSession
   | startSubmit
