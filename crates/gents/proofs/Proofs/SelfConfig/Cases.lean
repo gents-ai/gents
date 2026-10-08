@@ -121,15 +121,16 @@ def rowResolve (r : CaseRow) : Doc → Option Doc :=
   | _ => fun _ => none
 
 /-- The always-on operator-grant slice. It is not part of the guarded
-dispatch: the native owner runs it in the shared validate slot on every Tools
-write. -/
+dispatch: the native owner runs it on every Tools write from the shared validate
+slot, and on every Context or Behavior write whose Tools selection changes
+(`guard_reselection_keeps_grants_in_txn`). -/
 def grantGuard (r : CaseRow) (stored : Doc) : Doc → Bool :=
   match r.target with
   | .tools => keepsGrants decodeGrants r.held stored
   | .agentContext | .agentBehavior => chainKeepsGrants decodeGrants r.held (rowResolve r) stored
   | _ => fun _ => true
 
-/-- Every Tools row replays the always-on grant slice. A guarded row also
+/-- Every Tools, Context and Behavior row replays the always-on grant slice. A guarded row also
 replays its target's typed guard: the no-lockout slice for Tools and Behavior,
 the auth fence for Backend and the account choice fence for Profile (default
 = the original account), which Rust enforces in `validate` on every model
