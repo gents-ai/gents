@@ -96,6 +96,7 @@ type LeanClientShellCase = {
   frontend_session_turn_state: TurnState | null;
   frontend_session_pending_request_id: number | null;
   frontend_session_queued_request_ids: number[];
+  frontend_session_folded_request_ids: number[];
   frontend_local_workflow_kind: string;
   frontend_local_workflow_session: number | null;
   frontend_local_workflow_request: number | null;
@@ -140,6 +141,7 @@ function session(
     latestRequestOutcome: null,
     pendingTurn: null,
     queuedTurns: [],
+    foldedInputs: [],
     goal: null,
     timelineItems: [],
     context: {
@@ -303,6 +305,14 @@ function sessionFromContract(contractCase: LeanClientShellCase) {
       origin: null,
       createdAt: "2026-04-21T12:01:30Z",
     })),
+    foldedInputs: contractCase.frontend_session_folded_request_ids.map(
+      (id) => ({
+        requestId: requestId(id)!,
+        foldedIntoRequestId: requestId(
+          contractCase.frontend_session_latest_request_id,
+        )!,
+      }),
+    ),
   });
 }
 
@@ -438,7 +448,13 @@ describe("projectChatShell", () => {
     "matches generated Lean ClientShell projection contracts",
     async () => {
       const contractCases = await loadLeanClientShellCases();
-      expect(contractCases).toHaveLength(27);
+      expect(contractCases).toHaveLength(28);
+      expect(
+        contractCases.some(
+          (contractCase) =>
+            contractCase.frontend_session_folded_request_ids.length > 0,
+        ),
+      ).toBe(true);
       expect(
         contractCases.some(
           (contractCase) =>
@@ -517,8 +533,7 @@ describe("projectChatShell", () => {
     expect(projection.activityStatus).toEqual({
       kind: "working",
       label: "Agent is working…",
-      detail:
-        "Messages you send now wait behind this turn and join the next one.",
+      detail: "Messages you send now wait until this turn finishes.",
       animated: true,
     });
   });
@@ -596,6 +611,35 @@ describe("projectChatShell", () => {
     expect(reconcileProjectedWorkflow(awaiting, projection.workflow)).toEqual(
       projection.workflow,
     );
+  });
+
+  test("a submission folded before any queued snapshot retires once its turn ends", () => {
+    const awaiting: ChatWorkflowState = {
+      kind: "awaitingObservation",
+      agentDid: "did:test:amy",
+      sessionId: "session-1",
+      requestId: "req-folded",
+    };
+    const projection = projectChatShell({
+      clientAvailable: true,
+      selectedAgentDid: "did:test:amy",
+      selectedSessionId: "session-1",
+      draft: "",
+      sending: false,
+      selectedSessionSummary: null,
+      session: session({
+        latestRequestId: "req-head",
+        turnState: "completed",
+        foldedInputs: [
+          { requestId: "req-folded", foldedIntoRequestId: "req-head" },
+        ],
+      }),
+      localWorkflow: awaiting,
+    });
+    expect(projection.workflow).toEqual({ kind: "ready" });
+    expect(reconcileProjectedWorkflow(awaiting, projection.workflow)).toEqual({
+      kind: "ready",
+    });
   });
 
   test("uses tracked request before observed latest request catches up", () => {

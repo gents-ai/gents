@@ -73,93 +73,192 @@ fn request_state_for_turn(turn_state: Option<&str>) -> RequestLifecycleState {
     }
 }
 
+const CONTRACT_AGENT: &str = "did:test:contract-agent";
+
+fn lean_requester(id: usize) -> Option<String> {
+    (id != 1).then(|| format!("did:test:requester-{id}"))
+}
+
+/// The native rows a `SessionTurn.Row` list stands for, in arrival order.
+fn lean_session_rows(
+    session_id: &str,
+    rows: &[lean_vocab_test::LeanSessionTurnRow],
+) -> Vec<AgentRequestRow> {
+    use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestInput, RequestQueue};
+    rows.iter()
+        .enumerate()
+        .map(|(index, row)| {
+            let owner = row
+                .folded_into
+                .map(|doc| rows.iter().find(|candidate| candidate.doc == doc));
+            let lifecycle = match (row.state.as_str(), row.folded_into) {
+                ("unclaimed", _) => RequestLifecycleState::Pending,
+                ("active", _) => RequestLifecycleState::Processing,
+                ("terminal", Some(_)) => RequestLifecycleState::Superseded,
+                ("terminal", None) => RequestLifecycleState::Completed,
+                (other, _) => panic!("unsupported Lean row state {other:?}"),
+            };
+            AgentRequestRow {
+                purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
+                doc_id: Some(format!("doc-{}", row.doc)),
+                request_id: contract_request_id(row.request),
+                agent_did: Some(CONTRACT_AGENT.into()),
+                requester_did: lean_requester(row.requester),
+                behavior_id: Some("contract-behavior".into()),
+                session_id: Some(session_id.into()),
+                content: Some(format!("input {}", row.request)),
+                lifecycle_state: Some(lifecycle),
+                execution_origin: Some("interactive".into()),
+                created_at: Some(format!("2026-04-21T12:00:{index:02}Z")),
+                retry_parent_request: row.retry_parent.map(contract_request_id),
+                superseded_by_request: owner.map(|owner| {
+                    owner.map_or("req-missing".into(), |o| contract_request_id(o.request))
+                }),
+                superseded_by_request_doc_id: row.folded_into.map(|doc| format!("doc-{doc}")),
+                failure_reason: row
+                    .folded_into
+                    .map(|_| gents::lifecycle::FOLDED_REASON.to_owned()),
+                input: row.queued_after.map(|after| RequestInput {
+                    queue: Some(RequestQueue {
+                        source: QueueSource::User,
+                        policy: QueuePolicy::Append,
+                        key: None,
+                        queued_after_request_id: Some(contract_request_id(after)),
+                        interrupted_request_id: None,
+                        background_completion_wake_version: None,
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }
+        })
+        .collect()
+}
+
+fn contract_session(
+    session_id: &str,
+    requester_did: Option<String>,
+    newest: Option<&AgentRequestRow>,
+) -> AgentSession {
+    AgentSession {
+        session_id: session_id.into(),
+        agent_did: CONTRACT_AGENT.into(),
+        requester_did,
+        behavior_id: "contract-behavior".into(),
+        created_at: "2026-04-21T12:00:00Z".into(),
+        closed_at: None,
+        title: None,
+        tags: Vec::new(),
+        provenance: None,
+        observation: newest.map(|newest| SessionObservation {
+            last_activity_at: "2026-04-21T12:01:00Z".into(),
+            preview: Some("contract prompt".into()),
+            latest_request: Some(SessionRequestObservation {
+                request_doc_id: newest.doc_id.clone().expect("contract rows are physical"),
+                request_id: newest.request_id.clone(),
+                lifecycle_state: newest.lifecycle_state.expect("contract rows have state"),
+            }),
+        }),
+    }
+}
+
 fn client_shell_contract_store(case: &lean_vocab_test::LeanClientShellCase) -> ClientStore {
-    let mut rows = ClientStoreRows::default();
     let session_id = contract_session_id(
         case.desktop_selected_session_id
             .expect("desktop contract case should select a session"),
     );
-    let request_id = case.desktop_observed_request_id.map(contract_request_id);
-    let queued = case
-        .desktop_queued_request_ids
-        .iter()
-        .copied()
-        .map(contract_request_id)
-        .collect::<Vec<_>>();
-    // The runtime's session observation names the newest request, which is
-    // the last queued one when any are queued behind the turn.
-    let newest = queued.last().cloned().or_else(|| request_id.clone());
-    if case.desktop_snapshot_present {
-        rows.sessions.push(AgentSession {
-            session_id: session_id.clone(),
-            agent_did: "did:test:contract-agent".into(),
-            requester_did: None,
-            behavior_id: "contract-behavior".into(),
-            created_at: "2026-04-21T12:00:00Z".into(),
-            closed_at: None,
-            title: None,
-            tags: Vec::new(),
-            provenance: None,
-            observation: newest.clone().map(|newest| SessionObservation {
-                last_activity_at: "2026-04-21T12:01:00Z".into(),
-                preview: Some("contract prompt".into()),
-                latest_request: Some(SessionRequestObservation {
-                    lifecycle_state: if Some(&newest) == request_id.as_ref() {
-                        request_state_for_turn(case.desktop_observed_turn_state.as_deref())
-                    } else {
-                        RequestLifecycleState::Pending
-                    },
-                    request_doc_id: newest.clone(),
-                    request_id: newest,
-                }),
-            }),
-        });
-    }
-    if let Some(request_id) = request_id.clone() {
-        rows.requests.push(AgentRequestRow {
-            purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
-            doc_id: Some(request_id.clone()),
-            request_id,
-            agent_did: Some("did:test:contract-agent".into()),
-            behavior_id: Some("contract-behavior".into()),
-            session_id: Some(session_id.clone()),
-            content: Some("contract prompt".into()),
-            lifecycle_state: Some(request_state_for_turn(
-                case.desktop_observed_turn_state.as_deref(),
-            )),
-            execution_origin: Some("interactive".into()),
-            created_at: Some("2026-04-21T12:00:00Z".into()),
-            ..Default::default()
-        });
-    }
-    let mut ahead = request_id;
-    for (index, queued_id) in queued.into_iter().enumerate() {
-        rows.requests.push(AgentRequestRow {
-            purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
-            doc_id: Some(queued_id.clone()),
-            request_id: queued_id.clone(),
-            agent_did: Some("did:test:contract-agent".into()),
-            behavior_id: Some("contract-behavior".into()),
-            session_id: Some(session_id.clone()),
-            content: Some(format!("queued {queued_id}")),
-            lifecycle_state: Some(RequestLifecycleState::Pending),
-            execution_origin: Some("interactive".into()),
-            created_at: Some(format!("2026-04-21T12:00:{:02}Z", index + 1)),
-            input: Some(gents_protocol::request_input::RequestInput {
-                queue: Some(gents_protocol::request_input::RequestQueue {
-                    source: gents_protocol::request_input::QueueSource::User,
-                    policy: gents_protocol::request_input::QueuePolicy::Append,
-                    key: None,
-                    queued_after_request_id: ahead.replace(queued_id),
-                    interrupted_request_id: None,
-                    background_completion_wake_version: None,
-                }),
+    let requests = if case.desktop_rows.is_empty() {
+        case.desktop_observed_request_id
+            .map(|id| AgentRequestRow {
+                purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
+                doc_id: Some(contract_request_id(id)),
+                request_id: contract_request_id(id),
+                agent_did: Some(CONTRACT_AGENT.into()),
+                behavior_id: Some("contract-behavior".into()),
+                session_id: Some(session_id.clone()),
+                content: Some("contract prompt".into()),
+                lifecycle_state: Some(request_state_for_turn(
+                    case.desktop_observed_turn_state.as_deref(),
+                )),
+                execution_origin: Some("interactive".into()),
+                created_at: Some("2026-04-21T12:00:00Z".into()),
                 ..Default::default()
-            }),
-            ..Default::default()
-        });
+            })
+            .into_iter()
+            .collect()
+    } else {
+        lean_session_rows(&session_id, &case.desktop_rows)
+    };
+    let mut rows = ClientStoreRows::default();
+    if case.desktop_snapshot_present {
+        rows.sessions
+            .push(contract_session(&session_id, None, requests.last()));
     }
+    rows.requests = requests;
     ClientStore::from_rows(rows)
+}
+
+fn request_ids_for_docs(rows: &[AgentRequestRow], docs: &[usize]) -> Vec<String> {
+    docs.iter()
+        .map(|doc| {
+            rows.iter()
+                .find(|row| row.doc_id.as_deref() == Some(format!("doc-{doc}").as_str()))
+                .expect("expected doc is a case row")
+                .request_id
+                .clone()
+        })
+        .collect()
+}
+
+#[test]
+fn session_snapshot_binds_generated_session_turn_cases() {
+    let cases = lean_vocab_test::lean_client_session_turn_cases();
+    assert_eq!(cases.len(), 12);
+    for case in cases {
+        let rows = lean_session_rows("session-1", &case.rows);
+        let newest = rows.last().expect("case has rows");
+        let store = ClientStore::from_rows(ClientStoreRows {
+            sessions: vec![contract_session(
+                "session-1",
+                newest.requester_did.clone(),
+                Some(newest),
+            )],
+            requests: rows.clone(),
+            ..ClientStoreRows::default()
+        });
+        let snapshot =
+            build_session_snapshot_from_store(&store, "session-1", None).expect("snapshot");
+        assert_eq!(
+            snapshot.latest_request_id,
+            request_ids_for_docs(&rows, &[case.expected_turn_doc]).pop(),
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            snapshot
+                .queued_turns
+                .iter()
+                .map(|turn| turn.request_id.clone())
+                .collect::<Vec<_>>(),
+            request_ids_for_docs(&rows, &case.expected_queued_docs),
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            snapshot
+                .folded_inputs
+                .iter()
+                .map(|input| input.request_id.clone())
+                .collect::<Vec<_>>(),
+            case.expected_folded_requests
+                .iter()
+                .copied()
+                .map(contract_request_id)
+                .collect::<Vec<_>>(),
+            "{}",
+            case.name
+        );
+    }
 }
 
 #[test]
@@ -370,10 +469,13 @@ fn session_snapshot_does_not_report_unobserved_preferred_request() {
 #[test]
 fn session_snapshot_projection_consumes_generated_client_shell_contract_cases() {
     let cases = lean_desktop_client_shell_cases();
-    assert_eq!(cases.len(), 23);
+    assert_eq!(cases.len(), 24);
     assert!(cases
         .iter()
         .any(|case| !case.desktop_queued_request_ids.is_empty()));
+    assert!(cases
+        .iter()
+        .any(|case| !case.desktop_folded_request_ids.is_empty()));
     for case in cases {
         let session_id = contract_session_id(
             case.desktop_selected_session_id
@@ -413,6 +515,20 @@ fn session_snapshot_projection_consumes_generated_client_shell_contract_cases() 
                     .map(|turn| turn.request_id.clone())
                     .collect::<Vec<_>>(),
                 case.desktop_queued_request_ids
+                    .iter()
+                    .copied()
+                    .map(contract_request_id)
+                    .collect::<Vec<_>>(),
+                "{}",
+                case.name
+            );
+            assert_eq!(
+                snapshot
+                    .folded_inputs
+                    .iter()
+                    .map(|input| input.request_id.clone())
+                    .collect::<Vec<_>>(),
+                case.desktop_folded_request_ids
                     .iter()
                     .copied()
                     .map(contract_request_id)

@@ -1,4 +1,5 @@
 import Proofs.Conformance.ClientShell.Contracts.Types
+import Proofs.Conformance.ClientShell.Contracts.SessionTurn
 
 namespace Conformance.ClientShellContracts
 
@@ -59,8 +60,35 @@ def storeNewCompleted : LocalStore :=
 def storeNewRunning : LocalStore :=
   storeWith [sessionObs sid1 (some reqNew) (some turnRunning)]
 
+/-- Rows whose observation `SessionTurn.observe` computes: `reqOld` running,
+`reqNew` either queued behind it or already folded into it. -/
+def queuedRows : List ClientShell.SessionTurn.Row :=
+  [ SessionTurnCases.row 1 reqOld .active
+  , SessionTurnCases.row 2 reqNew .unclaimed (queuedAfter := some reqOld) ]
+
+def foldedRows : List ClientShell.SessionTurn.Row :=
+  [ SessionTurnCases.row 1 reqOld .active
+  , SessionTurnCases.row 2 reqNew .terminal (foldedInto := some 1)
+      (queuedAfter := some reqOld) ]
+
+def rowsObs (rows : List ClientShell.SessionTurn.Row) : List SessionObservation :=
+  match rows.getLast? with
+  | some newest =>
+      [ClientShell.SessionTurn.observe sid1 contractAgent (some contractBehavior) rows newest]
+  | none => []
+
 def storeNewQueuedBehindRunning : LocalStore :=
-  storeWith [sessionObs sid1 (some reqOld) (some turnRunning) (queued := [reqNew])]
+  storeWith (rowsObs queuedRows)
+
+def storeNewFoldedIntoRunning : LocalStore :=
+  storeWith (rowsObs foldedRows)
+
+/-- The rows a desktop case's store is built from, when its observation was
+computed from rows. -/
+def desktopRowsFor (store : LocalStore) : List ClientShell.SessionTurn.Row :=
+  if store.sessions = storeNewQueuedBehindRunning.sessions then queuedRows
+  else if store.sessions = storeNewFoldedIntoRunning.sessions then foldedRows
+  else []
 
 def storeSid2Completed : LocalStore :=
   storeWith [sessionObs sid2 (some reqOther) (some turnCompleted) alternateAgent]
@@ -122,14 +150,17 @@ def awaitedRequestForFrontend
 def queuedRequestsOf (obs : Option SessionObservation) : List RequestId :=
   (obs.map (·.queuedRequests)).getD []
 
-/-- A submission observed as queued is not the session's turn; the frontend
-then tracks the turn it waits behind. -/
+def foldedRequestsOf (obs : Option SessionObservation) : List RequestId :=
+  (obs.map (·.foldedRequests)).getD []
+
+/-- A submission observed as queued or folded is not the session's turn; the
+frontend then tracks the turn it waits behind or was folded into. -/
 def trackedRequestForFrontend
     (selection : Selection)
     (obs : Option SessionObservation)
     (workflow : SubmissionWorkflow) : Option RequestId :=
   (awaitedRequestForFrontend selection obs workflow).filter
-    (fun req => !(queuedRequestsOf obs).contains req)
+    (fun req => !(queuedRequestsOf obs).contains req && !(foldedRequestsOf obs).contains req)
 
 def activeRequestForFrontend
     (selection : Selection)
@@ -266,6 +297,7 @@ def clientShellCaseFromStep
   , frontendSessionTurnState := turnStateOptionName (obs.bind (·.latestTurn))
   , frontendSessionPendingRequestId := pendingRequestForFrontend obs
   , frontendSessionQueuedRequestIds := queuedRequestsOf obs
+  , frontendSessionFoldedRequestIds := foldedRequestsOf obs
   , frontendLocalWorkflowKind :=
       match frontendLocal.workflow with
       | .idle           => "ready"
@@ -291,6 +323,8 @@ def clientShellCaseFromStep
   , desktopObservedRequestId := selectedObs.bind (·.latestObservedRequest)
   , desktopObservedTurnState := turnStateOptionName (selectedObs.bind (·.latestTurn))
   , desktopQueuedRequestIds := queuedRequestsOf selectedObs
+  , desktopFoldedRequestIds := foldedRequestsOf selectedObs
+  , desktopRows := desktopRowsFor frontendStore
   , desktopExpectedLatestRequestId := selectedObs.bind (·.latestObservedRequest)
   , desktopExpectedTurnState := turnStateOptionName (selectedObs.bind (·.latestTurn))
   , desktopExpectPendingTurn := desktopPendingExpectation selectedObs
@@ -396,6 +430,12 @@ def clientShellCases : List ClientShellContractCase :=
       "queued_observation_retires_awaiting"
       "queued_observation_retires_awaiting"
       awaitingNew input emptyStore .healthy ctxReady awaitingNew post storeNewQueuedBehindRunning
+  , let input := ShellInput.snapshot storeNewFoldedIntoRunning
+    let post := step awaitingNew input emptyStore .healthy ctxReady
+    clientShellCaseFromStep
+      "folded_observation_retires_awaiting"
+      "folded_observation_retires_awaiting"
+      awaitingNew input emptyStore .healthy ctxReady awaitingNew post storeNewFoldedIntoRunning
   , let pre := selectedShell (some sid1)
     let input := ShellInput.user .startSubmit
     clientShellCaseFromStep

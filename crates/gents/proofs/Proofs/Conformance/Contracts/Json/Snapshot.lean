@@ -229,6 +229,8 @@ def snapshotJson : String :=
       ++ toString Conformance.ClientShellContracts.desktopClientShellCaseCount ++ ","
     ++ "\"desktop_client_shell_cases\":"
       ++ Conformance.ClientShellContracts.desktopClientShellCasesJson ++ ","
+    ++ "\"client_session_turn_cases\":"
+      ++ Conformance.ClientShellContracts.sessionTurnCasesJson ++ ","
     ++ "\"request_lifecycle_operator_ui_cases\":"
       ++ Conformance.ClientShellContracts.requestLifecycleOperatorUiCasesJson ++ ","
     ++ "\"startup_readiness_cases\":"

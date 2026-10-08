@@ -1,4 +1,5 @@
 import Proofs.ClientShell
+import Proofs.ClientShell.SessionTurn
 import Proofs.Conformance.ContractTypes
 
 namespace Conformance.ClientShellContracts
@@ -49,6 +50,7 @@ structure ClientShellContractCase where
   frontendSessionTurnState : Option String
   frontendSessionPendingRequestId : Option RequestId
   frontendSessionQueuedRequestIds : List RequestId
+  frontendSessionFoldedRequestIds : List RequestId
   frontendLocalWorkflowKind : String
   frontendLocalWorkflowSession : Option SessionId
   frontendLocalWorkflowRequest : Option RequestId
@@ -68,6 +70,8 @@ structure ClientShellContractCase where
   desktopObservedRequestId : Option RequestId
   desktopObservedTurnState : Option String
   desktopQueuedRequestIds : List RequestId
+  desktopFoldedRequestIds : List RequestId
+  desktopRows : List ClientShell.SessionTurn.Row
   desktopExpectedLatestRequestId : Option RequestId
   desktopExpectedTurnState : Option String
   desktopExpectPendingTurn : Option Bool
