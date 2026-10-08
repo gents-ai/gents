@@ -338,9 +338,7 @@ describe("subagent lineage freshness", () => {
       const app = appFor(api, items);
       const observe = (storeVersion: number) =>
         writeSession(app.stores.session, (session) =>
-          session
-            ? { ...session, projectionRevision: { storeVersion, reconcileVersion: 1 } }
-            : session,
+          session ? { ...session, projectionRevision: { storeVersion } } : session,
         );
       observe(1);
       const { result } = renderWorkers(app);
@@ -373,9 +371,7 @@ describe("subagent lineage freshness", () => {
     const app = appFor(api, [group(tool)]);
     const observe = (storeVersion: number) =>
       writeSession(app.stores.session, (session) =>
-        session
-          ? { ...session, projectionRevision: { storeVersion, reconcileVersion: 1 } }
-          : session,
+        session ? { ...session, projectionRevision: { storeVersion } } : session,
       );
     observe(1);
     const { result } = renderWorkers(app);
@@ -419,7 +415,7 @@ describe("subagent lineage freshness", () => {
                   reasoning: null,
                 } as RenderedTimelineItem,
               ],
-              projectionRevision: { storeVersion, reconcileVersion: 1 },
+              projectionRevision: { storeVersion },
             }
           : session,
       );

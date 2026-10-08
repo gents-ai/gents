@@ -147,7 +147,7 @@ export type DesktopApiAdapter = {
     sessionId: string;
     agentDid?: string | null;
     requestId: string;
-    baseReconcileVersion: number;
+    baseLiveCursor: string;
     baseContentByteLen: number;
     baseContentHash: string;
     baseReasoningByteLen: number;

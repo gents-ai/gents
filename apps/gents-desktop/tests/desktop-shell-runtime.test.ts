@@ -28,7 +28,7 @@ describe("live session deltas", () => {
   it("applies a verified suffix while preserving historical row identity", () => {
     const current = session(["k1"], null);
     const historical = current.timelineItems[0];
-    current.projectionRevision = { storeVersion: 7, reconcileVersion: 3 };
+    current.projectionRevision = { storeVersion: 7 };
     current.timelineItems.push({
       kind: "liveAssistant",
       itemKey: "live-assistant",
@@ -37,14 +37,15 @@ describe("live session deltas", () => {
     });
     const request = sessionLiveDeltaRequest(current, "request-1");
     expect(request).toMatchObject({
-      baseReconcileVersion: 3,
+      baseLiveCursor: "cursor",
       baseContentByteLen: 5,
       baseContentHash: "4f9f2cab",
     });
 
     const next = applySessionLiveDelta(current, {
       outcome: "delta",
-      revision: { storeVersion: 8, reconcileVersion: 3 },
+      liveCursor: "cursor",
+      revision: { storeVersion: 8 },
       requestId: "request-1",
       turnState: "running",
       status: null,
@@ -65,9 +66,37 @@ describe("live session deltas", () => {
     expect(next?.timelineItems.at(-1)).toMatchObject({ content: "hello world" });
   });
 
+  it("keeps timeline and live item identity for an unchanged delta", () => {
+    const current = session(["k1"], null);
+    current.projectionRevision = { storeVersion: 7 };
+    current.timelineItems.push({
+      kind: "liveAssistant",
+      itemKey: "live-assistant",
+      content: "hello",
+      reasoning: null,
+    });
+    const live = current.timelineItems.at(-1);
+    const unchanged = { mode: "unchanged", value: "", byteLen: 0, hash: "811c9dc5" };
+
+    const next = applySessionLiveDelta(current, {
+      outcome: "unchanged",
+      liveCursor: "cursor",
+      revision: { storeVersion: 8 },
+      requestId: "request-1",
+      turnState: "running",
+      status: null,
+      content: { ...unchanged, byteLen: 5, hash: "4f9f2cab" },
+      reasoning: unchanged,
+    });
+
+    expect(next?.timelineItems).toBe(current.timelineItems);
+    expect(next?.timelineItems.at(-1)).toBe(live);
+    expect(next?.projectionRevision).toEqual({ storeVersion: 8 });
+  });
+
   it("removes a reset live tail between tool-loop assistant turns", () => {
     const current = session(["k1"], null);
-    current.projectionRevision = { storeVersion: 7, reconcileVersion: 3 };
+    current.projectionRevision = { storeVersion: 7 };
     current.timelineItems.push({
       kind: "liveAssistant",
       itemKey: "live-assistant",
@@ -77,7 +106,8 @@ describe("live session deltas", () => {
 
     const next = applySessionLiveDelta(current, {
       outcome: "delta",
-      revision: { storeVersion: 8, reconcileVersion: 3 },
+      liveCursor: "cursor",
+      revision: { storeVersion: 8 },
       requestId: "request-1",
       turnState: "running",
       status: null,
@@ -109,7 +139,7 @@ describe("live session deltas", () => {
       oldestItemKey: "k8",
       newestItemKey: "k8",
     });
-    current.projectionRevision = { storeVersion: 7, reconcileVersion: 3 };
+    current.projectionRevision = { storeVersion: 7 };
     current.timelineItems.push({
       kind: "liveAssistant",
       itemKey: "live-assistant",
@@ -129,7 +159,8 @@ describe("live session deltas", () => {
 
     const next = applySessionLiveDelta(withOlder, {
       outcome: "delta",
-      revision: { storeVersion: 8, reconcileVersion: 3 },
+      liveCursor: "cursor",
+      revision: { storeVersion: 8 },
       requestId: "request-1",
       turnState: "running",
       status: null,
@@ -155,9 +186,9 @@ describe("live session deltas", () => {
     expect(next?.timelineItems.at(-1)).toMatchObject({ content: "hello world" });
   });
 
-  it("rejects a reconcile gap and a corrupt suffix", () => {
+  it("rejects a corrupt suffix", () => {
     const current = session([], null);
-    current.projectionRevision = { storeVersion: 4, reconcileVersion: 2 };
+    current.projectionRevision = { storeVersion: 4 };
     current.timelineItems = [
       {
         kind: "liveAssistant",
@@ -168,7 +199,8 @@ describe("live session deltas", () => {
     ];
     const base = {
       outcome: "delta",
-      revision: { storeVersion: 5, reconcileVersion: 2 },
+      liveCursor: "cursor",
+      revision: { storeVersion: 5 },
       requestId: "request-1",
       turnState: "running",
       status: null,
@@ -186,12 +218,6 @@ describe("live session deltas", () => {
       },
     };
     expect(applySessionLiveDelta(current, base)).toBeNull();
-    expect(
-      applySessionLiveDelta(current, {
-        ...base,
-        revision: { storeVersion: 5, reconcileVersion: 3 },
-      }),
-    ).toBeNull();
   });
 });
 
@@ -200,6 +226,7 @@ function session(
   page: DesktopSessionSnapshot["timelinePage"],
 ): DesktopSessionSnapshot {
   return {
+    liveCursor: "cursor",
     sessionId: "session-1",
     agentDid: "did:key:test",
     behaviorId: "behavior-1",
@@ -229,6 +256,7 @@ function session(
       kind: "userMessage" as const,
       itemKey: key,
       requestId: key,
+      ownsTurn: true,
       sequence: Number(key.slice(1)),
       content: key,
       timestamp: null,
@@ -266,6 +294,7 @@ describe("session timeline page merging", () => {
         kind: "userMessage",
         itemKey: "authored-r1",
         requestId: "r1",
+        ownsTurn: true,
         sequence: 1,
         content: "repeat",
         timestamp: null,
@@ -304,6 +333,7 @@ describe("session timeline page merging", () => {
         kind: "userMessage",
         itemKey: "authored-r",
         requestId: "r",
+        ownsTurn: true,
         sequence: 1,
         content: "repeat",
         timestamp: null,
@@ -316,6 +346,54 @@ describe("session timeline page merging", () => {
       ),
     ).toEqual(["authored-r", "k2"]);
   });
+
+  /* A request authors rows besides the person's message: the workspace
+     instructions it publishes beside the prompt arrive as their own row and
+     must not retire the pending turn standing in for the message. */
+  it.each(["older", "tip"] as const)(
+    "keeps a queued input when only the request's context row is saved on the %s page",
+    (direction) => {
+      const page = {
+        totalItems: 3,
+        pageItems: 2,
+        hasOlder: true,
+        hasNewer: false,
+        oldestItemKey: "k1",
+        newestItemKey: "k2",
+      };
+      const current = session(["k1", "k2"], page);
+      current.timelineItems.unshift({
+        kind: "pendingUserTurn",
+        itemKey: "pending-r",
+        requestId: "r",
+        content: "same text",
+        selectedSkillIds: [],
+        lifecycleState: "pending",
+        createdAt: null,
+      });
+      const incoming = session(["k1", "k2"], page);
+      incoming.timelineItems.push({
+        kind: "userMessage",
+        itemKey: "authored-r-context",
+        requestId: "r",
+        ownsTurn: false,
+        sequence: 3,
+        content: "<context>\nworkspace instructions\n</context>",
+        timestamp: null,
+        reconstruction: { state: "ready" },
+      });
+      const merged =
+        direction === "tip"
+          ? mergeSessionTipSnapshot(current, incoming)
+          : mergeOlderSessionTimelinePage(incoming, current);
+      expect(merged.timelineItems.map((item) => item.itemKey)).toEqual([
+        "pending-r",
+        "k1",
+        "k2",
+        "authored-r-context",
+      ]);
+    },
+  );
 
   it.each(["older", "tip"] as const)(
     "replaces a queued input with its durable owner when the %s page arrives",
@@ -343,6 +421,7 @@ describe("session timeline page merging", () => {
         kind: "userMessage",
         itemKey: "authored-r",
         requestId: "r",
+        ownsTurn: true,
         sequence: 3,
         content: "same text",
         timestamp: null,
@@ -385,6 +464,7 @@ describe("session timeline page merging", () => {
         {
           kind,
           itemKey: "k1",
+          ownsTurn: true,
           sequence: 1,
           content: null,
           reasoning: null,

@@ -20,20 +20,15 @@ fn projection_invalidation_reuses_the_observed_snapshot_allocation() {
         store.projection_revision().store_version,
         initial.store_version + 1
     );
-    assert_eq!(
-        store.projection_revision().reconcile_version,
-        initial.reconcile_version + 1
-    );
 }
 
 #[test]
-fn observer_merge_advances_both_revision_fences_and_strips_transcript_rows() {
+fn observer_merge_advances_revision_and_strips_transcript_rows() {
     let (store, _) = ObservedStore::new(ClientStore::default());
     let initial = store.projection_revision();
     store.merge_observer_patch(ClientStore::default());
     let current = store.projection_revision();
     assert_eq!(current.store_version, initial.store_version + 1);
-    assert_eq!(current.reconcile_version, initial.reconcile_version + 1);
     assert!(store.snapshot().transcript_messages.is_empty());
     assert!(store.snapshot().output_segments.is_empty());
 }
@@ -222,7 +217,7 @@ async fn transcript_create_and_delete_only_invalidate_the_projection() {
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     assert!(store.snapshot().transcript_messages.is_empty());
     let after_create = store.projection_revision();
-    assert!(after_create.reconcile_version > before.reconcile_version);
+    assert!(after_create.store_version > before.store_version);
 
     node.execute(
             r#"mutation { delete_AgentMessage(filter: { message_key: { _eq: "sess-1:1" } }) { _docID } }"#,
@@ -231,7 +226,7 @@ async fn transcript_create_and_delete_only_invalidate_the_projection() {
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
     assert!(store.snapshot().transcript_messages.is_empty());
-    assert!(store.projection_revision().reconcile_version > after_create.reconcile_version);
+    assert!(store.projection_revision().store_version > after_create.store_version);
     assert!(handle.metrics_snapshot().transcript_invalidations >= 2);
     handle.shutdown().await;
 }
@@ -262,7 +257,7 @@ async fn hydration_control_updates_only_invalidate_the_session_projection() {
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
     let after_create = store.projection_revision();
-    assert!(after_create.reconcile_version > before.reconcile_version);
+    assert!(after_create.store_version > before.store_version);
     assert_eq!(changes.borrow_and_update().revision, after_create);
     assert_eq!(store.snapshot().row_count(), 0);
 
@@ -279,7 +274,7 @@ async fn hydration_control_updates_only_invalidate_the_session_projection() {
     assert!(!update.has_errors(), "{:?}", update.errors);
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
-    assert!(store.projection_revision().reconcile_version > after_create.reconcile_version);
+    assert!(store.projection_revision().store_version > after_create.store_version);
     assert_eq!(
         changes.borrow_and_update().revision,
         store.projection_revision()
