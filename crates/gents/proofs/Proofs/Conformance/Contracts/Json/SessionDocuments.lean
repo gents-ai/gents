@@ -7,7 +7,7 @@ namespace Conformance.Contracts
 open Lean Conformance.SessionDocuments
 
 def scopeJson (s : AgentSession.Scope) : Json := Json.mkObj
-  [("agent", toJson s.agent), ("session", toJson s.session), ("requester", toJson s.requester)]
+  [("node", toJson s.node), ("session", toJson s.session), ("requester", toJson s.requester)]
 def requestJson (r : AgentSession.RequestFact) : Json := Json.mkObj
   [("purpose", toJson r.purpose.toWire), ("scope", scopeJson r.scope), ("behavior", toJson r.agent),
    ("created_at", toJson r.createdAt), ("doc_id", toJson r.observed.docId),
@@ -166,19 +166,19 @@ private def historyJson (h : SessionFork.History) : Json := Json.mkObj
      [("doc_id", toJson c.id), ("session", toJson c.session),
       ("sequence", toJson c.sequence), ("through_sequence", toJson c.throughSequence)]))]
 private def selectionJson (name : String) (rows : List AgentSession.RequestFact)
-    (agent session : Nat) (requester : Option (Option Nat)) : Json := Json.mkObj
+    (node session : Nat) (requester : Option (Option Nat)) : Json := Json.mkObj
   [("name", toJson name), ("requests", toJson (rows.map requestJson)),
-   ("agent", toJson agent), ("session", toJson session),
+   ("node", toJson node), ("session", toJson session),
    ("requester_scoped", toJson requester.isSome),
    ("requester", toJson (requester.getD none)),
-   ("selected", (AgentSession.latest rows agent session requester).map requestJson |>.getD Json.null)]
+   ("selected", (AgentSession.latest rows node session requester).map requestJson |>.getD Json.null)]
 private def forkJson (name : String) (source : SessionFork.History)
     (target : AgentSession.Scope) (cut : Nat) (authorized idle coherent : Bool) : Json :=
   let authorization : SessionFork.SourceAuthorization :=
     if authorized then
       ⟨scope, source.messages.map (·.header.id), source.compactions.map (·.id)⟩
     else
-      ⟨{ scope with agent := scope.agent + 1 }, source.messages.map (·.header.id),
+      ⟨{ scope with node := scope.node + 1 }, source.messages.map (·.header.id),
         source.compactions.map (·.id)⟩
   Json.mkObj [("name", toJson name), ("source", historyJson source), ("parent", scopeJson scope),
    ("child", scopeJson target), ("exclusive_sequence_cut", toJson cut),

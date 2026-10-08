@@ -18,13 +18,13 @@ inductive AgentRequestAdmissionKind where
   | enrollment
   | localSelf
   | runtimeInternal
-  /-- A request authored by another principal's agent: a cross-principal
+  /-- A request authored by another node's agent: a cross-node
   `agent_new`/`agent_message`. The requester signs, the target differs
   from the requester, and the target's `PeerAdmissionAuthority` document ACP
   authorizes the requester DID. Premise: DefraDB authenticates the requester
   DID and enforces that ACP; the runtime adds no bridge row, claim fence,
   cancel mirror or delegated input. The reply routes back to `requesterDid`
-  best-effort through the P2P templates. A same-principal send is `localSelf`. -/
+  best-effort through the P2P templates. A same-node send is `localSelf`. -/
   | peer
   deriving DecidableEq, Repr
 
@@ -65,7 +65,7 @@ structure AgentRequestSemantics where
   hop : Nat := 0
   requestId : String
   purpose : RequestPurpose
-  targetAgent : Did
+  targetNode : Did
   requesterDid : Did
   agentId : String
   sessionId : String
@@ -90,7 +90,7 @@ def hopField (hop : Nat) : WireBytes := List.replicate hop 0
 
 def agentRequestSemanticFields (request : AgentRequestSemantics) : CanonicalFields :=
   [hopField request.hop] ++ textFieldsToBytes
-    [ request.requestId, request.purpose.toWire, request.targetAgent, request.requesterDid
+    [ request.requestId, request.purpose.toWire, request.targetNode, request.requesterDid
     , request.agentId, request.sessionId, request.content ] ++
   requestInputFields request.input ++ textFieldsToBytes
     [request.createdAt, request.triggerConfigDocumentId] ++
@@ -168,7 +168,7 @@ structure RuntimeInternalEvidence where
   sourceKind : RuntimeInternalSourceKind
   issuerDid : Did
   sourceRequestId : String
-  targetAgent : Did
+  targetNode : Did
   targetRuntimeAttestationValid : Bool
   /-- Includes complete signed workspace reference agreement with the existing
   authenticated source via requestWorkspaceWithinSource. -/
@@ -184,7 +184,7 @@ structure RuntimeInternalEvidence where
   verifiedGoalContinuation : Option GoalContinuationInput := none
   titleParent : Option TitleParentEvidence := none
   /-- The requester that owns the existing `AgentSession` of
-  `(targetAgent, sessionId)`, read by the session owner; `none` for a new
+  `(targetNode, sessionId)`, read by the session owner; `none` for a new
   session. -/
   sessionScope : Option Did := none
   deriving DecidableEq, Repr
@@ -201,8 +201,8 @@ runtime's requester. -/
 def runtimeRequesterScope (request : AgentRequestSemantics)
     (evidence : RuntimeInternalEvidence) : Did :=
   match request.purpose with
-  | .titleAudit => request.targetAgent
-  | .normal => evidence.sessionScope.getD request.targetAgent
+  | .titleAudit => request.targetNode
+  | .normal => evidence.sessionScope.getD request.targetNode
 
 def exactRuntimeInternalEvidence
     (request : AgentRequestSemantics) (admission : AgentRequestAdmission)
@@ -210,9 +210,9 @@ def exactRuntimeInternalEvidence
   evidence.issuerDid = admission.issuerDid ∧
   evidence.sourceRequestId = admission.sourceRequestId ∧
   evidence.sourceKind = admission.runtimeSourceKind ∧
-  evidence.targetAgent = request.targetAgent ∧
-  admission.issuerDid = request.targetAgent ∧
-  admission.signerDid = request.targetAgent ∧
+  evidence.targetNode = request.targetNode ∧
+  admission.issuerDid = request.targetNode ∧
+  admission.signerDid = request.targetNode ∧
   evidence.targetRuntimeAttestationValid = true ∧
   evidence.sourceBindingCurrent = true ∧
   request.requesterDid = runtimeRequesterScope request evidence ∧
@@ -233,7 +233,7 @@ def exactEnrollmentGeneration
     (request : AgentRequestSemantics) (admission : AgentRequestAdmission)
     (enrollmentRequest : Request) (decision : Decision) : Prop :=
   request.requesterDid = enrollmentRequest.candidateDid ∧
-  request.targetAgent = enrollmentRequest.ownerAgent ∧
+  request.targetNode = enrollmentRequest.ownerNode ∧
   admission.signerDid = request.requesterDid ∧
   admission.enrollmentRequestId = enrollmentRequest.requestId ∧
   admission.enrollmentRequestDigest = enrollmentRequest.digest ∧
@@ -254,9 +254,9 @@ def titlePurposeAllowed
     (runtimeEvidence : Option RuntimeInternalEvidence) : Prop :=
   admission.kind = .runtimeInternal ∧
   admission.runtimeSourceKind = .localControl ∧
-  request.requesterDid = request.targetAgent ∧
-  admission.signerDid = request.targetAgent ∧
-  admission.issuerDid = request.targetAgent ∧
+  request.requesterDid = request.targetNode ∧
+  admission.signerDid = request.targetNode ∧
+  admission.issuerDid = request.targetNode ∧
   request.input = {} ∧
   request.retryFields = [] ∧
   request.triggerFields = [] ∧
@@ -269,7 +269,7 @@ def titlePurposeAllowed
           parent.link.requestId ≠ request.requestId ∧
           request.parentFields = titleParentFields parent.link ∧
           admission.sourceRequestId = parent.link.requestId ∧
-          parent.nodeDid = request.targetAgent ∧
+          parent.nodeDid = request.targetNode ∧
           parent.sessionId = request.sessionId ∧
           parent.agentId = request.agentId ∧
           parent.logicalBindingCurrent = true ∧
@@ -305,11 +305,11 @@ instance (request : AgentRequestSemantics) (admission : AgentRequestAdmission)
         simp only [requestPurposeAllowed, hpurpose, titlePurposeAllowed, hparent]
         infer_instance
 
-/-- What the target principal decides for a request it did not issue. -/
+/-- What the target node decides for a request it did not issue. -/
 structure TargetAuthority where
   /-- The target's `PeerAdmissionAuthority` ACP verdict for the requester DID. -/
   peerAuthorityAllows : Bool
-  /-- The target principal's configured `max_request_hop` (default
+  /-- The target node's configured `max_request_hop` (default
   `CausalHop.defaultMaxRequestHop`); every branch bounds the signed causal hop
   by it (`CausalHop.admitHop`). -/
   maxRequestHop : Nat
@@ -339,10 +339,10 @@ def agentRequestAdmissible
       | _, _ => False
   | .localSelf =>
       admission.signerDid = request.requesterDid ∧
-      request.requesterDid = request.targetAgent
+      request.requesterDid = request.targetNode
   | .peer =>
       admission.signerDid = request.requesterDid ∧
-      request.requesterDid ≠ request.targetAgent ∧
+      request.requesterDid ≠ request.targetNode ∧
       target.peerAuthorityAllows = true
   | .runtimeInternal =>
       match runtimeEvidence with
@@ -381,16 +381,16 @@ def requestGoalInputAllowed (request : AgentRequestSemantics)
 /-- Composed claim boundary: signatures authenticate input but do not grant
 skills, cwd escape, or runtime queue origins. The observed session agent is
 resolved by the session owner; blank/mismatched selection cannot be repaired by
-falling back to the principal name. New-session creation passes its selected
+falling back to the node name. New-session creation passes its selected
 behavior through the same boundary. -/
 def agentRequestClaimable
     (s : State) (request : AgentRequestSemantics) (admission : AgentRequestAdmission)
     (enrollmentRequest : Option Request) (decision : Option Decision)
     (authorizationFresh : Bool) (runtimeEvidence : Option RuntimeInternalEvidence)
     (branchFieldsExact pendingDeadlineAbsent : Bool) (target : TargetAuthority)
-    (sessionBehavior : String) (skillIds : List String)
+    (sessionAgent : String) (skillIds : List String)
     (cwdAllowed : String → Bool) (queueSourceAllowed : SessionQueue.QueueSource → Bool) : Prop :=
-  behaviorMatchesSession request.agentId sessionBehavior = true ∧
+  agentMatchesSession request.agentId sessionAgent = true ∧
   inputWithinContext request.input skillIds cwdAllowed queueSourceAllowed = true ∧
   agentRequestAdmissible s request admission enrollmentRequest decision authorizationFresh
     runtimeEvidence branchFieldsExact pendingDeadlineAbsent target ∧
@@ -400,11 +400,11 @@ instance (s : State) (request : AgentRequestSemantics) (admission : AgentRequest
     (enrollmentRequest : Option Request) (decision : Option Decision)
     (authorizationFresh : Bool) (runtimeEvidence : Option RuntimeInternalEvidence)
     (branchFieldsExact pendingDeadlineAbsent : Bool) (target : TargetAuthority)
-    (sessionBehavior : String) (skillIds : List String)
+    (sessionAgent : String) (skillIds : List String)
     (cwdAllowed : String → Bool) (queueSourceAllowed : SessionQueue.QueueSource → Bool) :
     Decidable (agentRequestClaimable s request admission enrollmentRequest decision
       authorizationFresh runtimeEvidence branchFieldsExact pendingDeadlineAbsent
-      target sessionBehavior skillIds cwdAllowed queueSourceAllowed) := by
+      target sessionAgent skillIds cwdAllowed queueSourceAllowed) := by
   unfold agentRequestClaimable
   infer_instance
 
@@ -413,14 +413,14 @@ theorem claim_requires_authenticated_input
     {enrollmentRequest : Option Request} {decision : Option Decision}
     {fresh : Bool} {runtimeEvidence : Option RuntimeInternalEvidence}
     {branchFieldsExact pendingDeadlineAbsent : Bool} {target : TargetAuthority}
-    {sessionBehavior : String} {skills : List String}
+    {sessionAgent : String} {skills : List String}
     {cwdAllowed : String → Bool} {queueAllowed : SessionQueue.QueueSource → Bool}
     (h : agentRequestClaimable s request admission enrollmentRequest decision fresh
       runtimeEvidence branchFieldsExact pendingDeadlineAbsent target
-      sessionBehavior skills cwdAllowed queueAllowed) :
+      sessionAgent skills cwdAllowed queueAllowed) :
     admission.signatureValid = true ∧
     admission.signedFields = agentRequestAdmissionFields request admission ∧
-    behaviorMatchesSession request.agentId sessionBehavior = true ∧
+    agentMatchesSession request.agentId sessionAgent = true ∧
     inputWithinContext request.input skills cwdAllowed queueAllowed = true := by
   exact ⟨h.2.2.1.1, h.2.2.1.2.1, h.1, h.2.1⟩
 
@@ -434,13 +434,13 @@ theorem title_requires_runtime_parent_only
       runtimeEvidence branchFieldsExact pendingDeadlineAbsent target) :
     admission.kind = .runtimeInternal ∧
     admission.runtimeSourceKind = .localControl ∧
-    request.requesterDid = request.targetAgent ∧
-    admission.signerDid = request.targetAgent ∧
+    request.requesterDid = request.targetNode ∧
+    admission.signerDid = request.targetNode ∧
     request.input = {} ∧
     ∃ evidence parent,
       runtimeEvidence = some evidence ∧ evidence.titleParent = some parent ∧
       request.parentFields = titleParentFields parent.link ∧
-      parent.nodeDid = request.targetAgent ∧
+      parent.nodeDid = request.targetNode ∧
       parent.sessionId = request.sessionId ∧
       parent.agentId = request.agentId := by
   have htitle : titlePurposeAllowed request admission runtimeEvidence := by
@@ -549,25 +549,25 @@ claim; the separate output owner selects NoMessage for a rejected title. -/
 def titlePendingDisposition
     (observationAvailable : Bool) (s : State) (request : AgentRequestSemantics)
     (admission : AgentRequestAdmission) (runtimeEvidence : Option RuntimeInternalEvidence)
-    (sessionBehavior : String) (branchFieldsExact pendingDeadlineAbsent : Bool)
+    (sessionAgent : String) (branchFieldsExact pendingDeadlineAbsent : Bool)
     (maxRequestHop : Nat) :
     AgentRequestAdmissionDisposition :=
   if request.purpose != .titleAudit then .deny
   else admissionDispositionFromResult observationAvailable <|
     decide (agentRequestClaimable s request admission none none false runtimeEvidence
-      branchFieldsExact pendingDeadlineAbsent ⟨false, maxRequestHop⟩ sessionBehavior []
+      branchFieldsExact pendingDeadlineAbsent ⟨false, maxRequestHop⟩ sessionAgent []
       (fun _ => false) (fun _ => false))
 
 def titlePendingStep?
     (observationAvailable : Bool) (s : State) (request : AgentRequestSemantics)
     (admission : AgentRequestAdmission) (runtimeEvidence : Option RuntimeInternalEvidence)
-    (sessionBehavior : String) (branchFieldsExact pendingDeadlineAbsent : Bool)
+    (sessionAgent : String) (branchFieldsExact pendingDeadlineAbsent : Bool)
     (maxRequestHop : Nat) (pending : RequestContext) : Option RequestContext :=
   if request.purpose != .titleAudit || pending.state != .pending ||
       pending.admission != .released then none
   else
     match titlePendingDisposition observationAvailable s request admission runtimeEvidence
-        sessionBehavior branchFieldsExact pendingDeadlineAbsent maxRequestHop with
+        sessionAgent branchFieldsExact pendingDeadlineAbsent maxRequestHop with
     | .admit => some pending
     | .deny => pending.step? .admissionReject
     | .retry => some pending
@@ -649,7 +649,7 @@ theorem enrollment_expiry_fails_closed
   rcases enrollmentRequest with _ | enrolledRequest <;> rcases decision with _ | approval <;>
     simp [agentRequestAdmissible, hkind]
 
-theorem local_self_requires_exact_principal
+theorem local_self_requires_exact_node
     {s : State} {request : AgentRequestSemantics} {admission : AgentRequestAdmission}
     {enrollmentRequest : Option Request} {decision : Option Decision} {fresh : Bool}
     {runtimeEvidence : Option RuntimeInternalEvidence}
@@ -657,7 +657,7 @@ theorem local_self_requires_exact_principal
     (hkind : admission.kind = .localSelf)
     (hadmit : agentRequestAdmissible s request admission enrollmentRequest decision fresh
       runtimeEvidence branchFieldsExact pendingDeadlineAbsent target) :
-    admission.signerDid = request.requesterDid ∧ request.requesterDid = request.targetAgent := by
+    admission.signerDid = request.requesterDid ∧ request.requesterDid = request.targetNode := by
   simp only [agentRequestAdmissible, hkind] at hadmit
   rcases hadmit with ⟨_, _, _, _, ⟨hsigner, htarget⟩, _⟩
   exact ⟨hsigner, htarget⟩
@@ -700,13 +700,13 @@ theorem runtime_internal_adopts_session_scope
     (hadmit : agentRequestAdmissible s request admission enrollmentRequest decision fresh
       runtimeEvidence branchFieldsExact pendingDeadlineAbsent target) :
     ∃ evidence, runtimeEvidence = some evidence ∧
-      request.requesterDid = evidence.sessionScope.getD request.targetAgent := by
+      request.requesterDid = evidence.sessionScope.getD request.targetNode := by
   obtain ⟨evidence, hsome, hexact⟩ := runtime_internal_requires_owned_issue hkind hadmit
   refine ⟨evidence, hsome, ?_⟩
   have h := hexact.2.2.2.2.2.2.2.2.1
   simpa [runtimeRequesterScope, hnormal] using h
 
-/-- Target-runtime attestation, not a principal's enrollment history, owns internal admission. -/
+/-- Target-runtime attestation, not a node's enrollment history, owns internal admission. -/
 theorem runtime_internal_admission_is_independent_of_enrollment_state
     (s₁ s₂ : State) (request : AgentRequestSemantics) (admission : AgentRequestAdmission)
     (enrollmentRequest : Option Request) (decision : Option Decision) (fresh : Bool)
@@ -719,8 +719,8 @@ theorem runtime_internal_admission_is_independent_of_enrollment_state
         branchFieldsExact pendingDeadlineAbsent target := by
   simp [agentRequestAdmissible, hkind]
 
-/-- A peer request is authored by another principal and authorized only by the
-target's peer ACP; a same-principal request can never take this branch. -/
+/-- A peer request is authored by another node and authorized only by the
+target's peer ACP; a same-node request can never take this branch. -/
 theorem peer_requires_foreign_signed_authorized_requester
     {s : State} {request : AgentRequestSemantics} {admission : AgentRequestAdmission}
     {enrollmentRequest : Option Request} {decision : Option Decision} {fresh : Bool}
@@ -730,7 +730,7 @@ theorem peer_requires_foreign_signed_authorized_requester
     (hadmit : agentRequestAdmissible s request admission enrollmentRequest decision fresh
       runtimeEvidence branchFieldsExact pendingDeadlineAbsent target) :
     admission.signerDid = request.requesterDid ∧
-      request.requesterDid ≠ request.targetAgent ∧ target.peerAuthorityAllows = true := by
+      request.requesterDid ≠ request.targetNode ∧ target.peerAuthorityAllows = true := by
   simp only [agentRequestAdmissible, hkind] at hadmit
   exact hadmit.2.2.2.2.1
 

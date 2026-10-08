@@ -79,7 +79,7 @@ structure InterruptTarget where
   deriving DecidableEq, Repr
 
 def currentInterruptTarget (w : World) : InterruptTarget :=
-  ⟨w.input.requestDocId, w.queue.scope.agent, w.queue.scope.requester⟩
+  ⟨w.input.requestDocId, w.queue.scope.node, w.queue.scope.requester⟩
 
 def latchInterrupt? (w : World) (target : InterruptTarget) : Option World :=
   if target != currentInterruptTarget w then none
@@ -536,7 +536,7 @@ private def request (interrupt : Option Time := none) : RequestContext :=
   , interruptRequestedAt := interrupt }
 
 private def base (interrupt : Option Time := none) : World :=
-  { queue := ({ scope := { agent := 1, session := 7, requester := some 2 }, active := none, pending := [], terminal := ∅ } : SessionQueue.SessionQueueState)
+  { queue := ({ scope := { node := 1, session := 7, requester := some 2 }, active := none, pending := [], terminal := ∅ } : SessionQueue.SessionQueueState)
   , request := request interrupt
   , execution := none
   , input := { requestId := 11, requestDocId := 101, contentToken := 501 }
@@ -551,7 +551,7 @@ private def entry : SessionQueue.QueueEntry :=
 
 private def activation : Handover.Activation :=
   { request :=
-      { document := 101, entry, agent := 1, session := 7,
+      { document := 101, entry, node := 1, session := 7,
         requester := some 2, authenticated := true }
     evidence := .ordinary,
     generation := 91, duration := 10, deadline := 20 }

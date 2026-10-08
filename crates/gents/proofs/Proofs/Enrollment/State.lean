@@ -42,7 +42,7 @@ structure Offer where
   serverPeer : PeerId
   serverTicketPeer : PeerId
   resolvedServerDid : Did
-  ownerAgent : Did
+  ownerNode : Did
   profile : String
   schemaCompatible : Bool
   adminSigned : Bool
@@ -68,7 +68,7 @@ structure Request where
   observedCandidatePeer : PeerId
   resolvedCandidateDid : Did
   candidateTicketPeer : PeerId
-  ownerAgent : Did
+  ownerNode : Did
   profile : String
   clientNonce : String
   issuedAt : String
@@ -83,7 +83,7 @@ def stringBytes (value : String) : WireBytes := value.toUTF8.data.toList
 
 def canonicalRequestTextFields (r : Request) : List String :=
   [r.requestId, r.offerId, r.challenge, r.networkId, r.adminDid,
-   r.serverPeer, r.candidateDid, r.candidatePeer, r.ownerAgent, r.profile,
+   r.serverPeer, r.candidateDid, r.candidatePeer, r.ownerNode, r.profile,
    r.clientNonce, r.issuedAt, r.expiresAt]
 
 def textFieldsToBytes (fields : List String) : CanonicalFields := fields.map stringBytes
@@ -211,7 +211,7 @@ structure Decision where
   adminDid : Did
   candidateDid : Did
   candidatePeer : PeerId
-  ownerAgent : Did
+  ownerNode : Did
   kind : DecisionKind
   authorizationSequence : Nat
   /-- Signed lease boundary. `fresh` is the verifier's result at observation time. -/
@@ -228,7 +228,7 @@ structure AuthorizationRevision where
   adminDid : Did
   memberDid : Did
   memberPeer : PeerId
-  ownerAgent : Did
+  ownerNode : Did
   sequence : Nat
   /-- Exact lease generation copied from the approval; revocations retain it as history. -/
   authorizationExpiresAt : String
@@ -243,7 +243,7 @@ structure Membership where
   networkId : String
   memberDid : Did
   memberPeer : PeerId
-  ownerAgent : Did
+  ownerNode : Did
   authorizationSequence : Nat
   authorizationExpiresAt : String
   active : Bool
@@ -259,7 +259,7 @@ structure AppliedRoute where
   direction : RouteDirection
   peer : PeerId
   requester : Did
-  agent : Did
+  node : Did
   profile : String
   live : Bool
   deriving DecidableEq, Repr
@@ -277,7 +277,7 @@ structure RouteReceipt where
   memberDid : Did
   memberPeer : PeerId
   serverPeer : PeerId
-  ownerAgent : Did
+  ownerNode : Did
   authorizationSequence : Nat
   authorizationExpiresAt : String
   direction : RouteDirection
@@ -341,7 +341,7 @@ instance (s : State) (networkId : String) (adminDid : Did) : Decidable
 def requestMatchesOffer (o : Offer) (r : Request) : Prop :=
   r.offerId = o.offerId ∧ r.challenge = o.challenge ∧
   r.networkId = o.networkId ∧ r.adminDid = o.adminDid ∧
-  r.serverPeer = o.serverPeer ∧ r.ownerAgent = o.ownerAgent ∧
+  r.serverPeer = o.serverPeer ∧ r.ownerNode = o.ownerNode ∧
   r.profile = o.profile
 
 instance (o : Offer) (r : Request) : Decidable (requestMatchesOffer o r) := by
@@ -387,7 +387,7 @@ def decisionMatchesRequest (r : Request) (d : Decision) : Prop :=
   d.requestId = r.requestId ∧ d.requestDigest = r.digest ∧
   d.networkId = r.networkId ∧ d.adminDid = r.adminDid ∧
   d.candidateDid = r.candidateDid ∧ d.candidatePeer = r.candidatePeer ∧
-  d.ownerAgent = r.ownerAgent ∧ d.signerDid = r.adminDid ∧
+  d.ownerNode = r.ownerNode ∧ d.signerDid = r.adminDid ∧
   d.authorizationExpiresAt ≠ ""
 
 instance (r : Request) (d : Decision) : Decidable (decisionMatchesRequest r d) := by
@@ -397,7 +397,7 @@ def revisionForApproval (r : Request) (d : Decision) : AuthorizationRevision :=
   { requestId := r.requestId, requestDigest := r.digest
   , networkId := r.networkId, adminDid := r.adminDid
   , memberDid := r.candidateDid, memberPeer := r.candidatePeer
-  , ownerAgent := r.ownerAgent, sequence := d.authorizationSequence
+  , ownerNode := r.ownerNode, sequence := d.authorizationSequence
   , authorizationExpiresAt := d.authorizationExpiresAt
   , kind := .active, signerDid := d.signerDid, adminSigned := d.adminSigned }
 
@@ -405,7 +405,7 @@ def revisionMatchesRequest (r : Request) (revision : AuthorizationRevision) : Pr
   revision.requestId = r.requestId ∧ revision.requestDigest = r.digest ∧
   revision.networkId = r.networkId ∧ revision.adminDid = r.adminDid ∧
   revision.memberDid = r.candidateDid ∧ revision.memberPeer = r.candidatePeer ∧
-  revision.ownerAgent = r.ownerAgent ∧ revision.signerDid = r.adminDid ∧
+  revision.ownerNode = r.ownerNode ∧ revision.signerDid = r.adminDid ∧
   revision.authorizationExpiresAt ≠ ""
 
 instance (r : Request) (revision : AuthorizationRevision) : Decidable
@@ -481,7 +481,7 @@ instance (s : State) (memberDid : Did) : Decidable
 def membershipFor (r : Request) (d : Decision) : Membership :=
   { requestId := r.requestId, requestDigest := r.digest
   , networkId := r.networkId, memberDid := r.candidateDid
-  , memberPeer := r.candidatePeer, ownerAgent := r.ownerAgent
+  , memberPeer := r.candidatePeer, ownerNode := r.ownerNode
   , authorizationSequence := d.authorizationSequence
   , authorizationExpiresAt := d.authorizationExpiresAt
   , active := true, adminSigned := true, fresh := true }
@@ -491,20 +491,20 @@ def clientToServerRoute (r : Request) (d : Decision) : AppliedRoute :=
   , authorizationSequence := d.authorizationSequence
   , authorizationExpiresAt := d.authorizationExpiresAt, direction := .clientToServer
   , peer := r.candidatePeer, requester := r.candidateDid
-  , agent := r.ownerAgent, profile := r.profile, live := true }
+  , node := r.ownerNode, profile := r.profile, live := true }
 
 def serverToClientRoute (r : Request) (d : Decision) : AppliedRoute :=
   { requestId := r.requestId, networkId := r.networkId
   , authorizationSequence := d.authorizationSequence
   , authorizationExpiresAt := d.authorizationExpiresAt, direction := .serverToClient
   , peer := r.serverPeer, requester := r.candidateDid
-  , agent := r.ownerAgent, profile := r.profile, live := true }
+  , node := r.ownerNode, profile := r.profile, live := true }
 
 def serverRouteReceiptFor (r : Request) (d : Decision) : RouteReceipt :=
   { requestId := r.requestId, requestDigest := r.digest
   , networkId := r.networkId, adminDid := r.adminDid
   , memberDid := r.candidateDid, memberPeer := r.candidatePeer
-  , serverPeer := r.serverPeer, ownerAgent := r.ownerAgent
+  , serverPeer := r.serverPeer, ownerNode := r.ownerNode
   , authorizationSequence := d.authorizationSequence
   , authorizationExpiresAt := d.authorizationExpiresAt
   , direction := .clientToServer, signerDid := r.adminDid
@@ -583,7 +583,7 @@ instance (s : State) (r : Request) : Decidable (enrollmentReady s r) := by
   unfold enrollmentReady; infer_instance
 
 def toHydrationRoute (route : AppliedRoute) : SessionHydration.AppliedPairingRoute :=
-  { peer := route.peer, requester := route.requester, node := route.agent }
+  { peer := route.peer, requester := route.requester, node := route.node }
 
 def toHydrationMembership (membership : Membership) : SessionHydration.VerifiedActiveMembership :=
   { network := membership.networkId, member := membership.memberDid }
@@ -618,16 +618,16 @@ def hydrationRequestForDirection (r : Request) (session : String) :
     RouteDirection → SessionHydration.Request
   | .clientToServer =>
     { key := r.requestId, peer := r.candidatePeer, requester := r.candidateDid
-    , node := r.ownerAgent, session }
+    , node := r.ownerNode, session }
   | .serverToClient =>
     { key := r.requestId, peer := r.serverPeer, requester := r.candidateDid
-    , node := r.ownerAgent, session }
+    , node := r.ownerNode, session }
 
 def hydrationRequestFor (r : Request) (session : String) : SessionHydration.Request :=
   hydrationRequestForDirection r session .clientToServer
 
 def reverseHydrationRequestFor (r : Request) (session : String) : SessionHydration.Request :=
   { key := r.requestId, peer := r.serverPeer, requester := r.candidateDid
-  , node := r.ownerAgent, session }
+  , node := r.ownerNode, session }
 
 end Enrollment

@@ -123,7 +123,7 @@ theorem reissue_preserves_unrelated_request {pre post : SessionState} {failedId 
 under exact requester scope and physical parent identity, not cached UI state. -/
 def retryFromRows? (pre : SessionState) (session : AgentSession.Document)
     (rows : List AgentSession.RequestFact) (parentDoc failedId newId : Nat) : Option SessionState :=
-  match AgentSession.latest rows session.scope.agent session.scope.session
+  match AgentSession.latest rows session.scope.node session.scope.session
       (some session.scope.requester) with
   | none => none
   | some parent =>
