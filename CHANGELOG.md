@@ -60,6 +60,15 @@ source consistency checks, not a separate runtime compatibility version.
   the retry ladder, and `grok-auth-probe` and model discovery name the version
   gents sent and the `GENTS_XAI_GROK_CLIENT_VERSION` override.
 
+### Added
+
+- `gents server --enable-mcp --mcp-graph-tools` exposes the read-only
+  `list_graphs`, `get_graph_run` and `get_graph_result` at `/mcp`. Each call
+  must forward a caller-signed DefraDB bearer, whose DID selects whose graphs
+  are listed and observed. The graph collections carry no per-caller policy,
+  so this restricts no access, and the flag cannot be combined with
+  `--mcp-query-collection`.
+
 ## 0.20.0 - 2026-10-05
 
 - Trimmed tool results are recoverable: `sessions` gains an `output`
