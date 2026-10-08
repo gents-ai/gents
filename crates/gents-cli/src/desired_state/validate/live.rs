@@ -11,9 +11,9 @@ use super::super::DesiredStateManifest;
 /// Apply validates trigger filter syntax and `doc.*` template fields; the
 /// template rule itself is the publication owner's
 /// (`gents::config_client::validate_event_trigger_document_fields`), called
-/// here against the same introspected schema so the pre-flight never refuses a
-/// configuration the runtime serves. Resolving fields below the top level
-/// remains outside this contract.
+/// here against the same introspected schema, so a configuration refused
+/// here is one the publication owner refuses too. Resolving fields below the
+/// top level remains outside this contract.
 pub(crate) async fn validate_manifest_against_live(
     manifest: &DesiredStateManifest,
     access: &ConfigAccess,
@@ -89,14 +89,22 @@ pub(crate) async fn validate_manifest_against_live(
                 }
                 gents::document_config::EventGroupCount::Fixed(_) => None,
             });
-        if source.correlation_field.is_none()
-            && expected_count_field.is_none()
-            && !joined.iter().any(|(trigger, task)| {
-                gents::config_client::event_trigger_document_field_names(trigger, task)
-                    .is_ok_and(|names| !names.is_empty())
-            })
-        {
-            continue;
+        if source.correlation_field.is_none() && expected_count_field.is_none() {
+            let mut walks_templates = false;
+            for (trigger, task) in &joined {
+                match gents::config_client::event_trigger_document_field_names(trigger, task) {
+                    Ok(names) if !names.is_empty() => walks_templates = true,
+                    // A template that does not parse is refused by the same
+                    // static owner apply runs; reporting it here keeps the
+                    // pre-flight's refusal independent of whether an
+                    // unrelated correlation or count field forced a probe.
+                    Err(error) => errors.push(format!("{error:#}")),
+                    Ok(_) => {}
+                }
+            }
+            if !walks_templates {
+                continue;
+            }
         }
 
         let introspect = match gents::defra_query::introspection_query(source_collection) {
@@ -261,6 +269,34 @@ mod tests {
         let manifest = receipt_manifest(json!({"event_kind": "created"}), true)?;
         let errors = validate_manifest_against_live(&manifest, &access).await?;
         assert_eq!(errors, Vec::<String>::new(), "{errors:?}");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn refuses_a_template_that_does_not_parse_without_a_correlation_or_count() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let access = probe_access(&tempdir).await?;
+        let manifest = manifest(
+            json!([source("broken", json!({"correlation_field": "batch"}),)]),
+            json!([{
+                "agent_did": OWNER,
+                "task_id": "summarize",
+                "behavior_id": "beh",
+                "prompt_template": "Summarize {{ doc.x",
+            }]),
+            json!([{
+                "agent_did": OWNER,
+                "trigger_id": "on-broken",
+                "task_id": "summarize",
+                "source": {"kind": "event", "event_source_id": "broken"},
+            }]),
+        )?;
+
+        let errors = validate_manifest_against_live(&manifest, &access).await?;
+        assert!(
+            errors.iter().any(|error| error.contains("template parse error")),
+            "an unparsable template must fail the pre-flight without a correlation or count probe: {errors:?}"
+        );
         Ok(())
     }
 

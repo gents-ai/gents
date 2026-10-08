@@ -465,9 +465,10 @@ fn event_trigger_templates<'a>(
 
 /// A fire renders `{{ doc.X }}` against the delivered source document with
 /// strict undefined values, so a field the source collection does not declare
-/// fails every fire (#1970). `_`-prefixed names are engine metadata, aggregate
-/// pseudo-fields resolve through the query engine, and a template that guards
-/// an absent value renders it instead of failing. A per-document
+/// fails every fire (#1970). `_`-prefixed names are engine metadata, a
+/// template that guards an absent value renders it instead of failing, and a
+/// `doc.` reference to an aggregate pseudo-field is refused: it resolves
+/// through the query engine, never the delivered document. A per-document
 /// `emit_outcome` delivery of `CallbackResult` or `WorkspaceReceipt` resolves
 /// `handoff_id`, `reply_session_id` and `attempt` even undeclared: the
 /// trigger engine injects that native-route provenance into the fire's
