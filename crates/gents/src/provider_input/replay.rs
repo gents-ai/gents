@@ -15,6 +15,7 @@ pub(crate) fn owned_replay_input(
     issuer: Option<gents_loop::claude_messages_body::ReplayIssuer>,
     profile: super::ProviderInputProfile,
 ) -> LoopReplayInput {
+    let pending = Arc::new(PendingReplay::default());
     LoopReplayInput {
         request_doc_id: Some(request.doc_id.clone()),
         issuer,
@@ -23,7 +24,11 @@ pub(crate) fn owned_replay_input(
             let node = node.clone();
             let request = request.clone();
             let request_commit_cid = request_commit_cid.clone();
+            let pending = pending.clone();
             Box::pin(async move {
+                if let Some(rows) = pending.take(&tags) {
+                    return Ok(rows);
+                }
                 let started = std::time::Instant::now();
                 let boundary = crate::provider_context_reduction::capture_source_boundary(
                     &node,
@@ -60,7 +65,7 @@ pub(crate) fn owned_replay_input(
                     elapsed_ms = started.elapsed().as_millis() as u64,
                     "resolved canonical provider replay evidence"
                 );
-                Ok(resolved
+                let rows = resolved
                     .into_iter()
                     .flat_map(|(tag, evidence)| {
                         evidence.into_iter().map(move |evidence| {
@@ -70,10 +75,49 @@ pub(crate) fn owned_replay_input(
                             }
                         })
                     })
-                    .collect())
+                    .collect::<Vec<_>>();
+                pending.store(tags, rows.clone());
+                Ok(rows)
             })
         })),
         ..LoopReplayInput::default()
+    }
+}
+
+/// The first-turn admission estimate and the loop's first dispatch assemble
+/// the same request back to back. The last resolution serves the next
+/// identical lookup once; any other lookup re-reads the store.
+#[derive(Default)]
+struct PendingReplay(
+    std::sync::Mutex<
+        Option<(
+            Vec<gents_loop::claude_messages_body::ReplayTag>,
+            Vec<gents_loop::loop_stream::ReplayEvidenceRow>,
+        )>,
+    >,
+);
+
+impl PendingReplay {
+    fn take(
+        &self,
+        tags: &[gents_loop::claude_messages_body::ReplayTag],
+    ) -> Option<Vec<gents_loop::loop_stream::ReplayEvidenceRow>> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+            .and_then(|(previous, rows)| (previous == tags).then_some(rows))
+    }
+
+    fn store(
+        &self,
+        tags: Vec<gents_loop::claude_messages_body::ReplayTag>,
+        rows: Vec<gents_loop::loop_stream::ReplayEvidenceRow>,
+    ) {
+        *self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((tags, rows));
     }
 }
 
@@ -102,6 +146,22 @@ mod tests {
     };
     use gents_protocol::output::OutputSource;
     use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
+
+    #[test]
+    fn pending_replay_serves_one_identical_lookup() {
+        let pending = PendingReplay::default();
+        let tags = vec![provider_tag("doc-a", 0)];
+        pending.store(tags.clone(), Vec::new());
+        assert_eq!(pending.take(&tags).map(|rows| rows.len()), Some(0));
+        assert!(pending.take(&tags).is_none(), "served once");
+
+        pending.store(tags, Vec::new());
+        assert!(pending.take(&[provider_tag("doc-a", 1)]).is_none());
+        assert!(
+            pending.take(&[provider_tag("doc-a", 0)]).is_none(),
+            "a differing lookup discards the pending result"
+        );
+    }
 
     fn provider_tag(request_doc_id: &str, turn_index: u32) -> ReplayTag {
         ReplayTag {
