@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-pub const NODE_READINESS_FORMAT_VERSION: u32 = 1;
+pub const NODE_READINESS_FORMAT_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NodeReadinessProcessState {

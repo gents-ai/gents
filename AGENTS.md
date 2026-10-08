@@ -51,10 +51,11 @@ before pushing its implementation layers.
 ## Node/Agent rename stack (#1799)
 
 The rename spec layer (Node and Agent SDL, `gents_protocol` re-exports, the
-Engineer prompt and preset) replaces the old vocabulary in the table below. Keep it
-intentionally red: no Rust builds, tests or compatibility shims. Stack L0 spec, L1 Lean, L2 conformance, L3 runtime, L4
-CLI/shims, L5 desktop, each on its parent. The spec layer never merges alone;
-validate the integrated stack before pushing its implementation layers.
+Engineer prompt and preset) replaces the old vocabulary in the table below.
+Keep it intentionally red: no Rust builds, tests or compatibility shims. Stack
+L0 spec, L1 Lean, L2 conformance, L3 runtime, L4 CLI/shims, L5 desktop, each
+on its parent. The spec layer never merges alone; validate the integrated stack
+before pushing its implementation layers.
 
 | Old | New |
 | --- | --- |
@@ -129,7 +130,7 @@ decoders and native adapters translate representations, not redefine policy.
   Persisted messages remain native. DefraDB is the pinned public dependency in
   the workspace `Cargo.toml`; investigate node, schema, identity, and
   transaction behavior there. Claude subscriptions use Anthropic Messages HTTP
-  with an node-scoped `OAuthCredential` written by `gents claude-login` and
+  with a node-scoped `OAuthCredential` written by `gents claude-login` and
   refreshed by gents; the `claude` binary is not a dependency.
 
 ## Documentation and comments
