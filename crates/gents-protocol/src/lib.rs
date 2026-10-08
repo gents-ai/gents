@@ -1,4 +1,3 @@
-pub mod behavior_readiness;
 pub mod canonical;
 pub mod chatgpt_oauth;
 pub mod client_protocol;
@@ -8,6 +7,7 @@ pub mod graphql;
 pub mod mailbox_question;
 pub mod message;
 pub mod network_token;
+pub mod node_readiness;
 pub mod output;
 pub mod peer_schema;
 pub mod rendered_request;

@@ -19,21 +19,8 @@ fn readiness_snapshot(agents: Vec<AgentReadinessEntry>) -> NodeReadinessSnapshot
     }
 }
 
-fn observed_at() -> DateTime<Utc> {
-    DateTime::parse_from_rfc3339("2026-08-28T00:00:10Z")
-        .unwrap()
-        .with_timezone(&Utc)
-}
-
 fn projected_unknown(row: &NodeReadinessRow) -> Option<AgentReadinessUnknownReason> {
-    project_node_readiness(
-        Some(row),
-        "did:test:node",
-        ["a", "b"],
-        Some("a"),
-        observed_at(),
-    )
-    .unknown_reason
+    project_node_readiness(Some(row), "did:test:node", ["a", "b"], Some("a")).unknown_reason
 }
 
 #[test]
@@ -71,11 +58,7 @@ fn ready_snapshot_does_not_expire_without_semantic_changes() {
         reason: None,
     }]);
     let row = readiness_row("did:test:node", serde_json::to_string(&snapshot).unwrap());
-    let stale_at = DateTime::parse_from_rfc3339("2027-08-28T00:00:46Z")
-        .unwrap()
-        .with_timezone(&Utc);
-    let projection =
-        project_node_readiness(Some(&row), "did:test:node", ["a"], Some("a"), stale_at);
+    let projection = project_node_readiness(Some(&row), "did:test:node", ["a"], Some("a"));
     assert_eq!(projection.unknown_reason, None);
     assert_eq!(
         projection.agents.get("a"),
@@ -83,7 +66,7 @@ fn ready_snapshot_does_not_expire_without_semantic_changes() {
         "a lagged replica must keep last-known dispatcher readiness"
     );
     assert!(matches!(
-        project_node_readiness_summary(Some(&row), "did:test:node", stale_at),
+        project_node_readiness_summary(Some(&row), "did:test:node"),
         ProjectedNodeReadinessSummary::Observed(_)
     ));
 }
@@ -144,14 +127,7 @@ fn projection_accepts_only_canonical_bound_payloads_and_process_states() {
         Some(AgentReadinessUnknownReason::ReadinessMalformed)
     );
     assert_eq!(
-        project_node_readiness(
-            Some(&canonical),
-            "did:test:node",
-            [" a"],
-            Some("a"),
-            observed_at(),
-        )
-        .unknown_reason,
+        project_node_readiness(Some(&canonical), "did:test:node", [" a"], Some("a")).unknown_reason,
         Some(AgentReadinessUnknownReason::ReadinessMalformed)
     );
 
@@ -196,15 +172,11 @@ fn projection_accepts_only_canonical_bound_payloads_and_process_states() {
         r#"{"format_version":2,"process_state":"ready","active_generation":4,"router_generation":4,"default_agent_id":"a","agents":[{"agent_id":"a","state":"ready","reason":null}],"extra":true}"#.to_string(),
     );
     assert_eq!(
-        project_node_readiness_summary(
-            Some(&with_unknown_top_level_field),
-            "did:test:node",
-            observed_at(),
-        ),
+        project_node_readiness_summary(Some(&with_unknown_top_level_field), "did:test:node"),
         ProjectedNodeReadinessSummary::Unknown(AgentReadinessUnknownReason::ReadinessMalformed)
     );
     assert!(matches!(
-        project_node_readiness_summary(Some(&canonical), "did:test:node", observed_at()),
+        project_node_readiness_summary(Some(&canonical), "did:test:node"),
         ProjectedNodeReadinessSummary::Observed(NodeReadinessSummary {
             ready_count: 1,
             unavailable_agents: ref unavailable,
@@ -216,13 +188,7 @@ fn projection_accepts_only_canonical_bound_payloads_and_process_states() {
 #[test]
 fn malformed_configured_id_preserves_all_canonical_ids_independent_of_order() {
     for configured in [vec!["bad ", "a", "b"], vec!["a", "bad ", "b"]] {
-        let projection = project_node_readiness(
-            None,
-            "did:test:node",
-            configured,
-            Some("default"),
-            observed_at(),
-        );
+        let projection = project_node_readiness(None, "did:test:node", configured, Some("default"));
         assert_eq!(
             projection.unknown_reason,
             Some(AgentReadinessUnknownReason::ReadinessMalformed)

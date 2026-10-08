@@ -8,7 +8,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 pub const NODE_READINESS_FORMAT_VERSION: u32 = 2;
@@ -240,8 +239,6 @@ pub enum AgentReadinessUnknownReason {
     ReadinessMissing,
     ReadinessMalformed,
     ReadinessVersionUnsupported,
-    /// Legacy wire value retained for older clients; current projections do not emit it.
-    ReadinessStale,
     ProcessNotReady,
     RouterGenerationStale,
     AgentNotAssigned,
@@ -343,12 +340,11 @@ pub fn decode_node_readiness_snapshot(
 /// Strict operational summary from the sole durable readiness authority.
 /// Missing, malformed, non-ready, or generation-skewed observations fail
 /// closed and never manufacture agent counts from configuration rows.
-/// The clock argument is retained for source compatibility; document age does
-/// not establish runtime liveness. Transport health has its own database owner.
+/// Document age does not establish runtime liveness. Transport health has its
+/// own database owner.
 pub fn project_node_readiness_summary(
     row: Option<&NodeReadinessRow>,
     expected_node_did: &str,
-    _observed_at: DateTime<Utc>,
 ) -> ProjectedNodeReadinessSummary {
     let Some(row) = row else {
         return ProjectedNodeReadinessSummary::Unknown(
@@ -394,13 +390,11 @@ pub fn project_node_readiness_summary(
 /// Project the runtime-authored row into the only legal client readiness
 /// states. Configured identifiers are validated exactly, never normalized.
 /// Readiness changes only when the runtime publishes a semantic change.
-/// The clock argument is retained for source compatibility, not a liveness lease.
 pub fn project_node_readiness<'a>(
     row: Option<&NodeReadinessRow>,
     expected_node_did: &str,
     configured_agent_ids: impl IntoIterator<Item = &'a str>,
     configured_default_agent_id: Option<&str>,
-    _observed_at: DateTime<Utc>,
 ) -> NodeReadinessProjection {
     let mut agent_ids = BTreeSet::new();
     let mut configured_ids_malformed = false;
@@ -483,5 +477,5 @@ pub fn project_node_readiness<'a>(
 }
 
 #[cfg(test)]
-#[path = "behavior_readiness/tests.rs"]
+#[path = "node_readiness/tests.rs"]
 mod tests;

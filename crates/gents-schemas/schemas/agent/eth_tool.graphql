@@ -11,7 +11,7 @@ type EthTool @branchable @index(fields: ["node_did", "tool_id"], unique: true) {
     query_methods: [String]
     # JSON-serialized call decls (any_read or declared). Empty/null = none.
     calls: [String]
-    # ChainKeyBinding.binding_id this behavior may sign with. Null = read-only.
+    # ChainKeyBinding.binding_id this agent may sign with. Null = read-only.
     key_binding_id: String
     created_at: String
     tags: [String!]

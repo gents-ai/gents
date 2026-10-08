@@ -58,7 +58,7 @@ pub enum AgentRequestAdmissionKind {
     Enrollment,
     LocalSelf,
     RuntimeInternal,
-    /// A request authored by another principal's agent (a cross-principal
+    /// A request authored by another node's agent (a cross-node
     /// `agent_new`/`agent_message`). The requester signs, the target
     /// differs from the requester, and the target's `PeerAdmissionAuthority`
     /// ACP authorizes the requester DID. Replies route back to `requester_did`
@@ -260,7 +260,7 @@ pub struct AgentRequestSigningFields<'a> {
     pub caused_by_parent_tool_call_id: Option<&'a str>,
     pub caused_by_parent_tool_call_doc_id: Option<&'a str>,
     pub workspace_id: Option<&'a str>,
-    /// Principal scope copied from the verified workspace/source, not a host identity.
+    /// Node scope copied from the verified workspace/source, not a host identity.
     pub workspace_owner_node_did: Option<&'a str>,
     pub workspace_authority: Option<&'a str>,
     pub workspace_seal_hash: Option<&'a str>,
@@ -365,7 +365,7 @@ impl AgentRequestAdmissionRecord {
         }
     }
 
-    /// Cross-principal request signed by its requester (`signer_did`).
+    /// Cross-node request signed by its requester (`signer_did`).
     pub fn peer(signer_did: impl Into<String>) -> Self {
         Self {
             kind: AgentRequestAdmissionKind::Peer,
@@ -640,7 +640,7 @@ pub fn validate_workspace_reference(
             &["readOnly", "readWrite", "integrate"],
         ),
         _ => {
-            anyhow::bail!("workspace reference requires id, owner principal and authority together")
+            anyhow::bail!("workspace reference requires id, owner node and authority together")
         }
     }
 }
@@ -818,7 +818,7 @@ pub struct AgentRequestCreate {
     pub caused_by_parent_tool_call_id: Option<String>,
     pub caused_by_parent_tool_call_doc_id: Option<String>,
     pub workspace_id: Option<String>,
-    /// Signed principal scope; present exactly when workspace_id is present.
+    /// Signed node scope; present exactly when workspace_id is present.
     /// Issuance validates this against the existing workspace or authenticated source.
     pub workspace_owner_node_did: Option<String>,
     pub workspace_authority: Option<String>,
