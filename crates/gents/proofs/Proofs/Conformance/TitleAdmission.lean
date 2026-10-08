@@ -66,7 +66,7 @@ private def world (c : Case) : World :=
   { requestId := ids.encode c.ownPhysical
   , sessionId := session
   , purpose := request.purpose
-  , principal := agent
+  , nodeDid := agent
   , lease := RequestExecutionLease.initial Nat
   , segments := []
   , messages := []
@@ -118,7 +118,7 @@ private def emittedModelLabels (c : Case) : List Nat :=
     let value := activation.binding
     [value.physicalRequest, value.logicalRequest, value.parentPhysical,
      value.parentLogical, value.agent, value.session]
-  [start.requestId, start.sessionId, start.principal,
+  [start.requestId, start.sessionId, start.nodeDid,
    start.queue.scope.agent, start.queue.scope.session,
    start.queue.active.getD 0] ++ binding.getD []
 
@@ -165,7 +165,7 @@ private def caseJson (c : Case) : Json :=
       , ("model_own_physical", symbolJson start.requestId)
       , ("purpose", toJson start.purpose.toWire)
       , ("session", symbolJson start.sessionId)
-      , ("principal", symbolJson start.principal)
+      , ("principal", symbolJson start.nodeDid)
       , ("queue_scope_agent", symbolJson start.queue.scope.agent)
       , ("queue_scope_session", symbolJson start.queue.scope.session)
       , ("queue_active", optionalSymbolJson start.queue.active)

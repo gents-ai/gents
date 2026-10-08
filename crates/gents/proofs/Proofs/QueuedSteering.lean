@@ -329,7 +329,7 @@ def providerSendPermitted (w : World) (prepared : PreparedInput)
       | some execution =>
           capture.key.requestId == w.input.requestDocId &&
             capture.key.sessionId == execution.sessionId &&
-            capture.key.agentDid == execution.principal &&
+            capture.key.agentDid == execution.nodeDid &&
             capture.sendPermitted)
 
 theorem interrupted_before_claim_retains_exact_input
