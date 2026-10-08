@@ -49,7 +49,7 @@ theorem selected_network_membership_required (cat : Catalog) (st : State) (r : R
   intro hadmits
   exact hmembership hadmits.2.1
 
-/-- Pairing admission binds the target peer to the exact requester and agent. -/
+/-- Pairing admission binds the target peer to the exact requester and node. -/
 theorem applied_pairing_route_required (cat : Catalog) (st : State) (r : Request)
     (delivery : DeliveryResult) (terminalWrite : TerminalWriteResult)
     (hpairing : appliedPairingRoute r ∉ cat.appliedPairingRoutes) :
