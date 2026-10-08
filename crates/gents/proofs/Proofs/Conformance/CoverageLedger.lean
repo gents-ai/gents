@@ -520,10 +520,10 @@ def stateMachineCoverage : List CoverageEntry :=
   ]
 
 def caseCoverage : List CoverageEntry :=
-  [ tagged (followUpCoverage
+  [ tagged (consumerCoverage
       "root_admission_cases"
       "RootAdmissionCases"
-      "Pending consumer conformance::root_admission::generated_root_admission_cases_drive_production_root_policy: replay these rows through the production Tools root policy. No consumer at that path is bound yet.")
+      "conformance::root_admission::generated_root_admission_cases_drive_production_root_policy")
       "apply-reconcile" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "pairing_reconcile_cases"
