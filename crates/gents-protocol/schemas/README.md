@@ -8,10 +8,10 @@ protocol schemas.
 The canonical configuration graph is:
 
 ```text
-AgentPrincipal
-  -> default_agent_id -> AgentBehavior
+Node
+  -> default_agent_id -> Agent
 
-AgentBehavior
+Agent
   -> context_id           -> AgentContext
   -> inference_profile_id -> InferenceProfile
 
@@ -41,23 +41,23 @@ state publishes a complete retained owner graph atomically and validates every
 reference before commit. Tags are discovery metadata and never references,
 permissions, or execution selectors.
 
-`AgentBehavior` has one context selection and one inference selection. Literal
+`Agent` has one context selection and one inference selection. Literal
 instructions, skills, tools, and compaction belong to `AgentContext` and its
 referenced documents. Provider, model, sampling, execution bounds, and retries
 belong to the inference documents. Backend authentication is the tagged
 `InferenceBackend.auth` value; competing raw-key and environment-key fields do
 not exist.
 
-The runtime resolves a behavior in this order:
+The runtime resolves an agent in this order:
 
-1. Load the `AgentPrincipal` for the actor DID.
-2. Select its default behavior or the request's explicit `agent_id`.
-3. Resolve the behavior's `AgentContext` graph.
+1. Load the `Node` for the actor DID.
+2. Select its default agent or the request's explicit `agent_id`.
+3. Resolve the agent's `AgentContext` graph.
 4. Resolve its `InferenceProfile` graph.
 5. Intersect resolved tools with the host's `ToolCeiling`.
-6. Publish readiness through `AgentBehaviorReadiness`.
+6. Publish readiness through `NodeReadiness`.
 
-`AgentRuntime` carries reconcile and executor diagnostics. It is not desired
+`NodeRuntime` carries reconcile and executor diagnostics. It is not desired
 configuration or admission authority.
 
 ## Requests and sessions
@@ -81,7 +81,7 @@ request document IDs bind responses, messages, tool calls, retries, and
 delegation lineage to the exact request instance.
 
 `AgentSession` is the single durable session document. It owns session identity,
-requester scope, behavior selection, creation and close times, title, tags,
+requester scope, agent selection, creation and close times, title, tags,
 provenance, and a compact observation. Request execution state remains on
 `AgentRequest`.
 
@@ -94,7 +94,7 @@ commit before send.
 ## Tasks and automation
 
 ```text
-Task     -> agent_id    -> AgentBehavior
+Task     -> agent_id    -> Agent
 Schedule -> task_id     -> Task
 Trigger  -> task_id     -> Task
           source.schedule_id     -> Schedule

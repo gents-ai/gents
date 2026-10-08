@@ -339,9 +339,9 @@ mod tests {
             "process_state",
             "active_generation",
             "router_generation",
-            "default_behavior_id",
-            "runnable_behavior_count",
-            "unavailable_behavior_count",
+            "default_agent_id",
+            "runnable_agent_count",
+            "unavailable_agent_count",
         ] {
             assert!(
                 !NODE_RUNTIME.lines().any(|line| {
