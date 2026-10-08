@@ -200,7 +200,7 @@ impl From<&EvalCapture> for Capture {
 /// Where a trial's durable evidence lives once it has been provisioned.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TrialLocator {
-    pub trial_agent_did: String,
+    pub trial_node_did: String,
     pub session_id: String,
     /// A locator only. Never identity.
     pub home_hint: Option<String>,

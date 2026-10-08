@@ -183,7 +183,7 @@ impl SlotScore {
 pub struct AttemptSummary {
     pub trial_id: String,
     pub attempt: u32,
-    pub trial_agent_did: String,
+    pub trial_node_did: String,
     pub session_id: String,
     /// Relative to `<launching home>/eval/runs`. A locator, never identity.
     pub home_hint: Option<String>,
