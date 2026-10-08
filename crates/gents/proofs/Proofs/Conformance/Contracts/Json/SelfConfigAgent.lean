@@ -1,6 +1,7 @@
 import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.SelfConfig.Cases
 import Proofs.SelfConfig.Selection
+import Proofs.Conformance.Contracts.Json.SelfConfig
 
 namespace Conformance.Contracts
 
@@ -14,6 +15,23 @@ private def agentOpName : AgentOp → String
   | .edit => "edit"
   | .disable => "disable"
 
+/-- Create input under the Agent/AgentContext document field names it authors. -/
+private def agentCreateInputJson (i : AgentCreateInput) : String :=
+  "{"
+    ++ "\"display_name\":" ++ jsonString i.name ++ ","
+    ++ "\"system_prompt\":" ++ jsonString i.systemPrompt ++ ","
+    ++ "\"inference_profile_id\":" ++ jsonString i.profile ++ ","
+    ++ "\"clone_from\":" ++ jsonString i.cloneFrom
+  ++ "}"
+
+/-- Edit fields as self-config patch entries; an omitted field has no entry. -/
+private def agentEditPatchJson (f : AgentEditFields) : String :=
+  let entries : List (FieldKey × Option PatchOp) :=
+    [("display_name", f.name), ("system_prompt", f.systemPrompt),
+     ("inference_profile_id", f.profile)]
+  jsonArray (entries.filterMap fun (k, op) => op.map fun op =>
+    selfConfigPatchEntryJson (k, op.value))
+
 private def agentDecisionCaseJson (w : AgentDecisionWitness) : String :=
   "{"
     ++ "\"name\":" ++ jsonString w.row.name ++ ","
@@ -23,9 +41,16 @@ private def agentDecisionCaseJson (w : AgentDecisionWitness) : String :=
     ++ "\"default_id\":" ++ (match w.row.catalog.defaultId with
         | some id => jsonString id
         | none => "null") ++ ","
-    ++ "\"operation\":" ++ jsonString (agentOpName w.row.op) ++ ","
+    ++ "\"published_profiles\":" ++ jsonStringArray w.row.profiles ++ ","
+    ++ "\"operation\":" ++ jsonString (agentOpName w.row.operation.op) ++ ","
     ++ "\"target\":" ++ jsonString w.row.target ++ ","
     ++ "\"make_default\":" ++ agentBool w.row.makeDefault ++ ","
+    ++ "\"create_input\":" ++ (match w.row.operation with
+        | .create i => agentCreateInputJson i
+        | _ => "null") ++ ","
+    ++ "\"edit_patch\":" ++ (match w.row.operation with
+        | .edit f => agentEditPatchJson f
+        | _ => "null") ++ ","
     ++ "\"accepted\":" ++ agentBool w.accepted
   ++ "}"
 
