@@ -26,10 +26,21 @@ pub struct MessageView {
     #[ts(optional = nullable)]
     pub denied_dependency_doc_id: Option<String>,
     pub runtime_control: bool,
+    /// The request whose input this entry publishes
+    /// (`gents::lifecycle::input_message_owner`); for a folded entry, the
+    /// folded request rather than the request it was published under.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub input_request_id: Option<String>,
     /// Set for input that entered the session without the person typing it.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
     pub origin: Option<RequestOriginView>,
+    /// A user entry's text blocks as published, untrimmed and joined by
+    /// newlines; the presented body normalizes whitespace.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub input_text: Option<String>,
     pub timestamp: Option<String>,
 }
 
@@ -269,11 +280,18 @@ pub struct PendingTurnView {
     pub content: String,
     pub selected_skill_ids: Vec<String>,
     pub lifecycle_state: Option<String>,
-    /// The claimed request this message was folded into
+    /// The request whose transcript published this message as a folded entry
     /// (`gents::lifecycle::folded_into`); it is that turn's input, not a turn.
     pub folded_into_request_id: Option<String>,
     pub origin: Option<RequestOriginView>,
     pub created_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct FoldedInputView {
+    pub request_id: String,
+    pub folded_into_request_id: String,
 }
 
 /// Read-only presentation of the latest request's terminal facts. The request
@@ -296,6 +314,10 @@ pub enum RenderedTimelineItem {
         #[serde(skip_serializing_if = "Option::is_none", default)]
         #[ts(optional = nullable)]
         request_id: Option<String>,
+        /// The request whose input this is; dedups its pending projection.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        #[ts(optional = nullable)]
+        input_request_id: Option<String>,
         sequence: Option<i64>,
         content: Option<String>,
         timestamp: Option<String>,
@@ -535,6 +557,9 @@ pub struct DesktopSessionSnapshot {
     /// They have not entered the transcript: a claim either folds them into
     /// the claimed turn as its own user entries or makes one the next turn.
     pub queued_turns: Vec<PendingTurnView>,
+    /// Requests a claim folded, each with the request that answered it. The
+    /// requests are control-plane rows, so this does not depend on the page.
+    pub folded_inputs: Vec<FoldedInputView>,
     pub context: SessionContextView,
     pub timeline_items: Vec<RenderedTimelineItem>,
     #[serde(skip_serializing_if = "Option::is_none", default)]

@@ -151,6 +151,30 @@ pub fn folded_message_key(claimed_request_doc_id: &str, folded_request_doc_id: &
     )
 }
 
+/// The physical request and transcript key under which a request's input is
+/// published: its own authored prompt, or, once folded, its folded entry under
+/// the request that published it. A row is folded only in the transaction
+/// that publishes that entry; a selected message stays pending until then.
+pub fn input_message_owner(row: &gents_protocol::row::AgentRequestRow) -> Option<(String, String)> {
+    let doc = row
+        .doc_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|doc| !doc.is_empty())?;
+    if folded_into(row).is_some() {
+        let owner = row
+            .superseded_by_request_doc_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|owner| !owner.is_empty())?;
+        return Some((owner.to_owned(), folded_message_key(owner, doc)));
+    }
+    Some((
+        doc.to_owned(),
+        crate::session::canonical_rows::authored_message_key(doc, "prompt"),
+    ))
+}
+
 /// What put a request's content into its session. Only `Person` is typed by
 /// the session's requester; every other origin enters the session without the
 /// person typing it, and its content is still the model's user input.

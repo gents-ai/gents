@@ -37,52 +37,80 @@ fn unclaimed(row: &AgentRequestRow) -> bool {
 }
 
 /// The request whose turn a session is on, reached from `newest` within the
-/// session's `requests`. A message folded into a claimed request is answered
-/// by that request (`gents::lifecycle::folded_into`, Lean
-/// `SessionQueue.claimFolding`), and an unclaimed request queued behind a
-/// non-terminal request waits behind it (Lean
-/// `SessionObservation.queuedRequests`), so neither is the session's turn.
+/// session's `requests` (Lean `ClientShell.SessionTurn.turnOf`). Every step
+/// stays in `newest`'s requester scope.
 pub fn session_turn_request<'a>(
     requests: &[&'a AgentRequestRow],
     newest: &'a AgentRequestRow,
 ) -> &'a AgentRequestRow {
-    let mut current = newest;
-    let mut seen = HashSet::new();
-    while seen.insert(current.request_id.as_str()) {
-        let next = if let Some(head) = gents::lifecycle::folded_into(current) {
-            let head_doc = clean_string(current.superseded_by_request_doc_id.as_deref());
-            requests.iter().copied().find(|row| {
-                row.request_id == head
-                    && head_doc
-                        .as_deref()
-                        .is_none_or(|doc| row.doc_id.as_deref() == Some(doc))
+    resolve(requests, requests.len() + 1, newest)
+}
+
+fn in_scope<'a>(
+    requests: &[&'a AgentRequestRow],
+    of: &AgentRequestRow,
+    matches: impl Fn(&AgentRequestRow) -> bool,
+) -> Option<&'a AgentRequestRow> {
+    requests
+        .iter()
+        .copied()
+        .find(|row| row.requester_did == of.requester_did && matches(row))
+}
+
+/// Lean `SessionTurn.resolve`: a folded row resolves to the physical request
+/// it was folded into, a terminal row to its retry successor, and an
+/// unclaimed queued row to the turn of the request it was queued after while
+/// that turn is not terminal.
+fn resolve<'a>(
+    requests: &[&'a AgentRequestRow],
+    fuel: usize,
+    row: &'a AgentRequestRow,
+) -> &'a AgentRequestRow {
+    if fuel == 0 {
+        return row;
+    }
+    if gents::lifecycle::folded_into(row).is_some() {
+        let owner = clean_string(row.superseded_by_request_doc_id.as_deref()).and_then(|doc| {
+            in_scope(requests, row, |candidate| {
+                candidate.doc_id.as_deref() == Some(doc.as_str())
             })
-        } else if unclaimed(current) {
-            current
+        });
+        return owner.map_or(row, |owner| resolve(requests, fuel - 1, owner));
+    }
+    match row.lifecycle_state {
+        Some(state) if state.is_terminal() => {
+            let next = in_scope(requests, row, |candidate| {
+                clean_string(candidate.retry_parent_request.as_deref()).as_deref()
+                    == Some(row.request_id.as_str())
+            });
+            next.map_or(row, |next| resolve(requests, fuel - 1, next))
+        }
+        _ if unclaimed(row) => {
+            let ahead = row
                 .input
                 .as_ref()
                 .and_then(|input| input.queue.as_ref())
                 .and_then(|queue| clean_string(queue.queued_after_request_id.as_deref()))
                 .and_then(|ahead| {
-                    requests.iter().copied().find(|row| {
-                        row.request_id == ahead
-                            && row
-                                .lifecycle_state
-                                .is_some_and(|state| !state.is_terminal())
-                    })
-                })
-        } else {
-            None
-        };
-        match next {
-            Some(next) => current = next,
-            None => break,
+                    in_scope(requests, row, |candidate| candidate.request_id == ahead)
+                });
+            match ahead.map(|ahead| resolve(requests, fuel - 1, ahead)) {
+                Some(turn)
+                    if turn
+                        .lifecycle_state
+                        .is_some_and(|state| !state.is_terminal()) =>
+                {
+                    turn
+                }
+                _ => row,
+            }
         }
+        _ => row,
     }
-    current
 }
 
-/// Unclaimed requests waiting behind `turn`, in queue order.
+/// Unclaimed requests waiting behind `turn`, in arrival order (Lean
+/// `SessionTurn.queuedBehind`).
 pub fn queued_behind_turn<'a>(
     requests: &[&'a AgentRequestRow],
     turn: &AgentRequestRow,
@@ -91,9 +119,9 @@ pub fn queued_behind_turn<'a>(
         .iter()
         .copied()
         .filter(|row| {
-            row.request_id != turn.request_id
+            row.doc_id != turn.doc_id
                 && unclaimed(row)
-                && session_turn_request(requests, row).request_id == turn.request_id
+                && session_turn_request(requests, row).doc_id == turn.doc_id
         })
         .collect::<Vec<_>>();
     queued.sort_by(|left, right| {
@@ -102,6 +130,21 @@ pub fn queued_behind_turn<'a>(
             .then_with(|| left.request_id.cmp(&right.request_id))
     });
     queued
+}
+
+/// Requests a claim folded, in `requester`'s scope (Lean `SessionTurn.foldedIn`).
+pub fn folded_requests<'a>(
+    requests: &[&'a AgentRequestRow],
+    requester: Option<&str>,
+) -> Vec<&'a AgentRequestRow> {
+    requests
+        .iter()
+        .copied()
+        .filter(|row| {
+            row.requester_did.as_deref() == requester
+                && gents::lifecycle::folded_into(row).is_some()
+        })
+        .collect()
 }
 
 pub(super) fn derive_turn_for_request(

@@ -42,6 +42,7 @@ function session(content: string): DesktopSessionSnapshot {
     latestRequestOutcome: null,
     pendingTurn: null,
     queuedTurns: [],
+    foldedInputs: [],
     context: {
       estimatedDurableTokens: 0,
       estimatedConversationTokens: 0,

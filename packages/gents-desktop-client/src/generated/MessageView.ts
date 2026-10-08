@@ -10,6 +10,17 @@ export type MessageView = { messageKey: string, requestId: string | null, sequen
  */
 reconstructionState: ReconstructionState, reconstructionError?: string | null, deniedDependencyDocId?: string | null, runtimeControl: boolean,
 /**
+ * The request whose input this entry publishes
+ * (`gents::lifecycle::input_message_owner`); for a folded entry, the
+ * folded request rather than the request it was published under.
+ */
+inputRequestId?: string | null,
+/**
  * Set for input that entered the session without the person typing it.
  */
-origin?: RequestOriginView | null, timestamp: string | null, };
+origin?: RequestOriginView | null,
+/**
+ * A user entry's text blocks as published, untrimmed and joined by
+ * newlines; the presented body normalizes whitespace.
+ */
+inputText?: string | null, timestamp: string | null, };

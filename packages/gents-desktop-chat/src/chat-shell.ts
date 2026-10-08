@@ -244,8 +244,7 @@ function activityStatusFor(
       : {
           kind: "working",
           label: "Agent is working…",
-          detail:
-            "Messages you send now wait behind this turn and join the next one.",
+          detail: "Messages you send now wait until this turn finishes.",
           animated: true,
         };
   }
@@ -310,8 +309,11 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
   const queuedRequestIds = new Set(
     (input.session?.queuedTurns ?? []).map((turn) => turn.requestId),
   );
-  /* a submission observed as queued is not the session's turn: the turn it
-     waits behind is tracked instead */
+  const foldedRequestIds = new Set(
+    (input.session?.foldedInputs ?? []).map((folded) => folded.requestId),
+  );
+  /* Lean `trackedRequestForFrontend`: a submission observed as queued or
+     folded is not the session's turn */
   const trackedRequestId =
     (input.localWorkflow.kind === "awaitingObservation" ||
       input.localWorkflow.kind === "turnInProgress") &&
@@ -320,7 +322,8 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
       input.session?.sessionId === input.localWorkflow.sessionId) &&
     !(
       input.localWorkflow.kind === "awaitingObservation" &&
-      queuedRequestIds.has(input.localWorkflow.requestId)
+      (queuedRequestIds.has(input.localWorkflow.requestId) ||
+        foldedRequestIds.has(input.localWorkflow.requestId))
     )
       ? (input.localWorkflow.requestId ?? null)
       : null;
@@ -341,9 +344,9 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
       (input.selectedSessionId === input.localWorkflow.sessionId ||
         (input.session?.sessionId === input.localWorkflow.sessionId &&
           input.session.agentDid === input.localWorkflow.agentDid));
-    const observedAsQueued = queuedRequestIds.has(
-      input.localWorkflow.requestId,
-    );
+    const observedAsQueued =
+      queuedRequestIds.has(input.localWorkflow.requestId) ||
+      foldedRequestIds.has(input.localWorkflow.requestId);
     const requestObserved =
       observedLatestRequestId === input.localWorkflow.requestId ||
       pendingRequestId === input.localWorkflow.requestId ||

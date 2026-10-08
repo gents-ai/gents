@@ -67,19 +67,12 @@ pub(super) fn build_pending_turn(
         .lifecycle_state
         .map(|state| state.as_str().to_string());
     let content = normalize_optional(request.content.as_deref())?;
-    let request_doc_id = request.doc_id.as_deref();
-    // A folded message is published by the turn that answered it, under its
-    // own folded key; until then it stays a pending input of that turn.
-    let owner = match folded_into {
-        Some(_) => {
-            let head_doc_id = normalize_optional(request.superseded_by_request_doc_id.as_deref())?;
-            let key = gents::lifecycle::folded_message_key(&head_doc_id, request_doc_id?);
-            Some((head_doc_id, key))
-        }
-        None => {
-            request_doc_id.map(|doc_id| (doc_id.to_owned(), format!("authored:{doc_id}:prompt")))
-        }
-    };
+    // A folded row is consumed in the transaction that publishes its entry
+    // under the claiming request; a replica can hold the row first.
+    let owner = gents::lifecycle::input_message_owner(request);
+    if folded_into.is_some() && owner.is_none() {
+        return None;
+    }
     // Pending ownership is session state, not visible-page state. A materialized
     // user row outside the current window must still suppress the request-owned
     // placeholder at the tip.

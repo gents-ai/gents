@@ -349,6 +349,7 @@ export function createDesktopUiHarness(
     latestRequestOutcome: harnessRequestOutcome(),
     pendingTurn: null,
     queuedTurns: [],
+    foldedInputs: [],
     context:
       scenario === "long-content"
         ? harnessSessionContext({
@@ -536,6 +537,7 @@ export function createDesktopUiHarness(
       latestRequestOutcome: null,
       pendingTurn: null,
       queuedTurns: [],
+      foldedInputs: [],
       context: harnessSessionContext(),
       timelineItems: [
         {
@@ -579,6 +581,7 @@ export function createDesktopUiHarness(
         latestRequestOutcome: null,
         pendingTurn: null,
         queuedTurns: [],
+        foldedInputs: [],
         context: harnessSessionContext(),
         timelineItems: [],
       });
@@ -794,6 +797,7 @@ export function createDesktopUiHarness(
       latestRequestOutcome: harnessRequestOutcome(),
       pendingTurn: null,
       queuedTurns: [],
+      foldedInputs: [],
       context: harnessSessionContext(),
       timelineItems: [
         {
@@ -2841,6 +2845,7 @@ function createLargePerformanceSession(): DesktopSessionSnapshot {
     latestRequestOutcome: null,
     pendingTurn: null,
     queuedTurns: [],
+    foldedInputs: [],
     context: harnessSessionContext(),
     timelineItems,
   };

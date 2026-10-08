@@ -335,6 +335,7 @@ fn build_hydration_only_session_snapshot(
         latest_request_outcome: None,
         pending_turn: None,
         queued_turns: Vec::new(),
+        folded_inputs: Vec::new(),
         context: build_session_context_from_stores(
             store,
             store,

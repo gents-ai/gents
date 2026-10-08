@@ -183,7 +183,7 @@ pub(super) fn build_rendered_timeline(
                     request_id: message.request_id.clone(),
                     sequence: message.sequence,
                     origin,
-                    content: normalized_content.clone(),
+                    content: message.input_text.clone(),
                     timestamp: normalize_optional(message.timestamp.as_deref()),
                     reconstruction,
                 }),
@@ -195,6 +195,7 @@ pub(super) fn build_rendered_timeline(
                     Some(RenderedTimelineItem::UserMessage {
                         item_key: message.message_key.clone(),
                         request_id: message.request_id.clone(),
+                        input_request_id: message.input_request_id.clone(),
                         sequence: message.sequence,
                         content: normalized_content.clone(),
                         timestamp: normalize_optional(message.timestamp.as_deref()),
@@ -295,7 +296,9 @@ mod tests {
             reconstruction_error: None,
             denied_dependency_doc_id: None,
             runtime_control: false,
+            input_request_id: None,
             origin: None,
+            input_text: None,
             timestamp: None,
         }
     }

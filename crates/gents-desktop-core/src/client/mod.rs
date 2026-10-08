@@ -40,7 +40,7 @@ pub use query::{
 };
 pub use schema::subscribed_collection_names;
 pub use store::{
-    queued_behind_turn, session_turn_request, ClientStore, ClientStoreRows, TaskRecentRuns,
-    TranscriptView,
+    folded_requests, queued_behind_turn, session_turn_request, ClientStore, ClientStoreRows,
+    TaskRecentRuns, TranscriptView,
 };
 pub use sync_projection::{project_sync_health, SyncHealth, SyncHealthState};

@@ -149,6 +149,7 @@ fn session_timeline_pages_are_bounded_and_cursor_stable() {
         .map(|index| RenderedTimelineItem::UserMessage {
             item_key: format!("message-{index:03}"),
             request_id: Some(format!("request-{index:03}")),
+            input_request_id: None,
             sequence: Some(index),
             content: Some(format!("row {index}")),
             timestamp: None,
@@ -188,6 +189,7 @@ fn queried_timeline_page_reports_database_work_and_does_not_rescan_for_cursor() 
         .map(|index| RenderedTimelineItem::UserMessage {
             item_key: format!("message-{index:03}"),
             request_id: None,
+            input_request_id: None,
             sequence: Some(index),
             content: Some(format!("row {index}")),
             timestamp: None,

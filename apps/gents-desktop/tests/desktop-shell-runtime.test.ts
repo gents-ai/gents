@@ -213,6 +213,7 @@ function session(
     latestRequestOutcome: null,
     pendingTurn: null,
     queuedTurns: [],
+    foldedInputs: [],
     context: {
       estimatedDurableTokens: 0,
       estimatedConversationTokens: 0,
@@ -230,6 +231,7 @@ function session(
       kind: "userMessage" as const,
       itemKey: key,
       requestId: key,
+      inputRequestId: key,
       sequence: Number(key.slice(1)),
       content: key,
       timestamp: null,
@@ -240,6 +242,55 @@ function session(
 }
 
 describe("session timeline page merging", () => {
+  it("an older page's folded entry retires a stale pending copy of that input", () => {
+    const current = session(["k8"], {
+      totalItems: -1,
+      totalItemsExact: false,
+      pageItems: 2,
+      hasOlder: true,
+      hasNewer: false,
+      oldestItemKey: "pending-folded",
+      newestItemKey: "k8",
+    });
+    current.timelineItems.unshift({
+      kind: "pendingUserTurn",
+      itemKey: "pending-folded",
+      requestId: "folded",
+      content: "also this",
+      selectedSkillIds: [],
+      lifecycleState: "superseded",
+      foldedIntoRequestId: "head",
+      origin: null,
+      createdAt: null,
+    });
+    const older = session([], {
+      totalItems: -1,
+      totalItemsExact: false,
+      pageItems: 1,
+      hasOlder: false,
+      hasNewer: true,
+      oldestItemKey: "authored:doc-head:folded:doc-folded",
+      newestItemKey: "authored:doc-head:folded:doc-folded",
+    });
+    older.timelineItems = [
+      {
+        kind: "userMessage",
+        itemKey: "authored:doc-head:folded:doc-folded",
+        requestId: "doc-head",
+        inputRequestId: "folded",
+        sequence: 3,
+        content: "also this",
+        timestamp: null,
+        reconstruction: { state: "ready" },
+      },
+    ];
+    const merged = mergeOlderSessionTimelinePage(current, older);
+    expect(merged.timelineItems.map((item) => item.itemKey)).toEqual([
+      "authored:doc-head:folded:doc-folded",
+      "k8",
+    ]);
+  });
+
   it("keeps distinct requests with identical content across older pages", () => {
     const page = {
       totalItems: 2,
@@ -305,6 +356,7 @@ describe("session timeline page merging", () => {
         kind: "userMessage",
         itemKey: "authored-r",
         requestId: "r",
+        inputRequestId: "r",
         sequence: 1,
         content: "repeat",
         timestamp: null,
@@ -344,6 +396,7 @@ describe("session timeline page merging", () => {
         kind: "userMessage",
         itemKey: "authored-r",
         requestId: "r",
+        inputRequestId: "r",
         sequence: 3,
         content: "same text",
         timestamp: null,

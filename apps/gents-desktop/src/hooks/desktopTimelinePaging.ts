@@ -10,7 +10,7 @@ function timelineItemIdentity(item: RenderedTimelineItem) {
 function removeMaterializedPendingTurns(items: RenderedTimelineItem[]) {
   const materialized = new Set(
     items.flatMap((item) =>
-      item.kind === "userMessage" && item.requestId ? [item.requestId] : [],
+      item.kind === "userMessage" && item.inputRequestId ? [item.inputRequestId] : [],
     ),
   );
   return items.filter(
@@ -34,6 +34,7 @@ function timelineItemUnchanged(
       return (
         next.kind === "userMessage" &&
         previous.requestId === next.requestId &&
+        previous.inputRequestId === next.inputRequestId &&
         previous.sequence === next.sequence &&
         previous.content === next.content &&
         previous.timestamp === next.timestamp &&

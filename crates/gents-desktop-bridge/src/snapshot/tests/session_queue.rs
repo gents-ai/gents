@@ -221,7 +221,7 @@ fn a_queued_message_the_runtime_ends_unclaimed_keeps_its_terminal_state() {
 }
 
 #[test]
-fn a_folded_message_stays_pending_under_its_turn_until_that_turn_publishes_it() {
+fn a_folded_row_whose_entry_has_not_replicated_stays_a_pending_input_of_its_turn() {
     let mut rows = ClientStoreRows {
         sessions: vec![session_observing(
             "later",
@@ -273,7 +273,10 @@ fn the_session_list_reports_the_turn_a_folded_or_queued_head_belongs_to() {
         folded_into("later", "head", "head", 2),
     ];
     let summaries = session_summaries(
-        &[session_observing("later", RequestLifecycleState::Superseded)],
+        &[session_observing(
+            "later",
+            RequestLifecycleState::Superseded,
+        )],
         &requests,
         "did:test:amy",
         &[],
@@ -281,4 +284,67 @@ fn the_session_list_reports_the_turn_a_folded_or_queued_head_belongs_to() {
     );
     assert_eq!(summaries[0].latest_request_id.as_deref(), Some("head"));
     assert_eq!(summaries[0].turn_state.as_deref(), Some("running"));
+}
+
+#[test]
+fn a_selected_message_the_head_never_published_is_queued_again_not_delivered() {
+    let mut rows = ClientStoreRows {
+        sessions: vec![session_observing(
+            "selected",
+            RequestLifecycleState::Pending,
+        )],
+        requests: vec![
+            request("done", RequestLifecycleState::Completed, 0),
+            queued("head", "done", RequestLifecycleState::Processing, 1),
+            queued("selected", "head", RequestLifecycleState::Pending, 2),
+        ],
+        ..ClientStoreRows::default()
+    };
+    push_canonical_text_message(
+        &mut rows,
+        "authored:doc-head:prompt",
+        "sess-1",
+        Some("doc-head"),
+        1,
+        MessageRole::User,
+        "head text",
+    );
+    push_canonical_text_message(
+        &mut rows,
+        "authored:doc-done:prompt",
+        "sess-1",
+        Some("doc-done"),
+        0,
+        MessageRole::User,
+        "done text",
+    );
+    let running =
+        build_session_snapshot_from_store(&ClientStore::from_rows(rows.clone()), "sess-1", None)
+            .expect("snapshot");
+    assert_eq!(running.latest_request_id.as_deref(), Some("head"));
+    assert_eq!(
+        running
+            .queued_turns
+            .iter()
+            .map(|turn| turn.request_id.as_str())
+            .collect::<Vec<_>>(),
+        ["selected"]
+    );
+
+    rows.requests[1].lifecycle_state = Some(RequestLifecycleState::Failed);
+    let failed = build_session_snapshot_from_store(&ClientStore::from_rows(rows), "sess-1", None)
+        .expect("snapshot");
+    assert_eq!(failed.latest_request_id.as_deref(), Some("selected"));
+    assert_eq!(failed.turn_state.as_deref(), Some("waitingForClaim"));
+    assert!(failed.folded_inputs.is_empty());
+    assert!(failed.queued_turns.is_empty());
+    assert_eq!(
+        user_contents(&failed),
+        ["done text", "head text", "pending:selected text"]
+    );
+    assert!(failed.timeline_items.iter().any(|item| matches!(
+        item,
+        RenderedTimelineItem::PendingUserTurn { request_id, lifecycle_state, folded_into_request_id: None, .. }
+            if request_id == "selected" && lifecycle_state.as_deref() == Some("pending")
+    )));
 }

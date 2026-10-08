@@ -67,6 +67,7 @@ function session(overrides: Partial<DesktopSessionSnapshot>): DesktopSessionSnap
     latestRequestOutcome: null,
     pendingTurn: null,
     queuedTurns: [],
+    foldedInputs: [],
     context: {
       estimatedDurableTokens: 0,
       estimatedConversationTokens: 0,

@@ -1,14 +1,16 @@
-/* Input the model receives that a person did not type, and messages a person
-   typed that are still waiting behind the running turn. Every fact here comes
-   from the bridge: the request's origin, its lifecycle state, and the
-   session's queue; nothing is inferred from text. */
 import { useState } from "react";
 import { Bot, ChevronDown, Clock, Play, Timer, Workflow, Zap } from "lucide-react";
 import type {
   DeploymentView,
   PendingTurnView,
+  RenderedTimelineItem,
   RequestOriginView,
 } from "@source-inc/gents-desktop-client";
+
+type Reconstruction = Extract<
+  RenderedTimelineItem,
+  { kind: "automatedInput" }
+>["reconstruction"];
 import { Badge } from "@gents/ui/components/badge";
 import {
   Collapsible,
@@ -19,8 +21,8 @@ import { UserMessage } from "@gents/ui/conversation";
 import { cn } from "@gents/ui/lib/utils";
 import { href } from "@/lib/router";
 
-/* the state a person-typed input that has not been answered is in, worded
-   for the person: nothing for one being answered now */
+/** A folded request was consumed when its entry was published, so it has
+    been delivered; a selected but unpublished one is still `pending`. */
 export function pendingInputState(
   lifecycleState: string | null | undefined,
   foldedIntoRequestId?: string | null,
@@ -47,7 +49,6 @@ function triggerName(triggerId: string, deployment: DeploymentView | null) {
   return trigger?.config.display_name ?? task?.name ?? triggerId;
 }
 
-/* who or what sent it, in a few words */
 export function originLabel(
   origin: RequestOriginView,
   deployment: DeploymentView | null,
@@ -109,19 +110,33 @@ function firstLine(content: string | null | undefined) {
   );
 }
 
-/* A compact row that opens to exactly what the model received. */
+function unavailableReason(reconstruction: Reconstruction | undefined) {
+  switch (reconstruction?.state) {
+    case "loading":
+      return "Still syncing this input.";
+    case "denied":
+      return "This input is not shared with this device.";
+    case "invalid":
+      return "This input could not be read.";
+    default:
+      return null;
+  }
+}
+
 export function AutomatedInput({
   origin,
   content,
+  reconstruction,
   state = null,
   deployment,
 }: {
   origin: RequestOriginView;
   content: string | null | undefined;
-  /* the request's state while it has not run, from its lifecycle */
+  reconstruction?: Reconstruction;
   state?: string | null;
   deployment: DeploymentView | null;
 }) {
+  const unavailable = unavailableReason(reconstruction);
   const [open, setOpen] = useState(false);
   const label = originLabel(origin, deployment);
   const preview = firstLine(content);
@@ -135,7 +150,7 @@ export function AutomatedInput({
       <div className="flex min-w-0 items-center gap-1.5">
         <CollapsibleTrigger
           className="-mx-2 -my-1 flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-lg px-2 py-1 text-left transition-colors hover:bg-accent/30 hover:text-foreground"
-          aria-label={`${label}: ${open ? "hide" : "show"} what the agent received`}
+          aria-label={`${label}: ${open ? "hide" : "show"} the text the agent received`}
         >
           <OriginIcon origin={origin} />
           <span className="shrink-0 font-medium text-foreground/80">{label}</span>
@@ -169,19 +184,21 @@ export function AutomatedInput({
         )}
       </div>
       <CollapsibleContent className="mt-1 border-l border-border pl-3">
-        <pre
-          className="max-h-96 overflow-auto font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-muted-foreground"
-          data-testid="automated-input-content"
-        >
-          {content ?? ""}
-        </pre>
+        {unavailable ? (
+          <p data-testid="automated-input-unavailable">{unavailable}</p>
+        ) : (
+          <pre
+            className="max-h-96 overflow-auto font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-muted-foreground"
+            data-testid="automated-input-content"
+          >
+            {content ?? ""}
+          </pre>
+        )}
       </CollapsibleContent>
     </Collapsible>
   );
 }
 
-/* A person's message with the state it is in, seated on the bubble's bottom
-   edge the way a sender's queued chip is. */
 export function UserInputWithState({
   content,
   state,
@@ -205,9 +222,6 @@ export function UserInputWithState({
   );
 }
 
-/* Messages waiting behind the running turn, in the order they will be read.
-   They have not entered the transcript; once a turn claims them they appear
-   there as its input and leave this list. */
 export function QueuedInputs({
   queued,
   deployment,

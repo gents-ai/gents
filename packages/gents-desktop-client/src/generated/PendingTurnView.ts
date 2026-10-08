@@ -3,7 +3,7 @@ import type { RequestOriginView } from "./RequestOriginView.js";
 
 export type PendingTurnView = { requestId: string, content: string, selectedSkillIds: Array<string>, lifecycleState: string | null,
 /**
- * The claimed request this message was folded into
+ * The request whose transcript published this message as a folded entry
  * (`gents::lifecycle::folded_into`); it is that turn's input, not a turn.
  */
 foldedIntoRequestId: string | null, origin: RequestOriginView | null, createdAt: string | null, };
