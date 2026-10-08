@@ -28,7 +28,10 @@ Semantics:
   whole accepted batch. A redrive that restores one reuses exactly the
   consumed messages; any selection made at that claim waits for the next
   turn.
-* Provider retries inside the turn reuse its fixed input. -/
+* Provider retries inside the turn reuse its fixed input. A request retry
+  that resumes its parent's durable progress publishes no input, so it
+  answers no newly selected message (`CurrentInput.answersSelection`); the
+  parent's published folded messages are history it continues from. -/
 namespace SessionQueue
 
 theorem mem_foldRun {head entry : QueueEntry} {admitted : List RequestId}
