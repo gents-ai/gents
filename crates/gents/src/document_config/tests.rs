@@ -1736,7 +1736,7 @@ async fn oauth_account_scope_matches_lean() {
         );
         let resolved = match case["owner"].as_str() {
             Some(owner) => {
-                assert!(matches!(auth, BackendAuth::PrincipalOAuth { .. }), "{case}");
+                assert!(matches!(auth, BackendAuth::NodeOAuth { .. }), "{case}");
                 let provider = kind_of(&case["provider_kind"]).oauth_provider().unwrap();
                 // The runtime resolves under the executing principal, never the stored owner.
                 let row = resolve_oauth_credential(
@@ -1755,10 +1755,7 @@ async fn oauth_account_scope_matches_lean() {
                 )
             }
             None => {
-                assert!(
-                    !matches!(auth, BackendAuth::PrincipalOAuth { .. }),
-                    "{case}"
-                );
+                assert!(!matches!(auth, BackendAuth::NodeOAuth { .. }), "{case}");
                 None
             }
         };
