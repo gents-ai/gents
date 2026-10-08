@@ -216,8 +216,12 @@ async fn stale_credential_refreshes_once_through_the_claude_token_endpoint() {
         r#"{"access_token":"access-NEW","refresh_token":"refresh-NEW","expires_in":28800}"#,
     )
     .await;
-    // Process-global, read by the wrapper at refresh time; no other lib test
-    // refreshes a Claude credential, so nothing else observes it.
+    // Process-global, read by the wrapper at refresh time; hold TOKEN_URL_ENV
+    // across the whole set/remove window so lib tests that set this override
+    // cannot interleave with it.
+    let _env = crate::oauth_credential::test_support::TOKEN_URL_ENV
+        .lock()
+        .await;
     std::env::set_var(
         crate::claude_oauth::CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV,
         &url,

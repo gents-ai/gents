@@ -69,6 +69,15 @@ structure RenderedCaptureKeyCase where
   sameFact : Bool
   deriving Repr
 
+/-- One reference a manifest row names, beside what the row's store holds
+under it: `storedWitness` is the commit of the stored block, `none` when the
+reference is absent. -/
+structure RenderedCaptureManifestBlock where
+  ref : ArtifactRef
+  pinnedWitness : FieldCommitWitness
+  storedWitness : Option FieldCommitWitness
+  deriving Repr
+
 structure RenderedCaptureStorageCase where
   name : String
   encoding : String
@@ -77,20 +86,26 @@ structure RenderedCaptureStorageCase where
   baseDepth : Nat
   maxDepth : Nat
   baseVerified : Bool
-  /-- How many block references a manifest row names; 0 for the other
-  encodings. The manifest document sits at ref 1 / witness 10 like every row,
-  its blocks at refs 2.. with their own pinned witnesses. -/
-  blockCount : Nat
+  /-- The block references the row's manifest document (ref 1 / witness 10)
+  names, read out of the row's store; empty for the other encodings. -/
+  manifestBlocks : List RenderedCaptureManifestBlock
   decodedRequest : Option Nat
   sendPermitted : Bool
   deriving Repr
 
+private def manifestBlocks (store : ArtifactStore) : List RenderedCaptureManifestBlock :=
+  match store 1 with
+  | some { encoded := .manifest blocks, .. } =>
+      blocks.map fun (ref, pinnedWitness) =>
+        { ref, pinnedWitness, storedWitness := (store ref).map (·.commit) }
+  | _ => []
+
 private def storageCase (name encoding : String) (store : ArtifactStore)
     (request : Nat) (baseWitness : Option Nat) (baseDepth maxDepth : Nat)
-    (baseVerified : Bool) (blockCount : Nat := 0) : RenderedCaptureStorageCase :=
+    (baseVerified : Bool) : RenderedCaptureStorageCase :=
   let decoded := resolveRequest store (maxDepth + 1) 1 10
   { name, encoding, request, baseWitness, baseDepth, maxDepth, baseVerified
-  , blockCount
+  , manifestBlocks := manifestBlocks store
   , decodedRequest := decoded.map CanonicalRequest.value
   , sendPermitted := decoded == some { value := request }
   }
@@ -118,16 +133,16 @@ def renderedCaptureStorageCases : List RenderedCaptureStorageCase :=
       (fun ref => if ref = 1 then some ⟨10, .manifest [(2, 41), (3, 42)]⟩
         else if ref = 2 then some ⟨41, .full [105]⟩
         else if ref = 3 then some ⟨42, .full []⟩ else none)
-      105 none 0 3 false 2
+      105 none 0 3 false
   , storageCase "manifest_missing_block_blocks_send" "manifest"
       (fun ref => if ref = 1 then some ⟨10, .manifest [(2, 41), (3, 42)]⟩
         else if ref = 2 then some ⟨41, .full [106]⟩ else none)
-      106 none 0 3 false 2
+      106 none 0 3 false
   , storageCase "manifest_block_witness_mismatch_blocks_send" "manifest"
       (fun ref => if ref = 1 then some ⟨10, .manifest [(2, 41), (3, 42)]⟩
         else if ref = 2 then some ⟨41, .full [107]⟩
         else if ref = 3 then some ⟨999, .full []⟩ else none)
-      107 none 0 3 false 2
+      107 none 0 3 false
   , storageCase "empty_manifest_decode_fails_blocks_send" "manifest"
       (fun ref => if ref = 1 then some ⟨10, .manifest []⟩ else none)
       108 none 0 3 false
@@ -135,7 +150,7 @@ def renderedCaptureStorageCases : List RenderedCaptureStorageCase :=
       (fun ref => if ref = 1 then some ⟨10, .manifest [(2, 43), (3, 44)]⟩
         else if ref = 2 then some ⟨43, .full [109]⟩
         else if ref = 3 then some ⟨44, .full []⟩ else none)
-      109 none 0 2 false 2
+      109 none 0 2 false
   ]
 
 theorem renderedCaptureStorageCases_pinned :

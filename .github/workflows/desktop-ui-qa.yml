@@ -40,9 +40,9 @@ jobs:
       - name: Build desktop packages
         run: npm run build:packages
 
-      - name: Install Playwright browser
+      - name: Install Playwright browsers
         working-directory: apps/gents-desktop
-        run: npx playwright install chromium
+        run: npx playwright install chromium webkit
 
       - name: Check desktop formatting
         working-directory: apps/gents-desktop

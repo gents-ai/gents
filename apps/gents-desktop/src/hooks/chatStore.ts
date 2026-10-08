@@ -81,4 +81,9 @@ export const chat = {
   showPendingTurn(store: ChatStore, turn: OptimisticPendingTurn) {
     store.setState({ optimisticPendingTurn: turn });
   },
+  /** the transcript holds the turn: its own row stands for it from now on */
+  endPendingTurn(store: ChatStore, requestId: string) {
+    if (store.getState().optimisticPendingTurn?.requestId === requestId)
+      store.setState({ optimisticPendingTurn: null });
+  },
 };

@@ -895,6 +895,7 @@ impl RequestLifecycle {
         )
         .await?;
         let queued_request = AgentRequest {
+            retry_parent_request_doc_id: create.retry_parent_request_doc_id.clone(),
             purpose: create.purpose,
             doc_id,
             request_id,

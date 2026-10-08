@@ -144,6 +144,32 @@ export type MobilePerformanceHarnessController = {
   finishStreaming(): void;
   streamUpdate(): number;
   streamBurst(count: number): number;
+  /** appends `text` to the live reply, as one update */
+  streamText(text: string): void;
+  /** how long a read of an older timeline page takes, as the bridge's do */
+  setOlderPageDelay(ms: number): void;
+  /**
+   * One snapshot of a turn ending the way the bridge can deliver it: the
+   * live tail kept or dropped, the saved reply present (under its own key,
+   * as the bridge renders it) or not yet, the turn running or completed.
+   */
+  endReply(step: { live: "keep" | "drop"; saved: boolean; completed: boolean }): void;
+  /**
+   * A message the person sent, as the bridge shows it: first the pending
+   * turn, then the saved message under its own key, before the live tail.
+   * The bridge names the request on the pending turn by its id, as a send
+   * returns it, and on the saved message by its document id.
+   */
+  userTurn(stage: "pending" | "saved"): void;
+  /**
+   * From now on a send to the large session is accepted, under the request
+   * id `userTurn` uses, but the transcript does not show it until
+   * `userTurn` does: the moment between the bridge accepting a message and
+   * its read holding it.
+   */
+  holdSends(): void;
+  /** a step the reply takes, after the live tail: running, then done */
+  liveTool(state: "running" | "done"): void;
 };
 
 export type SessionSyncHarnessController = {
@@ -161,6 +187,9 @@ type DesktopUiHarness = {
   performance: MobilePerformanceHarnessController | null;
   sessionSync: SessionSyncHarnessController;
 };
+
+/* the request a held send to the large session is accepted under */
+const LARGE_SENT_REQUEST_ID = "6f1c2a7e-large-request-sent";
 
 export const MOBILE_PERFORMANCE_FIXTURE = {
   id: "mobile-interactions-v1",
@@ -195,6 +224,7 @@ export function createDesktopUiHarness(
   const scenario = normalizeScenario(options.scenario);
   const listeners = new Set<DesktopClientUpdatedHandler>();
   const sessions = new Map<string, DesktopSessionSnapshot>();
+  let sendsHeld = false;
   const sessionLineage = new Map<
     string,
     {
@@ -295,6 +325,7 @@ export function createDesktopUiHarness(
   let updateEvents = 0;
   let storeVersion = 1;
   let liveSourceEpoch = 1;
+  let olderPageDelayMs = 0;
   let streamSequence = 0;
   let bridgeCalls: MobilePerformanceBridgeCall[] = [];
   let commits: MobilePerformanceCommit[] = [];
@@ -590,6 +621,8 @@ export function createDesktopUiHarness(
     }, 0);
   }
 
+  /* the live reply as it last stood, for the saved message that replaces it */
+  let liveReply = "";
   function appendStreamChunk() {
     streamSequence += 1;
     const session = sessions.get("session-large");
@@ -1098,6 +1131,8 @@ export function createDesktopUiHarness(
       const sessionId = _sessionId;
       const session = sessions.get(sessionId);
       if (!session) return null;
+      if (timelinePage?.beforeItemKey && olderPageDelayMs > 0)
+        await wait(olderPageDelayMs);
       const snapshot = clone(session);
       snapshot.projectionRevision = { storeVersion };
       snapshot.liveCursor = session.timelineItems.some(
@@ -1205,6 +1240,14 @@ export function createDesktopUiHarness(
         throw new Error("message content is required");
       }
 
+      if (sendsHeld && request.sessionId === "session-large") {
+        return {
+          sessionId: request.sessionId,
+          requestId: LARGE_SENT_REQUEST_ID,
+          agentDid: request.agentDid,
+          behaviorId: request.behaviorId ?? null,
+        };
+      }
       if (request.sessionId && sessions.has(request.sessionId)) {
         const existing = sessions.get(request.sessionId)!;
         const nextSequence = existing.timelineItems.length + 1;
@@ -2448,6 +2491,159 @@ export function createDesktopUiHarness(
             syncSessions();
             notify("store", true);
             return sequence;
+          },
+          setOlderPageDelay(ms) {
+            olderPageDelayMs = ms;
+          },
+          streamText(text) {
+            const session = sessions.get("session-large");
+            if (!session) {
+              throw new Error("mobile performance fixture lost session-large");
+            }
+            sessions.set("session-large", {
+              ...session,
+              timelineItems: session.timelineItems.map((item) =>
+                item.kind === "liveAssistant"
+                  ? { ...item, content: `${item.content ?? ""}${text}` }
+                  : item,
+              ),
+            });
+            syncSessions();
+            notify("store", true);
+          },
+          endReply({ live, saved, completed }) {
+            const session = sessions.get("session-large");
+            if (!session) {
+              throw new Error("mobile performance fixture lost session-large");
+            }
+            const tail = session.timelineItems.find(
+              (item) => item.kind === "liveAssistant",
+            );
+            if (tail?.kind === "liveAssistant" && tail.content) {
+              liveReply = tail.content;
+            }
+            const without = session.timelineItems.filter(
+              (item) =>
+                item.itemKey !== "large-reply" &&
+                (live === "keep" || item.kind !== "liveAssistant"),
+            );
+            const reply = {
+              kind: "assistantMessage" as const,
+              itemKey: "large-reply",
+              sequence: session.timelineItems.length,
+              content: liveReply,
+              reasoning: null,
+              timestamp: STARTED_AT,
+              reconstruction: HARNESS_READY_RECONSTRUCTION,
+            };
+            /* the bridge places a saved reply before the live tail's slot */
+            const tailAt = without.findIndex((item) => item.kind === "liveAssistant");
+            const timelineItems = !saved
+              ? without
+              : tailAt < 0
+                ? [...without, reply]
+                : [...without.slice(0, tailAt), reply, ...without.slice(tailAt)];
+            sessions.set("session-large", {
+              ...session,
+              status: "active",
+              turnState: completed ? "completed" : "running",
+              timelineItems,
+            });
+            syncSessions();
+            notify("store");
+          },
+          userTurn(stage) {
+            const session = sessions.get("session-large");
+            if (!session) {
+              throw new Error("mobile performance fixture lost session-large");
+            }
+            const requestId = LARGE_SENT_REQUEST_ID;
+            const requestDocId = `bae-${requestId}`;
+            const turn =
+              stage === "pending"
+                ? {
+                    kind: "pendingUserTurn" as const,
+                    itemKey: `pending-${requestId}`,
+                    requestId,
+                    content: "again",
+                    selectedSkillIds: [],
+                    lifecycleState: "pending",
+                    createdAt: STARTED_AT,
+                  }
+                : {
+                    kind: "userMessage" as const,
+                    itemKey: "large-user-sent",
+                    requestId: requestDocId,
+                    sequence: session.timelineItems.length,
+                    content: "again",
+                    timestamp: STARTED_AT,
+                    reconstruction: HARNESS_READY_RECONSTRUCTION,
+                  };
+            const without = session.timelineItems.filter(
+              (item) =>
+                !("requestId" in item) ||
+                (item.requestId !== requestId && item.requestId !== requestDocId),
+            );
+            const tailAt = without.findIndex((item) => item.kind === "liveAssistant");
+            const timelineItems =
+              tailAt < 0
+                ? [...without, turn]
+                : [...without.slice(0, tailAt), turn, ...without.slice(tailAt)];
+            sessions.set("session-large", {
+              ...session,
+              latestRequestId: requestId,
+              timelineItems,
+            });
+            syncSessions();
+            notify("store");
+          },
+          holdSends() {
+            sendsHeld = true;
+          },
+          liveTool(state) {
+            const session = sessions.get("session-large");
+            if (!session) {
+              throw new Error("mobile performance fixture lost session-large");
+            }
+            const group = {
+              kind: "toolGroup" as const,
+              itemKey: "large-tools",
+              messageSequence: session.timelineItems.length,
+              tools: [
+                {
+                  itemKey: "large-exec",
+                  toolName: "gents_exec",
+                  statusKind: state === "running" ? "running" : "success",
+                  reconstruction: HARNESS_READY_RECONSTRUCTION,
+                  presentation: {
+                    kind: "command" as const,
+                    command: "cargo test -p gents",
+                    exitCode: state === "running" ? null : 0,
+                    timedOut: false,
+                    failed: false,
+                    durationMs: null,
+                    cwd: null,
+                    executionMode: "read_only",
+                    networkMode: "disabled",
+                    stdout: "",
+                    stderr: "",
+                    fallbackOutput: null,
+                  },
+                  partialOutputTail: null,
+                },
+              ],
+            };
+            sessions.set("session-large", {
+              ...session,
+              timelineItems: [
+                ...session.timelineItems.filter(
+                  (item) => item.itemKey !== group.itemKey,
+                ),
+                group,
+              ],
+            });
+            syncSessions();
+            notify("store");
           },
           streamBurst(count) {
             let sequence = streamSequence;

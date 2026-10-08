@@ -17,6 +17,7 @@ pub(crate) const AGENT_REQUEST_FIELDS: &str = r#"
                     behavior_id
                     session_id
                     content
+                    retry_parent_request_doc_id
                     max_total_tokens
                     input
                     execution_origin

@@ -347,12 +347,35 @@ mod tests {
     /// field commit the store reports for it.
     type BlockAnswer = Option<(Vec<u8>, String)>;
 
-    /// The `docID` argument of a `_commits` query, so the fake stores can
-    /// answer the commit read for the block document it names.
-    fn commit_query_doc_id(query: &str) -> Option<&str> {
-        let (_, rest) = query.split_once("docID: \"")?;
-        let (doc_id, _) = rest.split_once('"')?;
-        Some(doc_id)
+    /// The `(alias, docID)` pairs of a batched `_commits` query, so the fake
+    /// stores can answer the commit read for every block document it names.
+    fn commit_query_aliases(query: &str) -> Vec<(String, String)> {
+        let parts = query.split(": _commits(docID: \"").collect::<Vec<_>>();
+        parts
+            .windows(2)
+            .filter_map(|pair| {
+                let alias = pair[0].split_whitespace().last()?;
+                let (doc_id, _) = pair[1].split_once('"')?;
+                Some((alias.to_owned(), doc_id.to_owned()))
+            })
+            .collect()
+    }
+
+    /// Answer a batched `_commits` query with one payload commit per alias.
+    fn commit_response(
+        aliases: Vec<(String, String)>,
+        cid_of: impl Fn(&str) -> Option<String>,
+    ) -> Value {
+        let data = aliases
+            .into_iter()
+            .map(|(alias, doc_id)| {
+                let commits = cid_of(&doc_id)
+                    .map(|cid| serde_json::json!([{ "cid": cid, "height": 1, "fieldName": "payload" }]))
+                    .unwrap_or_else(|| serde_json::json!([]));
+                (alias, commits)
+            })
+            .collect::<serde_json::Map<_, _>>();
+        serde_json::json!({ "data": data })
     }
 
     /// A block store whose failures the test selects: `fail_queries` turns every
@@ -391,22 +414,19 @@ mod tests {
             if self.fail_queries {
                 anyhow::bail!("store unavailable");
             }
-            if let Some(doc_id) = commit_query_doc_id(query) {
-                let commits = doc_id
-                    .strip_prefix("block-")
-                    .and_then(|value| value.parse::<usize>().ok())
-                    .map(|index| {
-                        let cid = self
-                            .answers
+            let aliases = commit_query_aliases(query);
+            if !aliases.is_empty() {
+                return Ok(commit_response(aliases, |doc_id| {
+                    let index = doc_id.strip_prefix("block-")?.parse::<usize>().ok()?;
+                    Some(
+                        self.answers
                             .get(&index)
                             .cloned()
                             .flatten()
                             .map(|(_, cid)| cid)
-                            .unwrap_or_else(|| self.blocks[index].0.clone());
-                        serde_json::json!([{ "cid": cid, "height": 1, "fieldName": "payload" }])
-                    })
-                    .unwrap_or_default();
-                return Ok(serde_json::json!({"data": {"_commits": commits}}));
+                            .unwrap_or_else(|| self.blocks[index].0.clone()),
+                    )
+                }));
             }
             if !query.contains("RenderedRequestBlock") {
                 return Ok(serde_json::json!({"data": {"RenderedRequest": []}}));
@@ -508,16 +528,14 @@ mod tests {
     #[async_trait::async_trait]
     impl CaptureBaseReader for MisreferencingBlockStore {
         async fn execute_capture_query(&self, query: &str) -> Result<Value> {
-            if let Some(doc_id) = commit_query_doc_id(query) {
-                let commits = self
-                    .docs
-                    .iter()
-                    .find(|(named, _, _)| named == doc_id)
-                    .map(|(_, _, cid)| {
-                        serde_json::json!([{ "cid": cid, "height": 1, "fieldName": "payload" }])
-                    })
-                    .unwrap_or_default();
-                return Ok(serde_json::json!({"data": {"_commits": commits}}));
+            let aliases = commit_query_aliases(query);
+            if !aliases.is_empty() {
+                return Ok(commit_response(aliases, |doc_id| {
+                    self.docs
+                        .iter()
+                        .find(|(named, _, _)| named == doc_id)
+                        .map(|(_, _, cid)| cid.clone())
+                }));
             }
             if !query.contains("RenderedRequestBlock") {
                 return Ok(serde_json::json!({"data": {"RenderedRequest": []}}));
@@ -624,10 +642,31 @@ mod tests {
         .await
         .expect("the neighboring turn must still replay through the shared cache");
         assert_eq!(replayed, body);
+
+        // The cache now holds every correct block. A manifest naming an absent
+        // document under a cached block's content key, witness and length
+        // still fails: the cache answers documents, not content.
+        let mut absent = entries.clone();
+        absent[0].doc_id = "block-absent".into();
+        let error = decode_capture_json_from_cached(
+            &store,
+            version,
+            &encode_turn(&absent),
+            CapturePayloadKind::RequestBody,
+            &mut cache,
+        )
+        .await
+        .err()
+        .expect("a manifest naming an absent document must fail closed");
+        assert!(
+            error.downcast_ref::<CaptureStoreReadError>().is_none(),
+            "an absent block is a verification failure, not a store failure: {error:#}"
+        );
     }
 
     fn agent_request() -> crate::watcher::AgentRequest {
         crate::watcher::AgentRequest {
+            retry_parent_request_doc_id: None,
             purpose: gents_protocol::request_admission::RequestPurpose::Normal,
             doc_id: "doc-1".to_string(),
             request_id: "request-1".to_string(),
@@ -754,11 +793,13 @@ impl CaptureBaseReader for defra_node::EmbeddedNode {
 
 type CaptureBaseCache = std::collections::BTreeMap<String, (Value, String)>;
 
-/// One block document already read and witnessed. Blocks are immutable, so a
-/// positive observation stays valid for the life of the cache; the content
-/// key is unique on the collection, which makes it an unambiguous cache
-/// identity across every capture that references the block.
+/// One block document already read and witnessed, keyed by its document id:
+/// the manifest pins a document, so a cached observation answers only entries
+/// naming that document, and each entry still checks the content key it was
+/// read under. Blocks are immutable, so a positive observation stays valid for
+/// the life of the cache.
 struct CachedCaptureBlock {
+    content_key: String,
     bytes: Vec<u8>,
     field_commit_cid: String,
 }
@@ -870,26 +911,29 @@ async fn decode_capture_json_from_cached<R: CaptureBaseReader + Sync>(
                 .context("capture delta chain exceeds maximum depth or contains a cycle")
         },
         |entry| {
-            cache
+            let block = cache
                 .blocks
-                .get(&entry.content_key)
-                .map(|block| (block.bytes.clone(), block.field_commit_cid.clone()))
-                .context("capture manifest block was not read")
+                .get(&entry.doc_id)
+                .context("capture manifest block was not read")?;
+            anyhow::ensure!(
+                block.content_key == entry.content_key,
+                "capture manifest block {} was read under another content key",
+                entry.doc_id
+            );
+            Ok((block.bytes.clone(), block.field_commit_cid.clone()))
         },
     )
 }
 
-/// Read the block documents a manifest names that are not cached yet, in one
-/// batched query plus one field-commit read per document.
+/// Read the block documents a manifest names that are not cached yet: one
+/// batched row query plus batched field-commit reads.
 ///
 /// A failed query is a [`CaptureStoreReadError`]: it says the store is broken,
 /// not that the capture is unverifiable. A block document that is simply
 /// absent is left uncached, so resolution reports it as a verification failure
 /// and replay drops only the affected turn. A document whose payload does not
 /// hash to the entry's content key is the same kind of verification failure
-/// for the capture that named it, and is refused before the cache: the cache
-/// is keyed by content key, so admitting it would poison every later capture
-/// that references the key correctly.
+/// for the capture that named it, and is refused before the cache.
 async fn read_manifest_blocks<R: CaptureBaseReader + Sync>(
     reader: &R,
     entries: &[encoding::ManifestEntry],
@@ -901,21 +945,18 @@ async fn read_manifest_blocks<R: CaptureBaseReader + Sync>(
         entries.len(),
         encoding::MAX_MANIFEST_BLOCKS
     );
-    let unread: Vec<&encoding::ManifestEntry> = entries
-        .iter()
-        .filter(|entry| !cache.contains_key(&entry.content_key))
-        .collect();
+    let mut unread = std::collections::BTreeMap::new();
+    for entry in entries {
+        if !cache.contains_key(&entry.doc_id) {
+            unread.entry(entry.doc_id.as_str()).or_insert(entry);
+        }
+    }
     if unread.is_empty() {
         return Ok(());
     }
     let doc_ids = unread
-        .iter()
-        .map(|entry| {
-            format!(
-                "\"{}\"",
-                crate::graphql::escape_graphql_string(&entry.doc_id)
-            )
-        })
+        .keys()
+        .map(|doc_id| format!("\"{}\"", crate::graphql::escape_graphql_string(doc_id)))
         .collect::<Vec<_>>()
         .join(", ");
     let query = format!(
@@ -932,20 +973,13 @@ async fn read_manifest_blocks<R: CaptureBaseReader + Sync>(
         .and_then(|data| data.get("RenderedRequestBlock"))
         .and_then(Value::as_array)
         .context("reading capture manifest blocks returned an unexpected shape")?;
-    let mut by_doc_id = std::collections::BTreeMap::new();
+    let mut found = Vec::new();
     for row in rows {
         let doc_id = row
             .get("_docID")
             .and_then(Value::as_str)
-            .context("capture manifest block row lacks _docID")?
-            .to_owned();
-        anyhow::ensure!(
-            by_doc_id.insert(doc_id.clone(), row.clone()).is_none(),
-            "capture manifest block {doc_id} was returned twice"
-        );
-    }
-    for entry in unread {
-        let Some(row) = by_doc_id.get(&entry.doc_id) else {
+            .context("capture manifest block row lacks _docID")?;
+        let Some(entry) = unread.remove(doc_id) else {
             continue;
         };
         let payload = row
@@ -956,22 +990,6 @@ async fn read_manifest_blocks<R: CaptureBaseReader + Sync>(
             .get("byte_len")
             .and_then(Value::as_u64)
             .context("capture manifest block row lacks byte_len")?;
-        let commit_query = format!(
-            r#"query {{ _commits(docID: "{doc_id}") {{ cid height fieldName }} }}"#,
-            doc_id = crate::graphql::escape_graphql_string(&entry.doc_id),
-        );
-        let commit_response = reader
-            .execute_capture_query(&commit_query)
-            .await
-            .map_err(|error| anyhow::Error::new(CaptureStoreReadError(error)))?;
-        let commit = commits::select_field_commit(&commit_response, "payload")
-            .map_err(|error| anyhow::Error::new(CaptureStoreReadError(error)))?
-            .with_context(|| {
-                format!(
-                    "capture manifest block {} lacks a payload field commit",
-                    entry.doc_id
-                )
-            })?;
         anyhow::ensure!(
             byte_len == entry.byte_len,
             "capture manifest block {} stores byte_len {byte_len}, manifest pins {}",
@@ -983,10 +1001,29 @@ async fn read_manifest_blocks<R: CaptureBaseReader + Sync>(
             "capture manifest block {} stores a payload that does not hash to its content key",
             entry.doc_id
         );
+        found.push((entry, payload.as_bytes().to_vec()));
+    }
+    let found_doc_ids = found
+        .iter()
+        .map(|(entry, _)| entry.doc_id.clone())
+        .collect::<Vec<_>>();
+    let witnesses = commits::field_commits(&found_doc_ids, "payload", |query| async move {
+        reader.execute_capture_query(&query).await
+    })
+    .await
+    .map_err(|error| anyhow::Error::new(CaptureStoreReadError(error)))?;
+    for ((entry, bytes), commit) in found.into_iter().zip(witnesses) {
+        let commit = commit.with_context(|| {
+            format!(
+                "capture manifest block {} lacks a payload field commit",
+                entry.doc_id
+            )
+        })?;
         cache.insert(
-            entry.content_key.clone(),
+            entry.doc_id.clone(),
             CachedCaptureBlock {
-                bytes: payload.as_bytes().to_vec(),
+                content_key: entry.content_key.clone(),
+                bytes,
                 field_commit_cid: commit.cid,
             },
         );

@@ -1,7 +1,7 @@
 type EventSourceCursor @index(fields: ["cursor_key"], unique: true) {
     cursor_key: String @immutable
     owner_did: String @index @immutable
-    trigger_id: String @index @immutable
+    consumer: JSON @immutable
     source_collection: String @immutable
     after: String
 }

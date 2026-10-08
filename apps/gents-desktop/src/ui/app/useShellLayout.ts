@@ -62,6 +62,29 @@ export function useShellLayout(route: Route) {
   const dockVisible = docked && (dockOpen || divider.pos > 0);
   const dockCol = dockVisible ? divider.pos + 8 : 0;
   const paneCol = Math.max(0, shellWidth - rail - dockCol);
+  /* The pane is laid out once per move of the divider, not at every width
+     on the way: a long transcript re-wraps every row at each width, and real
+     sessions took 100 ms and more a frame. Settling, it takes the width it is
+     settling to and the dock slides over or off it; dragged, it keeps the
+     width it had when the drag began, slides under the moving dock, and
+     re-wraps once where the divider is let go. */
+  const settlingTo = docked && !divider.dragging ? divider.target : null;
+  const dragFrom = useRef<number | null>(null);
+  if (!(docked && divider.dragging)) dragFrom.current = null;
+  else dragFrom.current ??= paneCol;
+  const paneWidth =
+    dragFrom.current !== null
+      ? dragFrom.current
+      : settlingTo === null
+        ? null
+        : Math.max(0, shellWidth - rail - (settlingTo > 0 ? settlingTo + 8 : 0));
+  /* the dock's surface likewise: laid out once at the width it opens to,
+     revealed as its column widens; closing, it keeps the width it had open
+     and its column clips it away */
+  const openWidth = useRef(divider.pos);
+  if (settlingTo === null && divider.pos > 0) openWidth.current = divider.pos;
+  const dockWidth =
+    settlingTo === null ? divider.pos : settlingTo > 0 ? settlingTo : openWidth.current;
   /* every column is a length so the bar above and the row below share one
      set of tracks, and the divider's motion is the spring's, frame by frame */
   const columns = !wide
@@ -79,6 +102,10 @@ export function useShellLayout(route: Route) {
     divider,
     dockVisible,
     paneCol,
+    /** the pane's width while the divider moves: where a settle is going, or
+        where a drag began */
+    paneWidth,
+    dockWidth,
     columns,
   };
 }

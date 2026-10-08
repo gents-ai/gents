@@ -13,12 +13,23 @@ import {
   TextRow,
   TagsRow,
 } from "./editors";
-import { newId, optionalInteger, str, useDraft, validateCronSchedule } from "./draft";
+import {
+  newId,
+  problemOf,
+  requiredInteger,
+  str,
+  useDraft,
+  validateCronExpression,
+  validateCronSchedule,
+  validateTimezone,
+} from "./draft";
 import { DeleteButton, ListDetail } from "./ListDetail";
 import { Group } from "./rows";
 import { RowMenu } from "./RowMenu";
 import { toastFailure } from "@/lib/failure";
 import { useApp } from "@/app/AppContext";
+
+const INTERVAL = "Interval seconds";
 
 function cadenceLabel(s: Schedule) {
   return s.cadence.kind === "cron"
@@ -53,31 +64,44 @@ export function ScheduleEditor({
     timezone: schedule.cadence.kind === "cron" ? schedule.cadence.timezone : "UTC",
     tags: schedule.tags ?? [],
   };
-  const d = useDraft(saved, async (next) => {
-    const cadence =
-      next.cadenceKind === "interval"
-        ? {
-            kind: "interval" as const,
-            interval_secs:
-              optionalInteger("Interval seconds", next.intervalSecs, { min: 1 }) ??
-              (() => {
-                throw new Error("Interval seconds is required");
-              })(),
-          }
-        : {
-            kind: "cron" as const,
-            ...validateCronSchedule(next.expression, next.timezone),
-            missed_run_policy: "latest_only" as const,
-          };
-    await changeConfig("saveScheduleConfig", {
-      document: {
-        ...schedule,
-        display_name: next.displayName.trim() || null,
-        cadence,
-        tags: next.tags.length ? next.tags : null,
-      },
-    });
-  });
+  const d = useDraft(
+    saved,
+    async (next) => {
+      const cadence =
+        next.cadenceKind === "interval"
+          ? {
+              kind: "interval" as const,
+              interval_secs: requiredInteger(INTERVAL, next.intervalSecs, { min: 1 }),
+            }
+          : {
+              kind: "cron" as const,
+              ...validateCronSchedule(next.expression, next.timezone),
+              missed_run_policy: "latest_only" as const,
+            };
+      await changeConfig("saveScheduleConfig", {
+        document: {
+          ...schedule,
+          display_name: next.displayName.trim() || null,
+          cadence,
+          tags: next.tags.length ? next.tags : null,
+        },
+      });
+    },
+    {
+      /* only the cadence chosen is checked */
+      problems: (next) =>
+        next.cadenceKind === "interval"
+          ? {
+              intervalSecs: problemOf(() =>
+                requiredInteger(INTERVAL, next.intervalSecs, { min: 1 }),
+              ),
+            }
+          : {
+              expression: problemOf(() => validateCronExpression(next.expression)),
+              timezone: problemOf(() => validateTimezone(next.timezone)),
+            },
+    },
+  );
   const [lastRun, setLastRun] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const id = (f: string) => `${schedule.schedule_id}-${f}`;
@@ -127,10 +151,11 @@ export function ScheduleEditor({
         {d.draft.cadenceKind === "interval" ? (
           <NumberRow
             id={id("interval")}
-            label="Interval seconds"
+            label={INTERVAL}
             description="Positive whole number."
             value={d.draft.intervalSecs}
             onChange={(v) => d.set("intervalSecs", v)}
+            error={d.problems.intervalSecs}
           />
         ) : (
           <>
@@ -139,12 +164,14 @@ export function ScheduleEditor({
               label="Cron"
               value={d.draft.expression}
               onChange={(v) => d.set("expression", v)}
+              error={d.problems.expression}
             />
             <TextRow
               id={id("tz")}
               label="Timezone"
               value={d.draft.timezone}
               onChange={(v) => d.set("timezone", v)}
+              error={d.problems.timezone}
             />
           </>
         )}
@@ -155,7 +182,14 @@ export function ScheduleEditor({
           onChange={(v) => d.set("tags", v)}
         />
       </Group>
-      <DraftActions draft={d} />
+      <DraftActions
+        draft={d}
+        fields={{
+          intervalSecs: id("interval"),
+          expression: id("cron"),
+          timezone: id("tz"),
+        }}
+      />
       <Group
         title="Manual run"
         action={

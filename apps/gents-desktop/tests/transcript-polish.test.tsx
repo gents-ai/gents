@@ -13,7 +13,7 @@ vi.mock("../src/ui/screens/Markdown", () => ({
   Markdown: ({ children }: { children: string }) => <div>{children}</div>,
 }));
 
-import { TranscriptPanel } from "../src/ui/screens/SessionScreen";
+import { TranscriptPanel } from "../src/ui/screens/Transcript";
 import { ToolBody } from "../src/ui/screens/tool-views";
 import { diffText, lineCount, toolSummary } from "../src/ui/screens/tool-summary";
 import { activityStatus, isStopping } from "../src/ui/screens/activity-status";
@@ -191,9 +191,12 @@ describe("long command output", () => {
 
     rerender(<ToolBody tool={running("a\nb")} />);
     grow();
-    expect(viewport.scrollTop).toBe(500);
+    /* the foot: the bottom of the output at the bottom of the box */
+    expect(viewport.scrollTop).toBe(500 - 160);
 
     act(() => {
+      /* the reader's own wheel, then the scroll it makes */
+      viewport.dispatchEvent(new Event("wheel"));
       viewport.scrollTop = 0;
       viewport.dispatchEvent(new Event("scroll"));
     });

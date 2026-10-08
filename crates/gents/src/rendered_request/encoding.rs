@@ -448,43 +448,18 @@ pub(crate) const MANIFEST_RESOLUTION_FUEL: usize = MAX_MANIFEST_BLOCKS + 2;
 
 /// Encode the manifest record for already-stored blocks. The entries' document
 /// ids and field-commit witnesses come from the block writes that precede this
-/// call; like [`encode_full`], the envelope is decoded back before use.
+/// call.
 pub(crate) fn encode_manifest(blocks: &[ManifestEntry]) -> Result<EncodedJson> {
     anyhow::ensure!(
         blocks.len() <= MAX_MANIFEST_BLOCKS,
-        "capture manifest names {} blocks spanning {} body bytes ({}..{} bytes per block), \
-         above the {} the reader resolves; that ceiling decodes bodies of at least ~20 MiB at \
-         the 2 KiB minimum cut and ~40 MiB at the 4 KiB mean cut",
-        blocks.len(),
-        blocks
-            .iter()
-            .fold(0u64, |total, entry| total.saturating_add(entry.byte_len)),
-        blocks
-            .iter()
-            .map(|entry| entry.byte_len)
-            .min()
-            .unwrap_or_default(),
-        blocks
-            .iter()
-            .map(|entry| entry.byte_len)
-            .max()
-            .unwrap_or_default(),
-        MAX_MANIFEST_BLOCKS
+        "capture manifest names {} blocks, above the {MAX_MANIFEST_BLOCKS} the reader resolves",
+        blocks.len()
     );
-    let stored = encode_envelope(Payload::Manifest {
-        blocks: blocks.to_vec(),
-    })?;
-    let DecodedRecord::Manifest {
-        blocks: decoded_blocks,
-    } = decode_record(&stored)?
-    else {
-        anyhow::bail!("new manifest capture encoding did not decode as a manifest")
-    };
-    anyhow::ensure!(
-        decoded_blocks == blocks,
-        "new manifest capture encoding did not preserve its block references"
-    );
-    Ok(EncodedJson { stored })
+    Ok(EncodedJson {
+        stored: encode_envelope(Payload::Manifest {
+            blocks: blocks.to_vec(),
+        })?,
+    })
 }
 
 /// Resolve a manifest record into its capture value through a block source.
@@ -1089,62 +1064,49 @@ mod tests {
                         ))
                     })
                 }
-                // Kernel rows pin the manifest document at ref 1 / witness 10
-                // with blocks at refs 2..=block_count — and an empty manifest
-                // for block_count 0, which reassembles zero bytes and so fails
-                // to decode. Rebuild exactly that store around the real v3
-                // codec. Resolution runs at fuel `max_depth + 1`, mirroring the
-                // Lean rows' `resolveRequest store (maxDepth + 1) 1 10`.
+                // The row's Lean store, rebuilt around the real v3 codec: each
+                // modeled reference becomes a block document under its pinned
+                // witness, answering with the stored commit or not at all.
+                // Resolution runs at fuel `max_depth + 1`, mirroring the Lean
+                // rows' `resolveRequest store (maxDepth + 1) 1 10`.
                 "manifest" => {
-                    let blocks = if case.block_count == 0 {
+                    let chunks = if case.manifest_blocks.is_empty() {
                         Vec::new()
                     } else {
                         let body = json!({
                             "request": case.request,
                             "payload": deterministic_capture_text(6000),
                         });
-                        let canonical = super::super::canonical_json_string(&body).unwrap();
-                        let blocks = chunk_capture_body(&canonical);
-                        assert_eq!(
-                            blocks.len(),
-                            case.block_count,
-                            "{}: the chunked store must match the pinned row",
-                            case.name
-                        );
-                        blocks
+                        chunk_capture_body(&super::super::canonical_json_string(&body).unwrap())
                     };
+                    assert_eq!(
+                        chunks.len(),
+                        case.manifest_blocks.len(),
+                        "{}: the chunked body must span the modeled references",
+                        case.name
+                    );
                     let mut entries = Vec::new();
                     let mut store = BTreeMap::new();
-                    for (index, block) in blocks.iter().enumerate() {
-                        let doc_id = format!("block-{index}");
-                        let witness = format!("witness-{index}");
+                    for (block, chunk) in case.manifest_blocks.iter().zip(&chunks) {
+                        let doc_id = format!("block-{}", block.r#ref);
                         entries.push(ManifestEntry {
                             doc_id: doc_id.clone(),
-                            content_key: block.content_key.clone(),
-                            field_commit_cid: witness.clone(),
-                            byte_len: u64::try_from(block.bytes.len()).unwrap(),
+                            content_key: chunk.content_key.clone(),
+                            field_commit_cid: format!("witness-{}", block.pinned_witness),
+                            byte_len: u64::try_from(chunk.bytes.len()).unwrap(),
                         });
-                        store.insert(doc_id, (witness, block.bytes.clone()));
+                        if let Some(stored) = block.stored_witness {
+                            store
+                                .insert(doc_id, (chunk.bytes.clone(), format!("witness-{stored}")));
+                        }
                     }
                     let manifest = encode_manifest(&entries).unwrap();
-                    resolve_manifest_with_limit(
-                        case.max_depth + 1,
-                        &manifest.stored,
-                        |entry| match (case.name.as_str(), entry.doc_id.as_str()) {
-                            // The kernel rows break the last named block
-                            // (ref 3 of a two-block manifest).
-                            ("manifest_missing_block_blocks_send", "block-1") => {
-                                anyhow::bail!("block document is missing")
-                            }
-                            ("manifest_block_witness_mismatch_blocks_send", "block-1") => {
-                                Ok((store[&entry.doc_id].1.clone(), "changed".into()))
-                            }
-                            _ => Ok((
-                                store[&entry.doc_id].1.clone(),
-                                store[&entry.doc_id].0.clone(),
-                            )),
-                        },
-                    )
+                    resolve_manifest_with_limit(case.max_depth + 1, &manifest.stored, |entry| {
+                        store
+                            .get(&entry.doc_id)
+                            .cloned()
+                            .context("block document is missing")
+                    })
                 }
                 other => panic!("unknown Lean encoding {other}"),
             };

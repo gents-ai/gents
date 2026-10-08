@@ -13,7 +13,7 @@ import {
   TextRow,
   TagsRow,
 } from "./editors";
-import { newId, optionalInteger, useDraft } from "./draft";
+import { newId, problemOf, requiredInteger, useDraft, type Problems } from "./draft";
 import { DeleteButton, ListDetail } from "./ListDetail";
 import { Group } from "./rows";
 import { RowMenu } from "./RowMenu";
@@ -47,45 +47,57 @@ function Editor({
     enabled: service.enabled ?? true,
     tags: service.tags ?? [],
   };
-  const validatedEndpoint = (next: typeof saved) => {
-    if (![next.hostname, next.tailscaleIp, next.lanIp].some((v) => v.trim()))
-      throw new Error("Hostname, Tailscale IP, or LAN IP is required");
-    const mcpPort = optionalInteger("MCP port", next.mcpPort, {
-      min: 1,
-      max: 65_535,
-    });
-    if (mcpPort == null) throw new Error("MCP port is required");
-    if (next.mcpPath && !next.mcpPath.startsWith("/"))
-      throw new Error("MCP path must be empty or start with /");
-    return {
-      hostname: next.hostname.trim() || null,
-      tailscaleIp: next.tailscaleIp.trim() || null,
-      lanIp: next.lanIp.trim() || null,
-      mcpPort,
-      mcpPath: next.mcpPath.trim() || null,
-    };
-  };
-  const d = useDraft(saved, async (next) => {
-    const endpoint = validatedEndpoint(next);
-    await changeConfig("saveToolServiceConfig", {
-      document: {
-        ...service,
-        display_name: next.displayName.trim() || null,
-        description: next.description.trim() || null,
-        hostname: endpoint.hostname,
-        tailscale_ip: endpoint.tailscaleIp,
-        lan_ip: endpoint.lanIp,
-        mcp_port: endpoint.mcpPort,
-        mcp_path: endpoint.mcpPath,
-        send_agent_did: next.sendAgentDid,
-        enabled: next.enabled,
-        tags: next.tags.length ? next.tags : null,
-      },
-    });
+  const port = (next: typeof saved) =>
+    requiredInteger("MCP port", next.mcpPort, { min: 1, max: 65_535 });
+  /* what the save and the test both need of the address */
+  const endpointProblems = (next: typeof saved): Problems<typeof saved> => ({
+    hostname: [next.hostname, next.tailscaleIp, next.lanIp].some((v) => v.trim())
+      ? undefined
+      : "Hostname, Tailscale IP, or LAN IP is required",
+    mcpPort: problemOf(() => port(next)),
+    mcpPath:
+      next.mcpPath && !next.mcpPath.startsWith("/")
+        ? "MCP path must be empty or start with /"
+        : undefined,
   });
+  /* the address as the bridge takes it, once it has no problems */
+  const endpointOf = (next: typeof saved) => ({
+    hostname: next.hostname.trim() || null,
+    tailscaleIp: next.tailscaleIp.trim() || null,
+    lanIp: next.lanIp.trim() || null,
+    mcpPort: port(next),
+    mcpPath: next.mcpPath.trim() || null,
+  });
+  const d = useDraft(
+    saved,
+    async (next) => {
+      const endpoint = endpointOf(next);
+      await changeConfig("saveToolServiceConfig", {
+        document: {
+          ...service,
+          display_name: next.displayName.trim() || null,
+          description: next.description.trim() || null,
+          hostname: endpoint.hostname,
+          tailscale_ip: endpoint.tailscaleIp,
+          lan_ip: endpoint.lanIp,
+          mcp_port: endpoint.mcpPort,
+          mcp_path: endpoint.mcpPath,
+          send_agent_did: next.sendAgentDid,
+          enabled: next.enabled,
+          tags: next.tags.length ? next.tags : null,
+        },
+      });
+    },
+    { problems: endpointProblems },
+  );
   const test = async () => {
+    const problem = Object.values(d.problems).find(Boolean);
+    if (problem) {
+      toast(`Test failed: ${problem}`);
+      return;
+    }
     try {
-      const endpoint = validatedEndpoint(d.draft);
+      const endpoint = endpointOf(d.draft);
       const result = await api.testToolService({
         serviceId: service.service_id,
         ...endpoint,
@@ -123,6 +135,7 @@ function Editor({
           id={id("host")}
           label="Hostname"
           value={d.draft.hostname}
+          error={d.problems.hostname}
           onChange={(v) => d.set("hostname", v)}
         />
         <TextRow
@@ -143,6 +156,7 @@ function Editor({
           id={id("port")}
           label="MCP port"
           value={d.draft.mcpPort}
+          error={d.problems.mcpPort}
           onChange={(v) => d.set("mcpPort", v)}
         />
         <TextRow
@@ -150,6 +164,7 @@ function Editor({
           label="MCP path"
           description="Empty uses the endpoint root; otherwise start with /."
           value={d.draft.mcpPath}
+          error={d.problems.mcpPath}
           onChange={(v) => d.set("mcpPath", v)}
           mono
         />
@@ -177,7 +192,10 @@ function Editor({
           Test connection
         </Button>
       </div>
-      <DraftActions draft={d} />
+      <DraftActions
+        draft={d}
+        fields={{ hostname: id("host"), mcpPort: id("port"), mcpPath: id("path") }}
+      />
       <DeleteButton
         label={service.display_name ?? service.service_id}
         warning={dependentsWarning(deployment, "tool-service", service.service_id)}

@@ -38,6 +38,7 @@ pub(super) fn test_identity(name: &str) -> KeyIdentity {
 
 pub(super) fn request(behavior_id: Option<&str>, session_id: &str) -> AgentRequest {
     AgentRequest {
+        retry_parent_request_doc_id: None,
         purpose: gents_protocol::request_admission::RequestPurpose::Normal,
         doc_id: "doc-1".to_string(),
         request_id: "req-1".to_string(),

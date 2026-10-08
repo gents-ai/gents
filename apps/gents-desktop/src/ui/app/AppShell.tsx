@@ -56,7 +56,8 @@ export function AppShell({
   children: ReactNode;
 }) {
   const layout = useShellLayout(route);
-  const { shellRef, columns, wide, docked, dockVisible, paneCol, shownNav } = layout;
+  const { shellRef, columns, wide, docked, dockVisible, paneCol, paneWidth, shownNav } =
+    layout;
   /* the pane bar's slot: screens fill it through a portal */
   const [paneBar, setPaneBar] = useState<HTMLElement | null>(null);
   const settings = (variant: "rail" | "row") => (
@@ -97,11 +98,19 @@ export function AppShell({
           data-testid="pane"
         >
           <main
-            className="@container relative min-h-0 min-w-0 flex-1 overflow-hidden"
-            /* past the divider's range the pane keeps its minimum width and
-               slides under the dock rather than reflowing narrower */
+            className="relative min-h-0 min-w-0 flex-1 overflow-hidden"
+            /* The pane's content keeps a width of its own where the card is
+               narrower than it should lay out at: past the divider's range it
+               keeps its minimum, and while the divider moves it keeps the width
+               that move lays it out at. The card follows the divider and clips
+               it, so it slides under the dock rather than re-wrapping. 10 is the
+               card's right margin and borders. */
             style={
-              docked && dockVisible && paneCol - 8 < 360 ? { width: 360 } : undefined
+              paneWidth !== null
+                ? { width: Math.max(360, paneWidth - 10) }
+                : docked && dockVisible && paneCol - 8 < 360
+                  ? { width: 360 }
+                  : undefined
             }
           >
             <SwipeHandles />

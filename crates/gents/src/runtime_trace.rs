@@ -89,6 +89,7 @@ mod tests {
 
     fn request(input: gents_protocol::request_input::RequestInput) -> AgentRequest {
         AgentRequest {
+            retry_parent_request_doc_id: None,
             purpose: gents_protocol::request_admission::RequestPurpose::Normal,
             doc_id: "doc-1".to_string(),
             request_id: "req-1".to_string(),

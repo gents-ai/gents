@@ -53,6 +53,15 @@ export default defineConfig({
       },
     },
     {
+      /* the desktop app draws in WebKit, which has no scroll anchoring */
+      name: "webkit-desktop",
+      testMatch: /transcript-.*\.spec\.ts/,
+      use: {
+        ...devices["Desktop Safari"],
+        viewport: { width: 1280, height: 900 },
+      },
+    },
+    {
       name: "chromium-narrow",
       use: {
         ...devices["Desktop Chrome"],

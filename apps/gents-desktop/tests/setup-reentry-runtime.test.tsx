@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -142,6 +143,27 @@ describe("setup re-entry at the provider step", () => {
     expect(api.startManagedServer).toHaveBeenCalledTimes(1);
     expect(api.startManagedServer).toHaveBeenCalledWith("Local Agent");
     expect(api.claudeLogin).not.toHaveBeenCalled();
+  });
+
+  it("starts the stopped runtime once under StrictMode's second mount", async () => {
+    const { api, app } = harness();
+    let started = false;
+    api.managedServerStatus.mockImplementation(async () =>
+      started ? status({ state: "running", pairingReady: true }) : status(),
+    );
+    api.startManagedServer.mockImplementation(async () => {
+      started = true;
+      return status({ state: "running", pairingReady: true });
+    });
+    renderIn(
+      app,
+      <StrictMode>
+        <SetupScreen initialStep="inference" onDone={vi.fn()} />
+      </StrictMode>,
+    );
+
+    expect(await screen.findByRole("button", { name: "Sign in" })).toBeVisible();
+    expect(api.startManagedServer).toHaveBeenCalledTimes(1);
   });
 
   it("shows macOS approval guidance on re-entry and continues once Gents is allowed", async () => {

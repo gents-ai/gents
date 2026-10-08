@@ -9,11 +9,57 @@ import { toastFailure } from "@/lib/failure";
    that closes or navigates on success never does so after a failure; the
    error stays on the draft. A new document (`isNew`) is saveable as it
    stands: prefilled is not the same as saved. */
+/** A draft's problems, each at its field; a field with none is absent. */
+export type Problems<T> = Partial<Record<keyof T & string, string>>;
+
+const NO_PROBLEMS = {};
+
+/** The message a parse throws, or undefined when it passes: the parse
+    helpers below word every problem once, for a field and for a save. */
+export function problemOf(parse: () => unknown): string | undefined {
+  try {
+    parse();
+    return undefined;
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e);
+  }
+}
+
+const hasProblems = (problems: object) => Object.values(problems).some(Boolean);
+
+/**
+ * Focuses the first field with a problem, in the order `fields` lists them
+ * (field to element id, as drawn). True when the draft has problems, so
+ * the save it stood for does not go ahead.
+ */
+export function focusFirstProblem(
+  problems: Partial<Record<string, string>>,
+  fields: Partial<Record<string, string>> = {},
+): boolean {
+  if (!hasProblems(problems)) return false;
+  const first = Object.keys(fields).find((field) => problems[field]);
+  const element = first ? document.getElementById(fields[first]!) : null;
+  /* a field folded away in a disclosure is opened to be shown */
+  for (
+    let fold = element?.closest("details");
+    fold;
+    fold = fold.parentElement?.closest("details")
+  )
+    fold.open = true;
+  element?.focus();
+  return true;
+}
+
 export function useDraft<T extends object>(
   saved: T,
   /* `intent` is whatever a caller passes to save, for a save with a choice */
   persist: (next: T, intent?: unknown) => Promise<unknown>,
-  options: { isNew?: boolean } = {},
+  options: {
+    isNew?: boolean;
+    /** what is wrong with a draft, at its fields; a draft with any is not
+        saved, and persist sees only drafts without */
+    problems?: (draft: T) => Problems<T>;
+  } = {},
 ) {
   const [draft, setDraft] = useState<T>(saved);
   const [baseline, setBaseline] = useState<T>(saved);
@@ -36,8 +82,9 @@ export function useDraft<T extends object>(
   const dirty =
     (options.isNew === true && !created) ||
     JSON.stringify(draft) !== JSON.stringify(baseline);
+  const problems: Problems<T> = options.problems?.(draft) ?? NO_PROBLEMS;
   const save = async (intent?: unknown): Promise<boolean> => {
-    if (!dirty || saving) return false;
+    if (!dirty || saving || hasProblems(problems)) return false;
     setSaving(true);
     setError(null);
     try {
@@ -80,6 +127,7 @@ export function useDraft<T extends object>(
     dirty,
     saving,
     error,
+    problems,
     save,
     reset,
   };
@@ -107,6 +155,16 @@ export function optionalInteger(
     throw new Error(`${label} must be ${bounds.min} or more`);
   if (bounds.max != null && parsed > bounds.max)
     throw new Error(`${label} must be ${bounds.max} or less`);
+  return parsed;
+}
+
+export function requiredInteger(
+  label: string,
+  value: string,
+  bounds: { min?: number; max?: number } = {},
+) {
+  const parsed = optionalInteger(label, value, bounds);
+  if (parsed === null) throw new Error(`${label} is required`);
   return parsed;
 }
 
@@ -241,7 +299,7 @@ function cronValue(field: number, value: string) {
   return parsed;
 }
 
-export function validateCronSchedule(expression: string, timezone: string) {
+export function validateCronExpression(expression: string) {
   const text = expression.trim();
   const fields = text.split(/\s+/);
   if (fields.length !== 5)
@@ -262,6 +320,10 @@ export function validateCronSchedule(expression: string, timezone: string) {
         throw new Error(`Cron field ${field + 1} has a descending range`);
     }
   });
+  return text;
+}
+
+export function validateTimezone(timezone: string) {
   const zone = timezone.trim();
   if (!zone) throw new Error("Timezone is required");
   try {
@@ -269,7 +331,14 @@ export function validateCronSchedule(expression: string, timezone: string) {
   } catch {
     throw new Error("Timezone must be a valid IANA timezone");
   }
-  return { expression: text, timezone: zone };
+  return zone;
+}
+
+export function validateCronSchedule(expression: string, timezone: string) {
+  return {
+    expression: validateCronExpression(expression),
+    timezone: validateTimezone(timezone),
+  };
 }
 
 /* ids for new documents, minted in the handler, never in render */

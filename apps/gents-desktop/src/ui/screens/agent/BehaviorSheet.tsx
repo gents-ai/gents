@@ -1,7 +1,8 @@
 /* A new behavior drafted beside another page: nothing is saved until Save,
    and the page it came from gets the id. */
 import type { NodeView } from "../../../hooks/fleetStore";
-import { BehaviorEditor, newBehaviorView } from "./BehaviorsPanel";
+import { BehaviorEditor } from "./BehaviorEditor";
+import { newBehaviorView } from "./behaviorDraft";
 import { EditorSheet } from "./EditorSheet";
 import { useState } from "react";
 

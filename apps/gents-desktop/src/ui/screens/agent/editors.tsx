@@ -30,6 +30,7 @@ import { href, type Route } from "@/lib/router";
 import { Switch } from "@gents/ui/components/switch";
 import { Textarea } from "@gents/ui/components/textarea";
 import { Fact, Row, StackedRow } from "./rows";
+import { focusFirstProblem } from "./draft";
 
 export type Choice = { value: string; label: string };
 
@@ -47,6 +48,7 @@ type DraftLike = {
   dirty: boolean;
   saving: boolean;
   error: string | null;
+  problems?: Partial<Record<string, string>>;
   save: () => unknown;
   reset: () => void;
 };
@@ -55,6 +57,8 @@ type DraftLike = {
     draft unless the editor says otherwise. */
 export function DraftActions({
   draft,
+  fields,
+  problems = draft.problems ?? {},
   dirty = draft.dirty,
   error = draft.error,
   onSave = () => draft.save(),
@@ -62,6 +66,11 @@ export function DraftActions({
   saveLabel = "Save",
 }: {
   draft: DraftLike;
+  /** each field with a problem's element, in the order they are drawn: Save
+      goes to the first instead of saving */
+  fields?: Partial<Record<string, string>>;
+  /** the draft's problems, where the editor works them out itself */
+  problems?: Partial<Record<string, string>>;
   dirty?: boolean;
   error?: string | null;
   onSave?: () => unknown;
@@ -83,7 +92,9 @@ export function DraftActions({
         <Button
           variant="brand"
           disabled={!dirty || saving}
-          onClick={() => void onSave()}
+          onClick={() => {
+            if (!focusFirstProblem(problems, fields)) void onSave();
+          }}
         >
           {saving ? "Saving…" : saveLabel}
         </Button>
@@ -143,15 +154,19 @@ export function NumberRow({
   value,
   onChange,
   placeholder,
+  error,
+  disabled,
 }: Common & {
   value: string;
   onChange: (v: string) => void;
   placeholder?: string;
 }) {
   return (
-    <Row label={label} description={description} htmlFor={id}>
+    <Row label={label} description={description} htmlFor={id} error={error}>
       <Input
         id={id}
+        aria-invalid={error ? true : undefined}
+        disabled={disabled}
         inputMode="decimal"
         value={value}
         onChange={(e) => onChange(e.target.value)}

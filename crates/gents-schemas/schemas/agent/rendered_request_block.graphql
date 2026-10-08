@@ -21,7 +21,10 @@
 # time and re-checked against the block document at read time. A reference
 # never broadens access either: reading a capture's body means reading every
 # block it names, so ACP applies to the whole referenced set and no manifest
-# may be delivered where its blocks may not.
+# may be delivered where its blocks may not. Blocks dedupe by `content_key`
+# across every agent, session and DID; once per-DID ACP applies to captures,
+# that dedupe scope must become per-principal, or a writer that cannot read
+# another principal's block fails its capture and with it the send.
 #
 # Indexes are deliberately few: every index adds per-commit keys, and blocks
 # are the highest-volume collection in the capture stack (one row per ~4 KiB of
