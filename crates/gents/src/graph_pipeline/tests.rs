@@ -326,6 +326,25 @@ fn per_group_accepts_a_bounded_source_field_and_validates_timeout() {
     assert!(has_code(&error, DiagnosticCode::InvalidGroupTimeout));
 }
 
+/// The refusal text is native: the model fences only that `latest_only` is
+/// refused, so the message naming the modes that remain is pinned here.
+#[test]
+fn latest_only_refusal_names_the_supported_modes() {
+    let mut intent = linear_intent();
+    intent.edges[0].concurrency = DeliveryConcurrency::LatestOnly;
+    let error = compile(&intent, &catalog()).unwrap_err();
+    let refusal = error
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == DiagnosticCode::InvalidEdgeConcurrency)
+        .unwrap_or_else(|| panic!("{:?}", error.diagnostics));
+    assert_eq!(refusal.path, "/edges/0/concurrency");
+    assert_eq!(
+        refusal.message,
+        "latest_only is not allowed on a graph edge; use parallel, serial or queued_serial"
+    );
+}
+
 #[test]
 fn result_contracts_are_typed_canonical_and_digest_bound() {
     let mut intent = linear_intent();

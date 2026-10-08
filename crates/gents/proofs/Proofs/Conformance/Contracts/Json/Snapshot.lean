@@ -123,6 +123,8 @@ def snapshotJson : String :=
       ++ Conformance.GraphPipelineContracts.revisionGateCasesJson ++ ","
     ++ "\"graph_pipeline_run_terminal_cases\":"
       ++ Conformance.GraphPipelineContracts.runTerminalCasesJson ++ ","
+    ++ "\"graph_pipeline_edge_delivery_cases\":"
+      ++ Conformance.GraphPipelineContracts.edgeDeliveryCasesJson ++ ","
     ++ "\"request_transition_cases\":"
       ++ jsonArray (requestTransitionCases.map lifecycleTransitionCaseJson) ++ ","
     ++ "\"provider_eof_cases\":"

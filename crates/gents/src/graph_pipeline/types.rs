@@ -346,6 +346,7 @@ pub enum DiagnosticCode {
     InvalidGroupSize,
     InvalidGroupCountField,
     InvalidGroupTimeout,
+    InvalidEdgeConcurrency,
     DuplicateResult,
     MissingTerminalResult,
     InvalidResultCardinality,

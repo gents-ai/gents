@@ -5,10 +5,10 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use super::types::{
-    CapabilityManifestEntry, DeliveryMode, Diagnostic, DiagnosticCode, GraphIntent, GraphLimits,
-    GraphPlan, GroupCount, HostInput, PackagePlan, PlannedEdge, PlannedEntry, PlannedNode,
-    PlannedResult, PortCardinality, PortRef, PortSpec, ResultCardinality, StageCapability,
-    StageTarget, COMPILER_VERSION,
+    CapabilityManifestEntry, DeliveryConcurrency, DeliveryMode, Diagnostic, DiagnosticCode,
+    GraphIntent, GraphLimits, GraphPlan, GroupCount, HostInput, PackagePlan, PlannedEdge,
+    PlannedEntry, PlannedNode, PlannedResult, PortCardinality, PortRef, PortSpec,
+    ResultCardinality, StageCapability, StageTarget, COMPILER_VERSION,
 };
 use crate::document_config::reject_protected_collection_name;
 use crate::graphql::{
@@ -521,6 +521,14 @@ pub fn compile_graph(
                     "delivery mode is incompatible with the connected port cardinalities",
                 );
             }
+        }
+        if edge.concurrency == DeliveryConcurrency::LatestOnly {
+            diagnostic(
+                &mut diagnostics,
+                DiagnosticCode::InvalidEdgeConcurrency,
+                format!("{path}/concurrency"),
+                "latest_only is not allowed on a graph edge; use parallel, serial or queued_serial",
+            );
         }
         if let Some(group) = &edge.delivery {
             match &group.expected_count {

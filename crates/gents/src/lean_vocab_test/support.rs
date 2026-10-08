@@ -48,6 +48,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) graph_pipeline_validation_cases: Vec<LeanGraphPipelineValidationCase>,
     pub(crate) graph_pipeline_revision_gate_cases: Vec<LeanGraphPipelineRevisionGateCase>,
     pub(crate) graph_pipeline_run_terminal_cases: Vec<LeanGraphPipelineRunTerminalCase>,
+    pub(crate) graph_pipeline_edge_delivery_cases: Vec<LeanGraphPipelineEdgeDeliveryCase>,
     pub(crate) goal_claimed_publication_cases: Vec<serde_json::Value>,
     pub(crate) goal_request_head_cases: Vec<serde_json::Value>,
     pub(crate) goal_operator_resume_cases: Vec<serde_json::Value>,
@@ -421,6 +422,19 @@ pub(crate) struct LeanGraphPipelineRunTerminalCase {
     pub(crate) expected_succeed: bool,
     pub(crate) expected_fail: bool,
     pub(crate) expected_cancel: bool,
+}
+
+/// One graph edge (`Conformance.GraphPipelineContracts.edgeDeliveryCases`):
+/// its concurrency and delivery group in their wire shapes, and the verdicts
+/// of `GraphPipeline.graphEdgeConcurrencyValid` and `graphEdgeValid`.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LeanGraphPipelineEdgeDeliveryCase {
+    pub(crate) name: String,
+    pub(crate) concurrency: String,
+    #[serde(deserialize_with = "required_nullable")]
+    pub(crate) delivery: Option<serde_json::Value>,
+    pub(crate) expected_concurrency_valid: bool,
+    pub(crate) expected_valid: bool,
 }
 #[derive(Debug, Deserialize)]
 pub(crate) struct LeanVocabularyContract {

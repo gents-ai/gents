@@ -1276,6 +1276,11 @@ def caseCoverage : List CoverageEntry :=
       "conformance::graph_pipeline::generated_run_terminal_cases_fence_completion_cas")
       "graph-pipeline" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "graph_pipeline_edge_delivery_cases"
+      "GraphPipelineEdgeDeliveryCases"
+      "conformance::graph_pipeline::generated_edge_delivery_cases_fence_graph_edge_admission")
+      "graph-pipeline" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "restart_disposition_cases"
       "RestartDispositionCases"
       "tool_call_lifecycle::recovery_conformance::generated_native_restart_dispositions_use_canonical_admission_owner")

@@ -714,6 +714,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_run_terminal_cases_fence_completion_cas",
         },
         ConformanceConsumer::RustTest {
+            id: "conformance::graph_pipeline::generated_edge_delivery_cases_fence_graph_edge_admission",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance/graph_pipeline.rs",
+            module_path: "conformance::graph_pipeline",
+            function: "generated_edge_delivery_cases_fence_graph_edge_admission",
+        },
+        ConformanceConsumer::RustTest {
             id: "conformance::goals::rust_goal_status_vocabulary_and_machine_match_lean_contract",
             package: "gents",
             source_path: "crates/gents/tests/conformance/goals.rs",

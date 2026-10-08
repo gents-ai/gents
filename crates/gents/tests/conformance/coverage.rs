@@ -749,6 +749,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "GraphPipelineRunTerminalCases".to_string(),
         ));
     }
+    if !snapshot.graph_pipeline_edge_delivery_cases.is_empty() {
+        emitted.insert((
+            "graph_pipeline_edge_delivery_cases".to_string(),
+            "GraphPipelineEdgeDeliveryCases".to_string(),
+        ));
+    }
     assert_eq!(
         snapshot.trigger_dispatch_case_count,
         snapshot.trigger_dispatch_cases.len(),

@@ -1,4 +1,5 @@
 import Proofs.GraphPipeline
+import Proofs.GraphPipeline.Configuration
 import Proofs.Conformance.ContractTypes
 
 namespace Conformance.GraphPipelineContracts
@@ -331,5 +332,100 @@ def runTerminalCaseJson (testCase : RunTerminalCase) : String :=
 
 def runTerminalCasesJson : String :=
   jsonArray (runTerminalCases.map runTerminalCaseJson)
+
+/-- Delivery shapes on both sides of the shared group validator, kept inside
+what the native compiler also enforces: timeouts at most 86400 seconds,
+source fields that are GraphQL names, and the 256-document bound shared by
+`Triggers.Groups.maxGroupDocs` and `CompilerPolicy.max_group_size`. -/
+def edgeDeliveryShapes : List (String × Option Triggers.Groups.GroupConfig) :=
+  [ ("ungrouped", none)
+  , ("fixed_1", some { expected := some (.fixed 1) })
+  , ("fixed_2", some { expected := some (.fixed 2) })
+  , ("fixed_256", some { expected := some (.fixed 256) })
+  , ("fixed_257", some { expected := some (.fixed 257) })
+  , ("source_field", some { expected := some (.sourceField "expected_total") })
+  , ("timeout_only", some { timeoutSecs := some 60 })
+  , ("fixed_3_minimum_4", some { expected := some (.fixed 3), minimumCount := some 4 })
+  , ("fixed_3_timeout_0", some { expected := some (.fixed 3), timeoutSecs := some 0 })
+  , ("fixed_3_timeout_86400_minimum_2",
+      some { expected := some (.fixed 3), timeoutSecs := some 86400, minimumCount := some 2 })
+  , ("fixed_3_minimum_0", some { expected := some (.fixed 3), minimumCount := some 0 })
+  ]
+
+def concurrencyModes : List (ConcurrencyMode × String) :=
+  [ (.parallel, "parallel")
+  , (.serial, "serial")
+  , (.queuedSerial, "queued_serial")
+  , (.latestOnly, "latest_only")
+  ]
+
+/-- The correlation field every port of the native edge fixture uses. -/
+def edgeCorrelation : String := "graph_run_id"
+
+structure EdgeDeliveryCase where
+  name : String
+  mode : ConcurrencyMode
+  modeName : String
+  delivery : Option Triggers.Groups.GroupConfig
+  deriving DecidableEq, Repr
+
+def EdgeDeliveryCase.expectedConcurrencyValid (c : EdgeDeliveryCase) : Bool :=
+  GraphPipeline.graphEdgeConcurrencyValid c.mode
+
+def EdgeDeliveryCase.expectedValid (c : EdgeDeliveryCase) : Bool :=
+  GraphPipeline.graphEdgeValid c.delivery edgeCorrelation c.mode
+
+def edgeDeliveryCases : List EdgeDeliveryCase :=
+  concurrencyModes.flatMap fun (mode, modeName) =>
+    edgeDeliveryShapes.map fun (shape, delivery) =>
+      { name := "concurrency=" ++ modeName ++ ",delivery=" ++ shape
+      , mode := mode
+      , modeName := modeName
+      , delivery := delivery
+      }
+
+theorem edgeDeliveryCases_count : edgeDeliveryCases.length = 44 := by native_decide
+
+theorem edgeDeliveryCases_valid_count :
+    (edgeDeliveryCases.filter (·.expectedValid)).length = 15 := by native_decide
+
+theorem edgeDeliveryCases_latest_only_never_valid :
+    edgeDeliveryCases.all (fun c => c.mode != .latestOnly || !c.expectedValid) = true := by
+  native_decide
+
+theorem edgeDeliveryCases_cover_both_verdicts :
+    (edgeDeliveryCases.any (fun c => c.expectedValid) &&
+      edgeDeliveryCases.any (fun c => !c.expectedValid) &&
+      edgeDeliveryCases.any (fun c => !c.expectedConcurrencyValid)) = true := by
+  native_decide
+
+/-- The `EventGroup` wire shape (`expected_count`, `timeout_secs`, `min_count`). -/
+def groupConfigJson (g : Triggers.Groups.GroupConfig) : String :=
+  let expected : List String := match g.expected with
+    | none => []
+    | some (.fixed count) => ["\"expected_count\":" ++ toString count]
+    | some (.sourceField field) =>
+        ["\"expected_count\":{\"source_field\":" ++ jsonString field ++ "}"]
+  let timeout : List String := match g.timeoutSecs with
+    | none => []
+    | some seconds => ["\"timeout_secs\":" ++ toString seconds]
+  let minimum : List String := match g.minimumCount with
+    | none => []
+    | some count => ["\"min_count\":" ++ toString count]
+  "{" ++ ",".intercalate (expected ++ timeout ++ minimum) ++ "}"
+
+def edgeDeliveryCaseJson (c : EdgeDeliveryCase) : String :=
+  "{"
+    ++ "\"name\":" ++ jsonString c.name ++ ","
+    ++ "\"concurrency\":" ++ jsonString c.modeName ++ ","
+    ++ "\"delivery\":" ++ (match c.delivery with
+        | none => "null"
+        | some g => groupConfigJson g) ++ ","
+    ++ "\"expected_concurrency_valid\":" ++ boolJson c.expectedConcurrencyValid ++ ","
+    ++ "\"expected_valid\":" ++ boolJson c.expectedValid
+    ++ "}"
+
+def edgeDeliveryCasesJson : String :=
+  jsonArray (edgeDeliveryCases.map edgeDeliveryCaseJson)
 
 end Conformance.GraphPipelineContracts
