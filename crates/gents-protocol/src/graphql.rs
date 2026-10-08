@@ -610,7 +610,7 @@ pub fn graphql_string_list_literal(values: &[String]) -> String {
 /// An empty `Value::Array` is rendered as the literal `null`, never `[]`.
 /// DefraDB types a bare `[]` as `JsonArray([])`. This is incompatible with
 /// `NillableStringArray` (`[String]`) columns (used for tags, skill IDs,
-/// subagent target IDs, and similar canonical lists). A create may appear to
+/// agent target IDs, and similar canonical lists). A create may appear to
 /// succeed while storing the wrong type; any
 /// subsequent update then fails re-validation.
 ///
@@ -770,7 +770,7 @@ pub fn session_shape_query(session_id: &str) -> String {
             AgentMessage(filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }}, order: {{ sequence: ASC }}) {{
                 message_key
                 session_id
-                agent_did
+                node_did
                 requester_did
                 request_doc_id
                 publication
@@ -791,7 +791,7 @@ pub fn session_shape_query(session_id: &str) -> String {
                 lifecycle_state
                 child_request_id
                 spawn_target_did
-                spawn_behavior_id
+                spawn_agent_id
                 await_mode
                 deadline_at
                 selected_service_id
@@ -1036,8 +1036,8 @@ mod tests {
         // NillableStringArray column (create stores JsonArray, later updates
         // fail re-validation). See `string_list_field` doc comment.
         assert_eq!(
-            string_list_field("subagent_targets", &[]),
-            Some("subagent_targets: null".to_string()),
+            string_list_field("agent_targets", &[]),
+            Some("agent_targets: null".to_string()),
         );
         assert_eq!(
             string_list_field("cli_tool_names", &["rg".to_string(), "cargo".to_string()]),
@@ -1079,7 +1079,7 @@ mod tests {
         for filter in [
             // The confirmed #1038 payload: closes the enclosing _and array,
             // object and paren, then appends its own selection.
-            r#"{} ] }, limit: 1) { _docID } AgentBehavior(filter: { _and: [ {} ] }, limit: 1) { system_prompt } PocEvent(filter: { _and: [ {}"#,
+            r#"{} ] }, limit: 1) { _docID } Agent(filter: { _and: [ {} ] }, limit: 1) { system_prompt } PocEvent(filter: { _and: [ {}"#,
             // Unbalanced / stray delimiters.
             "{ a: 1 } }",
             "{ a: 1 ]",
