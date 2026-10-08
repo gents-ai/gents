@@ -112,7 +112,7 @@ theorem successful_handoff_has_stored_question_and_terminal_producer
                 have hbinding : request.sessionId = producer.sessionId ∧
                     request.requestId = producer.requestId ∧
                     request.identity.requesterDid = producer.requesterDid ∧
-                    request.identity.agentDid = producer.agentDid := by
+                    request.identity.nodeDid = producer.nodeDid := by
                   simp [eligible] at he
                   aesop
                 exact ⟨hstored.1, hterminal.2, htoolState,
