@@ -188,7 +188,7 @@ theorem tools_authority_removal_refused (decode : Doc → Option Control)
     keepsControl decode stored candidate = false := by
   simp [keepsControl, retained, ho, hn, had, removed]
 
-/-- Disabling the invoking behavior is a lockout. -/
+/-- Disabling the invoking agent is a lockout. -/
 theorem self_disable_refused (decode : Doc → Option Reach)
     (stored candidate : Doc) (old new : Reach)
     (ho : decode stored = some old) (hn : decode candidate = some new)

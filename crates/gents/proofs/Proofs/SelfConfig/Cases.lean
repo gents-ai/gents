@@ -51,14 +51,14 @@ def decodeControl (doc : Doc) : Option Control := do
         some (true, true, true)
     | none => some (false, false, true)
     | _ => none
-  let agents ← match doc "subagents" with
+  let agents ← match doc "agents" with
     | some "{\"enabled\":true}" => some true
     | some "{\"enabled\":false}" => some false
     | none => some false
     | _ => none
   pure { selfConfig, agents, noLockout, toolsAuthority }
 
-/-- Fixture decoder for the behavior values used below. -/
+/-- Fixture decoder for the agent values used below. -/
 def decodeReach (doc : Doc) : Option Reach := do
   let enabled ← match doc "enabled" with
     | some "true" | none => some true
@@ -94,9 +94,9 @@ def decodeAuthText : String → Option Configuration.BackendAuth
 def decodeAuth (doc : Doc) : Option Configuration.BackendAuth :=
   (doc "auth").bind decodeAuthText
 
-/-- The invoker-only no-lockout slice for Tools and Behavior targets. -/
+/-- The invoker-only no-lockout slice for Tools and Agent targets. -/
 def lockoutGuard (t : Target) (stored : Doc) : Doc → Bool :=
-  if t = .agentBehavior then keepsReach decodeReach stored
+  if t = .agent then keepsReach decodeReach stored
   else keepsControl decodeControl stored
 
 def rowBackendOf (r : CaseRow) (id : String) : Option (String × Configuration.BackendAuth) :=
@@ -109,31 +109,31 @@ def plainTools : List (FieldKey × FieldValue) :=
 def grantedTools : List (FieldKey × FieldValue) :=
   [("self_config", "{\"enable_self_config\":true,\"enable_pack_install\":true}")]
 
-/-- The Tools document a Context or Behavior selects, through the row's tables. -/
+/-- The Tools document a Context or Agent selects, through the row's tables. -/
 def rowResolve (r : CaseRow) : Doc → Option Doc :=
   let tools (id : FieldValue) : Option Doc :=
     (r.tools.find? (·.1 == id)).map (fun entry => Doc.ofList entry.2)
   match r.target with
   | .agentContext => fun doc => (doc "tools_id").bind tools
-  | .agentBehavior => fun doc =>
+  | .agent => fun doc =>
       ((doc "context_id").bind fun context =>
         (r.contexts.find? (·.1 == context)).bind (·.2)).bind tools
   | _ => fun _ => none
 
 /-- The always-on operator-grant slice. It is not part of the guarded
 dispatch: the native owner runs it on every Tools write from the shared validate
-slot, on every Context or Behavior write whose Tools selection changes
+slot, on every Context or Agent write whose Tools selection changes
 (`guard_reselection_keeps_grants_in_txn`), and on a clone when its request is
-authored or previewed (`clone_keeps_grants_in_txn`), not on the Behavior write
+authored or previewed (`clone_keeps_grants_in_txn`), not on the Agent write
 that later publishes it. -/
 def grantGuard (r : CaseRow) (stored : Doc) : Doc → Bool :=
   match r.target with
   | .tools => keepsGrants decodeGrants r.held stored
-  | .agentContext | .agentBehavior => chainKeepsGrants decodeGrants r.held (rowResolve r) stored
+  | .agentContext | .agent => chainKeepsGrants decodeGrants r.held (rowResolve r) stored
   | _ => fun _ => true
 
-/-- Every Tools, Context and Behavior row replays the always-on grant slice. A guarded row also
-replays its target's typed guard: the no-lockout slice for Tools and Behavior,
+/-- Every Tools, Context and Agent row replays the always-on grant slice. A guarded row also
+replays its target's typed guard: the no-lockout slice for Tools and Agent,
 the auth fence for Backend and the account choice fence for Profile (default
 = the original account), which Rust enforces in `validate` on every model
 write rather than only under no-lockout. -/
@@ -192,11 +192,11 @@ def buildWitness (r : CaseRow) : CaseWitness :=
 /-- Values are decoded group values abstracted as strings; nested validation
 is supplied to `step`, using the same owner as ordinary configuration. -/
 def examples : List (Target × FieldKey × FieldValue) :=
-  [ (.agentBehavior, "context_id", "context-1")
+  [ (.agent, "context_id", "context-1")
   , (.agentContext, "system_prompt", "You are concise.")
   , (.compaction, "threshold", "0.75")
   , (.tools, "host", "{\"root\":\"/workspace\"}")
-  , (.subagentTarget, "behavior_id", "gatekeeper")
+  , (.agentTarget, "agent_id", "gatekeeper")
   , (.skill, "instructions", "Read the checklist before reviewing.")
   , (.datastoreToolSurface, "entries", "[{tool_name: submit_job, collection: Job}]")
   , (.inferenceProfile, "model_name", "model-1")
@@ -213,7 +213,7 @@ def examples : List (Target × FieldKey × FieldValue) :=
 def examplesToRows : List CaseRow := examples.map fun (t, k, v) =>
   { name := t.collectionName ++ "_configured_field_accepted"
   , target := t, guarded := false, validates := true
-  , doc := [(t.uniqueField, "doc-1"), ("agent_did", "did:key:agent-a")]
+  , doc := [(t.uniqueField, "doc-1"), ("node_did", "did:key:agent-a")]
   , patch := [(k, some v)] }
 
 /-- One provider with two accounts, another with its original and a second
@@ -227,18 +227,18 @@ def profileBackends : List (String × String × String) :=
   , ("\"local\"", "OpenAiCompatible", "{\"kind\":\"environment\",\"variable\":\"KEY\"}") ]
 
 def scenarios : List CaseRow := examplesToRows ++
-  [ { name := "behavior_owner_patch_rejected"
-    , target := .agentBehavior, guarded := false, validates := true
-    , doc := [("agent_did", "did:key:agent-a")]
-    , patch := [("agent_did", some "did:key:agent-b")] }
-  , { name := "behavior_invalid_reference_rejected"
-    , target := .agentBehavior, guarded := false, validates := false
+  [ { name := "agent_owner_patch_rejected"
+    , target := .agent, guarded := false, validates := true
+    , doc := [("node_did", "did:key:agent-a")]
+    , patch := [("node_did", some "did:key:agent-b")] }
+  , { name := "agent_invalid_reference_rejected"
+    , target := .agent, guarded := false, validates := false
     , doc := [("context_id", "context-1")]
     , patch := [("context_id", some "missing-context")] }
   , { name := "datastore_owner_patch_rejected"
     , target := .datastoreToolSurface, guarded := false, validates := true
-    , doc := [("surface_id", "jobs"), ("agent_did", "did:key:agent-a")]
-    , patch := [("agent_did", some "did:key:agent-b")] }
+    , doc := [("surface_id", "jobs"), ("node_did", "did:key:agent-a")]
+    , patch := [("node_did", some "did:key:agent-b")] }
   , { name := "datastore_invalid_entries_rejected"
     , target := .datastoreToolSurface, guarded := false, validates := false
     , doc := [("surface_id", "jobs"), ("entries", "valid")]
@@ -263,17 +263,17 @@ def scenarios : List CaseRow := examplesToRows ++
   , { name := "tools_guarded_agents_enable_accepted"
     , target := .tools, guarded := true, validates := true
     , doc := [("self_config", "{\"enable_self_config\":true}")]
-    , patch := [("subagents", some "{\"enabled\":true}")] }
+    , patch := [("agents", some "{\"enabled\":true}")] }
   , { name := "tools_guarded_agents_removal_rejected"
     , target := .tools, guarded := true, validates := true
     , doc := [("self_config", "{\"enable_self_config\":true}"),
-              ("subagents", "{\"enabled\":true}")]
-    , patch := [("subagents", some "{\"enabled\":false}")] }
+              ("agents", "{\"enabled\":true}")]
+    , patch := [("agents", some "{\"enabled\":false}")] }
   , { name := "tools_guarded_agents_clear_rejected"
     , target := .tools, guarded := true, validates := true
     , doc := [("self_config", "{\"enable_self_config\":true}"),
-              ("subagents", "{\"enabled\":true}")]
-    , patch := [("subagents", none)] }
+              ("agents", "{\"enabled\":true}")]
+    , patch := [("agents", none)] }
   , { name := "tools_guarded_self_config_clear_rejected"
     , target := .tools, guarded := true, validates := true
     , doc := [("self_config", "{\"enable_self_config\":true}")]
@@ -293,21 +293,21 @@ def scenarios : List CaseRow := examplesToRows ++
     , doc := [("self_config", "{\"enable_self_config\":true,\"self_config_no_lockout\":true}")]
     , patch := [("self_config",
         some "{\"enable_self_config\":true,\"self_config_no_lockout\":true,\"self_config_categories\":[\"tools\"]}")] }
-  , { name := "behavior_guarded_self_disable_rejected"
-    , target := .agentBehavior, guarded := true, validates := true
-    , doc := [("behavior_id", "default"), ("tags", "[\"gents:setup-steward\"]")]
+  , { name := "agent_guarded_self_disable_rejected"
+    , target := .agent, guarded := true, validates := true
+    , doc := [("agent_id", "default"), ("tags", "[\"gents:setup-steward\"]")]
     , patch := [("enabled", some "false")] }
-  , { name := "behavior_guarded_setup_tag_removal_rejected"
-    , target := .agentBehavior, guarded := true, validates := true
-    , doc := [("behavior_id", "default"), ("tags", "[\"gents:setup-steward\"]")]
+  , { name := "agent_guarded_setup_tag_removal_rejected"
+    , target := .agent, guarded := true, validates := true
+    , doc := [("agent_id", "default"), ("tags", "[\"gents:setup-steward\"]")]
     , patch := [("tags", some "[\"ui:engineer\"]")] }
-  , { name := "behavior_guarded_tag_addition_accepted"
-    , target := .agentBehavior, guarded := true, validates := true
-    , doc := [("behavior_id", "default"), ("tags", "[\"gents:setup-steward\"]")]
+  , { name := "agent_guarded_tag_addition_accepted"
+    , target := .agent, guarded := true, validates := true
+    , doc := [("agent_id", "default"), ("tags", "[\"gents:setup-steward\"]")]
     , patch := [("tags", some "[\"gents:setup-steward\",\"ui:engineer\"]")] }
   , { name := "task_targeting_invoker_unguarded_accepted"
     , target := .task, guarded := false, validates := true
-    , doc := [("task_id", "engineer-inbox"), ("behavior_id", "default")]
+    , doc := [("task_id", "engineer-inbox"), ("agent_id", "default")]
     , patch := [("prompt_template", some "Review {{ doc.outcome }}")] }
   , { name := "backend_observation_patch_rejected"
     , target := .inferenceBackend, guarded := false, validates := true
@@ -437,38 +437,38 @@ def scenarios : List CaseRow := examplesToRows ++
     , patch := [("tools_id", some "granted")]
     , tools := [("granted", grantedTools)] }
   , { name := "behavior_grant_reselect_without_held_rejected"
-    , target := .agentBehavior, guarded := false, validates := true
+    , target := .agent, guarded := false, validates := true
     , doc := [("behavior_id", "worker"), ("context_id", "ctx-plain")]
     , patch := [("context_id", some "ctx-granted")]
     , contexts := [("ctx-plain", some "plain"), ("ctx-granted", some "granted")]
     , tools := [("plain", plainTools), ("granted", grantedTools)] }
   , { name := "behavior_reselect_away_from_granted_tools_accepted"
-    , target := .agentBehavior, guarded := false, validates := true
+    , target := .agent, guarded := false, validates := true
     , doc := [("behavior_id", "worker"), ("context_id", "ctx-granted")]
     , patch := [("context_id", some "ctx-plain")]
     , contexts := [("ctx-plain", some "plain"), ("ctx-granted", some "granted")]
     , tools := [("plain", plainTools), ("granted", grantedTools)] }
   , { name := "clone_granted_source_without_held_rejected"
-    , target := .agentBehavior, guarded := false, validates := true
+    , target := .agent, guarded := false, validates := true
     , doc := [("behavior_id", "copy")]
     , patch := [("context_id", some "ctx-granted")]
     , contexts := [("ctx-granted", some "granted")]
     , tools := [("granted", grantedTools)] }
   , { name := "clone_granted_source_with_held_accepted"
-    , target := .agentBehavior, guarded := false, validates := true
+    , target := .agent, guarded := false, validates := true
     , held := { Grants.bot with packInstall := true }
     , doc := [("behavior_id", "copy")]
     , patch := [("context_id", some "ctx-granted")]
     , contexts := [("ctx-granted", some "granted")]
     , tools := [("granted", grantedTools)] }
   , { name := "clone_plain_source_without_held_accepted"
-    , target := .agentBehavior, guarded := false, validates := true
+    , target := .agent, guarded := false, validates := true
     , doc := [("behavior_id", "copy")]
     , patch := [("context_id", some "ctx-plain")]
     , contexts := [("ctx-plain", some "plain")]
     , tools := [("plain", plainTools)] }
   , { name := "clone_source_without_tools_accepted"
-    , target := .agentBehavior, guarded := false, validates := true
+    , target := .agent, guarded := false, validates := true
     , doc := [("behavior_id", "copy")]
     , patch := [("context_id", some "ctx-bare")]
     , contexts := [("ctx-bare", none)] }
@@ -510,9 +510,9 @@ theorem self_config_cases_cover_reselection :
         && w.selectedBefore.isSome && w.selectedAfter.isSome && !w.accepted)
       && selfConfigCases.any (fun w => decide (w.row.target = .agentContext)
         && w.selectedBefore.isNone && w.selectedAfter.isSome && !w.accepted)
-      && selfConfigCases.any (fun w => decide (w.row.target = .agentBehavior)
+      && selfConfigCases.any (fun w => decide (w.row.target = .agent)
         && w.selectedBefore.isSome && !w.accepted)
-      && selfConfigCases.any (fun w => decide (w.row.target = .agentBehavior)
+      && selfConfigCases.any (fun w => decide (w.row.target = .agent)
         && w.selectedBefore.isNone && w.selectedAfter.isSome && !w.accepted)
       && selfConfigCases.any (fun w =>
         w.selectedBefore.isNone && w.selectedAfter.isSome && w.accepted)
