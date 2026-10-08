@@ -179,6 +179,7 @@ pub(super) fn build_rendered_timeline(
                     Some(RenderedTimelineItem::UserMessage {
                         item_key: message.message_key.clone(),
                         request_id: message.request_id.clone(),
+                        owns_turn: message.owns_turn,
                         sequence: message.sequence,
                         content: normalized_content.clone(),
                         timestamp: normalize_optional(message.timestamp.as_deref()),
@@ -268,6 +269,7 @@ mod tests {
         MessageView {
             message_key: key.to_string(),
             request_id: Some("request-1".to_string()),
+            owns_turn: false,
             sequence: Some(sequence),
             role: Some("user".to_string()),
             display_role: Some("user".to_string()),

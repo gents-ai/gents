@@ -8,7 +8,7 @@ use gents_desktop_core::client::{
 use gents_protocol::message::Message;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::{AgentRequestRow, AgentToolCallRow};
-use gents_protocol::transcript::{normalize_markdown_text, present_message};
+use gents_protocol::transcript::present_message;
 
 use super::super::cause_derivation::{derive_tool_call_cause, RequestEvidence, ToolCallEvidence};
 use super::super::types::{
@@ -69,6 +69,14 @@ pub(super) fn request_is_background_completion(request: &AgentRequestRow) -> boo
         .input
         .as_ref()
         .is_some_and(gents::lifecycle::is_background_completion_request)
+}
+
+/// `canonical_rows::authored_message_key` is `pub(crate)` in gents, so its
+/// prompt shape is repeated here; the two reconciliations that compare keys
+/// (the pending turn's owner and the message projection's owns-turn marker)
+/// must not drift apart.
+pub(super) fn authored_prompt_message_key(request_doc_id: &str) -> String {
+    format!("authored:{request_doc_id}:prompt")
 }
 
 struct LoadedRequestContext {
@@ -236,7 +244,6 @@ pub async fn build_session_snapshot_for_agent_with_transcript(
         }
         snapshot.projection_revision = Some(SessionProjectionRevisionView {
             store_version: projection_revision.store_version,
-            reconcile_version: projection_revision.reconcile_version,
         });
         snapshot.hydration = hydration;
     }
@@ -251,6 +258,7 @@ fn build_hydration_only_session_snapshot(
     context_totals_exact: bool,
 ) -> DesktopSessionSnapshot {
     DesktopSessionSnapshot {
+        live_cursor: None,
         session_id: session_id.to_string(),
         agent_did: Some(agent_did.to_string()),
         behavior_id: None,
