@@ -80,6 +80,15 @@ fn client_shell_contract_store(case: &lean_vocab_test::LeanClientShellCase) -> C
             .expect("desktop contract case should select a session"),
     );
     let request_id = case.desktop_observed_request_id.map(contract_request_id);
+    let queued = case
+        .desktop_queued_request_ids
+        .iter()
+        .copied()
+        .map(contract_request_id)
+        .collect::<Vec<_>>();
+    // The runtime's session observation names the newest request, which is
+    // the last queued one when any are queued behind the turn.
+    let newest = queued.last().cloned().or_else(|| request_id.clone());
     if case.desktop_snapshot_present {
         rows.sessions.push(AgentSession {
             session_id: session_id.clone(),
@@ -91,32 +100,62 @@ fn client_shell_contract_store(case: &lean_vocab_test::LeanClientShellCase) -> C
             title: None,
             tags: Vec::new(),
             provenance: None,
-            observation: request_id.clone().map(|request_id| SessionObservation {
+            observation: newest.clone().map(|newest| SessionObservation {
                 last_activity_at: "2026-04-21T12:01:00Z".into(),
                 preview: Some("contract prompt".into()),
                 latest_request: Some(SessionRequestObservation {
-                    request_doc_id: request_id.clone(),
-                    request_id,
-                    lifecycle_state: request_state_for_turn(
-                        case.desktop_observed_turn_state.as_deref(),
-                    ),
+                    lifecycle_state: if Some(&newest) == request_id.as_ref() {
+                        request_state_for_turn(case.desktop_observed_turn_state.as_deref())
+                    } else {
+                        RequestLifecycleState::Pending
+                    },
+                    request_doc_id: newest.clone(),
+                    request_id: newest,
                 }),
             }),
         });
     }
-    if let Some(request_id) = request_id {
+    if let Some(request_id) = request_id.clone() {
         rows.requests.push(AgentRequestRow {
             purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
             doc_id: Some(request_id.clone()),
             request_id,
             agent_did: Some("did:test:contract-agent".into()),
             behavior_id: Some("contract-behavior".into()),
-            session_id: Some(session_id),
+            session_id: Some(session_id.clone()),
             content: Some("contract prompt".into()),
             lifecycle_state: Some(request_state_for_turn(
                 case.desktop_observed_turn_state.as_deref(),
             )),
             execution_origin: Some("interactive".into()),
+            created_at: Some("2026-04-21T12:00:00Z".into()),
+            ..Default::default()
+        });
+    }
+    let mut ahead = request_id;
+    for (index, queued_id) in queued.into_iter().enumerate() {
+        rows.requests.push(AgentRequestRow {
+            purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
+            doc_id: Some(queued_id.clone()),
+            request_id: queued_id.clone(),
+            agent_did: Some("did:test:contract-agent".into()),
+            behavior_id: Some("contract-behavior".into()),
+            session_id: Some(session_id.clone()),
+            content: Some(format!("queued {queued_id}")),
+            lifecycle_state: Some(RequestLifecycleState::Pending),
+            execution_origin: Some("interactive".into()),
+            created_at: Some(format!("2026-04-21T12:00:{:02}Z", index + 1)),
+            input: Some(gents_protocol::request_input::RequestInput {
+                queue: Some(gents_protocol::request_input::RequestQueue {
+                    source: gents_protocol::request_input::QueueSource::User,
+                    policy: gents_protocol::request_input::QueuePolicy::Append,
+                    key: None,
+                    queued_after_request_id: ahead.replace(queued_id),
+                    interrupted_request_id: None,
+                    background_completion_wake_version: None,
+                }),
+                ..Default::default()
+            }),
             ..Default::default()
         });
     }
@@ -331,7 +370,10 @@ fn session_snapshot_does_not_report_unobserved_preferred_request() {
 #[test]
 fn session_snapshot_projection_consumes_generated_client_shell_contract_cases() {
     let cases = lean_desktop_client_shell_cases();
-    assert_eq!(cases.len(), 22);
+    assert_eq!(cases.len(), 23);
+    assert!(cases
+        .iter()
+        .any(|case| !case.desktop_queued_request_ids.is_empty()));
     for case in cases {
         let session_id = contract_session_id(
             case.desktop_selected_session_id
@@ -361,6 +403,20 @@ fn session_snapshot_projection_consumes_generated_client_shell_contract_cases() 
             assert_eq!(
                 snapshot.turn_state.as_deref(),
                 case.desktop_expected_turn_state.as_deref(),
+                "{}",
+                case.name
+            );
+            assert_eq!(
+                snapshot
+                    .queued_turns
+                    .iter()
+                    .map(|turn| turn.request_id.clone())
+                    .collect::<Vec<_>>(),
+                case.desktop_queued_request_ids
+                    .iter()
+                    .copied()
+                    .map(contract_request_id)
+                    .collect::<Vec<_>>(),
                 "{}",
                 case.name
             );

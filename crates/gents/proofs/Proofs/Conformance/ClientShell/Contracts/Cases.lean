@@ -34,12 +34,14 @@ def sessionObs
     (turn : Option ClientTurnState)
     (agent : AgentDid := contractAgent)
     (behavior : Option BehaviorId := some contractBehavior)
+    (queued : List RequestId := [])
     : SessionObservation :=
   { sessionId := sid
   , agentDid := agent
   , behaviorId := behavior
   , latestObservedRequest := req
   , latestTurn := turn
+  , queuedRequests := queued
   }
 
 def storeWith (sessions : List SessionObservation) : LocalStore :=
@@ -56,6 +58,9 @@ def storeNewCompleted : LocalStore :=
 
 def storeNewRunning : LocalStore :=
   storeWith [sessionObs sid1 (some reqNew) (some turnRunning)]
+
+def storeNewQueuedBehindRunning : LocalStore :=
+  storeWith [sessionObs sid1 (some reqOld) (some turnRunning) (queued := [reqNew])]
 
 def storeSid2Completed : LocalStore :=
   storeWith [sessionObs sid2 (some reqOther) (some turnCompleted) alternateAgent]
@@ -100,7 +105,7 @@ def pendingRequestForFrontend (obs : Option SessionObservation) : Option Request
       | _, _ => none
   | none => none
 
-def trackedRequestForFrontend
+def awaitedRequestForFrontend
     (selection : Selection)
     (obs : Option SessionObservation)
     (workflow : SubmissionWorkflow) : Option RequestId :=
@@ -113,6 +118,18 @@ def trackedRequestForFrontend
         | none             => false
       if selectedMatches || sessionMatches then some req else none
   | _ => none
+
+def queuedRequestsOf (obs : Option SessionObservation) : List RequestId :=
+  (obs.map (·.queuedRequests)).getD []
+
+/-- A submission observed as queued is not the session's turn; the frontend
+then tracks the turn it waits behind. -/
+def trackedRequestForFrontend
+    (selection : Selection)
+    (obs : Option SessionObservation)
+    (workflow : SubmissionWorkflow) : Option RequestId :=
+  (awaitedRequestForFrontend selection obs workflow).filter
+    (fun req => !(queuedRequestsOf obs).contains req)
 
 def activeRequestForFrontend
     (selection : Selection)
@@ -160,7 +177,7 @@ def frontendWorkflowFromProjection
           , turnState := none
           , reason := none
           }
-      | .blocked (.awaitingTurnTerminality turn) =>
+      | .queue turn =>
           { kind := "turnInProgress"
           , sessionId := state.selection.session
           , requestId := activeRequest
@@ -207,7 +224,7 @@ def clientShellCaseFromStep
     frontendWorkflowFromProjection frontendExpected frontendStore ctx activeRequest
   let selectedObs := selectedObservation frontendExpected frontendStore
   let desktopPreferred :=
-    trackedRequestForFrontend frontendLocal.selection obs frontendLocal.workflow
+    awaitedRequestForFrontend frontendLocal.selection obs frontendLocal.workflow
   { name := name
   , property := property
   , input := inputName input
@@ -248,6 +265,7 @@ def clientShellCaseFromStep
   , frontendSessionLatestRequestId := obs.bind (·.latestObservedRequest)
   , frontendSessionTurnState := turnStateOptionName (obs.bind (·.latestTurn))
   , frontendSessionPendingRequestId := pendingRequestForFrontend obs
+  , frontendSessionQueuedRequestIds := queuedRequestsOf obs
   , frontendLocalWorkflowKind :=
       match frontendLocal.workflow with
       | .idle           => "ready"
@@ -272,6 +290,7 @@ def clientShellCaseFromStep
   , desktopPreferredRequestId := desktopPreferred
   , desktopObservedRequestId := selectedObs.bind (·.latestObservedRequest)
   , desktopObservedTurnState := turnStateOptionName (selectedObs.bind (·.latestTurn))
+  , desktopQueuedRequestIds := queuedRequestsOf selectedObs
   , desktopExpectedLatestRequestId := selectedObs.bind (·.latestObservedRequest)
   , desktopExpectedTurnState := turnStateOptionName (selectedObs.bind (·.latestTurn))
   , desktopExpectPendingTurn := desktopPendingExpectation selectedObs
@@ -368,9 +387,15 @@ def clientShellCases : List ClientShellContractCase :=
   , let pre := selectedShell (some sid1)
     let input := ShellInput.user .startSubmit
     clientShellCaseFromStep
-      "blocked_submit_nonterminal_turn"
-      "blocked_submit_gates"
+      "queue_submit_behind_nonterminal_turn"
+      "nonterminal_turn_queues"
       pre input storeNewRunning .healthy ctxReady pre pre storeNewRunning
+  , let input := ShellInput.snapshot storeNewQueuedBehindRunning
+    let post := step awaitingNew input emptyStore .healthy ctxReady
+    clientShellCaseFromStep
+      "queued_observation_retires_awaiting"
+      "queued_observation_retires_awaiting"
+      awaitingNew input emptyStore .healthy ctxReady awaitingNew post storeNewQueuedBehindRunning
   , let pre := selectedShell (some sid1)
     let input := ShellInput.user .startSubmit
     clientShellCaseFromStep

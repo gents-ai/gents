@@ -27,6 +27,7 @@ pub(crate) struct LeanClientShellCase {
     pub(crate) desktop_preferred_request_id: Option<usize>,
     pub(crate) desktop_observed_request_id: Option<usize>,
     pub(crate) desktop_observed_turn_state: Option<String>,
+    pub(crate) desktop_queued_request_ids: Vec<usize>,
     pub(crate) desktop_expected_latest_request_id: Option<usize>,
     pub(crate) desktop_expected_turn_state: Option<String>,
     pub(crate) desktop_expect_pending_turn: Option<bool>,
