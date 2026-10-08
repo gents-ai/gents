@@ -93,7 +93,7 @@ private def candidateFixtureJson (f : CandidateFixture) : String :=
           ++ "\"enabled\":" ++ agentBool a.enabled ++ "}") ++ ","
     ++ "\"contexts\":" ++ jsonArray (f.contexts.map fun (id, c) =>
         "{\"context_id\":" ++ jsonString id ++ ","
-          ++ "\"instructions\":" ++ jsonString c.instructions ++ ","
+          ++ "\"system_prompt\":" ++ jsonString c.instructions ++ ","
           ++ "\"skill_ids\":" ++ jsonStringArray c.skillIds ++ ","
           ++ "\"tool_names\":" ++ jsonStringArray c.toolNames ++ "}") ++ ","
     ++ "\"inference_profiles\":" ++ jsonArray (f.profiles.map fun (id, m) =>
