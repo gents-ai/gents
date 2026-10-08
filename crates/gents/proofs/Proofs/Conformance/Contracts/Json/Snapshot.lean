@@ -277,6 +277,8 @@ def snapshotJson : String :=
       ++ agentMaterializationCasesJson ++ ","
     ++ "\"sibling_tools_cases\":"
       ++ siblingToolsCasesJson ++ ","
+    ++ "\"self_config_selection_cases\":"
+      ++ selfConfigSelectionCasesJson ++ ","
     ++ "\"session_recovery_cases\":"
       ++ jsonArray (sessionRecoveryCases.map sessionRecoveryCaseJson) ++ ","
     ++ "\"inference_slot_accounting_cases\":"

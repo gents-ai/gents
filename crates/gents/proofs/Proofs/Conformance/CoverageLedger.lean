@@ -900,20 +900,20 @@ def caseCoverage : List CoverageEntry :=
       "conformance::generated_self_config_cases_fence_patch_merge"
       "Covers production patch admissibility and accepted merges, replays every Tools row through the always-on operator-grant guard (guard_tools_keep_grants) and every Context and Agent row, clone rows included, through reselection_keeps_grants, and replays guarded rows through the production Tools/Agent no-lockout guards, the Backend auth fence and the Profile account choice fence. Reference validation and unchanged stored state after rejection require the shared configuration transaction owner.")
       "self-config" [Surface.agentFacing]
-  , tagged (followUpCoverage
+  , tagged (consumerCoverage
       "agent_decision_cases"
       "AgentDecisionCases"
-      "Verdicts of SelfConfig.agentOperationAdmitted for create, edit and disable over the Agent catalog (protected Engineer, default agent, missing and existing ids), each create input (profile, prompt, clone source) and each edit patch field (display_name, system_prompt, inference_profile_id). No Rust consumer is bound yet; the self-config agent management owner must replay these rows, including create_input and edit_patch, instead of keeping a parallel policy.")
+      "conformance::self_config::generated_agent_decision_cases_drive_production_agent_admission")
       "self-config" [Surface.agentFacing]
-  , tagged (followUpCoverage
+  , tagged (consumerCoverage
       "agent_materialization_cases"
       "AgentMaterializationCases"
-      "Verdicts of SelfConfig.materializedAgent over the shared decision inputs: the resolved session configuration (context and inference) or null when the operation materializes nothing (rejected create, profile clear, disable). No Rust consumer is bound yet; the self-config agent management owner must replay these rows through the production resolver instead of keeping a parallel policy.")
+      "conformance::self_config::generated_agent_materialization_cases_drive_production_agent_materialization")
       "self-config" [Surface.agentFacing]
-  , tagged (followUpCoverage
+  , tagged (consumerCoverage
       "sibling_tools_cases"
       "SiblingToolsCases"
-      "Model-executed omission, narrowing, shared-context, shared-tools, protected and foreign-owner verdicts for the scoped sibling-tools operation. No Rust consumer is bound yet; the focused configurator must replay these rows through the existing Tools self-config write.")
+      "conformance::self_config::generated_sibling_tools_cases_drive_production_tools_selection")
       "self-config" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
       "session_recovery_cases"
@@ -1236,9 +1236,14 @@ def caseCoverage : List CoverageEntry :=
       "agent::loop_stream::tests::generated_repeated_tool_failure_cases_drive_owned_loop")
       "completion-retry" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "self_config_selection_cases"
+      "SelfConfigSelectionCases"
+      "conformance::self_config::generated_self_config_selection_cases_drive_production_tools_selection")
+      "self-config" [Surface.agentFacing]
+  , tagged (consumerCoverage
       "plugin_resource_cases"
       "PluginModelSlotCases"
-      "pack::tests::generated_plugin_model_slots_require_optional_behavior_free_declarations")
+      "pack::tests::generated_plugin_model_slots_require_optional_agent_free_declarations")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
       "plugin_resource_cases"

@@ -632,21 +632,39 @@ theorem agent_decision_cases_regressions :
 
 /-! ## Materialization through the admission owner -/
 
-/-- One node owning an enabled `worker` Agent with no context and the `fast`
-profile on an enabled backend, so canonical resolution succeeds for `worker`. -/
-def workerCandidate : Configuration.Registry :=
+/-- The documents of one candidate registry under a single owning node. Lean
+builds the `Registry` from this list form and the emitter serializes the same
+lists, so a consumer constructs its documents from the emitted inputs. -/
+structure CandidateFixture where
+  nodeDid : String
+  agents : List (String × Configuration.Agent)
+  contexts : List (String × Configuration.Context)
+  profiles : List (String × Configuration.SelectedModel)
+  backends : List (String × Configuration.Backend)
+
+def CandidateFixture.registry (f : CandidateFixture) : Configuration.Registry :=
   { tasks := fun _ _ => none
   , agents := fun scope id =>
-      if scope = "node" ∧ id = "worker" then
-        some ⟨"node", { contextId := none, profileId := "fast", enabled := true }⟩
-      else none
-  , contexts := fun _ _ => none
+      if scope = f.nodeDid then (f.agents.lookup id).map (⟨f.nodeDid, ·⟩) else none
+  , contexts := fun scope id =>
+      if scope = f.nodeDid then (f.contexts.lookup id).map (⟨f.nodeDid, ·⟩) else none
   , profiles := fun scope id =>
-      if scope = "node" ∧ id = "fast" then
-        some ⟨"node", { backendId := "local", model := "m", effort := none }⟩
-      else none
+      if scope = f.nodeDid then (f.profiles.lookup id).map (⟨f.nodeDid, ·⟩) else none
   , backends := fun scope id =>
-      if scope = "node" ∧ id = "local" then some ⟨"node", { enabled := true }⟩ else none }
+      if scope = f.nodeDid then (f.backends.lookup id).map (⟨f.nodeDid, ·⟩) else none }
+
+/-- One node owning an enabled `worker` Agent with no context and the `fast`
+profile on an enabled backend, so canonical resolution succeeds for `worker`.
+Candidate construction is separate from create-input admission: the create
+input never supplies the candidate's context. -/
+def workerFixture : CandidateFixture :=
+  { nodeDid := "node"
+  , agents := [("worker", { contextId := none, profileId := "fast", enabled := true })]
+  , contexts := []
+  , profiles := [("fast", { backendId := "local", model := "m", effort := none })]
+  , backends := [("local", { enabled := true })] }
+
+def workerCandidate : Configuration.Registry := workerFixture.registry
 
 structure AgentMaterializationRow where
   name : String
@@ -678,7 +696,7 @@ def agentMaterializationScenarios : List AgentMaterializationRow :=
 def agentMaterializationCases : List (String × Option Configuration.ResolvedSessionConfig) :=
   agentMaterializationScenarios.map fun r =>
     (r.name, materializedAgent r.decision.profiles r.decision.catalog r.decision.operation
-      r.decision.target r.decision.makeDefault workerCandidate "node")
+      r.decision.target r.decision.makeDefault workerCandidate workerFixture.nodeDid)
 
 /-- Regression expectations, checked against model execution. The rejected
 fresh create resolves canonically (absent context is permitted) yet
@@ -687,7 +705,7 @@ theorem agent_materialization_cases_regressions :
     (agentMaterializationCases.filter (·.2.isSome)).map (·.1) =
       ["materialize_fresh_create_with_prompt_session",
        "materialize_edit_name_only_session"] ∧
-    (Configuration.resolveAgent workerCandidate "node" "worker").toOption.isSome = true := by
+    (Configuration.resolveAgent workerCandidate workerFixture.nodeDid "worker").toOption.isSome = true := by
   native_decide
 
 end SelfConfig.ContractCases

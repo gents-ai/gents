@@ -83,14 +83,39 @@ private def resolvedSessionJson : Option Configuration.ResolvedSessionConfig →
       ++ "\"effort\":" ++ jsonOptionalString (r.inference.effort.map effortName)
     ++ "}"
 
-/-- Rows are `materializedAgent` over the shared decision inputs; `session` is
-the model's resolved configuration or null when nothing is materialized. -/
+private def candidateFixtureJson (f : CandidateFixture) : String :=
+  "{"
+    ++ "\"node_did\":" ++ jsonString f.nodeDid ++ ","
+    ++ "\"agents\":" ++ jsonArray (f.agents.map fun (id, a) =>
+        "{\"agent_id\":" ++ jsonString id ++ ","
+          ++ "\"context_id\":" ++ jsonOptionalString a.contextId ++ ","
+          ++ "\"inference_profile_id\":" ++ jsonString a.profileId ++ ","
+          ++ "\"enabled\":" ++ agentBool a.enabled ++ "}") ++ ","
+    ++ "\"contexts\":" ++ jsonArray (f.contexts.map fun (id, c) =>
+        "{\"context_id\":" ++ jsonString id ++ ","
+          ++ "\"instructions\":" ++ jsonString c.instructions ++ ","
+          ++ "\"skill_ids\":" ++ jsonStringArray c.skillIds ++ ","
+          ++ "\"tool_names\":" ++ jsonStringArray c.toolNames ++ "}") ++ ","
+    ++ "\"inference_profiles\":" ++ jsonArray (f.profiles.map fun (id, m) =>
+        "{\"profile_id\":" ++ jsonString id ++ ","
+          ++ "\"backend_id\":" ++ jsonString m.backendId ++ ","
+          ++ "\"model_name\":" ++ jsonString m.model ++ ","
+          ++ "\"reasoning_effort\":" ++ jsonOptionalString (m.effort.map effortName) ++ "}") ++ ","
+    ++ "\"inference_backends\":" ++ jsonArray (f.backends.map fun (id, b) =>
+        "{\"backend_id\":" ++ jsonString id ++ ","
+          ++ "\"enabled\":" ++ agentBool b.enabled ++ "}")
+  ++ "}"
+
+/-- Rows are `materializedAgent` over the shared decision inputs and the
+serialized candidate registry; `session` is the model's resolved configuration
+or null when nothing is materialized. -/
 def agentMaterializationCasesJson : String :=
   jsonArray (agentMaterializationScenarios.map fun r =>
     "{" ++ agentDecisionRowFields { r.decision with name := r.name } ++ ","
+      ++ "\"candidate\":" ++ candidateFixtureJson workerFixture ++ ","
       ++ "\"session\":" ++ resolvedSessionJson
         (materializedAgent r.decision.profiles r.decision.catalog r.decision.operation
-          r.decision.target r.decision.makeDefault workerCandidate "node")
+          r.decision.target r.decision.makeDefault workerFixture.registry workerFixture.nodeDid)
     ++ "}")
 
 private def networkName : CommandPolicy.NetworkMode → String
@@ -133,5 +158,35 @@ private def siblingToolsCaseJson (op : SiblingToolsOperation) : String :=
 
 def siblingToolsCasesJson : String :=
   jsonArray (siblingToolsOperations.map siblingToolsCaseJson)
+
+private def optionalBoolJson : Option Bool → String
+  | none => "null"
+  | some b => agentBool b
+
+/-- Tool-group selection and graph presentation verdicts, each derived from
+`selectedToolFlag` and `graphToolPresented` over every input combination. -/
+def selfConfigSelectionCasesJson : String :=
+  let bools := [false, true]
+  let toolFlags := Id.run do
+    let mut rows : List String := []
+    for existing in bools do
+      for requested in [none, some false, some true] do
+        rows := rows ++ ["{\"existing\":" ++ agentBool existing ++ ","
+          ++ "\"requested\":" ++ optionalBoolJson requested ++ ","
+          ++ "\"selected\":" ++ agentBool (selectedToolFlag requested existing) ++ "}"]
+    return rows
+  let presentation := Id.run do
+    let mut rows : List String := []
+    for requested in bools do
+      for selfConfig in bools do
+        for packInstall in bools do
+          rows := rows ++ ["{\"requested\":" ++ agentBool requested ++ ","
+            ++ "\"self_config\":" ++ agentBool selfConfig ++ ","
+            ++ "\"pack_install\":" ++ agentBool packInstall ++ ","
+            ++ "\"presented\":" ++ agentBool (graphToolPresented requested selfConfig packInstall)
+            ++ "}"]
+    return rows
+  "{\"tool_flag_cases\":" ++ jsonArray toolFlags ++ ","
+    ++ "\"graph_presentation_cases\":" ++ jsonArray presentation ++ "}"
 
 end Conformance.Contracts
