@@ -185,7 +185,7 @@ theorem machine_filter_eq (peerDid homeDid : Did) :
           , value := homeDid } ] := by
   simp [scopeFilter, machineTemplate, machineRules, conversationTemplate]
 
-theorem machine_filters_transcript_persona_and_directory (peerDid homeDid : Did) :
+theorem machine_filters_transcript_and_directory (peerDid homeDid : Did) :
     ((scopeFilter machineTemplate.scope [] peerDid homeDid).map
         (fun k => k.collection)).toFinset
       = (transcriptCollections ++
@@ -311,75 +311,75 @@ or use that route belongs to existing DID/ACP admission, outside this selection 
 theorem operator_config_selects_backend :
     "InferenceBackend" ∈ agentConfigTemplate.collections := by decide
 
-/-- Ordinary client, transcript and subagent templates never select credential
+/-- Ordinary client, transcript and agent-target templates never select credential
 documents. Template names do not confer operator authorization. -/
 theorem ordinary_routes_exclude_credentials
     (t : Template) (ht : t ∈ [clientTemplate, conversationTemplate, machineTemplate,
-      clientIndexTemplate, subagentHostTemplate, subagentCoordinatorTemplate])
+      clientIndexTemplate, agentTargetHostTemplate, agentTargetCallerTemplate])
     (c : String) (hc : c ∈ credentialCollections) : c ∉ t.collections := by
   simp only [credentialCollections, List.mem_cons, List.not_mem_nil, or_false] at ht hc
   rcases ht with rfl | rfl | rfl | rfl | rfl | rfl <;>
     rcases hc with rfl | rfl <;> decide
 
-theorem subagentCoordinator_filter_eq (peerDid localDid : Did) :
-    scopeFilter (.perCollection subagentCoordinatorRules) [] peerDid localDid
+theorem agentTargetCaller_filter_eq (peerDid localDid : Did) :
+    scopeFilter (.perCollection agentTargetCallerRules) [] peerDid localDid
       = [ { collection := "AgentRequest", field := "node_did", value := peerDid } ] := by
-  simp [scopeFilter, subagentCoordinatorRules]
+  simp [scopeFilter, agentTargetCallerRules]
 
-theorem subagentHost_filter_eq (peerDid localDid : Did) :
-    scopeFilter (.perCollection subagentHostRules) [] peerDid localDid
+theorem agentTargetHost_filter_eq (peerDid localDid : Did) :
+    scopeFilter (.perCollection agentTargetHostRules) [] peerDid localDid
       = [ { collection := "AgentRequest",    field := "requester_did", value := peerDid }
         , { collection := "AgentSession",    field := "requester_did", value := peerDid }
         , { collection := "AgentOutputSegment", field := "requester_did", value := peerDid }
         , { collection := "AgentMessage",    field := "requester_did", value := peerDid } ] := by
-  simp [scopeFilter, subagentHostRules]
+  simp [scopeFilter, agentTargetHostRules]
 
-theorem subagentHost_filters_requester_lineage (peerDid localDid : Did) :
-    (scopeFilter subagentHostTemplate.scope [] peerDid localDid).all
+theorem agentTargetHost_filters_requester_lineage (peerDid localDid : Did) :
+    (scopeFilter agentTargetHostTemplate.scope [] peerDid localDid).all
       (fun k => k.field = "requester_did" ∧ k.value = peerDid) = true := by
-  simp [scopeFilter, subagentHostTemplate, subagentHostRules]
+  simp [scopeFilter, agentTargetHostTemplate, agentTargetHostRules]
 
 /-- The caller → host leg carries exactly the Peer AgentRequest a remote
 `agent_new` authors on the caller, selected by the target's `node_did`. -/
-theorem subagentCoordinator_carries_exactly_target_request (peerDid localDid : Did) :
-    subagentCoordinatorTemplate.collections = {"AgentRequest"} ∧
-    scopeFilter subagentCoordinatorTemplate.scope [] peerDid localDid
+theorem agentTargetCaller_carries_exactly_target_request (peerDid localDid : Did) :
+    agentTargetCallerTemplate.collections = {"AgentRequest"} ∧
+    scopeFilter agentTargetCallerTemplate.scope [] peerDid localDid
       = [ { collection := "AgentRequest", field := "node_did", value := peerDid } ] := by
   refine ⟨by decide, ?_⟩
-  simp [scopeFilter, subagentCoordinatorTemplate, subagentCoordinatorRules]
+  simp [scopeFilter, agentTargetCallerTemplate, agentTargetCallerRules]
 
 /-- The host → caller leg carries exactly the caused request, its session and
 its transcript, each selected by the caller's `requester_did`. -/
-theorem subagentHost_carries_exactly_caused_transcript (peerDid localDid : Did) :
-    subagentHostTemplate.collections =
+theorem agentTargetHost_carries_exactly_caused_transcript (peerDid localDid : Did) :
+    agentTargetHostTemplate.collections =
       ["AgentRequest", "AgentSession", "AgentOutputSegment", "AgentMessage"].toFinset ∧
-    (scopeFilter subagentHostTemplate.scope [] peerDid localDid).all
+    (scopeFilter agentTargetHostTemplate.scope [] peerDid localDid).all
       (fun k => k.field = "requester_did" ∧ k.value = peerDid) = true := by
-  exact ⟨rfl, subagentHost_filters_requester_lineage peerDid localDid⟩
+  exact ⟨rfl, agentTargetHost_filters_requester_lineage peerDid localDid⟩
 
-theorem subagentCoordinator_filters_declared_collections (peerDid localDid : Did) :
-    ((scopeFilter subagentCoordinatorTemplate.scope [] peerDid localDid).map
+theorem agentTargetCaller_filters_declared_collections (peerDid localDid : Did) :
+    ((scopeFilter agentTargetCallerTemplate.scope [] peerDid localDid).map
         (fun k => k.collection)).toFinset
-      = subagentCoordinatorTemplate.collections := by
-  simp [scopeFilter, subagentCoordinatorTemplate, subagentCoordinatorRules,
-    subagentCoordinatorCollections]
+      = agentTargetCallerTemplate.collections := by
+  simp [scopeFilter, agentTargetCallerTemplate, agentTargetCallerRules,
+    agentTargetCallerCollections]
 
-theorem subagentHost_filters_declared_collections (peerDid localDid : Did) :
-    ((scopeFilter subagentHostTemplate.scope [] peerDid localDid).map
+theorem agentTargetHost_filters_declared_collections (peerDid localDid : Did) :
+    ((scopeFilter agentTargetHostTemplate.scope [] peerDid localDid).map
         (fun k => k.collection)).toFinset
-      = subagentHostTemplate.collections := by
-  simp [scopeFilter, subagentHostTemplate, subagentHostRules,
-    subagentHostCollections]
+      = agentTargetHostTemplate.collections := by
+  simp [scopeFilter, agentTargetHostTemplate, agentTargetHostRules,
+    agentTargetHostCollections]
 
 /-- The host's AgentToolCall rows are host-local execution records: they, tool
-results, compaction and configuration never ride either subagent leg. -/
-theorem subagent_legs_exclude_host_local_execution :
-    "AgentToolCall" ∉ subagentHostTemplate.collections ∧
-    "AgentToolCall" ∉ subagentCoordinatorTemplate.collections ∧
-    "AgentToolResult" ∉ subagentHostTemplate.collections ∧
-    "CompactionEntry" ∉ subagentHostTemplate.collections ∧
-    "Agent" ∉ subagentHostTemplate.collections ∧
-    "InferenceBackend" ∉ subagentHostTemplate.collections := by
+results, compaction and configuration never ride either agent-target leg. -/
+theorem agent_target_legs_exclude_host_local_execution :
+    "AgentToolCall" ∉ agentTargetHostTemplate.collections ∧
+    "AgentToolCall" ∉ agentTargetCallerTemplate.collections ∧
+    "AgentToolResult" ∉ agentTargetHostTemplate.collections ∧
+    "CompactionEntry" ∉ agentTargetHostTemplate.collections ∧
+    "Agent" ∉ agentTargetHostTemplate.collections ∧
+    "InferenceBackend" ∉ agentTargetHostTemplate.collections := by
   decide
 
 /-- Whether the route a template resolves for `peerDid` selects a row of
@@ -389,22 +389,22 @@ def routeSelects (t : Template) (collection field : String)
   (scopeFilter t.scope [] peerDid localDid).any
     (fun k => k.collection == collection && k.field == field && k.value == rowDid)
 
-theorem subagentCoordinator_selects_request_iff_target
+theorem agentTargetCaller_selects_request_iff_target
     (target peerDid localDid : Did) :
-    routeSelects subagentCoordinatorTemplate "AgentRequest" "node_did"
+    routeSelects agentTargetCallerTemplate "AgentRequest" "node_did"
       target peerDid localDid = true ↔ peerDid = target := by
   unfold routeSelects
-  rw [show subagentCoordinatorTemplate.scope = .perCollection subagentCoordinatorRules
-    from rfl, subagentCoordinator_filter_eq]
+  rw [show agentTargetCallerTemplate.scope = .perCollection agentTargetCallerRules
+    from rfl, agentTargetCaller_filter_eq]
   simp
 
-theorem subagentHost_selects_request_iff_requester
+theorem agentTargetHost_selects_request_iff_requester
     (requester peerDid localDid : Did) :
-    routeSelects subagentHostTemplate "AgentRequest" "requester_did"
+    routeSelects agentTargetHostTemplate "AgentRequest" "requester_did"
       requester peerDid localDid = true ↔ peerDid = requester := by
   unfold routeSelects
-  rw [show subagentHostTemplate.scope = .perCollection subagentHostRules
-    from rfl, subagentHost_filter_eq]
+  rw [show agentTargetHostTemplate.scope = .perCollection agentTargetHostRules
+    from rfl, agentTargetHost_filter_eq]
   simp
 
 private theorem wave_selects_one (peers : List Did) (did : Did)
@@ -426,32 +426,32 @@ private theorem wave_selects_one (peers : List Did) (did : Did)
 
 /-- A request wave over distinct peers reaches one host: of a caller's routes
 to its peers, only the route to the request's target `node_did` carries it. -/
-theorem subagentCoordinator_wave_reaches_one_target
+theorem agentTargetCaller_wave_reaches_one_target
     (peers : List Did) (target localDid : Did)
     (hnodup : peers.Nodup) (hmem : target ∈ peers) :
-    (peers.filter (fun p => routeSelects subagentCoordinatorTemplate
+    (peers.filter (fun p => routeSelects agentTargetCallerTemplate
       "AgentRequest" "node_did" target p localDid)).length = 1 :=
   wave_selects_one peers target _
-    (fun p => subagentCoordinator_selects_request_iff_target target p localDid)
+    (fun p => agentTargetCaller_selects_request_iff_target target p localDid)
     hnodup hmem
 
 /-- Of a host's routes to distinct callers, only the route to the caused
 request's `requester_did` returns it. -/
-theorem subagentHost_wave_returns_to_one_requester
+theorem agentTargetHost_wave_returns_to_one_requester
     (peers : List Did) (requester localDid : Did)
     (hnodup : peers.Nodup) (hmem : requester ∈ peers) :
-    (peers.filter (fun p => routeSelects subagentHostTemplate
+    (peers.filter (fun p => routeSelects agentTargetHostTemplate
       "AgentRequest" "requester_did" requester p localDid)).length = 1 :=
   wave_selects_one peers requester _
-    (fun p => subagentHost_selects_request_iff_requester requester p localDid)
+    (fun p => agentTargetHost_selects_request_iff_requester requester p localDid)
     hnodup hmem
 
-theorem subagentCoordinator_in_catalog :
-    resolveTemplate builtinCatalog "subagent-coordinator" = some subagentCoordinatorTemplate := by
+theorem agentTargetCaller_in_catalog :
+    resolveTemplate builtinCatalog "agent-target-caller" = some agentTargetCallerTemplate := by
   decide
 
-theorem subagentHost_in_catalog :
-    resolveTemplate builtinCatalog "subagent-host" = some subagentHostTemplate := by
+theorem agentTargetHost_in_catalog :
+    resolveTemplate builtinCatalog "agent-target-host" = some agentTargetHostTemplate := by
   decide
 
 theorem machine_in_catalog :
@@ -511,7 +511,7 @@ theorem clientIndex_covers_exactly_literal_index_collections :
       ["AgentSession", "MailboxItem"].toFinset := by
   decide
 
-theorem subagent_filter_values_local_or_peer
+theorem agent_target_filter_values_local_or_peer
     (rules : List CollectionRule) (peerDid localDid : Did)
     (k : CollectionScopeFilter)
     (hk : k ∈ scopeFilter (.perCollection rules) [] peerDid localDid) :

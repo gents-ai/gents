@@ -93,20 +93,19 @@ def keepsControl (decode : Doc → Option Control) (stored candidate : Doc) : Bo
   | _, _ => false
 
 /-- The invoker's reachability, projected from its own agent document:
-`enabled` (absent is true) and whether its tags carry the Setup tag. -/
+`enabled` (absent is true) and whether its tags carry the Engineer tag. -/
 structure Reach where
   enabled : Bool
-  setupTag : Bool
+  engineerTag : Bool
   deriving DecidableEq, Repr
 
 /-- The agent half of no lockout: the invoker stays enabled and keeps the
-Setup tag it had. The tag is how the desktop reaches the Engineer and how
-persona requests refuse editing or disabling it
-(`PersonaRequest.protected_edit_or_disable_rejected`); dropping it first would
+Engineer tag it had. The tag is how the desktop reaches the Engineer and what
+`SelfConfig.agentDecision` protects from edit or disable; dropping it first would
 make self-disable a two-step edit. Other tags and fields stay editable. -/
 def keepsReach (decode : Doc → Option Reach) (stored candidate : Doc) : Bool :=
   match decode stored, decode candidate with
-  | some old, some new => new.enabled && retained old.setupTag new.setupTag
+  | some old, some new => new.enabled && retained old.engineerTag new.engineerTag
   | _, _ => false
 
 end SelfConfig
