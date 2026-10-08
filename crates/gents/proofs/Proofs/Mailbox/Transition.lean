@@ -41,9 +41,9 @@ def applyResolution? (item : Item) : ResolutionAction → Option Item
 
 def stamped (request : CreateRequest) : Bool :=
   request.identity.requesterDid = request.context.requesterDid &&
-    request.identity.agentDid = request.context.agentDid &&
+    request.identity.nodeDid = request.context.nodeDid &&
     request.identity.requesterDid != "" &&
-    request.identity.agentDid != "" &&
+    request.identity.nodeDid != "" &&
     request.identity.itemKey != "" &&
     request.identity.sourceId != "" &&
     request.docId != ""
@@ -70,7 +70,7 @@ def storedCreateReceipt? (state : RegistryState) (request : CreateRequest) :
   match post.rows.find? (fun row =>
       row.isOpen &&
       row.envelope.identity.ownerPrefix == request.identity.ownerPrefix &&
-      row.envelope.identity.agentDid == request.identity.agentDid &&
+      row.envelope.identity.nodeDid == request.identity.nodeDid &&
       row.envelope.handling == request.handling &&
       row.envelope.sessionId == request.sessionId &&
       row.envelope.requestId == request.requestId &&

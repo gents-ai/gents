@@ -8,7 +8,7 @@ structure ReplyEvidence where
   requestDocId : String
   sourceDocId : String
   requesterDid : String
-  agentDid : String
+  nodeDid : String
   agentId : String
   sessionId : String
   authenticated : Bool
@@ -18,7 +18,7 @@ structure ReplyEvidence where
 structure ReplyEnvelope where
   docId : String
   handling : Handling
-  targetAgentDid : String
+  targetNodeDid : String
   agentId : String
   sessionId : Option String
   deadlineValid : Bool
@@ -29,10 +29,10 @@ def replyMatches (item : Item) (envelope : ReplyEnvelope) (reply : ReplyEvidence
   (envelope.deadlineValid = true ∨
     (item.status = .acted ∧ item.resolvedDocId = reply.requestDocId)) ∧
   reply.requestDocId ≠ "" ∧ reply.requesterDid ≠ "" ∧
-  reply.requesterDid = item.identity.requesterDid ∧ reply.agentDid = envelope.targetAgentDid ∧
+  reply.requesterDid = item.identity.requesterDid ∧ reply.nodeDid = envelope.targetNodeDid ∧
   envelope.agentId ≠ "" ∧ reply.agentId = envelope.agentId ∧
   (envelope.sessionId = none ∨ envelope.sessionId = some reply.sessionId) ∧
-  envelope.docId ≠ "" ∧ reply.sourceDocId = envelope.docId ∧ reply.agentDid ≠ ""
+  envelope.docId ≠ "" ∧ reply.sourceDocId = envelope.docId ∧ reply.nodeDid ≠ ""
 
 instance (item : Item) (envelope : ReplyEnvelope) (reply : ReplyEvidence) :
     Decidable (replyMatches item envelope reply) := by

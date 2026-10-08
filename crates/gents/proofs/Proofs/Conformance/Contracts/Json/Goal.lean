@@ -323,37 +323,37 @@ def goalCreateCasesJson : String := jsonArray (goalCreateCases.map goalCreateCas
 
 structure TaskGoalPublicationCase where
   name : String
-  agentDid : String
+  nodeDid : String
   taskId : String
   fireKey : String
   declaration : GoalAutomation.TaskGoalDeclaration
 
 def taskGoalPublicationCases : List TaskGoalPublicationCase :=
-  let agentDid := "did:key:z-feature-owner"
+  let nodeDid := "did:key:z-feature-owner"
   let taskId := "feature-implementation"
   let fireKey := "schedule:2026-09-02T12:00:00Z"
-  [ { name := "absent_goal_uses_ordinary_publication", agentDid, taskId, fireKey
+  [ { name := "absent_goal_uses_ordinary_publication", nodeDid, taskId, fireKey
       declaration := ⟨none, none⟩ }
-  , { name := "objective_uses_atomic_goal_publication", agentDid, taskId, fireKey
+  , { name := "objective_uses_atomic_goal_publication", nodeDid, taskId, fireKey
       declaration := ⟨some "implement feature", none⟩ }
-  , { name := "positive_budget_uses_atomic_goal_publication", agentDid, taskId, fireKey
+  , { name := "positive_budget_uses_atomic_goal_publication", nodeDid, taskId, fireKey
       declaration := ⟨some "implement feature", some 1000⟩ }
-  , { name := "maximum_budget_uses_atomic_goal_publication", agentDid, taskId, fireKey
+  , { name := "maximum_budget_uses_atomic_goal_publication", nodeDid, taskId, fireKey
       declaration := ⟨some "implement feature", some GoalAutomation.maxTokenBudget⟩ }
   , { name := "same_task_fire_is_scoped_to_other_principal",
-      agentDid := "did:key:z-other-feature-owner", taskId, fireKey
+      nodeDid := "did:key:z-other-feature-owner", taskId, fireKey
       declaration := ⟨some "implement feature", none⟩ }
-  , { name := "blank_objective_cannot_publish", agentDid, taskId, fireKey
+  , { name := "blank_objective_cannot_publish", nodeDid, taskId, fireKey
       declaration := ⟨some "", none⟩ }
-  , { name := "whitespace_objective_cannot_publish", agentDid, taskId, fireKey
+  , { name := "whitespace_objective_cannot_publish", nodeDid, taskId, fireKey
       declaration := ⟨some "   ", none⟩ }
-  , { name := "budget_without_objective_cannot_publish", agentDid, taskId, fireKey
+  , { name := "budget_without_objective_cannot_publish", nodeDid, taskId, fireKey
       declaration := ⟨none, some 1000⟩ }
-  , { name := "zero_budget_cannot_publish", agentDid, taskId, fireKey
+  , { name := "zero_budget_cannot_publish", nodeDid, taskId, fireKey
       declaration := ⟨some "implement feature", some 0⟩ }
-  , { name := "negative_budget_cannot_publish", agentDid, taskId, fireKey
+  , { name := "negative_budget_cannot_publish", nodeDid, taskId, fireKey
       declaration := ⟨some "implement feature", some (-1)⟩ }
-  , { name := "overflow_budget_cannot_publish", agentDid, taskId, fireKey
+  , { name := "overflow_budget_cannot_publish", nodeDid, taskId, fireKey
       declaration := ⟨some "implement feature",
         some (GoalAutomation.maxTokenBudget + 1)⟩ }
   ]
@@ -373,10 +373,10 @@ def goalOptionalIntJson : Option Int → String
 
 def taskGoalPublicationCaseJson (w : TaskGoalPublicationCase) : String :=
   let publication := GoalAutomation.decideTaskPublication
-    w.declaration w.agentDid w.taskId w.fireKey
+    w.declaration w.nodeDid w.taskId w.fireKey
   "{"
     ++ "\"name\":" ++ jsonString w.name ++ ","
-    ++ "\"agent_did\":" ++ jsonString w.agentDid ++ ","
+    ++ "\"node_did\":" ++ jsonString w.nodeDid ++ ","
     ++ "\"task_id\":" ++ jsonString w.taskId ++ ","
     ++ "\"fire_key\":" ++ jsonString w.fireKey ++ ","
     ++ "\"goal_objective\":" ++ goalOptionalStringJson w.declaration.goalObjective ++ ","
@@ -397,7 +397,7 @@ def taskGoalPublicationCasesJson : String :=
 
 structure TaskGoalRecoveryCase where
   name : String
-  agentDid : String
+  nodeDid : String
   agentId : String
   taskId : String
   fireKey : String
@@ -406,37 +406,37 @@ structure TaskGoalRecoveryCase where
   creationClaimPresent : Bool
 
 def taskGoalRecoveryCases : List TaskGoalRecoveryCase :=
-  let agentDid := "did:key:z-feature-owner"
+  let nodeDid := "did:key:z-feature-owner"
   let agentId := "feature-engineer"
   let taskId := "feature-implementation"
   let fireKey := "schedule:2026-09-02T12:00:00Z"
   let expected := GoalAutomation.expectedTaskGoalRequestBinding
-    agentDid agentId taskId fireKey
-  [ { name := "request_absent_has_nothing_to_checkpoint", agentDid, agentId, taskId, fireKey
+    nodeDid agentId taskId fireKey
+  [ { name := "request_absent_has_nothing_to_checkpoint", nodeDid, agentId, taskId, fireKey
       request := none, durableGoalPresent := false, creationClaimPresent := false }
-  , { name := "matching_request_with_metadata_recovers", agentDid, agentId, taskId, fireKey
+  , { name := "matching_request_with_metadata_recovers", nodeDid, agentId, taskId, fireKey
       request := some expected, durableGoalPresent := true, creationClaimPresent := true }
-  , { name := "matching_request_without_goal_recovers", agentDid, agentId, taskId, fireKey
+  , { name := "matching_request_without_goal_recovers", nodeDid, agentId, taskId, fireKey
       request := some expected, durableGoalPresent := false, creationClaimPresent := true }
-  , { name := "matching_request_without_claim_recovers", agentDid, agentId, taskId, fireKey
+  , { name := "matching_request_without_claim_recovers", nodeDid, agentId, taskId, fireKey
       request := some expected, durableGoalPresent := true, creationClaimPresent := false }
   , { name := "matching_request_without_goal_or_claim_recovers",
-      agentDid, agentId, taskId, fireKey
+      nodeDid, agentId, taskId, fireKey
       request := some expected, durableGoalPresent := false, creationClaimPresent := false }
   , { name := "mismatched_principal_conflicts",
-      agentDid, agentId, taskId, fireKey
-      request := some { expected with agentDid := "did:key:z-other-owner" }
+      nodeDid, agentId, taskId, fireKey
+      request := some { expected with nodeDid := "did:key:z-other-owner" }
       durableGoalPresent := false, creationClaimPresent := false }
-  , { name := "mismatched_behavior_conflicts", agentDid, agentId, taskId, fireKey
+  , { name := "mismatched_behavior_conflicts", nodeDid, agentId, taskId, fireKey
       request := some { expected with agentId := "other-behavior" }
       durableGoalPresent := false, creationClaimPresent := false }
-  , { name := "mismatched_session_conflicts", agentDid, agentId, taskId, fireKey
+  , { name := "mismatched_session_conflicts", nodeDid, agentId, taskId, fireKey
       request := some { expected with sessionId := "other-session" }
       durableGoalPresent := false, creationClaimPresent := false }
-  , { name := "mismatched_request_id_conflicts", agentDid, agentId, taskId, fireKey
+  , { name := "mismatched_request_id_conflicts", nodeDid, agentId, taskId, fireKey
       request := some { expected with requestId := "other-request" }
       durableGoalPresent := false, creationClaimPresent := false }
-  , { name := "mismatched_retry_key_conflicts", agentDid, agentId, taskId, fireKey
+  , { name := "mismatched_retry_key_conflicts", nodeDid, agentId, taskId, fireKey
       request := some { expected with retryKey := "other-retry" }
       durableGoalPresent := false, creationClaimPresent := false }
   ]
@@ -448,19 +448,19 @@ def taskFireRecoveryDispositionName : GoalAutomation.TaskFireRecoveryDisposition
 
 def taskGoalRecoveryCaseJson (w : TaskGoalRecoveryCase) : String :=
   let expected := GoalAutomation.expectedTaskGoalRequestBinding
-    w.agentDid w.agentId w.taskId w.fireKey
+    w.nodeDid w.agentId w.taskId w.fireKey
   let decision := GoalAutomation.decideTaskFireRecovery expected
     ⟨w.request, w.durableGoalPresent, w.creationClaimPresent⟩
   "{"
     ++ "\"name\":" ++ jsonString w.name ++ ","
-    ++ "\"agent_did\":" ++ jsonString w.agentDid ++ ","
-    ++ "\"behavior_id\":" ++ jsonString w.agentId ++ ","
+    ++ "\"node_did\":" ++ jsonString w.nodeDid ++ ","
+    ++ "\"agent_id\":" ++ jsonString w.agentId ++ ","
     ++ "\"task_id\":" ++ jsonString w.taskId ++ ","
     ++ "\"fire_key\":" ++ jsonString w.fireKey ++ ","
     ++ "\"request_present\":" ++ boolString w.request.isSome ++ ","
     ++ "\"request_binding_matches\":" ++ boolString (w.request == some expected) ++ ","
-    ++ "\"observed_agent_did\":" ++ goalOptionalStringJson (w.request.map (·.agentDid)) ++ ","
-    ++ "\"observed_behavior_id\":" ++ goalOptionalStringJson (w.request.map (·.agentId)) ++ ","
+    ++ "\"observed_node_did\":" ++ goalOptionalStringJson (w.request.map (·.nodeDid)) ++ ","
+    ++ "\"observed_agent_id\":" ++ goalOptionalStringJson (w.request.map (·.agentId)) ++ ","
     ++ "\"observed_session_id\":" ++ goalOptionalStringJson (w.request.map (·.sessionId)) ++ ","
     ++ "\"observed_request_id\":" ++ goalOptionalStringJson (w.request.map (·.requestId)) ++ ","
     ++ "\"observed_retry_key\":" ++ goalOptionalStringJson (w.request.map (·.retryKey)) ++ ","
