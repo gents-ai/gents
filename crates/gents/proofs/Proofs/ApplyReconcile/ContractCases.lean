@@ -26,33 +26,33 @@ private def row (c : Collection) (id : String) (refs : List DocRef := [])
   (⟨c, id, owner⟩, { content := id, refs := refs })
 
 private def chain : List (DocRef × DesiredFields) :=
-  [row .agentBehavior "behavior" [⟨.agentContext, "context", "did:owner"⟩],
+  [row .agent "behavior" [⟨.agentContext, "context", "did:owner"⟩],
    row .agentContext "context" [⟨.tools, "tools", "did:owner"⟩], row .tools "tools"]
 
 private def cycle : List (DocRef × DesiredFields) :=
-  [row .agentBehavior "behavior" [⟨.agentContext, "context", "did:owner"⟩],
+  [row .agent "behavior" [⟨.agentContext, "context", "did:owner"⟩],
    row .agentContext "context" [⟨.tools, "tools", "did:owner"⟩],
-   row .tools "tools" [⟨.subagentTarget, "target", "did:owner"⟩],
-   row .subagentTarget "target" [⟨.agentBehavior, "behavior", "did:owner"⟩]]
+   row .tools "tools" [⟨.agentTarget, "target", "did:owner"⟩],
+   row .agentTarget "target" [⟨.agent, "behavior", "did:owner"⟩]]
 
 private def missing : List (DocRef × DesiredFields) :=
-  [row .agentBehavior "behavior" [⟨.agentContext, "absent", "did:owner"⟩]]
+  [row .agent "behavior" [⟨.agentContext, "absent", "did:owner"⟩]]
 
 private def foreign : List (DocRef × DesiredFields) :=
-  [row .agentBehavior "behavior" [⟨.agentContext, "foreign", "did:other"⟩],
+  [row .agent "behavior" [⟨.agentContext, "foreign", "did:other"⟩],
    row .agentContext "foreign" [] "did:other"]
 
 private def independentOwners : List (DocRef × DesiredFields) :=
   [row .tools "mine", row .tools "theirs" [] "did:other"]
 
 private def sameLabels : List (DocRef × DesiredFields) :=
-  [row .agentBehavior "coding" [⟨.agentContext, "context", "did:owner"⟩],
-   row .agentContext "context", row .agentBehavior "coding"
+  [row .agent "coding" [⟨.agentContext, "context", "did:owner"⟩],
+   row .agentContext "context", row .agent "coding"
      [⟨.agentContext, "context", "did:other"⟩] "did:other",
    row .agentContext "context" [] "did:other"]
 
 private def foreignShadow : List (DocRef × DesiredFields) :=
-  [row .agentBehavior "coding" [⟨.agentContext, "context", "did:owner"⟩],
+  [row .agent "coding" [⟨.agentContext, "context", "did:owner"⟩],
    row .agentContext "context" [] "did:other"]
 
 private def scenarios : List (String × List (DocRef × DesiredFields)) :=
