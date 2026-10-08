@@ -89,6 +89,8 @@ export const sessionSnapshot = (
   retryEligibility: { eligible: false, denialReason: null },
   latestRequestOutcome: null,
   pendingTurn: null,
+  queuedTurns: [],
+  foldedInputs: [],
   context: sessionContext(),
   timelineItems: [],
   ...session,

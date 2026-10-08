@@ -1,11 +1,13 @@
 import { useState } from "react";
 import { Bot, ChevronDown, Clock, Play, Timer, Workflow, Zap } from "lucide-react";
 import type {
-  DeploymentView,
   PendingTurnView,
   RenderedTimelineItem,
   RequestOriginView,
 } from "@source-inc/gents-desktop-client";
+import type { NodeView } from "../../hooks/fleetStore";
+import { useSelectedNode } from "@/hooks/useClient";
+import { useFleet } from "../hooks/useFleet";
 
 type Reconstruction = Extract<
   RenderedTimelineItem,
@@ -21,17 +23,16 @@ import { UserMessage } from "@gents/ui/conversation";
 import { cn } from "@gents/ui/lib/utils";
 import { href } from "@/lib/router";
 
-/** A folded request was consumed when its entry was published, so it has
-    been delivered; a selected but unpublished one is still `pending`. */
+/** A transcript input that ended without being sent. A folded request was
+    consumed when its entry was published, so it was delivered; an input
+    still waiting is the turn being started or is listed with the queue, and
+    carries no chip, so its row keeps its height when it is saved. */
 export function pendingInputState(
   lifecycleState: string | null | undefined,
   foldedIntoRequestId?: string | null,
 ): string | null {
   if (foldedIntoRequestId) return null;
   switch (lifecycleState) {
-    case "pending":
-    case "workspaceBindingPending":
-      return "Queued";
     case "interrupted":
       return "Not sent · interrupted";
     case "failed":
@@ -43,29 +44,27 @@ export function pendingInputState(
   }
 }
 
-function triggerName(triggerId: string, deployment: DeploymentView | null) {
-  const trigger = deployment?.triggers?.find((t) => t.config.trigger_id === triggerId);
-  const task = deployment?.tasks?.find((t) => t.taskId === trigger?.config.task_id);
+function triggerName(triggerId: string, node: NodeView | null) {
+  const trigger = node?.triggers?.find((t) => t.config.trigger_id === triggerId);
+  const task = node?.tasks?.find((t) => t.taskId === trigger?.config.task_id);
   return trigger?.config.display_name ?? task?.name ?? triggerId;
 }
 
 export function originLabel(
   origin: RequestOriginView,
-  deployment: DeploymentView | null,
+  node: NodeView | null,
+  senderTitle: string | null,
 ): string {
   switch (origin.kind) {
     case "sessionMessage": {
-      const session = deployment?.sessions?.find(
-        (s) => s.sessionId === origin.senderSessionId,
-      );
-      if (session?.title) return `Message from ${session.title}`;
+      if (senderTitle) return `Message from ${senderTitle}`;
       if (origin.senderSessionId) return "Message from another session";
-      return origin.senderAgentDid === deployment?.agentDid
+      return origin.senderAgentDid === node?.agentDid
         ? "Message from another session"
         : "Message from another agent";
     }
     case "trigger": {
-      const name = triggerName(origin.triggerId, deployment);
+      const name = triggerName(origin.triggerId, node);
       return origin.triggerKind === "schedule"
         ? `Schedule · ${name}`
         : origin.triggerKind === "event"
@@ -128,17 +127,21 @@ export function AutomatedInput({
   content,
   reconstruction,
   state = null,
-  deployment,
 }: {
   origin: RequestOriginView;
   content: string | null | undefined;
   reconstruction?: Reconstruction;
   state?: string | null;
-  deployment: DeploymentView | null;
 }) {
   const unavailable = unavailableReason(reconstruction);
   const [open, setOpen] = useState(false);
-  const label = originLabel(origin, deployment);
+  const node = useSelectedNode();
+  const senderSessionId =
+    origin.kind === "sessionMessage" ? origin.senderSessionId : null;
+  const senderTitle = useFleet((fleet) =>
+    senderSessionId ? (fleet.bySessionId[senderSessionId]?.title ?? null) : null,
+  );
+  const label = originLabel(origin, node, senderTitle);
   const preview = firstLine(content);
   return (
     <Collapsible
@@ -150,7 +153,7 @@ export function AutomatedInput({
       <div className="flex min-w-0 items-center gap-1.5">
         <CollapsibleTrigger
           className="-mx-2 -my-1 flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-lg px-2 py-1 text-left transition-colors hover:bg-accent/30 hover:text-foreground"
-          aria-label={`${label}: ${open ? "hide" : "show"} the text the agent received`}
+          aria-label={`${label}: ${open ? "hide" : "show"} its published input`}
         >
           <OriginIcon origin={origin} />
           <span className="shrink-0 font-medium text-foreground/80">{label}</span>
@@ -222,13 +225,7 @@ export function UserInputWithState({
   );
 }
 
-export function QueuedInputs({
-  queued,
-  deployment,
-}: {
-  queued: PendingTurnView[];
-  deployment: DeploymentView | null;
-}) {
+export function QueuedInputs({ queued }: { queued: PendingTurnView[] }) {
   if (queued.length === 0) return null;
   return (
     <div
@@ -243,7 +240,6 @@ export function QueuedInputs({
               origin={turn.origin}
               content={turn.content}
               state="Queued"
-              deployment={deployment}
             />
           ) : (
             <UserInputWithState content={turn.content} state="Queued" />

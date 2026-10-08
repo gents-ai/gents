@@ -321,3 +321,38 @@ describe("the rows drawn for sent messages", () => {
     expect(withSentTurns([person], local, "other")).toEqual([person]);
   });
 });
+
+describe("withSentTurns with folded messages", () => {
+  const entry = (itemKey: string, input: string, content: string) =>
+    ({
+      kind: "userMessage",
+      itemKey,
+      requestId: "doc-head",
+      inputRequestId: input,
+      sequence: null,
+      content,
+      timestamp: null,
+      reconstruction: { state: "ready" },
+    }) as RenderedTimelineItem;
+
+  it("draws each folded entry of a turn and the sent copy once", () => {
+    const items = [
+      entry("authored:doc-head:prompt", "head", "head text"),
+      entry("authored:doc-head:folded:doc-first", "first", "first text"),
+      entry("authored:doc-head:folded:doc-second", "second", "second text"),
+    ];
+    const local = {
+      sessionId: "s",
+      requestId: "second",
+      content: "second text",
+      selectedSkillIds: [],
+      lifecycleState: "pending",
+      createdAt: null,
+    };
+    expect(withSentTurns(items, local, "s").map((item) => item.itemKey)).toEqual([
+      "authored:doc-head:prompt",
+      "authored:doc-head:folded:doc-first",
+      "authored:doc-head:folded:doc-second",
+    ]);
+  });
+});

@@ -24,9 +24,9 @@ export type SessionFacts = {
   toolsRevision: number;
   /** every tool call, in transcript order; the same array until a tool changes */
   tools: readonly RenderedToolCallView[];
-  /** the request ids on the transcript's user rows, as the bridge names
-      them: a pending turn's is the request's id, a saved message's the
-      request's document id */
+  /** the request ids on the transcript's input rows: a pending turn's
+      request id, and a saved or automated entry's input request id
+      (`inputRequestId`), falling back to its document id */
   userRequestIds: ReadonlySet<string>;
 };
 
@@ -135,9 +135,13 @@ function factsOf(
   if (rowsSame) return facts;
   const userRequestIds = new Set(
     after.flatMap((item) =>
-      (item.kind === "userMessage" || item.kind === "pendingUserTurn") && item.requestId
-        ? [item.requestId]
-        : [],
+      item.kind === "userMessage" || item.kind === "automatedInput"
+        ? [item.inputRequestId, item.requestId].filter((id): id is string =>
+            Boolean(id),
+          )
+        : item.kind === "pendingUserTurn" && item.requestId
+          ? [item.requestId]
+          : [],
     ),
   );
   return {
@@ -152,12 +156,12 @@ function factsOf(
 
 /**
  * Whether the bridge holds a request the app sent, by the request's id (what
- * a send returns): once it does, the transcript has a row for it, its
- * pending turn or its saved message. A saved message carries the request's
- * document id instead, so the request is known by the session's latest
- * request, which names it by its id; and should no read happen to show it as
- * the latest, by the latest having moved on from `latestWhenSent`, the one
- * the session showed when the request was sent.
+ * a send returns): once it does, the transcript has a row for it (its pending
+ * turn, or its saved or folded entry by `inputRequestId`), the session lists
+ * it as queued behind the running turn or as folded into a claimed turn, or
+ * it is the session's latest request; and should no read happen to show any
+ * of these, the latest has moved on from `latestWhenSent`, the one the
+ * session showed when the request was sent.
  */
 export function holdsRequest(
   state: SessionState,
@@ -169,6 +173,8 @@ export function holdsRequest(
   return (
     latest === sent.requestId ||
     state.facts.userRequestIds.has(sent.requestId) ||
+    session.queuedTurns.some((turn) => turn.requestId === sent.requestId) ||
+    session.foldedInputs.some((folded) => folded.requestId === sent.requestId) ||
     (latest !== null && latest !== sent.latestWhenSent)
   );
 }
@@ -184,6 +190,8 @@ export type SessionHeader = Pick<
   | "turnState"
   | "latestRequestId"
   | "pendingTurn"
+  | "queuedTurns"
+  | "foldedInputs"
   | "hydration"
 >;
 
@@ -196,6 +204,8 @@ export function headerOf(session: DesktopSessionSnapshot | null): SessionHeader 
     turnState: session.turnState,
     latestRequestId: session.latestRequestId,
     pendingTurn: session.pendingTurn,
+    queuedTurns: session.queuedTurns,
+    foldedInputs: session.foldedInputs,
     hydration: session.hydration,
   };
 }

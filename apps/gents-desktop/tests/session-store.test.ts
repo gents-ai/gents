@@ -73,11 +73,18 @@ describe("whether the bridge holds a sent request", () => {
       itemKey: `pending-${requestId}`,
       requestId,
     }) as RenderedTimelineItem;
-  const read = (latestRequestId: string | null, items: RenderedTimelineItem[]) =>
+  const read = (
+    latestRequestId: string | null,
+    items: RenderedTimelineItem[],
+    lists: Partial<Pick<DesktopSessionSnapshot, "queuedTurns" | "foldedInputs">> = {},
+  ) =>
     createSessionStore({
       sessionId: "s",
       latestRequestId,
       timelineItems: items,
+      queuedTurns: [],
+      foldedInputs: [],
+      ...lists,
     } as unknown as DesktopSessionSnapshot).getState();
   const sent = { sessionId: "s", requestId: "r2", latestWhenSent: "r1" };
 
@@ -95,6 +102,34 @@ describe("whether the bridge holds a sent request", () => {
 
   it("once the latest request has moved past the one there when it was sent", () => {
     expect(holdsRequest(read("r3", [user("doc-r2")]), sent)).toBe(true);
+  });
+
+  it("once it is queued behind the running turn, which stays the latest", () => {
+    const queued = { requestId: "r2" } as DesktopSessionSnapshot["queuedTurns"][number];
+    expect(
+      holdsRequest(read("r1", [user("doc-r1")], { queuedTurns: [queued] }), sent),
+    ).toBe(true);
+  });
+
+  it("once it was folded into the running turn", () => {
+    expect(
+      holdsRequest(
+        read("r1", [user("doc-r1")], {
+          foldedInputs: [{ requestId: "r2", foldedIntoRequestId: "r1" }],
+        }),
+        sent,
+      ),
+    ).toBe(true);
+  });
+
+  it("once its folded entry is in the transcript under the request that answered it", () => {
+    const folded = {
+      kind: "userMessage",
+      itemKey: "authored:doc-r1:folded:doc-r2",
+      requestId: "doc-r1",
+      inputRequestId: "r2",
+    } as RenderedTimelineItem;
+    expect(holdsRequest(read("r1", [user("doc-r1"), folded]), sent)).toBe(true);
   });
 
   it("never in another session", () => {

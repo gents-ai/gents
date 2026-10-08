@@ -430,6 +430,7 @@ export function SessionScreen() {
 
   /* Local text plus the canonical shell admission decision. */
   const status = presentedComposerSendStatus(draft, sendStatus);
+  const queueing = status.kind === "queue";
 
   /* Until the session is here, nothing of its screen is. Drawn without it,
      the screen assembled under the reader's eye — chrome, then a title
@@ -649,10 +650,14 @@ export function SessionScreen() {
                     leading={
                       <ChatFolderPicker folder={chatFolder} onChange={setChatFolder} />
                     }
-                    sending={sending || inFlight}
+                    sending={sending || (inFlight && !queueing)}
                     onStop={inFlight && !stopping ? stop : undefined}
                     placeholder={
-                      inFlight ? "Ask anything" : placeholderFor(status, "Ask anything")
+                      inFlight
+                        ? sendStatus.kind === "queue"
+                          ? "Add a message; it waits for this turn"
+                          : "Ask anything"
+                        : placeholderFor(status, "Ask anything")
                     }
                   />
                 </div>

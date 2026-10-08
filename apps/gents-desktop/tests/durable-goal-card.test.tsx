@@ -19,6 +19,8 @@ describe("durable goal transcript card", () => {
       retryEligibility: { eligible: false, denialReason: null },
       latestRequestOutcome: null,
       pendingTurn: null,
+      queuedTurns: [],
+      foldedInputs: [],
       context: sessionContext(),
       timelineItems: [],
       goal: {
@@ -65,6 +67,8 @@ describe("durable goal transcript card", () => {
       latestRequestId: "request-1",
       latestRequestOutcome: null,
       pendingTurn: null,
+      queuedTurns: [],
+      foldedInputs: [],
       timelineItems: [],
       goal: {
         goalId: "goal-partial",

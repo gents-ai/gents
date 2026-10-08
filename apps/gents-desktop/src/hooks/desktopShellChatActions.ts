@@ -63,7 +63,7 @@ export function createDesktopShellChatActions({
 
     const projection = project();
     const status = projection.shellProjection.nonEmptyContentSendStatus;
-    if (status.kind !== "ready") {
+    if (status.kind === "disabled") {
       reportFailure(status.hint);
       return null;
     }
@@ -106,6 +106,8 @@ export function createDesktopShellChatActions({
         content,
         selectedSkillIds: [],
         lifecycleState: "pending",
+        foldedIntoRequestId: null,
+        origin: null,
         createdAt: new Date().toISOString(),
       });
       chat.awaitObservation(stores.chat, {

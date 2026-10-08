@@ -246,10 +246,14 @@ export function drawKeys(
   return next;
 }
 
+/* a saved message names the request whose input it is (`inputRequestId`):
+   a folded message is published under the request that answered it */
 const requestOf = (item: RenderedTimelineItem) =>
-  (item.kind === "userMessage" || item.kind === "pendingUserTurn") && item.requestId
-    ? item.requestId
-    : null;
+  item.kind === "userMessage"
+    ? (item.inputRequestId ?? item.requestId ?? null)
+    : item.kind === "pendingUserTurn"
+      ? item.requestId
+      : null;
 
 export const drawKey = (keys: DrawKeys, item: RenderedTimelineItem): string => {
   const request = requestOf(item);
@@ -297,6 +301,8 @@ export function withSentTurns(
             content: local.content,
             selectedSkillIds: local.selectedSkillIds,
             lifecycleState: local.lifecycleState,
+            foldedIntoRequestId: null,
+            origin: null,
             createdAt: local.createdAt,
           };
           const tailAt = items.findIndex((i) => i.kind === "liveAssistant");

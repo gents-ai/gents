@@ -107,7 +107,13 @@ type ProjectionInput = {
   /** The workflow reads these alone; transcript content never decides it. */
   session: Pick<
     DesktopSessionSnapshot,
-    "sessionId" | "agentDid" | "turnState" | "latestRequestId" | "pendingTurn"
+    | "sessionId"
+    | "agentDid"
+    | "turnState"
+    | "latestRequestId"
+    | "pendingTurn"
+    | "queuedTurns"
+    | "foldedInputs"
   > | null;
   selectedSessionSummary: SessionSummary | null;
   localWorkflow: ChatWorkflowState;
