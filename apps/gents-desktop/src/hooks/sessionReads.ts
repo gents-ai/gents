@@ -6,6 +6,7 @@ import {
   applySessionLiveDelta,
   acceptsAsyncResult,
   sessionLiveDeltaRequest,
+  timingConfig,
   SESSION_TIMELINE_PAGE_SIZE,
 } from "./desktopShellRuntime";
 import {
@@ -49,6 +50,9 @@ export function createSessionReads({
   setError,
 }: SessionReadParams) {
   let refreshSeq = 0;
+  let liveSeq = 0;
+  let runEpoch = 0;
+  let reconciledAt = 0;
   const setSession = (next: Parameters<typeof writeSession>[1]) =>
     writeSession(sessionStore, next);
   const setSessionLoad = (load: SessionLoadState) =>
@@ -93,6 +97,7 @@ export function createSessionReads({
         (!next || next.sessionId === nextSessionId);
       if (!stillCurrent) return null;
       setSession((current) => (next ? mergeSessionTipSnapshot(current, next) : null));
+      reconciledAt = performance.now();
       setSessionLoad({
         phase: "loaded",
         sessionId: nextSessionId,
@@ -120,6 +125,12 @@ export function createSessionReads({
     nextSessionId: string | null,
   ): Promise<DesktopSessionSnapshot | null> {
     if (!nextSessionId) return null;
+    const capturedRun = runEpoch;
+    const selected = store.getState();
+    const stillCurrent = () =>
+      capturedRun === runEpoch &&
+      store.getState().agentDid === selected.agentDid &&
+      store.getState().sessionId === selected.sessionId;
     const projected = readSession(sessionStore);
     const agentDid =
       projected?.sessionId === nextSessionId
@@ -128,8 +139,10 @@ export function createSessionReads({
     try {
       setError(null);
       await api.retrySessionHydration(nextSessionId, agentDid);
+      if (!stillCurrent()) return null;
       return await refreshSession(nextSessionId, agentDid);
     } catch (error) {
+      if (!stillCurrent()) return null;
       setError(String(error));
       return null;
     }
@@ -139,24 +152,44 @@ export function createSessionReads({
     const current = readSession(sessionStore);
     const requestId = trackedRequestId();
     if (!current || !requestId || !api.fetchSessionLiveDelta) return false;
+    // A delta covers only the live overlay. Enforce history reconciliation at
+    // this shared event/poll entry so a continuous wake stream cannot starve
+    // it; a null period configures no periodic reconciliation.
+    const reconcileMs = timingConfig().activeSessionPollMs;
+    if (reconcileMs !== null && performance.now() - reconciledAt >= reconcileMs)
+      return false;
     const request = sessionLiveDeltaRequest(current, requestId);
     if (!request) return false;
+    const capturedRefresh = refreshSeq;
+    const capturedLive = ++liveSeq;
+    const capturedAgent = store.getState().agentDid;
+    const stillCurrent = () =>
+      capturedRefresh === refreshSeq &&
+      capturedLive === liveSeq &&
+      store.getState().agentDid === capturedAgent &&
+      store.getState().sessionId === current.sessionId &&
+      trackedRequestId() === requestId;
     try {
       const delta = await api.fetchSessionLiveDelta(request);
-      if (!delta || store.getState().sessionId !== current.sessionId) return false;
+      if (!stillCurrent()) return true;
+      if (!delta) return false;
       const latest = readSession(sessionStore);
       if (!latest || latest.sessionId !== current.sessionId) return true;
       const next = applySessionLiveDelta(latest, delta);
       if (!next) return false;
       setSession(next);
       return true;
-    } catch (error) {
-      setError(String(error));
+    } catch {
+      if (!stillCurrent()) return true;
+      // The authoritative full read owns failure reporting. A transient delta
+      // failure must not leave a global error after that read recovers.
       return false;
     }
   }
 
   async function loadOlderSessionTimeline(): Promise<boolean> {
+    const capturedRun = runEpoch;
+    const capturedAgent = store.getState().agentDid;
     try {
       for (let hop = 0; hop < MAX_HIDDEN_PAGE_HOPS; hop += 1) {
         const current = readSession(sessionStore);
@@ -168,7 +201,13 @@ export function createSessionReads({
           trackedRequestId(),
           { limit: SESSION_TIMELINE_PAGE_SIZE, beforeItemKey: cursor },
         );
-        if (!older || store.getState().sessionId !== current.sessionId) return false;
+        if (
+          capturedRun !== runEpoch ||
+          capturedAgent !== store.getState().agentDid ||
+          !older ||
+          store.getState().sessionId !== current.sessionId
+        )
+          return false;
         const previousItemCount = readSession(sessionStore)?.timelineItems.length ?? 0;
         setSession((latest) => mergeOlderSessionTimelinePage(latest, older));
         const next = readSession(sessionStore);
@@ -185,12 +224,19 @@ export function createSessionReads({
       // resumes from there without making this interaction unbounded.
       return false;
     } catch (error) {
+      if (capturedRun !== runEpoch) return false;
       setError(String(error));
       return false;
     }
   }
 
   return {
+    /** Revoke pending reads when client observation stops. */
+    invalidateSessionReads() {
+      runEpoch += 1;
+      refreshSeq += 1;
+      liveSeq += 1;
+    },
     /**
      * Reads a session (the selected node's unless another is given) and holds
      * it, or clears the held session for null. Only the latest read commits,

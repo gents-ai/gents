@@ -2,7 +2,7 @@
 import type { SessionLiveTextPatchView } from "./SessionLiveTextPatchView.js";
 import type { SessionProjectionRevisionView } from "./SessionProjectionRevisionView.js";
 
-export type SessionLiveDeltaView = {
+export type SessionLiveDeltaView = { liveCursor?: string | null,
 /**
  * delta | unchanged | snapshotRequired
  */

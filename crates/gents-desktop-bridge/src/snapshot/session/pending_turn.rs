@@ -85,7 +85,7 @@ pub(super) fn build_pending_turn(
                     &row.input.clone().unwrap_or_default(),
                 )
         });
-        let parent_key = format!("authored:{parent}:prompt");
+        let parent_key = authored_prompt_message_key(&parent);
         let published_parent = transcript.messages.iter().any(|row| {
             row.message.request_doc_id.as_deref() == Some(parent.as_str())
                 && row.message.requester_did == request.requester_did
@@ -96,7 +96,7 @@ pub(super) fn build_pending_turn(
             return None;
         }
     }
-    let prompt_message_key = request_doc_id.map(|doc_id| format!("authored:{doc_id}:prompt"));
+    let prompt_message_key = request_doc_id.map(authored_prompt_message_key);
     let exact_owner = transcript.messages.iter().any(|row| {
         request_doc_id.is_some()
             && row.message.request_doc_id.as_deref() == request_doc_id

@@ -1,8 +1,9 @@
 import type { ChatWorkflowState } from "@source-inc/gents-desktop-chat";
-import type {
-  DesktopSessionSnapshot,
-  P2PHealth,
-  SessionLiveDeltaView,
+import {
+  isTerminalTurnState,
+  type DesktopSessionSnapshot,
+  type P2PHealth,
+  type SessionLiveDeltaView,
 } from "@source-inc/gents-desktop-client";
 
 export const SESSION_TIMELINE_PAGE_SIZE = 40;
@@ -94,7 +95,8 @@ export function sessionLiveDeltaRequest(
   requestId: string,
 ) {
   const revision = session.projectionRevision;
-  if (!revision || session.latestRequestId !== requestId) return null;
+  if (!revision || !session.liveCursor || session.latestRequestId !== requestId)
+    return null;
   const live = session.timelineItems.find((item) => item.kind === "liveAssistant");
   const content = live?.content ?? "";
   const reasoning = live?.reasoning ?? "";
@@ -102,7 +104,7 @@ export function sessionLiveDeltaRequest(
     sessionId: session.sessionId,
     agentDid: session.agentDid,
     requestId,
-    baseReconcileVersion: revision.reconcileVersion,
+    baseLiveCursor: session.liveCursor,
     baseContentByteLen: utf8.encode(content).byteLength,
     baseContentHash: liveTextHash(content),
     baseReasoningByteLen: utf8.encode(reasoning).byteLength,
@@ -133,6 +135,15 @@ function applyLiveTextPatch(
   return next || null;
 }
 
+/** Native adapter of ClientLiveDelta.accepts; identity is encoded by the bridge. */
+export function acceptsLiveCursor(
+  base: string | null | undefined,
+  current: string | null | undefined,
+  terminal: boolean,
+): boolean {
+  return !terminal && base != null && base === current;
+}
+
 /** Apply a bridge-checked response suffix without rebuilding historical rows. */
 export function applySessionLiveDelta(
   current: DesktopSessionSnapshot,
@@ -142,13 +153,22 @@ export function applySessionLiveDelta(
     delta.outcome === "snapshotRequired" ||
     delta.requestId !== current.latestRequestId ||
     !current.projectionRevision ||
-    delta.revision.reconcileVersion !== current.projectionRevision.reconcileVersion ||
+    !acceptsLiveCursor(
+      current.liveCursor,
+      delta.liveCursor,
+      (!!delta.turnState && isTerminalTurnState(delta.turnState)) ||
+        (!!current.turnState && isTerminalTurnState(current.turnState)),
+    ) ||
     delta.revision.storeVersion < current.projectionRevision.storeVersion
   ) {
     return null;
   }
   if (delta.outcome === "unchanged") {
-    return { ...current, projectionRevision: delta.revision };
+    return {
+      ...current,
+      turnState: delta.turnState,
+      projectionRevision: delta.revision,
+    };
   }
   if (delta.outcome !== "delta" || !delta.content || !delta.reasoning) {
     return null;

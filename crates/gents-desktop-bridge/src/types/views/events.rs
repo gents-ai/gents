@@ -47,8 +47,6 @@ pub struct ClientUpdateEvent {
     pub reason: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub store_version: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reconcile_version: Option<u64>,
 }
 
 impl ClientUpdateEvent {
@@ -56,7 +54,6 @@ impl ClientUpdateEvent {
         Self {
             reason,
             store_version: None,
-            reconcile_version: None,
         }
     }
 
@@ -64,7 +61,6 @@ impl ClientUpdateEvent {
         Self {
             reason: "store",
             store_version: Some(notice.revision.store_version),
-            reconcile_version: Some(notice.revision.reconcile_version),
         }
     }
 }
