@@ -10,7 +10,7 @@ namespace GoalAutomation.ReadinessGate
 open Goals
 
 /-- Readiness of the continuation's agent, projected from the canonical
-runtime-authored readiness row (`project_behavior_readiness`). The projection
+runtime-authored readiness row (`project_agent_readiness`). The projection
 already folds process state, generation alignment, explicit unavailability and
 startup demotion through the same predicate that request routing uses. -/
 inductive Observation where
@@ -126,7 +126,7 @@ def nextRetries (cause : Cause) (i : Input) : Gated → Nat
       if cause = .attempt ∧ i.terminal = .completed then 0 else i.retries
   | _ => i.retries
 
-/-- Legal Goal transition for a settled-unavailable behavior. Only Goals whose
+/-- Legal Goal transition for a settled-unavailable agent. Only Goals whose
 existing decision would publish reach it: active Goals pause, and a pending
 budget wrap-up is abandoned rather than retried. -/
 def resolveUnavailable (state : State) : Option State :=
@@ -157,7 +157,7 @@ def claimedGate (observation : Observation) (settled childExists : Bool)
 `lastFailure` reconstructs an infrastructure retry prompt after a crash or a
 transient readiness wait. A readiness stop preserves it; explicit operator
 resume retains its separate contract of starting a fresh continuation epoch.
-The canonical behavior-readiness row owns the unavailability reason. -/
+The canonical agent-readiness row owns the unavailability reason. -/
 structure ClaimedRecovery where
   goal : State
   retries : Nat
@@ -248,7 +248,7 @@ theorem decide_publishes_only_for_open_goals
   · simp [publishes] at h
   · cases requested <;> cases completed <;> cases status <;> simp_all [publishes]
 
-theorem unavailable_behavior_never_retries (i : Input) :
+theorem unavailable_agent_never_retries (i : Input) :
     baseDecision .agentUnavailable i ≠ .retry := by
   intro h
   obtain ⟨status, terminal, idle, child, budget, activity, wrapup, retries, requested,
@@ -273,7 +273,7 @@ theorem gate_decided_is_base
   · cases h
     rfl
 
-/-- The existing decision owner is unchanged for a ready behavior and an
+/-- The existing decision owner is unchanged for a ready agent and an
 attempt that ran (or failed admission for a reason other than readiness). -/
 theorem ready_attempt_refines_existing_decision
     (newer settled : Bool) (i : Input) :
@@ -282,8 +282,8 @@ theorem ready_attempt_refines_existing_decision
         i.hasActivity i.requestIsWrapup i.retries i.wrapupRequested i.wrapupCompleted) := by
   simp [gate, observe, baseDecision]
 
-/-- No continuation child is published unless the behavior is ready. -/
-theorem publication_requires_ready_behavior
+/-- No continuation child is published unless the agent is ready. -/
+theorem publication_requires_ready_agent
     (observation : Observation) (settled : Bool) (cause : Cause) (i : Input)
     (decision : Decision) (h : gate observation settled cause i = .decided decision)
     (hpublish : publishes decision = true) :
@@ -303,8 +303,8 @@ theorem stale_readiness_never_reissues_a_rejection
   · rfl
   · simp [gate, observe, Observation.newerThanTerminal, hbase, hp] at h
 
-/-- While the behavior is not ready, the retry budget is untouched. -/
-theorem unready_behavior_preserves_retry_budget
+/-- While the agent is not ready, the retry budget is untouched. -/
+theorem unready_agent_preserves_retry_budget
     (observation : Observation) (settled : Bool) (cause : Cause) (i : Input)
     (hready : observe observation settled ≠ .ready) :
     nextRetries cause i (gate observation settled cause i) = i.retries := by
@@ -312,17 +312,17 @@ theorem unready_behavior_preserves_retry_budget
   | decided decision =>
       cases hp : publishes decision
       · cases decision <;> simp_all [publishes, nextRetries]
-      · exact absurd (publication_requires_ready_behavior _ _ _ _ _ hg hp) hready
+      · exact absurd (publication_requires_ready_agent _ _ _ _ _ hg hp) hready
   | awaitReadiness => simp [nextRetries]
   | agentUnavailable => simp [nextRetries]
 
-/-- A request rejected because its behavior was unavailable never spends the
+/-- A request rejected because its agent was unavailable never spends the
 retry budget, whatever readiness is observed afterwards. -/
-theorem unavailable_behavior_rejection_is_never_charged
+theorem unavailable_agent_rejection_is_never_charged
     (observation : Observation) (settled : Bool) (i : Input) :
     nextRetries .agentUnavailable i (gate observation settled .agentUnavailable i)
       = i.retries := by
-  have hno := unavailable_behavior_never_retries i
+  have hno := unavailable_agent_never_retries i
   cases hg : gate observation settled .agentUnavailable i with
   | decided decision =>
       have hbase := gate_decided_is_base _ _ _ _ _ hg
@@ -330,7 +330,7 @@ theorem unavailable_behavior_rejection_is_never_charged
   | awaitReadiness => simp [nextRetries]
   | agentUnavailable => simp [nextRetries]
 
-/-- Retries are charged only for an attempt observed against a ready behavior. -/
+/-- Retries are charged only for an attempt observed against a ready agent. -/
 theorem charge_requires_ready_attempt
     (observation : Observation) (settled : Bool) (cause : Cause) (i : Input)
     (h : i.retries < nextRetries cause i (gate observation settled cause i)) :
@@ -339,12 +339,12 @@ theorem charge_requires_ready_attempt
   · cases hr : observe observation settled
     · rfl
     all_goals
-      rw [unready_behavior_preserves_retry_budget observation settled cause i
+      rw [unready_agent_preserves_retry_budget observation settled cause i
         (by rw [hr]; intro hc; cases hc)] at h
       omega
   · cases cause
     · rfl
-    · rw [unavailable_behavior_rejection_is_never_charged] at h
+    · rw [unavailable_agent_rejection_is_never_charged] at h
       omega
 
 /-- The persisted count never exceeds the bound. -/
@@ -361,7 +361,7 @@ theorem retry_budget_is_bounded
           cases cause
           · have := decide_retry_within_budget _ _ _ _ _ _ _ _ _ _ hbase
             omega
-          · exact absurd hbase (unavailable_behavior_never_retries i)
+          · exact absurd hbase (unavailable_agent_never_retries i)
       | «continue» =>
           simp only [nextRetries]
           split <;> omega
@@ -434,9 +434,9 @@ theorem readiness_trace_preserves_budget (retries : Nat) (scans : List Scan)
       have hscan : applyScan retries scan = retries := by
         simp only [applyScan]
         rcases h scan (List.mem_cons_self _ _) with hready | hcause
-        · exact unready_behavior_preserves_retry_budget _ _ _ _ hready
+        · exact unready_agent_preserves_retry_budget _ _ _ _ hready
         · rw [hcause]
-          exact unavailable_behavior_rejection_is_never_charged _ _ _
+          exact unavailable_agent_rejection_is_never_charged _ _ _
       rw [hscan]
       exact ih retries (fun s hs => h s (List.mem_cons_of_mem _ hs))
 
@@ -500,7 +500,7 @@ theorem reissue_requires_fresh_readiness
     cases hg : gate (stamp observation false) settled .agentUnavailable i with
     | decided decision =>
         rw [hg] at h
-        have hready := publication_requires_ready_behavior _ _ _ _ _ hg h
+        have hready := publication_requires_ready_agent _ _ _ _ _ hg h
         cases observation with
         | ready newer =>
             have := stale_readiness_never_reissues_a_rejection settled i decision hg

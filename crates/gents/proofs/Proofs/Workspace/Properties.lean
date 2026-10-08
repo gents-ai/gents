@@ -97,13 +97,13 @@ def BindingAuthority.commandMode : BindingAuthority → ExecutionMode
   | .readWrite => .workspaceWrite
   | .integrate => .readOnly
 
-def authorityMeet (behavior : ExecutionMode) (authority : BindingAuthority) : ExecutionMode :=
-  behavior.meet (BindingAuthority.commandMode authority)
+def authorityMeet (agent : ExecutionMode) (authority : BindingAuthority) : ExecutionMode :=
+  agent.meet (BindingAuthority.commandMode authority)
 
 /-- Explicit contextual grant, distinct from attenuation. The optional binding
 has already been checked by the existing workspace/execution owners, including
 active binding and current live, uncanceled execution. `requested` is AFTER the
-behavior/selection/operator-ceiling meet, never the raw artifact selection. -/
+agent/selection/operator-ceiling meet, never the raw artifact selection. -/
 def effectiveBoundCommand (requested : ExecutionMode)
     (binding : Option ArtifactBinding) : Option ExecutionMode :=
   if requested = .artifactWrite then
@@ -121,11 +121,11 @@ theorem artifact_binding_required (c : Option ArtifactBinding)
     admitArtifact .artifactWrite c = true := by
   simpa [effectiveBoundCommand] using h
 
-def AuthorityMeetOk (behavior : ExecutionMode) (authority : BindingAuthority) : Prop :=
-  ¬ (authority = .readWrite ∧ authorityMeet behavior authority = .unrestricted)
+def AuthorityMeetOk (agent : ExecutionMode) (authority : BindingAuthority) : Prop :=
+  ¬ (authority = .readWrite ∧ authorityMeet agent authority = .unrestricted)
 
-instance (behavior : ExecutionMode) (authority : BindingAuthority) :
-    Decidable (AuthorityMeetOk behavior authority) := by
+instance (agent : ExecutionMode) (authority : BindingAuthority) :
+    Decidable (AuthorityMeetOk agent authority) := by
   unfold AuthorityMeetOk
   infer_instance
 
@@ -169,18 +169,18 @@ theorem git_worktree_diff_readWrite_denies_git_metadata :
     ¬ GitMetadataWriteOk .gitWorktreeDiff .readWrite := by
   decide
 
-theorem meet_readWrite_ne_unrestricted (behavior : ExecutionMode) :
-    authorityMeet behavior .readWrite ≠ .unrestricted := by
-  cases behavior <;> simp [authorityMeet, BindingAuthority.commandMode, ExecutionMode.meet]
+theorem meet_readWrite_ne_unrestricted (agent : ExecutionMode) :
+    authorityMeet agent .readWrite ≠ .unrestricted := by
+  cases agent <;> simp [authorityMeet, BindingAuthority.commandMode, ExecutionMode.meet]
 
 theorem meet_unrestricted_readWrite_is_workspaceWrite :
     authorityMeet .unrestricted .readWrite = .workspaceWrite := by
   simp [authorityMeet, BindingAuthority.commandMode, ExecutionMode.meet]
 
-theorem AuthorityMeetOk_readWrite (behavior : ExecutionMode) :
-    AuthorityMeetOk behavior .readWrite := by
+theorem AuthorityMeetOk_readWrite (agent : ExecutionMode) :
+    AuthorityMeetOk agent .readWrite := by
   intro h
-  exact meet_readWrite_ne_unrestricted behavior h.2
+  exact meet_readWrite_ne_unrestricted agent h.2
 
 theorem unique_active_readWrite_nil (workspaceId : String) :
     UniqueActiveReadWrite workspaceId [] := by

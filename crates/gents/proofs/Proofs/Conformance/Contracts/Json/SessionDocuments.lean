@@ -9,7 +9,7 @@ open Lean Conformance.SessionDocuments
 def scopeJson (s : AgentSession.Scope) : Json := Json.mkObj
   [("node", toJson s.node), ("session", toJson s.session), ("requester", toJson s.requester)]
 def requestJson (r : AgentSession.RequestFact) : Json := Json.mkObj
-  [("purpose", toJson r.purpose.toWire), ("scope", scopeJson r.scope), ("behavior", toJson r.agent),
+  [("purpose", toJson r.purpose.toWire), ("scope", scopeJson r.scope), ("agent", toJson r.agent),
    ("created_at", toJson r.createdAt), ("doc_id", toJson r.observed.docId),
    ("request_id", toJson r.observed.requestId), ("state", toJson r.observed.state.toDefraDB)]
 private def provenanceJson (p : AgentSession.Provenance) : Json := Json.mkObj
@@ -19,7 +19,7 @@ private def provenanceJson (p : AgentSession.Provenance) : Json := Json.mkObj
      [("source_session_id", toJson f.sourceSession), ("at_user_turn", toJson f.atUserTurn)])
      |>.getD Json.null)]
 def documentJson (d : AgentSession.Document) : Json := Json.mkObj
-  [("scope", scopeJson d.scope), ("behavior", toJson d.agent),
+  [("scope", scopeJson d.scope), ("agent", toJson d.agent),
    ("created_at", toJson d.createdAt), ("closed_at", toJson d.closedAt),
    ("provenance", d.provenance.map provenanceJson |>.getD Json.null),
    ("tags", toJson d.tags), ("title", d.title.map (fun t => Json.mkObj
@@ -124,7 +124,7 @@ private def clearTitleJson : Json := Json.mkObj
    ("title", Json.null),
    ("after", documentJson (AgentSession.rename renameBefore none 4))]
 private def retryStateJson (s : SessionState) : Json := Json.mkObj
-  [("session_id", toJson s.sessionId), ("behavior", toJson s.agentId),
+  [("session_id", toJson s.sessionId), ("agent", toJson s.agentId),
    ("latest", toJson s.latest), ("requests", toJson ([1, 3].filter
      (fun id => decide (id ∈ s.requestIds)) |>.map (fun id => Json.mkObj
        [("request_id", toJson id), ("state", toJson (s.ctx id).state.toDefraDB),
@@ -223,7 +223,7 @@ def sessionDocumentsJson : String := (Json.mkObj
       refreshJson "missing_current_row_noop" newerRequest [],
       refreshJson "foreign_scope_current_row_noop" newerRequest
         [{ completedRequest with scope := { completedRequest.scope with requester := some 99 } }],
-      refreshJson "wrong_behavior_current_row_noop" newerRequest [{ completedRequest with agent:= 99 }]])),
+      refreshJson "wrong_agent_current_row_noop" newerRequest [{ completedRequest with agent:= 99 }]])),
    ("selection", toJson [
       selectionJson "timestamp_tie_forward" [old, newerRequest] 1 10 none,
       selectionJson "timestamp_tie_reverse" [newerRequest, old] 1 10 none,

@@ -44,11 +44,11 @@ def activation? (ids : Identities) (available : Bool) (enrollment : Enrollment.S
     (request : Enrollment.AgentRequestSemantics)
     (admission : Enrollment.AgentRequestAdmission)
     (evidence : Option Enrollment.RuntimeInternalEvidence)
-    (behavior : String) (row : RequestRowEvidence) (generation : Generation)
+    (agent : String) (row : RequestRowEvidence) (generation : Generation)
     (duration deadline : Time) : Option Handover.TitleActivation :=
   if request.purpose = .titleAudit ∧ rowBound row request admission ∧
       Enrollment.titlePendingDisposition available enrollment request admission evidence
-        behavior row.branchFieldsExact row.pendingDeadlineAbsent row.maxRequestHop = .admit then
+        agent row.branchFieldsExact row.pendingDeadlineAbsent row.maxRequestHop = .admit then
     match evidence.bind (·.titleParent) with
     | none => none
     | some parent => some
@@ -68,13 +68,13 @@ theorem activation_requires_admitted_observation
     (request : Enrollment.AgentRequestSemantics)
     (admission : Enrollment.AgentRequestAdmission)
     (evidence : Option Enrollment.RuntimeInternalEvidence)
-    (behavior : String) (row : RequestRowEvidence) (generation : Generation)
+    (agent : String) (row : RequestRowEvidence) (generation : Generation)
     (duration deadline : Time) (activation : Handover.TitleActivation)
-    (h : activation? ids available enrollment request admission evidence behavior
+    (h : activation? ids available enrollment request admission evidence agent
       row generation duration deadline = some activation) :
     request.purpose = .titleAudit ∧ rowBound row request admission ∧
       Enrollment.titlePendingDisposition available enrollment request admission evidence
-        behavior row.branchFieldsExact row.pendingDeadlineAbsent row.maxRequestHop = .admit := by
+        agent row.branchFieldsExact row.pendingDeadlineAbsent row.maxRequestHop = .admit := by
   unfold activation? at h
   split at h
   · assumption
@@ -85,9 +85,9 @@ theorem activation_binds_own_physical_and_logical_request
     (request : Enrollment.AgentRequestSemantics)
     (admission : Enrollment.AgentRequestAdmission)
     (evidence : Option Enrollment.RuntimeInternalEvidence)
-    (behavior : String) (row : RequestRowEvidence) (generation : Generation)
+    (agent : String) (row : RequestRowEvidence) (generation : Generation)
     (duration deadline : Time) (activation : Handover.TitleActivation)
-    (h : activation? ids available enrollment request admission evidence behavior
+    (h : activation? ids available enrollment request admission evidence agent
       row generation duration deadline = some activation) :
     activation.binding.physicalRequest = ids.encode row.physicalRequest ∧
       activation.binding.logicalRequest = ids.encode request.requestId := by
@@ -101,9 +101,9 @@ theorem unbound_row_cannot_activate
     (request : Enrollment.AgentRequestSemantics)
     (admission : Enrollment.AgentRequestAdmission)
     (evidence : Option Enrollment.RuntimeInternalEvidence)
-    (behavior : String) (row : RequestRowEvidence) (generation : Generation)
+    (agent : String) (row : RequestRowEvidence) (generation : Generation)
     (duration deadline : Time) (h : ¬ rowBound row request admission) :
-    activation? ids available enrollment request admission evidence behavior
+    activation? ids available enrollment request admission evidence agent
       row generation duration deadline = none := by
   simp [activation?, h]
 
@@ -115,11 +115,11 @@ def activate? (world : World) (actor : Gate.Actor) (now : Time)
     (request : Enrollment.AgentRequestSemantics)
     (admission : Enrollment.AgentRequestAdmission)
     (evidence : Option Enrollment.RuntimeInternalEvidence)
-    (behavior : String) (row : RequestRowEvidence) (generation : Generation)
+    (agent : String) (row : RequestRowEvidence) (generation : Generation)
     (duration deadline : Time) (scope : Nat) (budget : CompletionRetry.Budget)
     (retryDeadline : Option Time) : Option World := do
   let activation ← activation? ids available enrollment request admission evidence
-    behavior row generation duration deadline
+    agent row generation duration deadline
   SessionComposition.activateTitle world actor now activation scope budget retryDeadline
 
 theorem successful_activation_is_existing_claim
@@ -128,18 +128,18 @@ theorem successful_activation_is_existing_claim
     (request : Enrollment.AgentRequestSemantics)
     (admission : Enrollment.AgentRequestAdmission)
     (evidence : Option Enrollment.RuntimeInternalEvidence)
-    (behavior : String) (row : RequestRowEvidence) (generation : Generation)
+    (agent : String) (row : RequestRowEvidence) (generation : Generation)
     (duration deadline : Time) (scope : Nat) (budget : CompletionRetry.Budget)
     (retryDeadline : Option Time)
     (h : activate? before actor now ids available enrollment request admission evidence
-      behavior row generation duration deadline scope budget retryDeadline = some after) :
+      agent row generation duration deadline scope budget retryDeadline = some after) :
     ∃ activation,
-      activation? ids available enrollment request admission evidence behavior
+      activation? ids available enrollment request admission evidence agent
         row generation duration deadline = some activation ∧
       SessionComposition.activateTitle before actor now activation scope budget retryDeadline =
         some after := by
   unfold activate? at h
-  cases ha : activation? ids available enrollment request admission evidence behavior
+  cases ha : activation? ids available enrollment request admission evidence agent
       row generation duration deadline with
   | none => simp [ha] at h
   | some activation => exact ⟨activation, by simp [ha], by simpa [ha] using h⟩
@@ -150,14 +150,14 @@ theorem successful_activation_has_application_trace
     (request : Enrollment.AgentRequestSemantics)
     (admission : Enrollment.AgentRequestAdmission)
     (evidence : Option Enrollment.RuntimeInternalEvidence)
-    (behavior : String) (row : RequestRowEvidence) (generation : Generation)
+    (agent : String) (row : RequestRowEvidence) (generation : Generation)
     (duration deadline : Time) (scope : Nat) (budget : CompletionRetry.Budget)
     (retryDeadline : Option Time)
     (h : activate? before actor now ids available enrollment request admission evidence
-      behavior row generation duration deadline scope budget retryDeadline = some after) :
+      agent row generation duration deadline scope budget retryDeadline = some after) :
     SessionComposition.Trace before after := by
   obtain ⟨activation, _, hclaim⟩ := successful_activation_is_existing_claim before after
-    actor now ids available enrollment request admission evidence behavior row
+    actor now ids available enrollment request admission evidence agent row
     generation duration deadline scope budget retryDeadline h
   exact .activateTitle actor now activation scope budget retryDeadline hclaim
 

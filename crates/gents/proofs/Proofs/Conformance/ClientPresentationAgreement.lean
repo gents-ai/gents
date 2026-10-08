@@ -17,7 +17,7 @@ def blockers : List (String × SendBlockedReason) :=
   , ("agentNotSelected", .agentNotSelected)
   , ("submittingRequest", .mutationInFlight)
   , ("waitingForRequestObservation", .awaitingObservation)
-  , ("behaviorUnavailable", .sessionAgentMismatch)
+  , ("agentUnavailable", .sessionAgentMismatch)
   , ("sessionMissingFromSnapshot", .sessionAbsent)
   , ("inconsistentTurnObservation", .inconsistentObservation)
   , ("routeNotReady", .workflowBlocked)

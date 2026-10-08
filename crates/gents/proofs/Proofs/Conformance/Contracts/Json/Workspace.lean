@@ -46,8 +46,8 @@ def workspaceBindingCaseJson
     ++ "\"candidate\":"
       ++ bindingWitnessJson witness.workspaceId witness.candidate ++ ","
     ++ "\"git_metadata_write\":" ++ boolString witness.gitMetadataWrite ++ ","
-    ++ "\"behavior_command_mode\":"
-      ++ jsonString witness.behaviorCommandMode.toDefraDB ++ ","
+    ++ "\"agent_command_mode\":"
+      ++ jsonString witness.agentCommandMode.toDefraDB ++ ","
     ++ "\"legal\":" ++ boolString witness.legal
     ++ "}"
 
