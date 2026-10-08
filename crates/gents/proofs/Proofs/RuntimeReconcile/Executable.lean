@@ -99,8 +99,8 @@ def step? (pre : RuntimeState) : Action → Option RuntimeState
           , inFlight := insert requestId pre.inFlight
           , requestGeneration := Function.update pre.requestGeneration requestId pre.routerObservedGeneration
           , requestSession := Function.update pre.requestSession requestId sessionId
-          , requestBehavior := Function.update pre.requestBehavior requestId requested
-          , sessionBehavior := pre.bindSessionIfNeeded sessionId requested
+          , requestAgent := Function.update pre.requestAgent requestId requested
+          , sessionAgent := pre.bindSessionIfNeeded sessionId requested
           }
       else
         none
@@ -316,24 +316,24 @@ theorem accept_step_binding_coherent
       requestId ∈ post.inFlight ∧
       post.requestGeneration requestId = pre.routerObservedGeneration ∧
       post.requestSession requestId = sessionId ∧
-      post.requestBehavior requestId = requested ∧
-      post.sessionBehavior (post.requestSession requestId) =
-        some (post.requestBehavior requestId) := by
+      post.requestAgent requestId = requested ∧
+      post.sessionAgent (post.requestSession requestId) =
+        some (post.requestAgent requestId) := by
   simp [step?] at h_step
   rcases h_step with ⟨h_can, h_post⟩
   rcases h_can with ⟨_, h_fresh, _, h_binding⟩
   cases h_post
   simp [Function.update, bindSessionIfNeeded_requested pre sessionId requested h_binding, h_fresh]
 
-theorem mismatched_session_behavior_denied
+theorem mismatched_session_agent_denied
     (pre : RuntimeState) (process : ProcessState) (sessionId : SessionId)
     (requestId requested bound : Nat)
-    (hbound : pre.sessionBehavior sessionId = some bound) (hne : bound ≠ requested) :
+    (hbound : pre.sessionAgent sessionId = some bound) (hne : bound ≠ requested) :
     step? pre (.acceptRequest process sessionId requestId requested) = none := by
   simp [step?, CanAdmitRequest, hbound, hne]
 
 /-- Admission is the atomic boundary: an accepted request already owns its
-session/behavior projection; there is no later repair transition. -/
+session/agent projection; there is no later repair transition. -/
 theorem accept_step_projects_session_atomically
     {pre post : RuntimeState}
     {process : ProcessState}
@@ -343,7 +343,7 @@ theorem accept_step_projects_session_atomically
     (h_step : step? pre (.acceptRequest process sessionId requestId requested) = some post) :
     requestId ∈ post.accepted ∧
       post.requestSession requestId = sessionId ∧
-      post.sessionBehavior sessionId = some (post.requestBehavior requestId) := by
+      post.sessionAgent sessionId = some (post.requestAgent requestId) := by
   have h := accept_step_binding_coherent h_step
   exact ⟨h.1, h.2.2.2.1, by simpa [h.2.2.2.1] using h.2.2.2.2.2⟩
 
