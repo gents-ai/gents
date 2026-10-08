@@ -160,6 +160,10 @@ source consistency checks, not a separate runtime compatibility version.
   `1..=1024` (`platform_limit_exceeded` at `/limits/max_total_invocations`).
   Pack build, check and install recompile shipped graphs, so a pack that asks
   for more, or for zero, stops installing.
+- Graph compilation refuses `latest_only` concurrency on every graph edge
+  (`invalid_edge_concurrency`), grouped or not: on a per-document edge it
+  supersedes the trigger's in-flight requests and would cancel fan-out
+  items, and on a grouped edge it never applies.
 
 ## 0.20.0 - 2026-10-05
 
