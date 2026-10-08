@@ -76,13 +76,13 @@ def transcriptCollections : List String :=
   ["AgentRequest", "AgentMessage", "AgentToolCall", "AgentOutputSegment",
    "AgentSession", "CompactionEntry"]
 
-/-- Configuration reachable from AgentBehavior -> AgentContext / InferenceProfile
+/-- Configuration reachable from Agent -> AgentContext / InferenceProfile
 and its referenced settings and documents: Tools, CompactionConfig, sampling,
-execution, retry policy, MCP registries, skills, datastore surfaces, subagent
+execution, retry policy, MCP registries, skills, datastore surfaces, agent
 targets, chain keys and eth tools. Excludes credential-bearing documents by
 construction, so ordinary client/conversation transport cannot carry them. -/
 def reachableConfigKinds : List ConfigDocuments.Collection :=
-  [.agentBehavior, .agentContext, .compaction, .tools, .subagentTarget,
+  [.agent, .agentContext, .compaction, .tools, .agentTarget,
    .inferenceProfile, .inferenceSampling, .inferenceExecution,
    .inferenceRetryPolicy, .toolServiceRegistry, .skill, .datastoreToolSurface,
    .chainKeyBinding, .ethTool]
@@ -108,11 +108,11 @@ def clientTranscriptCollections : List String :=
   transcriptCollections ++ ["MailboxItem"]
 
 def clientOwnerProjectionCollections : List String :=
-  ["AgentBehaviorReadiness"]
+  ["NodeReadiness"]
 
 def clientToRuntimeCollections : List String :=
   clientTranscriptCollections ++
-    ["PersonaConfigRequest", "PeerEndpoint", "SessionHydrationRequest"]
+    ["PeerEndpoint", "SessionHydrationRequest"]
 
 def clientControlPlaneCollections : List String :=
   agentConfigCollections ++
@@ -129,12 +129,12 @@ def clientRouteCollections : RouteDirection → List String
 
 def machineCollections : List String :=
   conversationCollections ++
-    ["MailboxItem", "SessionHydrationRequest", "AgentDirectoryEntry"]
+    ["MailboxItem", "SessionHydrationRequest", "NodeDirectoryEntry"]
 
 /-- A remote `agent_new` is an ordinary Peer AgentRequest authored on the
-caller node with `agent_did = target` and `requester_did = caller`. The
+caller node with `node_did = target` and `requester_did = caller`. The
 coordinator leg (caller → host) therefore carries only that request, selected
-by the target's `agent_did`; no tool-call row is needed to name the host. -/
+by the target's `node_did`; no tool-call row is needed to name the host. -/
 def subagentCoordinatorCollections : List String :=
   ["AgentRequest"]
 
@@ -161,10 +161,10 @@ def machineRules : List CollectionRule :=
   conversationRules ++
     [ { collection := "MailboxItem", field := "requester_did", source := .peerDid }
     , { collection := "SessionHydrationRequest", field := "requester_did", source := .peerDid }
-    , { collection := "AgentDirectoryEntry", field := "source_did", source := .homeDid } ]
+    , { collection := "NodeDirectoryEntry", field := "source_did", source := .homeDid } ]
 
 def subagentCoordinatorRules : List CollectionRule :=
-  [ { collection := "AgentRequest", field := "agent_did", source := .peerDid } ]
+  [ { collection := "AgentRequest", field := "node_did", source := .peerDid } ]
 
 def subagentHostRules : List CollectionRule :=
   [ { collection := "AgentRequest",    field := "requester_did", source := .peerDid }
