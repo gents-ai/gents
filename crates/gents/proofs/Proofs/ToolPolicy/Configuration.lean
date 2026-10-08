@@ -122,19 +122,19 @@ theorem presentation_invariant (s : RemoteServiceTools) (style : RemoteToolStyle
 
 /-- Exact name selection is enforced together with the existing resolved ceiling,
 including calls through discovery wrappers. -/
-def remoteExecutable (behavior ceiling runtime : Surface) (selected : RemoteSelection)
+def remoteExecutable (agentSurface ceiling runtime : Surface) (selected : RemoteSelection)
     (available : RemoteAvailability) (enabled : RemoteEnablement)
     (agent service name : String) : Prop :=
-  (effective behavior ceiling runtime).mcpServices.permits service ∧
+  (effective agentSurface ceiling runtime).mcpServices.permits service ∧
     name ∈ remoteGrants selected available enabled agent service
 
-theorem remote_executable_within_ceiling (behavior ceiling runtime : Surface)
+theorem remote_executable_within_ceiling (agentSurface ceiling runtime : Surface)
     (selected : RemoteSelection) (available : RemoteAvailability) (enabled : RemoteEnablement)
     (agent service name : String)
-    (h : remoteExecutable behavior ceiling runtime selected available enabled agent service name) :
+    (h : remoteExecutable agentSurface ceiling runtime selected available enabled agent service name) :
     ceiling.mcpServices.permits service ∧
       ∃ s, selected service = some s ∧ name ∈ s.toolNames := by
-  exact ⟨effective_mcp_subset_ceiling behavior ceiling runtime service h.1,
+  exact ⟨effective_mcp_subset_ceiling agentSurface ceiling runtime service h.1,
     remote_grants_selected selected available enabled agent service name h.2⟩
 
 /-! ## Capability timeouts use the shared signed-limit decoder -/

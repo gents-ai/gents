@@ -135,7 +135,7 @@ def surfaceViewJson (v : SurfaceView) : String :=
 def toolPolicyCaseJson (c : Case) : String :=
   "{"
     ++ "\"name\":" ++ jsonString c.name ++ ","
-    ++ "\"behavior\":" ++ surfaceViewJson c.behavior ++ ","
+    ++ "\"agent\":" ++ surfaceViewJson c.agent ++ ","
     ++ "\"ceiling\":" ++ surfaceViewJson c.ceiling ++ ","
     ++ "\"runtime\":" ++ surfaceViewJson c.runtime ++ ","
     ++ "\"expected\":" ++ surfaceViewJson c.expected

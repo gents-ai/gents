@@ -40,99 +40,99 @@ def Surface.meet (a b : Surface) : Surface :=
   , ethCallTools := a.ethCallTools.meet unitVM b.ethCallTools
   , pluginTools := a.pluginTools.meet unitVM b.pluginTools }
 
-def effective (behavior ceiling : Surface) (runtime : Avail) : Surface :=
-  (behavior.meet ceiling).meet runtime
+def effective (agent ceiling : Surface) (runtime : Avail) : Surface :=
+  (agent.meet ceiling).meet runtime
 
-variable (behavior ceiling : Surface) (runtime : Avail)
+variable (agent ceiling : Surface) (runtime : Avail)
 
 theorem effective_file_le_ceiling :
-    (effective behavior ceiling runtime).file.rank ≤ ceiling.file.rank := by
+    (effective agent ceiling runtime).file.rank ≤ ceiling.file.rank := by
   unfold effective Surface.meet
   exact le_trans (FileCap.meet_rank_le_left _ _) (FileCap.meet_rank_le_right _ _)
 
-theorem effective_file_le_behavior :
-    (effective behavior ceiling runtime).file.rank ≤ behavior.file.rank := by
+theorem effective_file_le_agent :
+    (effective agent ceiling runtime).file.rank ≤ agent.file.rank := by
   unfold effective Surface.meet
   exact le_trans (FileCap.meet_rank_le_left _ _) (FileCap.meet_rank_le_left _ _)
 
 theorem effective_goalTools_le_ceiling :
-    (effective behavior ceiling runtime).goalTools = true → ceiling.goalTools = true := by
+    (effective agent ceiling runtime).goalTools = true → ceiling.goalTools = true := by
   exact fun h => bool_and_right (bool_and_left h)
 
-theorem effective_goalTools_le_behavior :
-    (effective behavior ceiling runtime).goalTools = true → behavior.goalTools = true := by
+theorem effective_goalTools_le_agent :
+    (effective agent ceiling runtime).goalTools = true → agent.goalTools = true := by
   exact fun h => bool_and_left (bool_and_left h)
 
 theorem effective_goalCreate_le_ceiling :
-    (effective behavior ceiling runtime).goalCreate = true → ceiling.goalCreate = true := by
+    (effective agent ceiling runtime).goalCreate = true → ceiling.goalCreate = true := by
   exact fun h => bool_and_right (bool_and_left h)
 
-theorem effective_goalCreate_le_behavior :
-    (effective behavior ceiling runtime).goalCreate = true → behavior.goalCreate = true := by
+theorem effective_goalCreate_le_agent :
+    (effective agent ceiling runtime).goalCreate = true → agent.goalCreate = true := by
   exact fun h => bool_and_left (bool_and_left h)
 
 theorem effective_defraQuery_le_ceiling :
-    (effective behavior ceiling runtime).defraQuery = true → ceiling.defraQuery = true := by
+    (effective agent ceiling runtime).defraQuery = true → ceiling.defraQuery = true := by
   exact fun h => bool_and_right (bool_and_left h)
 
-theorem effective_defraQuery_le_behavior :
-    (effective behavior ceiling runtime).defraQuery = true → behavior.defraQuery = true := by
+theorem effective_defraQuery_le_agent :
+    (effective agent ceiling runtime).defraQuery = true → agent.defraQuery = true := by
   exact fun h => bool_and_left (bool_and_left h)
 
 theorem effective_selfConfig_le_ceiling :
-    (effective behavior ceiling runtime).selfConfig = true → ceiling.selfConfig = true := by
+    (effective agent ceiling runtime).selfConfig = true → ceiling.selfConfig = true := by
   exact fun h => bool_and_right (bool_and_left h)
 
-theorem effective_selfConfig_le_behavior :
-    (effective behavior ceiling runtime).selfConfig = true → behavior.selfConfig = true := by
+theorem effective_selfConfig_le_agent :
+    (effective agent ceiling runtime).selfConfig = true → agent.selfConfig = true := by
   exact fun h => bool_and_left (bool_and_left h)
 
 theorem effective_selfConfigCategories_subset_ceiling (k : ToolId) :
-    (effective behavior ceiling runtime).selfConfigCategories.permits k →
+    (effective agent ceiling runtime).selfConfigCategories.permits k →
       ceiling.selfConfigCategories.permits k := by
   unfold effective Surface.meet
   intro h
   have hin := EndpointScope.meet_permits_left unitVM
-    (behavior.selfConfigCategories.meet unitVM ceiling.selfConfigCategories)
+    (agent.selfConfigCategories.meet unitVM ceiling.selfConfigCategories)
     runtime.selfConfigCategories k h
-  exact EndpointScope.meet_permits_right unitVM behavior.selfConfigCategories
+  exact EndpointScope.meet_permits_right unitVM agent.selfConfigCategories
     ceiling.selfConfigCategories k hin
 
-theorem effective_selfConfigCategories_subset_behavior (k : ToolId) :
-    (effective behavior ceiling runtime).selfConfigCategories.permits k →
-      behavior.selfConfigCategories.permits k := by
+theorem effective_selfConfigCategories_subset_agent (k : ToolId) :
+    (effective agent ceiling runtime).selfConfigCategories.permits k →
+      agent.selfConfigCategories.permits k := by
   unfold effective Surface.meet
   intro h
   have hin := EndpointScope.meet_permits_left unitVM
-    (behavior.selfConfigCategories.meet unitVM ceiling.selfConfigCategories)
+    (agent.selfConfigCategories.meet unitVM ceiling.selfConfigCategories)
     runtime.selfConfigCategories k h
-  exact EndpointScope.meet_permits_left unitVM behavior.selfConfigCategories
+  exact EndpointScope.meet_permits_left unitVM agent.selfConfigCategories
     ceiling.selfConfigCategories k hin
 
 theorem effective_memory_le_ceiling :
-    (effective behavior ceiling runtime).memory = true → ceiling.memory = true := by
+    (effective agent ceiling runtime).memory = true → ceiling.memory = true := by
   exact fun h => bool_and_right (bool_and_left h)
 
-theorem effective_memory_le_behavior :
-    (effective behavior ceiling runtime).memory = true → behavior.memory = true := by
+theorem effective_memory_le_agent :
+    (effective agent ceiling runtime).memory = true → agent.memory = true := by
   exact fun h => bool_and_left (bool_and_left h)
 
 /-- Schema administration is an explicit node-management capability, independent
 of config-document edits. DefraDB remains the schema authorization owner. -/
 theorem effective_schemaManagement_le_ceiling :
-    (effective behavior ceiling runtime).schemaManagement = true → ceiling.schemaManagement = true := by
+    (effective agent ceiling runtime).schemaManagement = true → ceiling.schemaManagement = true := by
   exact fun h => bool_and_right (bool_and_left h)
 
-theorem effective_schemaManagement_le_behavior :
-    (effective behavior ceiling runtime).schemaManagement = true → behavior.schemaManagement = true := by
+theorem effective_schemaManagement_le_agent :
+    (effective agent ceiling runtime).schemaManagement = true → agent.schemaManagement = true := by
   exact fun h => bool_and_left (bool_and_left h)
 
 theorem effective_p2pRead_le_ceiling :
-    (effective behavior ceiling runtime).p2pRead = true → ceiling.p2pRead = true := by
+    (effective agent ceiling runtime).p2pRead = true → ceiling.p2pRead = true := by
   exact fun h => bool_and_right (bool_and_left h)
 
 theorem effective_p2pMutate_le_ceiling :
-    (effective behavior ceiling runtime).p2pMutate = true → ceiling.p2pMutate = true := by
+    (effective agent ceiling runtime).p2pMutate = true → ceiling.p2pMutate = true := by
   exact fun h => bool_and_right (bool_and_left h)
 
 /-- A mutation grant does not expose node observations on its own. -/
@@ -166,242 +166,242 @@ theorem permitsP2pMutation_requires_read (surface : Surface) :
   exact bool_and_left
 
 theorem effective_p2pMutation_le_ceiling :
-    permitsP2pMutation (effective behavior ceiling runtime) = true →
+    permitsP2pMutation (effective agent ceiling runtime) = true →
       permitsP2pMutation ceiling = true := by
   intro h
-  have read := effective_p2pRead_le_ceiling behavior ceiling runtime (bool_and_left h)
-  have mutate := effective_p2pMutate_le_ceiling behavior ceiling runtime (bool_and_right h)
+  have read := effective_p2pRead_le_ceiling agent ceiling runtime (bool_and_left h)
+  have mutate := effective_p2pMutate_le_ceiling agent ceiling runtime (bool_and_right h)
   simp [permitsP2pMutation, read, mutate]
 
 theorem effective_p2pCollections_subset_ceiling (collection : ToolId) :
-    (effective behavior ceiling runtime).p2pCollections.permits collection →
+    (effective agent ceiling runtime).p2pCollections.permits collection →
       ceiling.p2pCollections.permits collection := by
   intro h
   have inner := EndpointScope.meet_permits_left unitVM
-    (behavior.p2pCollections.meet unitVM ceiling.p2pCollections)
+    (agent.p2pCollections.meet unitVM ceiling.p2pCollections)
     runtime.p2pCollections collection h
-  exact EndpointScope.meet_permits_right unitVM behavior.p2pCollections
+  exact EndpointScope.meet_permits_right unitVM agent.p2pCollections
     ceiling.p2pCollections collection inner
 
 theorem effective_sessionHistory_le_ceiling :
-    (effective behavior ceiling runtime).sessionHistory = true → ceiling.sessionHistory = true := by
+    (effective agent ceiling runtime).sessionHistory = true → ceiling.sessionHistory = true := by
   exact fun h => bool_and_right (bool_and_left h)
 
-theorem effective_sessionHistory_le_behavior :
-    (effective behavior ceiling runtime).sessionHistory = true → behavior.sessionHistory = true := by
+theorem effective_sessionHistory_le_agent :
+    (effective agent ceiling runtime).sessionHistory = true → agent.sessionHistory = true := by
   exact fun h => bool_and_left (bool_and_left h)
 
 theorem effective_contextBudget_le_ceiling :
-    (effective behavior ceiling runtime).contextBudget = true → ceiling.contextBudget = true := by
+    (effective agent ceiling runtime).contextBudget = true → ceiling.contextBudget = true := by
   exact fun h => bool_and_right (bool_and_left h)
 
-theorem effective_contextBudget_le_behavior :
-    (effective behavior ceiling runtime).contextBudget = true → behavior.contextBudget = true := by
+theorem effective_contextBudget_le_agent :
+    (effective agent ceiling runtime).contextBudget = true → agent.contextBudget = true := by
   exact fun h => bool_and_left (bool_and_left h)
 
 theorem effective_sessionMessages_le_ceiling :
-    (effective behavior ceiling runtime).sessionMessages = true →
+    (effective agent ceiling runtime).sessionMessages = true →
       ceiling.sessionMessages = true := by
   exact fun h => bool_and_right (bool_and_left h)
 
-theorem effective_sessionMessages_le_behavior :
-    (effective behavior ceiling runtime).sessionMessages = true →
-      behavior.sessionMessages = true := by
+theorem effective_sessionMessages_le_agent :
+    (effective agent ceiling runtime).sessionMessages = true →
+      agent.sessionMessages = true := by
   exact fun h => bool_and_left (bool_and_left h)
 
 theorem effective_skills_le_ceiling :
-    (effective behavior ceiling runtime).skills = true → ceiling.skills = true := by
+    (effective agent ceiling runtime).skills = true → ceiling.skills = true := by
   exact fun h => bool_and_right (bool_and_left h)
 
-theorem effective_skills_le_behavior :
-    (effective behavior ceiling runtime).skills = true → behavior.skills = true := by
+theorem effective_skills_le_agent :
+    (effective agent ceiling runtime).skills = true → agent.skills = true := by
   exact fun h => bool_and_left (bool_and_left h)
 
 theorem effective_lsp_le_ceiling :
-    (effective behavior ceiling runtime).lsp = true → ceiling.lsp = true := by
+    (effective agent ceiling runtime).lsp = true → ceiling.lsp = true := by
   exact fun h => bool_and_right (bool_and_left h)
 
-theorem effective_lsp_le_behavior :
-    (effective behavior ceiling runtime).lsp = true → behavior.lsp = true := by
+theorem effective_lsp_le_agent :
+    (effective agent ceiling runtime).lsp = true → agent.lsp = true := by
   exact fun h => bool_and_left (bool_and_left h)
 
 theorem effective_mcp_subset_ceiling (k : ToolId) :
-    (effective behavior ceiling runtime).mcpServices.permits k →
+    (effective agent ceiling runtime).mcpServices.permits k →
       ceiling.mcpServices.permits k := by
   unfold effective Surface.meet
   intro h
   have hin := EndpointScope.meet_permits_left unitVM
-    (behavior.mcpServices.meet unitVM ceiling.mcpServices) runtime.mcpServices k h
-  exact EndpointScope.meet_permits_right unitVM behavior.mcpServices ceiling.mcpServices k hin
+    (agent.mcpServices.meet unitVM ceiling.mcpServices) runtime.mcpServices k h
+  exact EndpointScope.meet_permits_right unitVM agent.mcpServices ceiling.mcpServices k hin
 
-theorem effective_mcp_subset_behavior (k : ToolId) :
-    (effective behavior ceiling runtime).mcpServices.permits k →
-      behavior.mcpServices.permits k := by
+theorem effective_mcp_subset_agent (k : ToolId) :
+    (effective agent ceiling runtime).mcpServices.permits k →
+      agent.mcpServices.permits k := by
   unfold effective Surface.meet
   intro h
   have hin := EndpointScope.meet_permits_left unitVM
-    (behavior.mcpServices.meet unitVM ceiling.mcpServices) runtime.mcpServices k h
-  exact EndpointScope.meet_permits_left unitVM behavior.mcpServices ceiling.mcpServices k hin
+    (agent.mcpServices.meet unitVM ceiling.mcpServices) runtime.mcpServices k h
+  exact EndpointScope.meet_permits_left unitVM agent.mcpServices ceiling.mcpServices k hin
 
 theorem effective_cli_keys_subset_ceiling (k : ToolId) :
-    (effective behavior ceiling runtime).cliTools.permits k →
+    (effective agent ceiling runtime).cliTools.permits k →
       ceiling.cliTools.permits k := by
   unfold effective Surface.meet
   intro h
   have hin := EndpointScope.meet_permits_left rootVM
-    (behavior.cliTools.meet rootVM ceiling.cliTools) runtime.cliTools k h
-  exact EndpointScope.meet_permits_right rootVM behavior.cliTools ceiling.cliTools k hin
+    (agent.cliTools.meet rootVM ceiling.cliTools) runtime.cliTools k h
+  exact EndpointScope.meet_permits_right rootVM agent.cliTools ceiling.cliTools k hin
 
-theorem effective_cli_keys_subset_behavior (k : ToolId) :
-    (effective behavior ceiling runtime).cliTools.permits k →
-      behavior.cliTools.permits k := by
+theorem effective_cli_keys_subset_agent (k : ToolId) :
+    (effective agent ceiling runtime).cliTools.permits k →
+      agent.cliTools.permits k := by
   unfold effective Surface.meet
   intro h
   have hin := EndpointScope.meet_permits_left rootVM
-    (behavior.cliTools.meet rootVM ceiling.cliTools) runtime.cliTools k h
-  exact EndpointScope.meet_permits_left rootVM behavior.cliTools ceiling.cliTools k hin
+    (agent.cliTools.meet rootVM ceiling.cliTools) runtime.cliTools k h
+  exact EndpointScope.meet_permits_left rootVM agent.cliTools ceiling.cliTools k hin
 
 theorem effective_defraCollections_subset_ceiling (k : ToolId) :
-    (effective behavior ceiling runtime).defraCollections.permits k →
+    (effective agent ceiling runtime).defraCollections.permits k →
       ceiling.defraCollections.permits k := by
   unfold effective Surface.meet
   intro h
   have hin := EndpointScope.meet_permits_left unitVM
-    (behavior.defraCollections.meet unitVM ceiling.defraCollections) runtime.defraCollections k h
-  exact EndpointScope.meet_permits_right unitVM behavior.defraCollections ceiling.defraCollections k hin
+    (agent.defraCollections.meet unitVM ceiling.defraCollections) runtime.defraCollections k h
+  exact EndpointScope.meet_permits_right unitVM agent.defraCollections ceiling.defraCollections k hin
 
-theorem effective_defraCollections_subset_behavior (k : ToolId) :
-    (effective behavior ceiling runtime).defraCollections.permits k →
-      behavior.defraCollections.permits k := by
+theorem effective_defraCollections_subset_agent (k : ToolId) :
+    (effective agent ceiling runtime).defraCollections.permits k →
+      agent.defraCollections.permits k := by
   unfold effective Surface.meet
   intro h
   have hin := EndpointScope.meet_permits_left unitVM
-    (behavior.defraCollections.meet unitVM ceiling.defraCollections) runtime.defraCollections k h
-  exact EndpointScope.meet_permits_left unitVM behavior.defraCollections ceiling.defraCollections k hin
+    (agent.defraCollections.meet unitVM ceiling.defraCollections) runtime.defraCollections k h
+  exact EndpointScope.meet_permits_left unitVM agent.defraCollections ceiling.defraCollections k hin
 
 theorem effective_agentTargets_subset_ceiling (k : String × String) :
-    (effective behavior ceiling runtime).agentTargets.permits k →
+    (effective agent ceiling runtime).agentTargets.permits k →
       ceiling.agentTargets.permits k := by
   unfold effective Surface.meet
   intro h
   have hin := EndpointScope.meet_permits_left unitVM
-    (behavior.agentTargets.meet unitVM ceiling.agentTargets) runtime.agentTargets k h
-  exact EndpointScope.meet_permits_right unitVM behavior.agentTargets ceiling.agentTargets k hin
+    (agent.agentTargets.meet unitVM ceiling.agentTargets) runtime.agentTargets k h
+  exact EndpointScope.meet_permits_right unitVM agent.agentTargets ceiling.agentTargets k hin
 
-theorem effective_agentTargets_subset_behavior (k : String × String) :
-    (effective behavior ceiling runtime).agentTargets.permits k →
-      behavior.agentTargets.permits k := by
+theorem effective_agentTargets_subset_agent (k : String × String) :
+    (effective agent ceiling runtime).agentTargets.permits k →
+      agent.agentTargets.permits k := by
   unfold effective Surface.meet
   intro h
   have hin := EndpointScope.meet_permits_left unitVM
-    (behavior.agentTargets.meet unitVM ceiling.agentTargets) runtime.agentTargets k h
-  exact EndpointScope.meet_permits_left unitVM behavior.agentTargets ceiling.agentTargets k hin
+    (agent.agentTargets.meet unitVM ceiling.agentTargets) runtime.agentTargets k h
+  exact EndpointScope.meet_permits_left unitVM agent.agentTargets ceiling.agentTargets k hin
 
 theorem effective_backgroundTools_subset_ceiling (k : ToolId) :
-    (effective behavior ceiling runtime).backgroundTools.permits k →
+    (effective agent ceiling runtime).backgroundTools.permits k →
       ceiling.backgroundTools.permits k := by
   unfold effective Surface.meet
   intro h
   have hin := EndpointScope.meet_permits_left unitVM
-    (behavior.backgroundTools.meet unitVM ceiling.backgroundTools) runtime.backgroundTools k h
-  exact EndpointScope.meet_permits_right unitVM behavior.backgroundTools ceiling.backgroundTools k hin
+    (agent.backgroundTools.meet unitVM ceiling.backgroundTools) runtime.backgroundTools k h
+  exact EndpointScope.meet_permits_right unitVM agent.backgroundTools ceiling.backgroundTools k hin
 
-theorem effective_backgroundTools_subset_behavior (k : ToolId) :
-    (effective behavior ceiling runtime).backgroundTools.permits k →
-      behavior.backgroundTools.permits k := by
+theorem effective_backgroundTools_subset_agent (k : ToolId) :
+    (effective agent ceiling runtime).backgroundTools.permits k →
+      agent.backgroundTools.permits k := by
   unfold effective Surface.meet
   intro h
   have hin := EndpointScope.meet_permits_left unitVM
-    (behavior.backgroundTools.meet unitVM ceiling.backgroundTools) runtime.backgroundTools k h
-  exact EndpointScope.meet_permits_left unitVM behavior.backgroundTools ceiling.backgroundTools k hin
+    (agent.backgroundTools.meet unitVM ceiling.backgroundTools) runtime.backgroundTools k h
+  exact EndpointScope.meet_permits_left unitVM agent.backgroundTools ceiling.backgroundTools k hin
 
 theorem effective_write_keys_subset_ceiling (k : String × String) :
-    (effective behavior ceiling runtime).writeTools.permits k →
+    (effective agent ceiling runtime).writeTools.permits k →
       ceiling.writeTools.permits k := by
   unfold effective Surface.meet
   intro h
   have hin := EndpointScope.meet_permits_left fieldsVM
-    (behavior.writeTools.meet fieldsVM ceiling.writeTools) runtime.writeTools k h
-  exact EndpointScope.meet_permits_right fieldsVM behavior.writeTools ceiling.writeTools k hin
+    (agent.writeTools.meet fieldsVM ceiling.writeTools) runtime.writeTools k h
+  exact EndpointScope.meet_permits_right fieldsVM agent.writeTools ceiling.writeTools k hin
 
-theorem effective_write_keys_subset_behavior (k : String × String) :
-    (effective behavior ceiling runtime).writeTools.permits k →
-      behavior.writeTools.permits k := by
+theorem effective_write_keys_subset_agent (k : String × String) :
+    (effective agent ceiling runtime).writeTools.permits k →
+      agent.writeTools.permits k := by
   unfold effective Surface.meet
   intro h
   have hin := EndpointScope.meet_permits_left fieldsVM
-    (behavior.writeTools.meet fieldsVM ceiling.writeTools) runtime.writeTools k h
-  exact EndpointScope.meet_permits_left fieldsVM behavior.writeTools ceiling.writeTools k hin
+    (agent.writeTools.meet fieldsVM ceiling.writeTools) runtime.writeTools k h
+  exact EndpointScope.meet_permits_left fieldsVM agent.writeTools ceiling.writeTools k hin
 
 theorem effective_bash_permits_subset_ceiling (req : CmdReq) :
-    (effective behavior ceiling runtime).bash.permits req →
+    (effective agent ceiling runtime).bash.permits req →
       ceiling.bash.permits req := by
   unfold effective Surface.meet
   intro h
-  have hin := BashPolicy.meet_permits_left (behavior.bash.meet ceiling.bash) runtime.bash req h
-  exact BashPolicy.meet_permits_right behavior.bash ceiling.bash req hin
+  have hin := BashPolicy.meet_permits_left (agent.bash.meet ceiling.bash) runtime.bash req h
+  exact BashPolicy.meet_permits_right agent.bash ceiling.bash req hin
 
-theorem effective_bash_permits_subset_behavior (req : CmdReq) :
-    (effective behavior ceiling runtime).bash.permits req →
-      behavior.bash.permits req := by
+theorem effective_bash_permits_subset_agent (req : CmdReq) :
+    (effective agent ceiling runtime).bash.permits req →
+      agent.bash.permits req := by
   unfold effective Surface.meet
   intro h
-  have hin := BashPolicy.meet_permits_left (behavior.bash.meet ceiling.bash) runtime.bash req h
-  exact BashPolicy.meet_permits_left behavior.bash ceiling.bash req hin
+  have hin := BashPolicy.meet_permits_left (agent.bash.meet ceiling.bash) runtime.bash req h
+  exact BashPolicy.meet_permits_left agent.bash ceiling.bash req hin
 
 theorem effective_within_ceiling :
-    (effective behavior ceiling runtime).file.rank ≤ ceiling.file.rank ∧
-    ((effective behavior ceiling runtime).defraQuery = true → ceiling.defraQuery = true) ∧
-    ((effective behavior ceiling runtime).skills = true → ceiling.skills = true) := by
-  exact ⟨effective_file_le_ceiling behavior ceiling runtime,
-    effective_defraQuery_le_ceiling behavior ceiling runtime,
-    effective_skills_le_ceiling behavior ceiling runtime⟩
+    (effective agent ceiling runtime).file.rank ≤ ceiling.file.rank ∧
+    ((effective agent ceiling runtime).defraQuery = true → ceiling.defraQuery = true) ∧
+    ((effective agent ceiling runtime).skills = true → ceiling.skills = true) := by
+  exact ⟨effective_file_le_ceiling agent ceiling runtime,
+    effective_defraQuery_le_ceiling agent ceiling runtime,
+    effective_skills_le_ceiling agent ceiling runtime⟩
 
 theorem effective_query_keys_subset_ceiling (k : String × String) :
-    (effective behavior ceiling runtime).queryTools.permits k →
+    (effective agent ceiling runtime).queryTools.permits k →
       ceiling.queryTools.permits k := by
   unfold effective Surface.meet
   intro h
   have hin := EndpointScope.meet_permits_left fieldsVM
-    (behavior.queryTools.meet fieldsVM ceiling.queryTools) runtime.queryTools k h
-  exact EndpointScope.meet_permits_right fieldsVM behavior.queryTools ceiling.queryTools k hin
+    (agent.queryTools.meet fieldsVM ceiling.queryTools) runtime.queryTools k h
+  exact EndpointScope.meet_permits_right fieldsVM agent.queryTools ceiling.queryTools k hin
 
-theorem effective_query_keys_subset_behavior (k : String × String) :
-    (effective behavior ceiling runtime).queryTools.permits k →
-      behavior.queryTools.permits k := by
+theorem effective_query_keys_subset_agent (k : String × String) :
+    (effective agent ceiling runtime).queryTools.permits k →
+      agent.queryTools.permits k := by
   unfold effective Surface.meet
   intro h
   have hin := EndpointScope.meet_permits_left fieldsVM
-    (behavior.queryTools.meet fieldsVM ceiling.queryTools) runtime.queryTools k h
-  exact EndpointScope.meet_permits_left fieldsVM behavior.queryTools ceiling.queryTools k hin
+    (agent.queryTools.meet fieldsVM ceiling.queryTools) runtime.queryTools k h
+  exact EndpointScope.meet_permits_left fieldsVM agent.queryTools ceiling.queryTools k hin
 
 theorem effective_query_fields_narrow
-    (behavior ceiling : Surface) (runtime : Avail)
+    (agent ceiling : Surface) (runtime : Avail)
     (hrt : runtime.queryTools = .all)
     (k : String × String) (vc ve : Finset String)
     (hck : ceiling.queryTools.lookup k = some vc)
-    (hek : (effective behavior ceiling runtime).queryTools.lookup k = some ve) :
+    (hek : (effective agent ceiling runtime).queryTools.lookup k = some ve) :
     ve ⊆ vc := by
   unfold effective Surface.meet at hek
   rw [hrt] at hek
-  have hek' : (behavior.queryTools.meet fieldsVM ceiling.queryTools).lookup k = some ve := by
+  have hek' : (agent.queryTools.meet fieldsVM ceiling.queryTools).lookup k = some ve := by
     simpa using hek
   exact EndpointScope.meet_lookup_vle_right fieldsVM
-    behavior.queryTools ceiling.queryTools k ve vc hek' hck
+    agent.queryTools ceiling.queryTools k ve vc hek' hck
 
 theorem effective_write_fields_narrow
-    (behavior ceiling : Surface) (runtime : Avail)
+    (agent ceiling : Surface) (runtime : Avail)
     (hrt : runtime.writeTools = .all)
     (k : String × String) (vc ve : Finset String)
     (hck : ceiling.writeTools.lookup k = some vc)
-    (hek : (effective behavior ceiling runtime).writeTools.lookup k = some ve) :
+    (hek : (effective agent ceiling runtime).writeTools.lookup k = some ve) :
     ve ⊆ vc := by
   unfold effective Surface.meet at hek
   rw [hrt] at hek
-  have hek' : (behavior.writeTools.meet fieldsVM ceiling.writeTools).lookup k = some ve := by
+  have hek' : (agent.writeTools.meet fieldsVM ceiling.writeTools).lookup k = some ve := by
     simpa using hek
   exact EndpointScope.meet_lookup_vle_right fieldsVM
-    behavior.writeTools ceiling.writeTools k ve vc hek' hck
+    agent.writeTools ceiling.writeTools k ve vc hek' hck
 
 @[simp] theorem FileCap.meet_idem (a : FileCap) : a.meet a = a := by
   cases a <;> simp [FileCap.meet, FileCap.rank]
