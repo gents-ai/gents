@@ -2654,7 +2654,7 @@ impl Tool for RunGraphTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_owned(),
-            description: "Start an installed graph on this managed node as the current principal. Supply package (and, if the package has more than one entry, entry) plus input matching that entry's advertised input_schema for a package run; list_graphs returns each entry's input_schema. For another graph, supply the exact graph_id, revision_digest, entry, and input returned by list_graphs. Returns a durable run receipt and observed initial state.".to_owned(),
+            description: "Start an installed graph on this managed node as the current principal. Select it by package, or by the exact graph_id and revision_digest that list_graphs returns. Supply entry only when the graph has more than one, and input matching that entry's input_schema from list_graphs (default {}). Returns a durable run receipt and observed initial state.".to_owned(),
             parameters: json!({
                 "type":"object",
                 "properties":{
