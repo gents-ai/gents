@@ -98,6 +98,14 @@ export function useScroller(): [
   return [scroller, owner];
 }
 
+/* the position this module last set or read a reader's place at, per scroller */
+const settled = new WeakMap<Element, number>();
+/* every write this module makes to a transcript's position */
+function setScroll(el: HTMLElement, top: number) {
+  el.scrollTop = top;
+  settled.set(el, el.scrollTop);
+}
+
 /* a reader who brings the view this close to the foot is following again */
 const REPIN_PX = 24;
 /* how long after a wheel, touch or key a scroll still counts as the reader's */
@@ -187,7 +195,7 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
     const top = () => scroller.getBoundingClientRect().top;
     const pin = () => {
       const foot = scroller.scrollHeight - scroller.clientHeight;
-      if (Math.abs(scroller.scrollTop - foot) >= 0.5) scroller.scrollTop = foot;
+      if (Math.abs(scroller.scrollTop - foot) >= 0.5) setScroll(scroller, foot);
     };
     /* A row inside a nested scroller (a group's own box) moves as that box
        scrolls; holding it would move the whole transcript after it. Inside
@@ -214,6 +222,7 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
       anchor = el
         ? { el, key: keyOf(el), offset: el.getBoundingClientRect().top - box.top }
         : null;
+      settled.set(scroller, scroller.scrollTop);
     };
     const hold = () => {
       if (!anchor) return capture();
@@ -226,10 +235,26 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
       }
       if (!el) return capture();
       anchor.el = el;
+      /* Moved since the row was taken, by nothing this module did, while
+         the reader is scrolling: their scroll is under way and its event
+         has not come yet. That move is theirs, not a shift to undo (WebKit
+         stops a held arrow key's scroll at any write). Without the reader's
+         input, it is the browser clamping, and is undone. */
+      const since = scroller.scrollTop - (settled.get(scroller) ?? scroller.scrollTop);
+      if (since !== 0 && performance.now() <= intentUntil) {
+        anchor.offset -= since;
+        settled.set(scroller, scroller.scrollTop);
+      }
       const delta = el.getBoundingClientRect().top - top() - anchor.offset;
-      if (Math.abs(delta) >= 0.5) scroller.scrollTop += delta;
+      if (Math.abs(delta) >= 0.5) setScroll(scroller, scroller.scrollTop + delta);
     };
     let intentUntil = 0;
+    /* The reader's last move was up the page. Near the foot, following
+       resumes only for a reader coming down to it: a scroll that leaves the
+       foot gently (WebKit eases a held arrow key in a few pixels at a time)
+       is still within reach of it for its first frames, and pinning it back
+       there would cancel the scroll the reader is making. */
+    let leaving = false;
     /* holding the scrollbar, the reader is placing the view themselves */
     let dragging = false;
     const reconcile = () => {
@@ -266,6 +291,7 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
        itself, before a content change can pin the view back down ahead of
        the scroll the input is about to make. */
     const release = () => {
+      leaving = true;
       if (following.current) {
         anchor = null;
         setFollowing(false);
@@ -274,6 +300,7 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
     const onWheel = (event: WheelEvent) => {
       intend();
       if (event.deltaY < 0) release();
+      else if (event.deltaY > 0) leaving = false;
     };
     let touchY: number | undefined;
     const onTouchStart = (event: TouchEvent) => {
@@ -283,6 +310,7 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
       intend();
       const y = event.touches[0]?.clientY;
       if (touchY !== undefined && y !== undefined && y > touchY) release();
+      else if (touchY !== undefined && y !== undefined && y < touchY) leaving = false;
       touchY = y;
     };
     const onKey = (event: KeyboardEvent) => {
@@ -291,13 +319,17 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
       if (!NAV_KEYS.has(event.key)) return;
       intend();
       if (UP_KEYS.has(event.key)) release();
+      else leaving = false;
     };
     const area = scroller.parentElement;
     const onPointerDown = (event: PointerEvent) => {
       if (
         (event.target as Element | null)?.closest?.("[data-slot=scroll-area-scrollbar]")
-      )
+      ) {
+        /* a drag has no direction to read: where it lets go decides */
         dragging = true;
+        leaving = false;
+      }
     };
     const onPointerUp = () => {
       if (dragging) intend();
@@ -305,7 +337,7 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
     };
     const onScroll = () => {
       if (!dragging && performance.now() > intentUntil) return;
-      setFollowing(distanceFromFoot(scroller) <= REPIN_PX);
+      setFollowing(!leaving && distanceFromFoot(scroller) <= REPIN_PX);
       if (!following.current) capture();
     };
     /* A row the reader opens or closes says so first. It is held while the
@@ -320,10 +352,11 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
       const inset = insetAt(el);
       let offset = el.getBoundingClientRect().top - top();
       if (offset < inset) {
-        scroller.scrollTop -= inset - offset;
+        setScroll(scroller, scroller.scrollTop - (inset - offset));
         offset = inset;
       }
       anchor = { el, key: keyOf(el), offset };
+      settled.set(scroller, scroller.scrollTop);
     };
     scroller.addEventListener("wheel", onWheel, { passive: true });
     scroller.addEventListener("touchstart", onTouchStart, { passive: true });
@@ -355,7 +388,7 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
     following.current = true;
     scroller.dataset.following = "true";
     setAtBottom(true);
-    scroller.scrollTop = scroller.scrollHeight - scroller.clientHeight;
+    setScroll(scroller, scroller.scrollHeight - scroller.clientHeight);
   }, [scroller]);
 
   /* for a change the content box does not show (the room kept for the
@@ -393,9 +426,12 @@ type Hold = {
 function restore(viewport: HTMLElement, hold: Hold) {
   if (hold.row?.isConnected && hold.top !== undefined) {
     const movement = viewport.scrollTop - hold.scrollTop;
-    viewport.scrollTop += hold.row.getBoundingClientRect().top - hold.top + movement;
+    setScroll(
+      viewport,
+      viewport.scrollTop + hold.row.getBoundingClientRect().top - hold.top + movement,
+    );
   } else {
-    viewport.scrollTop += viewport.scrollHeight - hold.height;
+    setScroll(viewport, viewport.scrollTop + viewport.scrollHeight - hold.height);
   }
 }
 

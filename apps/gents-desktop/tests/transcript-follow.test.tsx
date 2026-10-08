@@ -79,6 +79,23 @@ describe("transcript streaming follow", () => {
     expect(fixture.viewport.scrollTop).toBe(foot(1_500));
   });
 
+  /* WebKit eases a held arrow key in a few pixels at a time, so its first
+     frames are still within reach of the foot */
+  it("leaves a reader moving up near the foot where they are when the content changes", () => {
+    const fixture = transcriptFixture();
+    renderHook(() => useFollowTail(fixture.viewport, "session-1"));
+    fixture.growTo(600);
+    expect(fixture.viewport.scrollTop).toBe(foot(600));
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp" }));
+      fixture.viewport.scrollTop = foot(600) - 3;
+      fixture.viewport.dispatchEvent(new Event("scroll"));
+    });
+    fixture.growTo(700);
+    expect(fixture.viewport.dataset.following).toBe("false");
+    expect(fixture.viewport.scrollTop).toBe(foot(600) - 3);
+  });
+
   it("is not moved off the foot by a scroll the reader did not make", () => {
     const fixture = transcriptFixture();
     const { result } = renderHook(() => useFollowTail(fixture.viewport, "session-1"));

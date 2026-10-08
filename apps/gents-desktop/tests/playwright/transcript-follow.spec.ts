@@ -48,6 +48,34 @@ test.describe("a reader scrolled up in a transcript", () => {
     expect(moved).toBe(0);
   });
 
+  /* A held arrow key or a trackpad's momentum moves the view a little each
+     frame, and the scroll event saying so comes after; a row swapping or a
+     reply growing in between must not pull the reader back by the move they
+     just made (WebKit stops a keyboard scroll at any such write). */
+  test("does not undo the reader's own move when the content changes before its scroll event", async ({
+    page,
+  }) => {
+    await page.getByTestId("transcript-panel").hover();
+    await page.mouse.wheel(0, -1200);
+    const viewport = page.locator('[data-slot="scroll-area-viewport"][data-following]');
+    await expect(viewport).toHaveAttribute("data-following", "false");
+    await page.waitForTimeout(800);
+    const result = await viewport.evaluate(async (scroller) => {
+      const moved = scroller.scrollTop - 10;
+      /* a held arrow key repeats while its scroll runs */
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowUp", repeat: true }),
+      );
+      /* the view has moved; the content changes before the move's event */
+      scroller.scrollTop = moved;
+      const note = document.createElement("span");
+      scroller.querySelector("[data-timeline-key]")!.append(note);
+      for (let i = 0; i < 3; i += 1) await new Promise((r) => requestAnimationFrame(r));
+      return { moved, now: scroller.scrollTop };
+    });
+    expect(Math.abs(result.now - result.moved)).toBeLessThan(1);
+  });
+
   test("keeps their place while the reply below them streams", async ({ page }) => {
     await page.getByTestId("transcript-panel").hover();
     await page.mouse.wheel(0, -1200);
