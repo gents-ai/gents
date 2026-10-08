@@ -6,7 +6,7 @@ contract.
 This crate owns the agent-domain `.graphql` files that document-peer consumers
 need to share with gents:
 
-- agent identity, behavior, runtime, and tool selection
+- node identity, behavior, runtime, and tool selection
 - per-agent memory
 - requests, rendered provider requests, responses, sessions, conversations,
   messages, tool calls, and tool results
