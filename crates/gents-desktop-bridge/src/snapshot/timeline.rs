@@ -106,6 +106,8 @@ fn render_timeline_order(
                         content: pending_turn.content.clone(),
                         selected_skill_ids: pending_turn.selected_skill_ids.clone(),
                         lifecycle_state: pending_turn.lifecycle_state.clone(),
+                        folded_into_request_id: pending_turn.folded_into_request_id.clone(),
+                        origin: pending_turn.origin.clone(),
                         created_at: pending_turn.created_at.clone(),
                     });
                 }
@@ -154,7 +156,8 @@ pub(super) fn build_rendered_timeline(
             .or(message.role.as_deref())
             .unwrap_or("assistant");
         let is_user = role.eq_ignore_ascii_case("user");
-        let is_background_control = is_user && message.runtime_control;
+        let automated = message.origin.clone().filter(|_| is_user);
+        let is_background_control = is_user && message.runtime_control && automated.is_none();
         let unresolved = message.reconstruction_state != ReconstructionState::Ready;
         let keep = !is_background_control
             && (unresolved
@@ -172,7 +175,20 @@ pub(super) fn build_rendered_timeline(
             error: message.reconstruction_error.clone(),
             denied_dependency_doc_id: message.denied_dependency_doc_id.clone(),
         };
-        let (emits_item, item) = if is_user {
+        let (emits_item, item) = if let Some(origin) = automated {
+            (
+                true,
+                Some(RenderedTimelineItem::AutomatedInput {
+                    item_key: message.message_key.clone(),
+                    request_id: message.request_id.clone(),
+                    sequence: message.sequence,
+                    origin,
+                    content: normalized_content.clone(),
+                    timestamp: normalize_optional(message.timestamp.as_deref()),
+                    reconstruction,
+                }),
+            )
+        } else if is_user {
             match (normalized_content.clone(), unresolved) {
                 (Some(_), _) | (None, true) => (
                     true,
@@ -279,6 +295,7 @@ mod tests {
             reconstruction_error: None,
             denied_dependency_doc_id: None,
             runtime_control: false,
+            origin: None,
             timestamp: None,
         }
     }
@@ -291,6 +308,8 @@ mod tests {
             content: "keep this input".into(),
             selected_skill_ids: vec![],
             lifecycle_state: Some("interrupted".into()),
+            folded_into_request_id: None,
+            origin: None,
             created_at: None,
         };
         let hidden = MessageView {

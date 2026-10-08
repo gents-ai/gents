@@ -41,6 +41,7 @@ function session(content: string): DesktopSessionSnapshot {
     retryEligibility: { eligible: false, denialReason: null },
     latestRequestOutcome: null,
     pendingTurn: null,
+    queuedTurns: [],
     context: {
       estimatedDurableTokens: 0,
       estimatedConversationTokens: 0,

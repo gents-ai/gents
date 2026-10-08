@@ -316,6 +316,32 @@ test.describe("kit shell", () => {
     await expect(page.getByTestId("error-banner")).toHaveCount(0);
   });
 
+  test("a message sent while the turn runs queues behind it", async ({ page }) => {
+    await gotoHarness(page, "active-turn");
+    await page
+      .getByTestId("sessions-screen")
+      .getByRole("link", { name: /introduction-and-greetings/ })
+      .click();
+    await expect(composer(page)).toBeEnabled();
+    await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
+
+    /* Enter, not the button: the harness's toasts can sit over the send slot */
+    await composer(page).fill("first queued thought");
+    await expect(sendButton(page)).toBeEnabled();
+    await composer(page).press("Enter");
+    await expect(page.getByTestId("queued-input")).toHaveCount(1);
+    await composer(page).fill("second queued thought");
+    await expect(sendButton(page)).toBeEnabled();
+    await composer(page).press("Enter");
+
+    const queued = page.getByTestId("queued-input");
+    await expect(queued).toHaveCount(2);
+    await expect(queued.nth(0)).toContainText("first queued thought");
+    await expect(queued.nth(0)).toContainText("Queued");
+    await expect(queued.nth(1)).toContainText("second queued thought");
+    await expect(composer(page)).toBeEnabled();
+  });
+
   test("session context details have an explicit close control", async ({ page }) => {
     await gotoHarness(page);
     await page

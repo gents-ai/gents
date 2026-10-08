@@ -9,4 +9,10 @@ import type { SessionHydrationView } from "./SessionHydrationView.js";
 import type { SessionProjectionRevisionView } from "./SessionProjectionRevisionView.js";
 import type { SessionTimelinePageView } from "./SessionTimelinePageView.js";
 
-export type DesktopSessionSnapshot = { sessionId: string, agentDid: string | null, behaviorId: string | null, title: string | null, previewText: string | null, status: string | null, goal: GoalView | null, turnState: string | null, latestRequestId: string | null, retryEligibility: RetryEligibilityView, latestRequestOutcome: RequestOutcomeView | null, pendingTurn: PendingTurnView | null, context: SessionContextView, timelineItems: Array<RenderedTimelineItem>, hydration?: SessionHydrationView | null, timelinePage?: SessionTimelinePageView | null, projectionRevision?: SessionProjectionRevisionView | null, };
+export type DesktopSessionSnapshot = { sessionId: string, agentDid: string | null, behaviorId: string | null, title: string | null, previewText: string | null, status: string | null, goal: GoalView | null, turnState: string | null, latestRequestId: string | null, retryEligibility: RetryEligibilityView, latestRequestOutcome: RequestOutcomeView | null, pendingTurn: PendingTurnView | null,
+/**
+ * Unclaimed messages waiting behind the session's turn, in queue order.
+ * They have not entered the transcript: a claim either folds them into
+ * the claimed turn as its own user entries or makes one the next turn.
+ */
+queuedTurns: Array<PendingTurnView>, context: SessionContextView, timelineItems: Array<RenderedTimelineItem>, hydration?: SessionHydrationView | null, timelinePage?: SessionTimelinePageView | null, projectionRevision?: SessionProjectionRevisionView | null, };

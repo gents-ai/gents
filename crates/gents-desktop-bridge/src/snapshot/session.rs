@@ -14,9 +14,10 @@ use super::super::cause_derivation::{derive_tool_call_cause, RequestEvidence, To
 use super::super::types::{
     is_live_turn_state, normalize_optional, turn_state_label, CommandDenialView,
     DerivedCancelCauseView, DesktopSessionSnapshot, GoalView, MessageReconstructionView,
-    MessageView, PendingTurnView, ReconstructionState, RequestOutcomeView, RetryEligibilityView,
-    SessionCompactionView, SessionContextView, SessionHydrationView, SessionLiveDeltaView,
-    SessionLiveTextPatchView, SessionProjectionRevisionView, SessionTimelinePageView, ToolCallView,
+    MessageView, PendingTurnView, ReconstructionState, RequestOriginView, RequestOutcomeView,
+    RetryEligibilityView, SessionCompactionView, SessionContextView, SessionHydrationView,
+    SessionLiveDeltaView, SessionLiveTextPatchView, SessionProjectionRevisionView,
+    SessionTimelinePageView, ToolCallView,
 };
 use super::timeline::build_rendered_timeline;
 use super::{request_matches_agent, source_matches_agent};
@@ -62,6 +63,76 @@ pub(super) fn message_is_runtime_control(
         .cloned()
         .unwrap_or_default();
     gents::lifecycle::is_runtime_control_message(&request_input, &message.message.message_key)
+}
+
+/// Who put `request` into its session, when not the person. A session
+/// message names its sender's session only when this replica holds the exact
+/// causing request.
+pub(super) fn request_origin_view(
+    store: &ClientStore,
+    request: &AgentRequestRow,
+) -> Option<RequestOriginView> {
+    use gents::lifecycle::RequestOrigin;
+    Some(match gents::lifecycle::request_origin(request) {
+        RequestOrigin::Person => return None,
+        RequestOrigin::SessionMessage {
+            parent_request_doc_id,
+        } => {
+            let parent = parent_request_doc_id.and_then(|doc_id| {
+                store
+                    .requests
+                    .iter()
+                    .find(|row| row.doc_id.as_deref() == Some(doc_id))
+            });
+            RequestOriginView::SessionMessage {
+                sender_agent_did: parent
+                    .and_then(|row| normalize_optional(row.agent_did.as_deref()))
+                    .or_else(|| normalize_optional(request.requester_did.as_deref())),
+                sender_session_id: parent
+                    .and_then(|row| normalize_optional(row.session_id.as_deref())),
+                sender_request_id: parent
+                    .map(|row| row.request_id.clone())
+                    .or_else(|| normalize_optional(request.caused_by_parent_request_id.as_deref())),
+            }
+        }
+        RequestOrigin::Trigger {
+            trigger_id,
+            trigger_kind,
+        } => RequestOriginView::Trigger {
+            trigger_id: trigger_id.to_owned(),
+            trigger_kind: trigger_kind.map(str::to_owned),
+        },
+        RequestOrigin::GoalContinuation { goal_id, sequence } => {
+            RequestOriginView::GoalContinuation {
+                goal_id: goal_id.map(str::to_owned),
+                sequence,
+            }
+        }
+        RequestOrigin::BackgroundCompletion => RequestOriginView::BackgroundCompletion,
+    })
+}
+
+/// The origin of a user-role transcript entry: that of the request it was
+/// published under, or a background completion for a delivered notification.
+pub(super) fn message_origin(
+    store: &ClientStore,
+    message: &TranscriptMessageRow,
+    requests_by_id: &HashMap<&str, &AgentRequestRow>,
+) -> Option<RequestOriginView> {
+    if message.message.role != gents_protocol::output::MessageRole::User {
+        return None;
+    }
+    if gents::background_completion::is_background_completion_notification_message_key(
+        &message.message.message_key,
+    ) {
+        return Some(RequestOriginView::BackgroundCompletion);
+    }
+    message
+        .message
+        .request_doc_id
+        .as_deref()
+        .and_then(|request_id| requests_by_id.get(request_id))
+        .and_then(|request| request_origin_view(store, request))
 }
 
 pub(super) fn request_is_background_completion(request: &AgentRequestRow) -> bool {
@@ -263,6 +334,7 @@ fn build_hydration_only_session_snapshot(
         retry_eligibility: project_retry_eligibility(None),
         latest_request_outcome: None,
         pending_turn: None,
+        queued_turns: Vec::new(),
         context: build_session_context_from_stores(
             store,
             store,

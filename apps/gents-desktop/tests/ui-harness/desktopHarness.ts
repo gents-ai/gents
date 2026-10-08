@@ -348,6 +348,7 @@ export function createDesktopUiHarness(
     retryEligibility: { eligible: false, denialReason: null },
     latestRequestOutcome: harnessRequestOutcome(),
     pendingTurn: null,
+    queuedTurns: [],
     context:
       scenario === "long-content"
         ? harnessSessionContext({
@@ -534,6 +535,7 @@ export function createDesktopUiHarness(
       retryEligibility: { eligible: false, denialReason: null },
       latestRequestOutcome: null,
       pendingTurn: null,
+      queuedTurns: [],
       context: harnessSessionContext(),
       timelineItems: [
         {
@@ -576,6 +578,7 @@ export function createDesktopUiHarness(
         retryEligibility: { eligible: false, denialReason: null },
         latestRequestOutcome: null,
         pendingTurn: null,
+        queuedTurns: [],
         context: harnessSessionContext(),
         timelineItems: [],
       });
@@ -790,6 +793,7 @@ export function createDesktopUiHarness(
       retryEligibility: { eligible: false, denialReason: null },
       latestRequestOutcome: harnessRequestOutcome(),
       pendingTurn: null,
+      queuedTurns: [],
       context: harnessSessionContext(),
       timelineItems: [
         {
@@ -1247,6 +1251,37 @@ export function createDesktopUiHarness(
         const existing = sessions.get(request.sessionId)!;
         const nextSequence = existing.timelineItems.length + 1;
         const requestId = `request-${++requestSeq}`;
+        /* like the bridge, a message sent while the turn runs is queued
+           behind it rather than answered */
+        if (
+          existing.turnState === "running" ||
+          existing.turnState === "waitingForClaim"
+        ) {
+          sessions.set(request.sessionId, {
+            ...existing,
+            queuedTurns: [
+              ...existing.queuedTurns,
+              {
+                requestId,
+                content,
+                selectedSkillIds: [],
+                lifecycleState: "pending",
+                foldedIntoRequestId: null,
+                origin: null,
+                createdAt: new Date().toISOString(),
+              },
+            ],
+          });
+          rowCount += 1;
+          syncSessions();
+          notify("store");
+          return {
+            sessionId: request.sessionId,
+            requestId,
+            agentDid: request.agentDid,
+            behaviorId: request.behaviorId ?? null,
+          };
+        }
         const response = `Bombadil harness response ${requestSeq}: received "${content.slice(
           0,
           48,
@@ -2805,6 +2840,7 @@ function createLargePerformanceSession(): DesktopSessionSnapshot {
     retryEligibility: { eligible: false, denialReason: null },
     latestRequestOutcome: null,
     pendingTurn: null,
+    queuedTurns: [],
     context: harnessSessionContext(),
     timelineItems,
   };

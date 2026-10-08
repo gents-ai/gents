@@ -60,8 +60,23 @@ function timelineItemUnchanged(
         previous.requestId === next.requestId &&
         previous.content === next.content &&
         previous.lifecycleState === next.lifecycleState &&
+        previous.foldedIntoRequestId === next.foldedIntoRequestId &&
+        JSON.stringify(previous.origin) === JSON.stringify(next.origin) &&
         previous.createdAt === next.createdAt &&
         sameOptionalStrings(previous.selectedSkillIds, next.selectedSkillIds)
+      );
+    case "automatedInput":
+      return (
+        next.kind === "automatedInput" &&
+        previous.requestId === next.requestId &&
+        previous.sequence === next.sequence &&
+        previous.content === next.content &&
+        previous.timestamp === next.timestamp &&
+        JSON.stringify(previous.origin) === JSON.stringify(next.origin) &&
+        previous.reconstruction.state === next.reconstruction.state &&
+        previous.reconstruction.error === next.reconstruction.error &&
+        previous.reconstruction.deniedDependencyDocId ===
+          next.reconstruction.deniedDependencyDocId
       );
     case "liveAssistant":
       return (

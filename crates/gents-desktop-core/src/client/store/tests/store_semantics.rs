@@ -378,3 +378,137 @@ fn goal_merge_preserves_the_earliest_canonical_twin() {
     assert_eq!(store.goals.len(), 1);
     assert_eq!(store.goals[0].status.as_deref(), Some("complete"));
 }
+
+mod session_turn {
+    use super::*;
+    use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestInput, RequestQueue};
+
+    fn row(id: &str, state: RequestLifecycleState, created_at: &str) -> AgentRequestRow {
+        AgentRequestRow {
+            purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
+            doc_id: Some(format!("doc-{id}")),
+            request_id: id.into(),
+            agent_did: Some("did:agent:1".into()),
+            session_id: Some("session-1".into()),
+            content: Some(format!("{id} text")),
+            lifecycle_state: Some(state),
+            created_at: Some(created_at.into()),
+            ..Default::default()
+        }
+    }
+
+    fn queued(id: &str, after: &str, created_at: &str) -> AgentRequestRow {
+        AgentRequestRow {
+            input: Some(RequestInput {
+                queue: Some(RequestQueue {
+                    source: QueueSource::User,
+                    policy: QueuePolicy::Append,
+                    key: None,
+                    queued_after_request_id: Some(after.into()),
+                    interrupted_request_id: None,
+                    background_completion_wake_version: None,
+                }),
+                ..Default::default()
+            }),
+            ..row(id, RequestLifecycleState::Pending, created_at)
+        }
+    }
+
+    fn folded(id: &str, head: &str, created_at: &str) -> AgentRequestRow {
+        AgentRequestRow {
+            lifecycle_state: Some(RequestLifecycleState::Superseded),
+            superseded_by_request: Some(head.into()),
+            superseded_by_request_doc_id: Some(format!("doc-{head}")),
+            failure_reason: Some(gents::lifecycle::FOLDED_REASON.into()),
+            ..queued(id, "earlier", created_at)
+        }
+    }
+
+    fn ids(rows: Vec<&AgentRequestRow>) -> Vec<&str> {
+        rows.into_iter()
+            .map(|row| row.request_id.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn messages_queued_behind_a_running_turn_do_not_become_the_turn() {
+        let rows = [
+            row(
+                "running",
+                RequestLifecycleState::Processing,
+                "2026-01-01T00:00:00Z",
+            ),
+            queued("second", "running", "2026-01-01T00:00:02Z"),
+            queued("first", "running", "2026-01-01T00:00:01Z"),
+            queued("third", "second", "2026-01-01T00:00:03Z"),
+        ];
+        let requests = rows.iter().collect::<Vec<_>>();
+        let turn = session_turn_request(&requests, &rows[3]);
+        assert_eq!(turn.request_id, "running");
+        assert_eq!(
+            ids(queued_behind_turn(&requests, turn)),
+            ["first", "second", "third"]
+        );
+    }
+
+    #[test]
+    fn the_oldest_queued_message_is_the_turn_once_the_turn_ahead_ends() {
+        let rows = [
+            row(
+                "done",
+                RequestLifecycleState::Completed,
+                "2026-01-01T00:00:00Z",
+            ),
+            queued("next", "done", "2026-01-01T00:00:01Z"),
+            queued("later", "next", "2026-01-01T00:00:02Z"),
+        ];
+        let requests = rows.iter().collect::<Vec<_>>();
+        let turn = session_turn_request(&requests, &rows[2]);
+        assert_eq!(turn.request_id, "next");
+        assert_eq!(ids(queued_behind_turn(&requests, turn)), ["later"]);
+    }
+
+    #[test]
+    fn a_folded_message_resolves_to_the_turn_that_answered_it() {
+        let rows = [
+            row(
+                "head",
+                RequestLifecycleState::Processing,
+                "2026-01-01T00:00:01Z",
+            ),
+            folded("folded-a", "head", "2026-01-01T00:00:02Z"),
+            folded("folded-b", "head", "2026-01-01T00:00:03Z"),
+        ];
+        let requests = rows.iter().collect::<Vec<_>>();
+        let turn = session_turn_request(&requests, &rows[2]);
+        assert_eq!(turn.request_id, "head");
+        assert!(queued_behind_turn(&requests, turn).is_empty());
+    }
+
+    #[test]
+    fn store_turn_lookup_reports_the_running_turn_not_the_newest_queued_message() {
+        let store = ClientStore::from_rows(ClientStoreRows {
+            requests: vec![
+                row(
+                    "running",
+                    RequestLifecycleState::Processing,
+                    "2026-01-01T00:00:00Z",
+                ),
+                queued("waiting", "running", "2026-01-01T00:00:01Z"),
+            ],
+            ..ClientStoreRows::default()
+        });
+        assert_eq!(
+            store.latest_request_id_for_session("session-1").as_deref(),
+            Some("waiting")
+        );
+        assert_eq!(
+            store.turn_request_id_for_session("session-1").as_deref(),
+            Some("running")
+        );
+        assert_eq!(
+            store.derive_turn_for_agent("session-1", "did:agent:1"),
+            Some(ClientTurnState::Running)
+        );
+    }
+}

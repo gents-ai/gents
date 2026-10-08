@@ -2,9 +2,7 @@ use anyhow::{bail, Result};
 use gents_desktop_core::client::{ClientCore, SubmitRequestOptions};
 use uuid::Uuid;
 
-use super::super::types::{
-    turn_state_label, ChatSendRequest, ChatSendResult, SessionRenameRequest,
-};
+use super::super::types::{ChatSendRequest, ChatSendResult, SessionRenameRequest};
 
 pub async fn send_chat_message(
     core: &ClientCore,
@@ -55,21 +53,17 @@ pub async fn send_chat_message(
         cwd: chat_folder(request.cwd.as_deref())?,
         ..Default::default()
     };
-    if let Some(turn_state) = store.derive_turn_for_agent(&session_id, &agent_did) {
-        if !turn_state.is_terminal() {
-            // An answer never waits for the asking turn: like a queued user
-            // turn, it is ordered behind the active request, which the
-            // runtime claims first; the reply claim then consumes the item.
-            let active = store
-                .latest_request_id_for_session_for_agent(&session_id, &agent_did)
-                .filter(|_| request.answer.is_some());
-            let Some(active) = active else {
-                bail!(
-                    "cannot send while current turn is {}",
-                    turn_state_label(turn_state)
-                );
-            };
-            input.queue = Some(queued_user_turn(active));
+    // A message sent while the session's turn is not terminal is queued
+    // behind the newest request (Lean `SendDecision.queue`); the runtime
+    // claims it after that turn and folds queued user messages into the turn
+    // that claims them. An answer's claim also consumes its mailbox item.
+    let busy = store
+        .derive_turn_for_agent(&session_id, &agent_did)
+        .is_some_and(|turn_state| !turn_state.is_terminal());
+    if busy {
+        if let Some(newest) = store.latest_request_id_for_session_for_agent(&session_id, &agent_did)
+        {
+            input.queue = Some(queued_user_turn(newest));
         }
     }
 

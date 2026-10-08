@@ -112,6 +112,7 @@ export type {
   PendingTurnView,
   RenderedTimelineItem,
   RenderedToolCallView,
+  RequestOriginView,
   ToolCallView,
   ToolDiffLineKind,
   ToolDiffLineView,

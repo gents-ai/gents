@@ -136,8 +136,12 @@ fn push_canonical_text_message_for_agent(
 mod mcp_health;
 #[path = "tests/runtime.rs"]
 mod runtime;
+#[path = "tests/session_automated.rs"]
+mod session_automated;
 #[path = "tests/session_basic.rs"]
 mod session_basic;
+#[path = "tests/session_queue.rs"]
+mod session_queue;
 #[path = "tests/session_stale_rows.rs"]
 mod session_stale_rows;
 #[path = "tests/session_state.rs"]

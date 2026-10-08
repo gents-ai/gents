@@ -212,6 +212,7 @@ function session(
     retryEligibility: { eligible: false, denialReason: "notFailed" },
     latestRequestOutcome: null,
     pendingTurn: null,
+    queuedTurns: [],
     context: {
       estimatedDurableTokens: 0,
       estimatedConversationTokens: 0,

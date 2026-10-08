@@ -39,5 +39,8 @@ pub use query::{
     DEFAULT_SESSION_TRANSCRIPT_PAGE_SIZE, MAX_SESSION_TRANSCRIPT_PAGE_SIZE,
 };
 pub use schema::subscribed_collection_names;
-pub use store::{ClientStore, ClientStoreRows, TaskRecentRuns, TranscriptView};
+pub use store::{
+    queued_behind_turn, session_turn_request, ClientStore, ClientStoreRows, TaskRecentRuns,
+    TranscriptView,
+};
 pub use sync_projection::{project_sync_health, SyncHealth, SyncHealthState};

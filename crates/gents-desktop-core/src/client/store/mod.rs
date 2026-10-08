@@ -5,6 +5,8 @@ mod merges;
 mod session_lookups;
 mod turns;
 
+pub use turns::{queued_behind_turn, session_turn_request};
+
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 

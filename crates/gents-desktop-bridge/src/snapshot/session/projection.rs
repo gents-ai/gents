@@ -384,6 +384,16 @@ pub(super) fn build_session_snapshot_from_store_for_agent_with_transcript(
                 || store.latest_request_id_for_session(session_id),
                 |agent_did| store.latest_request_id_for_session_for_agent(session_id, agent_did),
             )
+        })
+        .map(|request_id| {
+            requests
+                .iter()
+                .find(|row| row.request_id == request_id)
+                .map_or(request_id, |row| {
+                    gents_desktop_core::client::session_turn_request(&requests, row)
+                        .request_id
+                        .clone()
+                })
         });
     let latest_request = latest_request_id
         .as_deref()
@@ -607,6 +617,7 @@ pub(super) fn build_session_snapshot_from_store_for_agent_with_transcript(
                 reconstruction_error,
                 denied_dependency_doc_id,
                 runtime_control: message_is_runtime_control(row, &requests_by_doc_id),
+                origin: message_origin(store, row, &requests_by_doc_id),
                 timestamp: Some(row.message.created_at.clone()),
             }
         })
@@ -694,12 +705,34 @@ pub(super) fn build_session_snapshot_from_store_for_agent_with_transcript(
         || context_store.transcript(session_id),
         |did| context_store.transcript_for_agent(session_id, did),
     );
+    let same_requester = |request: &AgentRequestRow| {
+        session_row.is_none_or(|session| request.requester_did == session.requester_did)
+    };
+    let queued_requests = latest_request
+        .map(|turn| gents_desktop_core::client::queued_behind_turn(&requests, turn))
+        .unwrap_or_default();
+    let queued_turns = queued_requests
+        .iter()
+        .filter(|request| include_live_tail && same_requester(request))
+        .filter_map(|request| {
+            build_pending_turn(
+                store,
+                context_store,
+                agent_did,
+                session_id,
+                &request.request_id,
+            )
+        })
+        .collect::<Vec<_>>();
     let pending_turns = requests
         .iter()
         .enumerate()
         .filter_map(|(index, request)| {
             if !owner_absent(request)
-                || session_row.is_some_and(|session| request.requester_did != session.requester_did)
+                || !same_requester(request)
+                || queued_requests
+                    .iter()
+                    .any(|queued| queued.request_id == request.request_id)
             {
                 return None;
             }
@@ -805,6 +838,7 @@ pub(super) fn build_session_snapshot_from_store_for_agent_with_transcript(
         retry_eligibility,
         latest_request_outcome,
         pending_turn,
+        queued_turns,
         context,
         timeline_items,
         hydration: None,

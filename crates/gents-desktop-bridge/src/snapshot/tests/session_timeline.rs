@@ -416,7 +416,14 @@ fn versioned_background_wake_never_projects_as_a_user_turn() {
     let snapshot =
         build_session_snapshot_from_store(&ClientStore::from_rows(rows), "sess-1", Some("req-1"))
             .expect("snapshot");
-    assert!(snapshot.timeline_items.is_empty());
+    assert!(matches!(
+        snapshot.timeline_items.as_slice(),
+        [RenderedTimelineItem::AutomatedInput {
+            origin: crate::types::RequestOriginView::BackgroundCompletion,
+            content,
+            ..
+        }] if content.as_deref() == Some("wake")
+    ));
 }
 
 #[test]
@@ -784,6 +791,7 @@ fn timeline_keys(snapshot: &DesktopSessionSnapshot) -> Vec<&str> {
         .iter()
         .map(|item| match item {
             RenderedTimelineItem::UserMessage { item_key, .. }
+            | RenderedTimelineItem::AutomatedInput { item_key, .. }
             | RenderedTimelineItem::AssistantMessage { item_key, .. }
             | RenderedTimelineItem::ToolGroup { item_key, .. }
             | RenderedTimelineItem::PendingUserTurn { item_key, .. }
@@ -802,6 +810,8 @@ fn historical_pending_input_pages_with_its_durable_anchor() {
             content: "keep this input".into(),
             selected_skill_ids: vec![],
             lifecycle_state: Some("interrupted".into()),
+            folded_into_request_id: None,
+            origin: None,
             created_at: None,
         },
         assistant_item("anchor", 1),
@@ -837,6 +847,8 @@ fn request_only_history_uses_existing_local_window_without_durable_cursor() {
             content: format!("input {index}"),
             selected_skill_ids: vec![],
             lifecycle_state: Some("interrupted".into()),
+            folded_into_request_id: None,
+            origin: None,
             created_at: None,
         })
         .collect();
@@ -868,6 +880,8 @@ fn local_pending_history_pages_with_durable_anchor_cursor() {
         content: "interrupted input".into(),
         selected_skill_ids: vec![],
         lifecycle_state: Some("interrupted".into()),
+        folded_into_request_id: None,
+        origin: None,
         created_at: None,
     };
     full.timeline_items = vec![
@@ -901,6 +915,8 @@ fn tail_request_input_is_not_anchored_to_an_old_orphan_tool_group() {
             content: "current input".into(),
             selected_skill_ids: vec![],
             lifecycle_state: Some("interrupted".into()),
+            folded_into_request_id: None,
+            origin: None,
             created_at: None,
         },
         tool_group(1),

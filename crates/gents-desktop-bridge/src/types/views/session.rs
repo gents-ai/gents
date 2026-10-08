@@ -26,7 +26,37 @@ pub struct MessageView {
     #[ts(optional = nullable)]
     pub denied_dependency_doc_id: Option<String>,
     pub runtime_control: bool,
+    /// Set for input that entered the session without the person typing it.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub origin: Option<RequestOriginView>,
     pub timestamp: Option<String>,
+}
+
+/// What put a request's content into the session, when not the person
+/// (`gents::lifecycle::request_origin`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum RequestOriginView {
+    /// Sent by an `agent_message` or `agent_new` call. The sender's session is
+    /// known only when this replica holds the causing request.
+    #[serde(rename_all = "camelCase")]
+    SessionMessage {
+        sender_agent_did: Option<String>,
+        sender_session_id: Option<String>,
+        sender_request_id: Option<String>,
+    },
+    #[serde(rename_all = "camelCase")]
+    Trigger {
+        trigger_id: String,
+        trigger_kind: Option<String>,
+    },
+    #[serde(rename_all = "camelCase")]
+    GoalContinuation {
+        goal_id: Option<String>,
+        sequence: Option<i64>,
+    },
+    BackgroundCompletion,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
@@ -239,6 +269,10 @@ pub struct PendingTurnView {
     pub content: String,
     pub selected_skill_ids: Vec<String>,
     pub lifecycle_state: Option<String>,
+    /// The claimed request this message was folded into
+    /// (`gents::lifecycle::folded_into`); it is that turn's input, not a turn.
+    pub folded_into_request_id: Option<String>,
+    pub origin: Option<RequestOriginView>,
     pub created_at: Option<String>,
 }
 
@@ -289,7 +323,23 @@ pub enum RenderedTimelineItem {
         content: String,
         selected_skill_ids: Vec<String>,
         lifecycle_state: Option<String>,
+        folded_into_request_id: Option<String>,
+        origin: Option<RequestOriginView>,
         created_at: Option<String>,
+    },
+    /// Input the model received that the person did not type, at its place in
+    /// the transcript.
+    #[serde(rename_all = "camelCase")]
+    AutomatedInput {
+        item_key: String,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        #[ts(optional = nullable)]
+        request_id: Option<String>,
+        sequence: Option<i64>,
+        origin: RequestOriginView,
+        content: Option<String>,
+        timestamp: Option<String>,
+        reconstruction: MessageReconstructionView,
     },
     #[serde(rename_all = "camelCase")]
     LiveAssistant {
@@ -481,6 +531,10 @@ pub struct DesktopSessionSnapshot {
     pub retry_eligibility: RetryEligibilityView,
     pub latest_request_outcome: Option<RequestOutcomeView>,
     pub pending_turn: Option<PendingTurnView>,
+    /// Unclaimed messages waiting behind the session's turn, in queue order.
+    /// They have not entered the transcript: a claim either folds them into
+    /// the claimed turn as its own user entries or makes one the next turn.
+    pub queued_turns: Vec<PendingTurnView>,
     pub context: SessionContextView,
     pub timeline_items: Vec<RenderedTimelineItem>,
     #[serde(skip_serializing_if = "Option::is_none", default)]

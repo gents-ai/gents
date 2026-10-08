@@ -1,4 +1,5 @@
 use gents_desktop_core::client::{ClientStore, TaskRecentRuns};
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use gents_protocol::session::AgentSession;
 
@@ -111,6 +112,29 @@ pub(super) fn session_summaries(
             } else {
                 None
             };
+            // Only an unclaimed or folded head can name a different turn.
+            let request = request.map(|request| {
+                let may_wait_or_fold = gents::lifecycle::folded_into(request).is_some()
+                    || matches!(
+                        request.lifecycle_state,
+                        Some(
+                            RequestLifecycleState::Pending
+                                | RequestLifecycleState::WorkspaceBindingPending
+                        )
+                    );
+                if !may_wait_or_fold {
+                    return request;
+                }
+                let session_requests = requests
+                    .iter()
+                    .filter(|row| {
+                        row.agent_did.as_deref() == Some(session.agent_did.as_str())
+                            && row.session_id.as_deref() == Some(session.session_id.as_str())
+                            && row.requester_did == session.requester_did
+                    })
+                    .collect::<Vec<_>>();
+                gents_desktop_core::client::session_turn_request(&session_requests, request)
+            });
             let lifecycle = request
                 .and_then(|request| request.lifecycle_state)
                 .or_else(|| indexed.map(|indexed| indexed.lifecycle_state));
@@ -139,7 +163,9 @@ pub(super) fn session_summaries(
                 session_id: session.session_id.clone(),
                 agent_did: session.agent_did.clone(),
                 requester_did: session.requester_did.clone(),
-                latest_request_doc_id: indexed.map(|indexed| indexed.request_doc_id.clone()),
+                latest_request_doc_id: request
+                    .and_then(|request| request.doc_id.clone())
+                    .or_else(|| indexed.map(|indexed| indexed.request_doc_id.clone())),
                 closed_at: session.closed_at.clone(),
                 tags: session.tags.clone(),
                 provenance: session.provenance.clone(),
@@ -147,7 +173,9 @@ pub(super) fn session_summaries(
                 preview_text: observation.and_then(|value| value.preview.clone()),
                 status: lifecycle.map(|state| state.as_str().to_owned()),
                 behavior_id: Some(session.behavior_id.clone()),
-                latest_request_id: indexed.map(|indexed| indexed.request_id.clone()),
+                latest_request_id: request
+                    .map(|request| request.request_id.clone())
+                    .or_else(|| indexed.map(|indexed| indexed.request_id.clone())),
                 task_id,
                 task_name,
                 trigger_id,
