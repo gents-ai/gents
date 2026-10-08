@@ -65,8 +65,8 @@ inductive Transition : RuntimeState → RuntimeState → Prop where
         , inFlight := insert requestId pre.inFlight
         , requestGeneration := Function.update pre.requestGeneration requestId pre.routerObservedGeneration
         , requestSession := Function.update pre.requestSession requestId sessionId
-        , requestBehavior := Function.update pre.requestBehavior requestId requested
-        , sessionBehavior := pre.bindSessionIfNeeded sessionId requested
+        , requestAgent := Function.update pre.requestAgent requestId requested
+        , sessionAgent := pre.bindSessionIfNeeded sessionId requested
         } →
       Transition pre post
   | finish_request {pre post : RuntimeState} (requestId : RequestId) :
@@ -205,18 +205,18 @@ theorem coherent_preserved
             subst h_eq
             exact h_fresh h_old
           by_cases h_same : pre.requestSession rid = sessionId
-          · have h_bound : pre.sessionBehavior sessionId = some (pre.requestBehavior rid) := by
+          · have h_bound : pre.sessionAgent sessionId = some (pre.requestAgent rid) := by
               simpa [h_same] using h_session rid h_old
             have h_bind_eq :
                 pre.bindSessionIfNeeded sessionId requested =
-                  pre.sessionBehavior :=
+                  pre.sessionAgent :=
               bindSessionIfNeeded_eq_self_of_bound h_bound
             simpa [h_bind_eq, Function.update, h_ne, h_same]
               using h_session rid h_old
           · have h_other :
               pre.bindSessionIfNeeded sessionId requested
                   (pre.requestSession rid) =
-                pre.sessionBehavior (pre.requestSession rid) :=
+                pre.sessionAgent (pre.requestSession rid) :=
               bindSessionIfNeeded_other
                 (s := pre)
                 (sessionId := sessionId)

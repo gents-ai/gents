@@ -6,9 +6,9 @@ import Proofs.CanonicalOutput.State
 namespace Conformance.ContractCases
 
 structure RuntimeReconcileCase where
-  requestedBehavior : Option AgentId
-  preDefaultBehavior : AgentId
-  preSessionBehavior : Option AgentId
+  requestedAgent : Option AgentId
+  preDefaultAgent : AgentId
+  preSessionAgent : Option AgentId
   preRunnable : List AgentId
   name : String
   action : String
@@ -29,8 +29,8 @@ structure RuntimeReconcileCase where
   trackedSessionId : SessionId
   trackedRequestGeneration : Generation
   trackedRequestSession : SessionId
-  trackedRequestBehavior : AgentId
-  trackedSessionBehavior : AgentId
+  trackedRequestAgent : AgentId
+  trackedSessionAgent : AgentId
   deriving Repr
 
 structure ClientAgentReadinessCase where
