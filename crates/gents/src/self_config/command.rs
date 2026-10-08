@@ -779,6 +779,7 @@ impl ConfigCommandTool {
                         &self.agent_did,
                         &params,
                         &self.process_ceiling,
+                        self.core.held_grants(),
                     )
                     .await;
                 }
@@ -800,7 +801,14 @@ impl ConfigCommandTool {
                 self.resolve_persona_ids(operation, &mut params).await?;
                 self.ensure_behavior_operation(operation, params.behavior_id.as_deref())?;
                 self.ensure_default_selection(&params)?;
-                persona_preview(&self.node, &self.agent_did, &params, &self.process_ceiling).await
+                persona_preview(
+                    &self.node,
+                    &self.agent_did,
+                    &params,
+                    &self.process_ceiling,
+                    self.core.held_grants(),
+                )
+                .await
             }
             "edit" => {
                 let behavior_id = argv
@@ -836,6 +844,7 @@ impl ConfigCommandTool {
                     identity,
                     &params,
                     &self.process_ceiling,
+                    self.core.held_grants(),
                 )
                 .await
             }
@@ -859,6 +868,7 @@ impl ConfigCommandTool {
                     identity,
                     &default_behavior_params("edit", &behavior_id),
                     &self.process_ceiling,
+                    self.core.held_grants(),
                 )
                 .await
             }

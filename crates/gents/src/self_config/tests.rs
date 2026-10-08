@@ -3150,6 +3150,7 @@ async fn behavior_only_grant_cannot_change_default_and_writes_require_exact_sign
         foreign_identity.as_ref(),
         &params,
         &Default::default(),
+        &OperatorGrants::default(),
     )
     .await
     .expect_err("foreign signer must fail before authoring a request");
@@ -4296,6 +4297,115 @@ async fn persona_clone_accepts_sibling_behavior_id() {
 }
 
 #[tokio::test]
+async fn persona_clone_cannot_copy_unheld_grants() {
+    let node = build_persona_node().await;
+    let identity = persona_identity("persona-clone-grants");
+    let agent_did = identity.did().to_string();
+    crate::test_support::install_test_behavior(&node, &agent_did, "granted").await;
+    operator_grant_pack_install(&node, &agent_did, "granted:tools").await;
+    let tools = build_self_config_tools(
+        node.clone(),
+        agent_did.clone(),
+        Some(identity.clone()),
+        &config(&["persona"]),
+        test_plugins(),
+    );
+    let tool = take_persona_tool(tools);
+    for argv in [
+        json!([
+            "behavior",
+            "clone",
+            "--display-name",
+            "Granted Copy",
+            "--from",
+            "granted",
+            "--profile",
+            "granted:inference"
+        ]),
+        json!([
+            "behavior",
+            "preview",
+            "clone",
+            "--display-name",
+            "Granted Copy",
+            "--from",
+            "granted",
+            "--profile",
+            "granted:inference"
+        ]),
+    ] {
+        let refused = config_error_message(
+            tool.call(json!({"argv": argv}).to_string())
+                .await
+                .expect_err("a clone must not copy grants the invoking agent does not hold"),
+        );
+        assert!(
+            refused.contains(
+                "clone source \"granted\" carries an operator grant this agent does not hold"
+            ),
+            "{argv}: {refused}"
+        );
+        assert!(
+            refused.contains("cannot be self-granted"),
+            "{argv}: {refused}"
+        );
+    }
+    assert!(
+        load_persona_rows_for_test(&node, &agent_did)
+            .await
+            .is_empty(),
+        "the refused clone must not author a request"
+    );
+}
+
+#[tokio::test]
+async fn persona_clone_by_holder_copies_granted_source() {
+    let node = build_persona_node().await;
+    let identity = persona_identity("persona-clone-holder");
+    let agent_did = identity.did().to_string();
+    crate::test_support::install_test_behavior(&node, &agent_did, "granted").await;
+    operator_grant_pack_install(&node, &agent_did, "granted:tools").await;
+    let mut tool_config = config(&["persona"]);
+    tool_config.enable_pack_install = true;
+    let tools = build_self_config_tools(
+        node.clone(),
+        agent_did.clone(),
+        Some(identity),
+        &tool_config,
+        test_plugins(),
+    );
+    let tool = take_persona_tool(tools);
+    tool.call(
+        json!({"argv": ["behavior", "preview", "clone", "--display-name", "Granted Copy",
+                        "--from", "granted", "--profile", "granted:inference"]})
+        .to_string(),
+    )
+    .await
+    .expect("a holder may preview copying a granted source");
+    let args = json!({"argv": ["behavior", "clone", "--display-name", "Granted Copy",
+                               "--from", "granted", "--profile", "granted:inference"]})
+    .to_string();
+    let call = tokio::spawn(async move { tool.call(args).await });
+    let mut authored = false;
+    for _ in 0..50 {
+        if load_persona_rows_for_test(&node, &agent_did)
+            .await
+            .iter()
+            .any(|row| row.clone_from.as_deref() == Some("granted"))
+        {
+            authored = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    call.abort();
+    assert!(
+        authored,
+        "a holder's clone of a granted source authors a request"
+    );
+}
+
+#[tokio::test]
 async fn canonical_self_config_preview_and_apply_preserve_scope_and_reject_lockout() {
     let node = build_persona_node().await;
     let identity = persona_identity("canonical-self-config");
@@ -5270,6 +5380,7 @@ async fn persona_profile_pick_cannot_switch_account() {
             identity.as_ref(),
             &refused,
             &Default::default(),
+            &OperatorGrants::default(),
         )
         .await
         .expect_err("switching to another account must be refused");
@@ -5291,6 +5402,7 @@ async fn persona_profile_pick_cannot_switch_account() {
             identity.as_ref(),
             &accepted,
             &Default::default(),
+            &OperatorGrants::default(),
         )
         .await
         .unwrap();
@@ -5329,9 +5441,15 @@ async fn persona_preview_agrees_with_the_account_choice_fence() {
             .collect();
         let params = behavior_params("preview", Some(operation.into()), &argv).unwrap();
         let preview: Value = serde_json::from_str(
-            &persona_preview(&node, &owner, &params, &Default::default())
-                .await
-                .unwrap(),
+            &persona_preview(
+                &node,
+                &owner,
+                &params,
+                &Default::default(),
+                &OperatorGrants::default(),
+            )
+            .await
+            .unwrap(),
         )
         .unwrap();
         assert_eq!(
@@ -5396,6 +5514,7 @@ async fn persona_clone_inherited_compaction_cannot_switch_account() {
                 &owner,
                 &clone("preview", source, profile),
                 &Default::default(),
+                &OperatorGrants::default(),
             )
             .await
             .unwrap(),
@@ -5408,6 +5527,7 @@ async fn persona_clone_inherited_compaction_cannot_switch_account() {
             identity.as_ref(),
             &clone("clone", source, profile),
             &Default::default(),
+            &OperatorGrants::default(),
         )
         .await
         .expect_err("inheriting another account's compaction must be refused");
@@ -5424,6 +5544,7 @@ async fn persona_clone_inherited_compaction_cannot_switch_account() {
             identity.as_ref(),
             &clone("clone", "src-original", profile),
             &Default::default(),
+            &OperatorGrants::default(),
         )
         .await
         .unwrap();

@@ -1070,6 +1070,7 @@ async fn persona_preview(
     agent_did: &str,
     args: &ConfigurePersonaParams,
     process_ceiling: &crate::tool_surface::SelfConfigProcessCeiling,
+    held: &OperatorGrants,
 ) -> Result<String> {
     let operation = args
         .operation
@@ -1096,6 +1097,21 @@ async fn persona_preview(
         "disable" => ("disable", PersonaOp::Disable, None),
         other => bail!("unknown preview operation {other:?}; use create|edit|clone|disable"),
     };
+    if let Some(source) = clone_from.as_deref() {
+        let actor = ::identity::Did::new(agent_did.to_owned())
+            .context("the agent DID is not ACP-addressable")?;
+        crate::config_client::ConfigAccess::transact_local_readonly(
+            node,
+            Some(actor),
+            "self_config.preview_clone_grants",
+            |txn| {
+                Box::pin(
+                    async move { clone_keeps_grants_in_txn(txn, agent_did, source, held).await },
+                )
+            },
+        )
+        .await?;
+    }
     let store =
         GraphqlPersonaRequestStore::with_ceiling(node.clone(), process_ceiling.root.clone());
     let catalog = store.load_catalog_view(agent_did).await?;
@@ -1290,6 +1306,7 @@ async fn persona_mutate(
     identity: &dyn AgentIdentity,
     args: &ConfigurePersonaParams,
     process_ceiling: &crate::tool_surface::SelfConfigProcessCeiling,
+    held: &OperatorGrants,
 ) -> Result<String> {
     anyhow::ensure!(
         identity.did() == agent_did,
@@ -1385,6 +1402,9 @@ async fn persona_mutate(
             let next_profile = record.profile_id.as_deref();
             let clone_from = record.clone_from.as_deref();
             Box::pin(async move {
+                if let Some(source) = clone_from {
+                    clone_keeps_grants_in_txn(txn, agent_did, source, held).await?;
+                }
                 guard_persona_profile_choice(
                     txn,
                     agent_did,
@@ -1578,6 +1598,29 @@ async fn persona_mutate(
         })
     });
     ordered! {"status": status, "recovery": recovery, "request": row}.pretty()
+}
+
+/// The clone bound (Lean `SelfConfig.reselectionKeepsGrants` with no previous
+/// selection): a clone copies its source's whole Tools document, operator
+/// grants included, so its grants are bounded like a Tools write over a
+/// document with no grant: pack installation only when the invoking agent
+/// holds it.
+/// Checked in the transaction that authors the request, and on preview. The
+/// reconciler publishes the clone later from the source as it is then, without
+/// the invoker's grants, so a grant an operator adds to the source in that
+/// window is copied; operator writes are unguarded by design.
+async fn clone_keeps_grants_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    agent_did: &str,
+    source_behavior_id: &str,
+    held: &OperatorGrants,
+) -> Result<()> {
+    let source_tools = ops::behavior_tools_in_txn(txn, agent_did, source_behavior_id).await?;
+    reselection_keeps_grants(held, None, source_tools.as_ref()).with_context(|| {
+        format!(
+            "clone source {source_behavior_id:?} carries an operator grant this agent does not hold; clone a source without it or ask the operator to grant it"
+        )
+    })
 }
 
 /// Install document and graph packs from the home's pack store or the registry through the
