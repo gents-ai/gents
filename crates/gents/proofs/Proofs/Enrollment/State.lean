@@ -583,7 +583,7 @@ instance (s : State) (r : Request) : Decidable (enrollmentReady s r) := by
   unfold enrollmentReady; infer_instance
 
 def toHydrationRoute (route : AppliedRoute) : SessionHydration.AppliedPairingRoute :=
-  { peer := route.peer, requester := route.requester, agent := route.agent }
+  { peer := route.peer, requester := route.requester, node := route.agent }
 
 def toHydrationMembership (membership : Membership) : SessionHydration.VerifiedActiveMembership :=
   { network := membership.networkId, member := membership.memberDid }
@@ -618,16 +618,16 @@ def hydrationRequestForDirection (r : Request) (session : String) :
     RouteDirection → SessionHydration.Request
   | .clientToServer =>
     { key := r.requestId, peer := r.candidatePeer, requester := r.candidateDid
-    , agent := r.ownerAgent, session }
+    , node := r.ownerAgent, session }
   | .serverToClient =>
     { key := r.requestId, peer := r.serverPeer, requester := r.candidateDid
-    , agent := r.ownerAgent, session }
+    , node := r.ownerAgent, session }
 
 def hydrationRequestFor (r : Request) (session : String) : SessionHydration.Request :=
   hydrationRequestForDirection r session .clientToServer
 
 def reverseHydrationRequestFor (r : Request) (session : String) : SessionHydration.Request :=
   { key := r.requestId, peer := r.serverPeer, requester := r.candidateDid
-  , agent := r.ownerAgent, session }
+  , node := r.ownerAgent, session }
 
 end Enrollment
