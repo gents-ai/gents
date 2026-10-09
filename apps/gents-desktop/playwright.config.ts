@@ -32,9 +32,9 @@ export default defineConfig({
     video: "retain-on-failure",
   },
   webServer: {
-    command: `node ${viteBin} --host 127.0.0.1 --port ${port} --strictPort --clearScreen false`,
+    command: `node ${viteBin} --host 127.0.0.1 --port ${port} --strictPort --clearScreen false --mode browser-test`,
     url: `${baseURL}/tests/ui-harness/harness.html`,
-    reuseExistingServer: !process.env.CI,
+    reuseExistingServer: false,
     timeout: 30_000,
   },
   projects: [
