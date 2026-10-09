@@ -410,6 +410,7 @@ fn project_file_edit(tool: &ToolCallView, operation: &str) -> ToolPresentationVi
     ToolPresentationView::FileEdit {
         operation: operation.to_string(),
         path: string_field(args.as_ref(), "path").or_else(|| string_field(meta.as_ref(), "path")),
+        reveal_path: string_field(meta.as_ref(), "resolved_path"),
         created: bool_field(meta.as_ref(), "created"),
         replacements_applied: i64_field(meta.as_ref(), "replacements_applied"),
         diff,
@@ -546,6 +547,50 @@ mod tests {
             denial: None,
             cancel_cause: None,
         }
+    }
+
+    #[test]
+    fn file_reveal_uses_resolved_result_path_without_changing_display_path() {
+        for result in [
+            r#"gents_fs: {"path":"file.txt","resolved_path":"/root/work/file.txt","created":true}
+write_file: wrote file.txt"#,
+            r#"{"path":"file.txt","resolved_path":"/root/work/file.txt","created":true}"#,
+        ] {
+            let projected = project_file_edit(
+                &tool(
+                    "write_file",
+                    r#"{"path":"file.txt","resolved_path":"/wrong"}"#,
+                    result,
+                    "completed",
+                ),
+                "write_file",
+            );
+            let ToolPresentationView::FileEdit {
+                path, reveal_path, ..
+            } = projected
+            else {
+                panic!("expected file edit");
+            };
+            assert_eq!(path.as_deref(), Some("file.txt"));
+            assert_eq!(reveal_path.as_deref(), Some("/root/work/file.txt"));
+        }
+    }
+
+    #[test]
+    fn file_reveal_does_not_infer_a_resolved_path_from_arguments() {
+        let projected = project_file_edit(
+            &tool(
+                "write_file",
+                r#"{"path":"file.txt","resolved_path":"/wrong"}"#,
+                "write failed",
+                "failed",
+            ),
+            "write_file",
+        );
+        let ToolPresentationView::FileEdit { reveal_path, .. } = projected else {
+            panic!("expected file edit");
+        };
+        assert_eq!(reveal_path, None);
     }
 
     fn diff_of(projected: ToolPresentationView) -> Vec<(ToolDiffLineKind, String)> {

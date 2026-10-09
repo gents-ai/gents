@@ -150,6 +150,10 @@ pub enum ToolPresentationView {
     FileEdit {
         operation: String,
         path: Option<String>,
+        /// Execution-node path from the validated native file operation.
+        /// Clients may reveal it only when that node is local.
+        #[ts(optional = nullable)]
+        reveal_path: Option<String>,
         created: Option<bool>,
         replacements_applied: Option<i64>,
         diff: Vec<ToolDiffLineView>,
