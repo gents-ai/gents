@@ -17,6 +17,10 @@ const TRANSCRIPT_ROWS = '[data-testid="transcript-panel"] [data-window-row]';
 const VIEWPORT = { width: 390, height: 844 };
 const TYPING_NEXT_PAINT_BUDGET_MS = 50;
 const TYPING_REACT_BUDGET_MS_PER_CHARACTER = 12;
+/* The bridge announces no plugin approval request, so the access prompt polls
+   the approval queue on a timer; those reads are not caused by what a scenario
+   does and are reported apart from its budgets. */
+const POLLED_COMMANDS = new Set(["listPendingPluginApprovals"]);
 
 const args = process.argv.slice(2);
 const runs = integerArgument("--runs", DEFAULT_RUNS);
@@ -608,7 +612,8 @@ async function domSnapshot(page) {
   }));
 }
 
-function bridgeSummary(calls) {
+function bridgeSummary(allCalls) {
+  const calls = allCalls.filter((call) => !POLLED_COMMANDS.has(call.command));
   const byCommand = {};
   for (const call of calls) {
     const entry = (byCommand[call.command] ??= {
@@ -629,6 +634,7 @@ function bridgeSummary(calls) {
     requestBytes: sum(calls.map((call) => call.requestBytes)),
     responseBytes: sum(calls.map((call) => call.responseBytes)),
     byCommand,
+    polledCallCount: allCalls.length - calls.length,
   };
 }
 
