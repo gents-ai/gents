@@ -15,7 +15,6 @@ pub(crate) fn owned_replay_input(
     issuer: Option<gents_loop::claude_messages_body::ReplayIssuer>,
     profile: super::ProviderInputProfile,
 ) -> LoopReplayInput {
-    let pending = Arc::new(PendingReplay::default());
     LoopReplayInput {
         request_doc_id: Some(request.doc_id.clone()),
         issuer,
@@ -24,21 +23,7 @@ pub(crate) fn owned_replay_input(
             let node = node.clone();
             let request = request.clone();
             let request_commit_cid = request_commit_cid.clone();
-            let pending = pending.clone();
             Box::pin(async move {
-                let scope = crate::session::CanonicalReplayScope {
-                    agent_did: &request.agent_did,
-                    requester_did: request.requester_did.as_deref(),
-                    session_id: &request.session_id,
-                    request_id: &request.request_id,
-                    request_doc_id: &request.doc_id,
-                    request_commit_cid: &request_commit_cid,
-                    expected_scope_kind,
-                };
-                let headers = crate::session::canonical_replay_header_ids(&node, scope).await?;
-                if let Some(rows) = pending.take(&tags, &headers) {
-                    return Ok(rows);
-                }
                 let started = std::time::Instant::now();
                 let boundary = crate::provider_context_reduction::capture_source_boundary(
                     &node,
@@ -50,9 +35,21 @@ pub(crate) fn owned_replay_input(
                 )
                 .await?;
                 let boundary_elapsed_ms = started.elapsed().as_millis() as u64;
-                let resolved =
-                    crate::session::resolve_canonical_replay_tags(&node, scope, &boundary, &tags)
-                        .await?;
+                let resolved = crate::session::resolve_canonical_replay_tags(
+                    &node,
+                    crate::session::CanonicalReplayScope {
+                        agent_did: &request.agent_did,
+                        requester_did: request.requester_did.as_deref(),
+                        session_id: &request.session_id,
+                        request_id: &request.request_id,
+                        request_doc_id: &request.doc_id,
+                        request_commit_cid: &request_commit_cid,
+                        expected_scope_kind,
+                    },
+                    &boundary,
+                    &tags,
+                )
+                .await?;
                 tracing::info!(
                     target: "gents::provider_input",
                     request_id = %request.request_id,
@@ -63,7 +60,7 @@ pub(crate) fn owned_replay_input(
                     elapsed_ms = started.elapsed().as_millis() as u64,
                     "resolved canonical provider replay evidence"
                 );
-                let rows = resolved
+                Ok(resolved
                     .into_iter()
                     .flat_map(|(tag, evidence)| {
                         evidence.into_iter().map(move |evidence| {
@@ -73,58 +70,10 @@ pub(crate) fn owned_replay_input(
                             }
                         })
                     })
-                    .collect::<Vec<_>>();
-                pending.store(tags, headers, rows.clone());
-                Ok(rows)
+                    .collect())
             })
         })),
         ..LoopReplayInput::default()
-    }
-}
-
-/// The first-turn admission estimate and the loop's first dispatch assemble
-/// the same request back to back. The last resolution serves the next
-/// identical lookup once, and only while the session's physical headers are
-/// unchanged: a replicated header can add a candidate that the twin and
-/// ambiguity checks must see. Any other lookup re-reads the store.
-#[derive(Default)]
-struct PendingReplay(std::sync::Mutex<Option<PendingResolution>>);
-
-struct PendingResolution {
-    tags: Vec<gents_loop::claude_messages_body::ReplayTag>,
-    headers: std::collections::BTreeSet<String>,
-    rows: Vec<gents_loop::loop_stream::ReplayEvidenceRow>,
-}
-
-impl PendingReplay {
-    fn take(
-        &self,
-        tags: &[gents_loop::claude_messages_body::ReplayTag],
-        headers: &std::collections::BTreeSet<String>,
-    ) -> Option<Vec<gents_loop::loop_stream::ReplayEvidenceRow>> {
-        self.0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take()
-            .and_then(|pending| {
-                (pending.tags == tags && &pending.headers == headers).then_some(pending.rows)
-            })
-    }
-
-    fn store(
-        &self,
-        tags: Vec<gents_loop::claude_messages_body::ReplayTag>,
-        headers: std::collections::BTreeSet<String>,
-        rows: Vec<gents_loop::loop_stream::ReplayEvidenceRow>,
-    ) {
-        *self
-            .0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(PendingResolution {
-            tags,
-            headers,
-            rows,
-        });
     }
 }
 
@@ -153,36 +102,6 @@ mod tests {
     };
     use gents_protocol::output::OutputSource;
     use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
-
-    #[test]
-    fn pending_replay_serves_one_identical_lookup() {
-        let pending = PendingReplay::default();
-        let tags = vec![provider_tag("doc-a", 0)];
-        let headers = std::collections::BTreeSet::from(["header-a".to_owned()]);
-        pending.store(tags.clone(), headers.clone(), Vec::new());
-        assert_eq!(
-            pending.take(&tags, &headers).map(|rows| rows.len()),
-            Some(0)
-        );
-        assert!(pending.take(&tags, &headers).is_none(), "served once");
-
-        pending.store(tags.clone(), headers.clone(), Vec::new());
-        assert!(pending
-            .take(&[provider_tag("doc-a", 1)], &headers)
-            .is_none());
-        assert!(
-            pending.take(&tags, &headers).is_none(),
-            "a differing lookup discards the pending result"
-        );
-
-        pending.store(tags.clone(), headers.clone(), Vec::new());
-        let mut arrived = headers.clone();
-        arrived.insert("header-twin".to_owned());
-        assert!(
-            pending.take(&tags, &arrived).is_none(),
-            "a new physical header invalidates the pending result"
-        );
-    }
 
     fn provider_tag(request_doc_id: &str, turn_index: u32) -> ReplayTag {
         ReplayTag {

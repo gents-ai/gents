@@ -1385,7 +1385,76 @@ async fn stored_agent_request(fixture: &ReplayFixture) -> crate::watcher::AgentR
 }
 
 #[tokio::test]
-async fn reused_replay_resolution_observes_a_header_replicated_before_dispatch() {
+async fn replay_resolution_observes_capture_arriving_for_existing_header() {
+    let fixture = signed_fixture().await;
+    let candidate = fixture.candidates().await.unwrap().remove(0);
+    let tag = ReplayTag {
+        request_doc_id: candidate.request_doc_id.clone(),
+        source: OutputSource::ProviderTurn {
+            scope: candidate.coordinate.scope,
+            turn_index: candidate.coordinate.turn_index,
+            attempt: candidate.coordinate.attempt,
+        },
+    };
+    let replay = crate::provider_input::replay::owned_replay_input(
+        fixture.node.clone(),
+        stored_agent_request(&fixture).await,
+        fixture.request_commit_cid.clone(),
+        fixture.scope_kind,
+        None,
+        crate::provider_input::ProviderInputProfile::ClaudeMessages,
+    );
+    let resolve = replay.resolve.expect("canonical resolver");
+    assert!(resolve(vec![tag.clone()]).await.unwrap().is_empty());
+    fixture
+        .insert_capture(RenderedRequestSource::ClaudeCliSubscription)
+        .await
+        .unwrap();
+    assert_eq!(
+        resolve(vec![tag]).await.unwrap().len(),
+        1,
+        "a capture arriving for the same physical header must become replay evidence"
+    );
+}
+
+#[tokio::test]
+async fn replay_resolution_observes_conflicting_capture_for_existing_header() {
+    let fixture = signed_fixture().await;
+    fixture
+        .insert_capture(RenderedRequestSource::ClaudeCliSubscription)
+        .await
+        .unwrap();
+    let candidate = fixture.candidates().await.unwrap().remove(0);
+    let tag = ReplayTag {
+        request_doc_id: candidate.request_doc_id.clone(),
+        source: OutputSource::ProviderTurn {
+            scope: candidate.coordinate.scope,
+            turn_index: candidate.coordinate.turn_index,
+            attempt: candidate.coordinate.attempt,
+        },
+    };
+    let replay = crate::provider_input::replay::owned_replay_input(
+        fixture.node.clone(),
+        stored_agent_request(&fixture).await,
+        fixture.request_commit_cid.clone(),
+        fixture.scope_kind,
+        None,
+        crate::provider_input::ProviderInputProfile::ClaudeMessages,
+    );
+    let resolve = replay.resolve.expect("canonical resolver");
+    assert_eq!(resolve(vec![tag.clone()]).await.unwrap().len(), 1);
+    fixture
+        .insert_capture(RenderedRequestSource::OpenAiResponses)
+        .await
+        .unwrap();
+    assert!(
+        resolve(vec![tag]).await.unwrap().is_empty(),
+        "conflicting captures invalidate existing replay evidence"
+    );
+}
+
+#[tokio::test]
+async fn replay_resolution_observes_a_header_replicated_before_dispatch() {
     let fixture = signed_fixture().await;
     fixture
         .insert_capture(RenderedRequestSource::ClaudeCliSubscription)
@@ -1416,11 +1485,11 @@ async fn reused_replay_resolution_observes_a_header_replicated_before_dispatch()
     assert_eq!(
         unchanged.unwrap().len(),
         1,
-        "an unchanged view serves the estimate's resolution"
+        "an unchanged view resolves the same evidence"
     );
     assert_eq!(
-        scans, 0,
-        "the identical dispatch lookup reuses the estimate"
+        scans, 1,
+        "each dispatch lookup revalidates canonical evidence"
     );
     assert_eq!(resolve(vec![tag.clone()]).await.unwrap().len(), 1);
 
