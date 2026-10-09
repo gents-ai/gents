@@ -56,7 +56,7 @@ pub(crate) use output::count_request_output_scans;
 pub(crate) use output::load_canonical_payload_from_node;
 pub(crate) use output::load_canonical_payload_in_txn;
 pub(crate) use output::{
-    canonical_replay_header_ids, load_canonical_message_in_txn, load_request_headers_in_txn,
+    load_canonical_message_in_txn, load_request_headers_in_txn,
     resolve_canonical_replay_tags, validate_canonical_replay_boundary, CanonicalReplayScope,
     TxnCanonicalReader,
 };
