@@ -1246,6 +1246,37 @@ mod tests {
     }
 
     #[test]
+    fn compressible_manifest_container_preserves_exact_block_resolution() {
+        let chunks = std::iter::once("[")
+            .chain(std::iter::repeat_n("\"λ\",", 64))
+            .chain(std::iter::once("\"λ\"]"))
+            .map(|text| ChunkedBlock {
+                content_key: format!("{:x}", Sha256::digest(text.as_bytes())),
+                bytes: text.as_bytes().to_vec(),
+            })
+            .collect::<Vec<_>>();
+        let (entries, store) = manifest_store(&chunks);
+        let manifest = encode_manifest(&entries).unwrap();
+        assert!(manifest.stored.len() >= MIN_COMPRESSION_BYTES);
+        let container = encode_container(&manifest, &manifest).unwrap();
+        for kind in [
+            CapturePayloadKind::RequestBody,
+            CapturePayloadKind::ProvenancePayload,
+        ] {
+            let record = select_container_record(&container, kind).unwrap();
+            let envelope: Value = serde_json::from_str(&record).unwrap();
+            assert_eq!(envelope["kind"], "zlib");
+            assert_eq!(decompress_record(&record).unwrap(), manifest.stored);
+            let resolved = resolve_manifest_with_limit(entries.len() + 2, &record, |entry| {
+                let (witness, bytes) = &store[&entry.doc_id];
+                Ok((bytes.clone(), witness.clone()))
+            })
+            .unwrap();
+            assert_eq!(resolved, json!(vec!["λ"; 65]));
+        }
+    }
+
+    #[test]
     fn manifest_round_trip_reassembles_the_exact_canonical_bytes() {
         let body = json!({
             "request": 7,
