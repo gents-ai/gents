@@ -65,4 +65,14 @@ test.describe("stacked editor sheets", () => {
     await expect.poll(() => scrollTop(bodyOf(top))).toBeGreaterThan(0);
     expect(await scrollTop(bodyOf(below))).toBe(belowBefore);
   });
+
+  test("the sheet below steps aside so the stack shows", async ({ page }) => {
+    const { below, top } = await stackTwoSheets(page);
+    await expect
+      .poll(async () => {
+        const [b, t] = [(await below.boundingBox())!, (await top.boundingBox())!];
+        return Math.round(t.x - b.x);
+      })
+      .toBe(24);
+  });
 });

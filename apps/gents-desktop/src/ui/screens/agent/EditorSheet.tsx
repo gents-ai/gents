@@ -33,9 +33,11 @@ export function EditorSheet({
   const body = useRef<HTMLDivElement>(null);
   return (
     <Sheet open={open} onOpenChange={(next) => !next && onClose()}>
+      {/* a sheet with another stacked on it steps aside, and the one on top
+          casts its shadow over it, so the stack shows */}
       <SheetContent
         side="right"
-        className="flex w-full flex-col gap-0 border-border/60 max-md:max-w-full data-[side=right]:max-md:w-full md:w-[92vw] data-[side=right]:sm:max-w-3xl"
+        className="flex w-full flex-col gap-0 border-border/60 max-md:max-w-full data-[side=right]:max-md:w-full md:w-[92vw] data-[side=right]:sm:max-w-3xl md:data-nested-dialog-open:-translate-x-[calc(var(--nested-dialogs)*1.5rem)] data-nested:shadow-[-16px_0_32px_-12px_rgb(0_0_0/0.35)]"
         overlayProps={{ onWheel: (e) => body.current?.scrollBy({ top: e.deltaY }) }}
       >
         <SheetHeader className="pr-20">
