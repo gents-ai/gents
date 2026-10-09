@@ -15,7 +15,7 @@ import {
   type DesktopStartupPhase,
 } from "../../../lib/loadingStatus";
 import { SETUP_COMPLETE_DWELL_MS, SetupProgress } from "./SetupProgress";
-import { engineerPatches } from "@/lib/setupSteward";
+import { engineerPatches } from "@/lib/engineer";
 import { supportsLocalManagedServer } from "../../../lib/shellPlatform";
 import { NodeAvatar } from "@/screens/AgentAvatar";
 import { Mark } from "@/app/Mark";

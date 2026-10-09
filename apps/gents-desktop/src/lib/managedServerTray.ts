@@ -87,8 +87,7 @@ export function installManagedServerTrayListeners(
         "This node was started outside the managed service. Stop that gents server process directly.",
       );
     }
-    if (!server.offers.stop)
-      throw new Error("Stop Node is unavailable in this build.");
+    if (!server.offers.stop) throw new Error("Stop Node is unavailable in this build.");
     await server.stop();
   });
   register(MANAGED_SERVER_TRAY_RESTART_EVENT, async () => {

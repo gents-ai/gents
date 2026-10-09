@@ -95,11 +95,11 @@ export function createProviders({ api, store, client }: ProviderParams) {
   }
 
   return {
-    /** Reads an node's provider accounts again; resolves once this read
+    /** Reads a node's provider accounts again; resolves once this read
         has landed, to what it read, or null when it failed. Only the newest
         read for the node is shown, and a failed one shows none. */
     loadProviderAccounts,
-    /** Shows an node's accounts: they are read now, and again whenever the
+    /** Shows a node's accounts: they are read now, and again whenever the
         client's snapshot changes, until every watcher has let go. */
     watchProviderAccounts(nodeDid: string) {
       watching.set(nodeDid, (watching.get(nodeDid) ?? 0) + 1);
@@ -110,12 +110,12 @@ export function createProviders({ api, store, client }: ProviderParams) {
         else watching.delete(nodeDid);
       };
     },
-    /** Reads an node's usage, skipping accounts read in the last five
+    /** Reads a node's usage, skipping accounts read in the last five
         minutes; a failure keeps the last usage shown. */
     loadProviderUsage(nodeDid: string) {
       return readUsage(nodeDid, false, null)?.catch(() => undefined);
     },
-    /** Reads an node's usage now, for one provider or all; rejects when the
+    /** Reads a node's usage now, for one provider or all; rejects when the
         read fails. Only the newest read for the node is shown. */
     refreshProviderUsage(nodeDid: string, provider: string | null) {
       return readUsage(nodeDid, true, provider);

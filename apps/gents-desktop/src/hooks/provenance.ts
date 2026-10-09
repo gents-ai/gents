@@ -42,7 +42,7 @@ type ProvenanceParams = {
 
 /**
  * The selected session's provenance, read while a screen shows it. Its
- * scope is exact: the session's agent, label and requester, as the session
+ * scope is exact: the session's node, label and requester, as the session
  * list reports them. It is asked again when the transcript's rows change
  * (a streamed chunk to the live reply does not move them) or the node's
  * session list does. It is also asked when the observed lineage inputs
@@ -86,9 +86,7 @@ export function createProvenance({ api, stores }: ProvenanceParams) {
     const state = stores.session.getState();
     const session = heldFor(state.session, selected, nodeDid);
     const sessionId = session?.sessionId ?? null;
-    const sessions = nodeDid
-      ? stores.fleet.getState().sessionsOf[nodeDid]
-      : undefined;
+    const sessions = nodeDid ? stores.fleet.getState().sessionsOf[nodeDid] : undefined;
     const summary = uniquelyListed(sessions, nodeDid, sessionId);
     const requesterDid = summary?.requesterDid ?? null;
     const scope = `${nodeDid ?? ""}\u0000${sessionId ?? ""}\u0000${requesterDid ?? ""}`;

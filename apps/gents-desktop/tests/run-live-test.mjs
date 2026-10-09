@@ -101,12 +101,12 @@ if (isDirectRun) {
 
   const liveTestSuites = {
     fleet: "tests/tauri-driver.live.fleet.test.tsx",
-    agent: "tests/tauri-driver.live.behavior.test.tsx",
+    agent: "tests/tauri-driver.live.agent.test.tsx",
     config: "tests/tauri-driver.live.config.test.tsx",
     chat: "tests/tauri-driver.live.chat.test.tsx",
     interrupt: "tests/tauri-driver.live.interrupt.test.tsx",
     operations: "tests/tauri-driver.live.operations.test.tsx",
-    "agent-target": "tests/tauri-driver.live.subagent.test.tsx",
+    "agent-target": "tests/tauri-driver.live.agent-target.test.tsx",
     replication: "tests/tauri-driver.live.replication.test.tsx",
     "sad-path": "tests/tauri-driver.live.sad-path.test.tsx",
     "e2e-acceptance": "tests/tauri-driver.live.e2e-acceptance.test.tsx",

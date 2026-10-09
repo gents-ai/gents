@@ -5,7 +5,7 @@ import {
   ENGINEER_AGENT_TAG,
   ENGINEER_PROMPT,
   engineerPatches,
-} from "../src/ui/lib/setupSteward";
+} from "../src/ui/lib/engineer";
 
 describe("engineer setup patches", () => {
   it("wires the default agent, context prompt, and self-config tools", () => {
