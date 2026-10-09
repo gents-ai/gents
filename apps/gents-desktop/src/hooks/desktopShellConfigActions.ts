@@ -1,5 +1,4 @@
 import type {
-  CodexLoginResult,
   DesktopApiAdapter,
   DesktopClientSnapshot,
   ToolServiceTestRequest,
@@ -87,20 +86,6 @@ export function createDesktopShellConfigActions({
      * the person typed.
      */
     changeConfig,
-    /** Signs the agent in to Codex in the browser; nothing is stored here.
-        A failure is reported once, then rethrown. */
-    codexLogin: (agentDid: string): Promise<CodexLoginResult> =>
-      call("sign in to Codex", () => api.codexLogin(agentDid)),
-    /** Abandons a Codex sign-in whose browser was closed. Best effort: a
-        failure (nothing in flight, say) never blocks closing the wizard. */
-    cancelCodexLogin: (): Promise<void> => api.cancelCodexLogin().catch(() => {}),
-    /** Signs the agent in to Grok in the browser; nothing is stored here.
-        A failure is reported once, then rethrown. */
-    grokLogin: (agentDid: string) =>
-      call("sign in to Grok", () => api.grokLogin(agentDid)),
-    /** Abandons a Grok sign-in whose browser was closed. Best effort, as
-        for Codex. */
-    cancelGrokLogin: (): Promise<void> => api.cancelGrokLogin().catch(() => {}),
     /** Tries a tool service's connection without saving it. A failure is
         reported once, then rethrown. */
     testToolService: (

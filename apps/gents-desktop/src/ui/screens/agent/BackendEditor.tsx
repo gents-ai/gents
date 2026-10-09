@@ -33,12 +33,7 @@ import { useApp } from "@/app/AppContext";
 import { toastFailure } from "@/lib/failure";
 import { healthy, isSubscriptionKind, KINDS, SUBSCRIPTION } from "./inferenceKinds";
 import { UsageRows } from "./ProviderUsage";
-import {
-  accountWarnings,
-  AccountRows,
-  backendAccount,
-  removeAccount,
-} from "./ProviderAccounts";
+import { accountWarnings, AccountRows, backendAccount } from "./ProviderAccounts";
 
 export function backendSave(
   agentDid: string,
@@ -85,14 +80,12 @@ export function BackendEditor({
   deployment,
   backend,
   accounts,
-  reload,
   usage,
   embedded = false,
 }: {
   deployment: NodeView;
   backend: InferenceBackendView;
   accounts: readonly ProviderAccountView[];
-  reload: () => Promise<void>;
   /* this backend's usage and the read again; absent, no Usage group */
   usage?: {
     view?: BackendUsageView;
@@ -102,8 +95,12 @@ export function BackendEditor({
   embedded?: boolean;
 }) {
   const {
-    api,
-    actions: { changeConfig },
+    actions: {
+      changeConfig,
+      discoverInferenceModels,
+      probeInferenceEndpoint,
+      removeProviderAccount,
+    },
   } = useApp();
   const base = {
     name: "agent" as const,
@@ -256,7 +253,7 @@ export function BackendEditor({
                   if (subscription) {
                     setProbe("Discovering models…");
                     const connection = SUBSCRIPTION[d.draft.providerKind]!;
-                    const result = await api.discoverInferenceModels({
+                    const result = await discoverInferenceModels({
                       requestKey: `backend-${backend.backendId}-${Date.now()}`,
                       agentDid: deployment.agentDid,
                       provider: connection.providerId,
@@ -276,7 +273,7 @@ export function BackendEditor({
                   }
                   const endpoint = requiredHttpUrl("Endpoint", d.draft.endpoint);
                   setProbe("probing…");
-                  const r = await api.probeInferenceEndpoint(endpoint);
+                  const r = await probeInferenceEndpoint(endpoint);
                   if (discoveryRevision.current !== revision) return;
                   setProbe(
                     r.reachable
@@ -344,7 +341,6 @@ export function BackendEditor({
             kind={d.draft.providerKind}
             accountRef={backend.accountRef ?? null}
             accounts={accounts}
-            reload={reload}
           />
         ) : (
           <>
@@ -511,7 +507,9 @@ export function BackendEditor({
           noun="account"
           warning={accountWarnings(deployment, accounts, removable).remove}
           base={base}
-          onDelete={() => removeAccount(api, deployment, removable, reload)}
+          onDelete={() =>
+            removeProviderAccount(deployment.agentDid, removable.credentialId)
+          }
         />
       )}
       {!embedded && !removable && (

@@ -51,6 +51,9 @@ export function createShellActions({
         newest read issued publishes. A failure is the client's own state,
         shown in the banner. */
     refreshSnapshot,
+    /** Reads the client without publishing it, for a screen checking what
+        its own write left behind. */
+    readSnapshot: () => api.fetchDesktopSnapshot(),
     ...createDesktopShellMailboxActions({
       api,
       stores,

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import type {
   BackendProviderKind,
-  DesktopApiAdapter,
+  InferenceBackendRecommendationRequest,
   InferenceBackendView,
   InferenceModelRecommendation,
 } from "@source-inc/gents-desktop-client";
@@ -21,14 +21,16 @@ type AdvertisedModel = NonNullable<InferenceBackendView["advertisedModels"]>[num
  * already set leaves the draft's own values alone.
  */
 export function useModelRecommendation({
-  api,
+  recommend,
   backendId,
   modelName,
   backend,
   advertised,
   onChosen,
 }: {
-  api: Pick<DesktopApiAdapter, "getInferenceBackendRecommendation">;
+  recommend: (
+    request: InferenceBackendRecommendationRequest,
+  ) => Promise<InferenceModelRecommendation>;
   backendId: string;
   modelName: string;
   backend: InferenceBackendView | undefined;
@@ -63,18 +65,17 @@ export function useModelRecommendation({
     const choice = `${backendId}\u0000${model}`;
     let canceled = false;
     const timeout = window.setTimeout(() => {
-      void api
-        .getInferenceBackendRecommendation({
-          providerKind,
-          endpoint,
-          modelName: model,
-          displayName: advertised?.display_name ?? null,
-          // Only the backend's advertised facts describe the model.
-          contextWindow: advertised?.context_window ?? null,
-          maxContextWindow: advertised?.max_context_window ?? null,
-          maxOutputTokens: advertised?.max_output_tokens ?? null,
-          reasoningEfforts: advertised?.reasoning_efforts ?? null,
-        })
+      void recommend({
+        providerKind,
+        endpoint,
+        modelName: model,
+        displayName: advertised?.display_name ?? null,
+        // Only the backend's advertised facts describe the model.
+        contextWindow: advertised?.context_window ?? null,
+        maxContextWindow: advertised?.max_context_window ?? null,
+        maxOutputTokens: advertised?.max_output_tokens ?? null,
+        reasoningEfforts: advertised?.reasoning_efforts ?? null,
+      })
         .then((recommendation) => {
           if (canceled) return;
           setAnswer({ asked, recommendation, error: null });
@@ -98,7 +99,7 @@ export function useModelRecommendation({
     };
     // `asked` names every input the request reads.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [asked, api]);
+  }, [asked, recommend]);
 
   const current = answer?.asked === asked ? answer : null;
   return {

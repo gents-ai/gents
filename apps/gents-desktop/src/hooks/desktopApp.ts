@@ -12,7 +12,7 @@ import { reconcileSelection } from "./selectionReconcile";
 import { createSessionReads } from "./sessionReads";
 import { createSessionStore, holdsRequest } from "./sessionStore";
 import { createProviderStore, type ProviderStore } from "./providerStore";
-import { createProviderReads } from "./providerReads";
+import { createProviders } from "./providers";
 import { createLocalServer } from "./localServer";
 import { createLocalServerStore, type LocalServerStore } from "./localServerStore";
 import { createShellActions } from "./shellActions";
@@ -97,7 +97,7 @@ export function createDesktopApp({
       client: lifecycle,
       reportFailure: reportAction,
     }),
-    ...createProviderReads({ api, store: stores.providers, client: stores.client }),
+    ...createProviders({ api, store: stores.providers, client: stores.client }),
     ...localServer,
   };
   reconcileSelection(stores, actions.selectAgent);

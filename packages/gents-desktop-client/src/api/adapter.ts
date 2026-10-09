@@ -274,6 +274,9 @@ export function createDesktopApiAdapter(
         request: { agentDid, provider: provider ?? null, label: label ?? null },
       }),
     cancelClaudeLogin: () => invokeDesktop<void>("desktop_claude_login_cancel"),
+    watchProviderLoginUrl: (provider, onUrl) =>
+      transport.listenProviderLoginUrl?.(provider, onUrl) ??
+      Promise.resolve(() => {}),
     ...createProviderAccountCommands(invokeDesktop),
     ...createPackCommands(invokeDesktop),
     ...createHostAccessCommands(invokeDesktop),

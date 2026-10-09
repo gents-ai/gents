@@ -10,7 +10,7 @@ import { createSelectors, type WithSelectors } from "./createSelectors";
 
 /** What the bridge says about inference providers, held once for every
     panel that shows it: each agent's accounts and usage as last read, and
-    the setup catalog. */
+    the setup catalog. A read replaces its agent's list whole. */
 export type ProviderState = {
   accounts: Readonly<Record<string, readonly ProviderAccountView[]>>;
   usage: Readonly<Record<string, readonly BackendUsageView[]>>;
@@ -49,9 +49,12 @@ export const providers = {
   ) {
     store.setState((state) => ({ usage: { ...state.usage, [agentDid]: views } }));
   },
+  /** Also clears a failure an earlier read left showing. */
   catalogRead(store: ProviderStore, catalog: InferenceSetupCatalog) {
     store.setState({ catalog, catalogFailure: null });
   },
+  /** null clears the failure as a read is asked again, so Retry does not
+      keep showing the error it is answering. */
   catalogFailed(store: ProviderStore, failure: { cause: unknown } | null) {
     store.setState({ catalogFailure: failure });
   },

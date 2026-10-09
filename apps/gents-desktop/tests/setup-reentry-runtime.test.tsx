@@ -5,10 +5,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DesktopApp } from "../src/hooks/desktopApp";
 import { publish, renderIn, testApp } from "./app-fixture";
 
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(async () => () => {}),
-}));
-
 import {
   BridgeInvokeError,
   type ManagedServerStatus,

@@ -1,3 +1,4 @@
+import type { OauthProvider } from "../transport.js";
 import type { ConfigComponentsApplyRequest } from "../generated/ConfigComponentsApplyRequest.js";
 import type { ConfigComponentsPatchRequest } from "../generated/ConfigComponentsPatchRequest.js";
 import type { EventSourceSaveRequest } from "../generated/EventSourceSaveRequest.js";
@@ -277,6 +278,12 @@ export type DesktopApiAdapter = {
     label?: string | null,
   ) => Promise<ClaudeLoginResult>;
   cancelClaudeLogin: () => Promise<void>;
+  /** Calls `onUrl` with each sign-in URL the bridge sends while a
+   *  provider's login runs; resolves to a function that stops watching. */
+  watchProviderLoginUrl?: (
+    provider: OauthProvider,
+    onUrl: (url: string) => void,
+  ) => Promise<() => void>;
   listProviderAccounts?: (agentDid: string) => Promise<ProviderAccountView[]>;
   disconnectProviderAccount?: (
     agentDid: string,
