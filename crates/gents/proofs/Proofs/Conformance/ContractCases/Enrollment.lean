@@ -1011,7 +1011,8 @@ private def edgeExpectedDigest : String :=
   "utf8hex-v1:" ++ edgeExpectedPayload
 
 def enrollmentDigestCases : List EnrollmentDigestCase :=
-  let baseFields := canonicalRequestTextFields enrollmentRequest
+  let baseFields := canonicalRequestTextFields
+    { enrollmentRequest with ownerNode := "did:key:agent" }
   let baseByteFields := textFieldsToBytes baseFields
   let basePayload := utf8HexString (canonicalSerializedFields baseByteFields)
   let baseDigest := renderDigestString (canonicalDigestFromFields baseByteFields)
