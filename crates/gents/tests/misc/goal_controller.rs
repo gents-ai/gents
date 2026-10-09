@@ -358,13 +358,20 @@ async fn seed_failed_request(db: &TestDb, request_id: &str) -> String {
     .await
 }
 
+struct GoalBackgroundHandoff {
+    runtime: crate::support::accepted_turn::AcceptedTurnRuntime,
+    parent_doc_id: String,
+    background_executions: gents::hook::BackgroundExecutionRegistry,
+    process_tool_call_id: String,
+}
+
 async fn boot_goal_background_handoff_with_plans(
     db: &TestDb,
     request_id: &str,
     entered_path: &std::path::Path,
     release_path: &std::path::Path,
     child_plans: Vec<crate::support::streaming_backend::StreamPlan>,
-) -> (crate::support::accepted_turn::AcceptedTurnRuntime, String) {
+) -> GoalBackgroundHandoff {
     let did = db.node_identity.did();
     let behavior = "goal-background-handoff";
     let prompt = "start late background handoff";
@@ -437,19 +444,33 @@ async fn boot_goal_background_handoff_with_plans(
     )
     .await
     .unwrap();
+    let background_executions = agent.background_execution_registry();
     let runtime =
         crate::support::accepted_turn::boot_prepared_accepted_turn(db, prepared, agent).await;
     let parent_doc = crate::support::exact_request_doc_id(db.node.as_ref(), request_id).await;
     for _ in 0..200 {
-        let response = db.node.execute(&format!(r#"{{ AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{}" }}, tool_name: {{ _eq: "bash" }}, lifecycle_state: {{ _eq: "running" }} }}, limit: 1) {{ _docID }} }}"#, gents::graphql::escape_graphql_string(&parent_doc))).await;
-        if response
+        let response = db.node.execute(&format!(r#"{{ AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{}" }}, tool_name: {{ _eq: "bash" }}, lifecycle_state: {{ _eq: "running" }} }}, limit: 1) {{ _docID tool_call_id }} }}"#, gents::graphql::escape_graphql_string(&parent_doc))).await;
+        assert!(
+            !response.has_errors(),
+            "query running background process: {:?}",
+            response.errors
+        );
+        if let Some(row) = response
             .data
             .as_ref()
             .and_then(|data| data["AgentToolCall"].as_array())
-            .is_some_and(|rows| !rows.is_empty())
+            .and_then(|rows| rows.first())
         {
             if entered_path.exists() {
-                return (runtime, parent_doc);
+                return GoalBackgroundHandoff {
+                    runtime,
+                    parent_doc_id: parent_doc,
+                    background_executions,
+                    process_tool_call_id: row["tool_call_id"]
+                        .as_str()
+                        .expect("running process has its registered tool call ID")
+                        .to_owned(),
+                };
             }
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
@@ -497,7 +518,11 @@ async fn real_waited_process_defers_goal_until_completion_wake_becomes_parent() 
             vec![StreamChunk::text("goal child reached provider")],
         ))],
     );
-    let (runtime, parent_doc_id) = boot_goal_background_handoff_with_plans(
+    let GoalBackgroundHandoff {
+        runtime,
+        parent_doc_id,
+        ..
+    } = boot_goal_background_handoff_with_plans(
         &db,
         parent_request_id,
         &entered_path,
@@ -1887,7 +1912,12 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
                 vec![StreamChunk::text("wrapup reached provider")],
             ))],
         );
-        let (runtime, parent_doc) = boot_goal_background_handoff_with_plans(
+        let GoalBackgroundHandoff {
+            runtime,
+            parent_doc_id: parent_doc,
+            background_executions,
+            process_tool_call_id,
+        } = boot_goal_background_handoff_with_plans(
             &db,
             parent,
             &entered_path,
@@ -1957,22 +1987,33 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
             "the wrapup reached its held provider response"
         );
         std::fs::write(&release_path, b"release").unwrap();
-        for _ in 0..200 {
-            let delivery = db.node.execute(
-                "{ AgentToolCall(filter: { tool_name: { _eq: \"bash\" } }, limit: 1) { completion_notification_delivered_at } }",
-            ).await;
-            if goal_children(&db).await.len() == 1
-                && delivery
-                    .data
-                    .as_ref()
-                    .and_then(|data| data["AgentToolCall"].as_array())
-                    .and_then(|rows| rows.first())
-                    .is_some_and(|row| row["completion_notification_delivered_at"].is_string())
-            {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
+        // Delivery is marked before the worker finishes its side effects. Wait
+        // for that exact worker to release ownership before redriving them.
+        let completion = tokio::time::timeout(
+            Duration::from_secs(5),
+            background_executions.wait_for_completion(&process_tool_call_id),
+        )
+        .await;
+        let observed = db.node.execute(&format!(
+            r#"{{ AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{}" }} }}) {{ _docID lifecycle_state status completion_notification_delivered_at }} }}"#,
+            gents::graphql::escape_graphql_string(&process_tool_call_id),
+        )).await;
+        assert!(
+            !observed.has_errors(),
+            "completion query: {:?}",
+            observed.errors
+        );
+        let delivery = observed.data.expect("background completion response");
+        assert!(
+            completion.is_ok(),
+            "background process {process_tool_call_id} did not finish its completion side effects after {terminal}; observed={delivery}"
+        );
+        let rows = delivery["AgentToolCall"].as_array().unwrap();
+        assert_eq!(rows.len(), 1, "exact background process: {delivery}");
+        assert!(
+            rows[0]["completion_notification_delivered_at"].is_string(),
+            "the worker must publish its completion before ownership ends: {delivery}"
+        );
         gents::tool_call_lifecycle::ToolCallLifecycle::reconcile_background_completion_side_effects(&db.node, db.node_identity.did()).await.unwrap();
         let observed = db.node.execute(
             "{ AgentRequest { _docID request_id created_at lifecycle_state execution_origin caused_by_trigger_kind caused_by_parent_request_id } AgentMessage { _docID agent_did requester_did request_doc_id } AgentToolCall { _docID tool_name lifecycle_state completion_notification_delivered_at } }",
