@@ -4742,6 +4742,7 @@ dependencies = [
  "chrono",
  "ciborium",
  "clap",
+ "defra-http",
  "defra-node",
  "defra-p2p-adapter",
  "flate2",

@@ -199,10 +199,9 @@ impl ConfigCommandTool {
             }
         }
         let mut request = match target {
-            SelfConfigTarget::Tools => refuse_silent_tools_drops(
-                tools_request(&core, patch, self.allow_pack_install),
-                allow_drop,
-            ),
+            SelfConfigTarget::Tools => {
+                refuse_silent_tools_drops(tools_request(&core, patch), allow_drop)
+            }
             SelfConfigTarget::InferenceBackend if create => {
                 let mut request = local_backend_create_request(
                     self.agent_did.clone(),

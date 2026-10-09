@@ -30,7 +30,7 @@ impl ConfigCommandTool {
                         }
                         if let Some((resource, _)) = HELP_INDEX.iter().find(|(resource, _)| {
                             crud::resource_target(resource).is_some_and(|target| target.collection_name() == collection.graphql_type())
-                                && model_resources(&self.categories, self.allow_pack_install).contains(resource)
+                                && model_resources(&self.categories, self.core.held_grants().pack_install).contains(resource)
                         }) {
                             diagnostic["inspect_with"] = json!({"argv":[resource,"get"],"target_id":id});
                         }

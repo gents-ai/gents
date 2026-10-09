@@ -13,6 +13,6 @@ pub use catalog::{
 pub use entry::{prepare_entry_run, EntryRunRequest, PreparedEntryRun};
 pub use install::{
     default_graph_package_install_bindings, install_loaded_graph_package,
-    load_installed_package_plan, GraphInstallRecord, GraphPackageInstallBindings,
-    GraphPackageInstallReceipt,
+    load_installed_package_plan, select_run_plan, GraphInstallRecord, GraphPackageInstallBindings,
+    GraphPackageInstallReceipt, GraphRunSelector,
 };

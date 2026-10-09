@@ -48,6 +48,13 @@ def selfConfigBackendJson (entry : String × String × String) : String :=
     ++ "\"auth\":" ++ jsonString entry.2.2
   ++ "}"
 
+def selfConfigGrantsJson (g : Grants) : String :=
+  "{\"pack_install\":" ++ scBool g.packInstall ++ "}"
+
+def selfConfigSelectionJson : Option (List (FieldKey × FieldValue)) → String
+  | none => "null"
+  | some doc => jsonArray (doc.map fieldValuePairJson)
+
 def selfConfigCaseJson (w : CaseWitness) : String :=
   "{"
     ++ "\"name\":" ++ jsonString w.row.name ++ ","
@@ -55,6 +62,9 @@ def selfConfigCaseJson (w : CaseWitness) : String :=
     ++ "\"category\":" ++ jsonString w.row.target.category ++ ","
     ++ "\"guarded\":" ++ scBool w.row.guarded ++ ","
     ++ "\"validates\":" ++ scBool w.row.validates ++ ","
+    ++ "\"held_grants\":" ++ selfConfigGrantsJson w.row.held ++ ","
+    ++ "\"selected_before\":" ++ selfConfigSelectionJson w.selectedBefore ++ ","
+    ++ "\"selected_after\":" ++ selfConfigSelectionJson w.selectedAfter ++ ","
     ++ "\"doc\":" ++ jsonArray (w.row.doc.map fieldValuePairJson) ++ ","
     ++ "\"patch\":"
       ++ jsonArray (w.row.patch.map selfConfigPatchEntryJson) ++ ","
