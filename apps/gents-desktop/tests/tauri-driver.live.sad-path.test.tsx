@@ -248,6 +248,9 @@ describeLive("Tauri app live bridge runner sad paths", () => {
         expect(service?.mcp_port).toBe(9);
         expect(service?.mcp_path).toBe("/mcp");
       });
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+      });
 
       await driver.user.click(screen.getByRole("button", { name: "Test connection" }));
       await waitFor(
