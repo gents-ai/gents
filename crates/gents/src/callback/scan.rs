@@ -18,7 +18,6 @@ use super::documents::{
     load_event_source, strip_secret_fields, validate_callback_binding, CallbackBindingDoc,
     CallbackInvocationDoc,
 };
-use super::run::run_owned_invocation;
 use super::{CallbackEngine, LIFECYCLE_PENDING};
 
 const SEEN_DOCS_SEED_LIMIT: usize = 10_000;
@@ -66,6 +65,7 @@ impl CallbackEngine {
             group_recovery_cursor: 0,
             rescan_tick: rescan_tick(),
             cancel,
+            workers: None,
         }
     }
 
@@ -593,15 +593,7 @@ impl CallbackEngine {
     ) -> Result<bool> {
         let stored = create_pending_invocation(self.node.as_ref(), &invocation).await?;
         if invocation_is_claimable(&self.agent_did, &stored) {
-            if let Err(error) = run_owned_invocation(
-                self.node.as_ref(),
-                &stored,
-                callback,
-                self.ceiling.as_deref(),
-                &self.plugins,
-            )
-            .await
-            {
+            if let Err(error) = self.execute_invocation(&stored, callback).await {
                 tracing::warn!(
                     invocation_id = %stored.invocation_id,
                     %error,
