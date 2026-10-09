@@ -53,9 +53,10 @@ export default defineConfig({
       },
     },
     {
-      /* the desktop app draws in WebKit, which has no scroll anchoring */
+      /* the desktop app draws in WebKit, which has no scroll anchoring and
+         handles wheels its own way */
       name: "webkit-desktop",
-      testMatch: /transcript-.*\.spec\.ts/,
+      testMatch: /(transcript-.*|editor-sheet-wheel)\.spec\.ts/,
       use: {
         ...devices["Desktop Safari"],
         viewport: { width: 1280, height: 900 },
