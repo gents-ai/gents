@@ -236,9 +236,9 @@ export function createLocalServer({ api, store, client }: LocalServerParams) {
         in; resolves with the last status. */
     settleLocalServer(status: ManagedServerStatus) {
       const current = reads.begin();
-      const currentWait = waits.begin();
+      const currentWait = running ? () => false : waits.begin();
       return awaitManagedServerSettled(api, status, (wait) => {
-        if (currentWait()) publishWait(wait);
+        if (currentWait() && !running) publishWait(wait);
       }).then((next) => {
         if (current()) localServer.read(store, next);
         return next;

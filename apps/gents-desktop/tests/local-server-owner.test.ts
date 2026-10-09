@@ -285,4 +285,27 @@ describe("the local server's owner", () => {
       vi.useRealTimers();
     }
   });
+  it("does not let a new settling read clear an active operation's wait", async () => {
+    vi.useFakeTimers();
+    try {
+      const started = later<ManagedServerStatus>();
+      const { server, store } = owner({
+        managedServerStatus: vi.fn().mockResolvedValue({
+          ...status("starting"),
+          runtimeBooting: true,
+        }),
+        startManagedServer: vi.fn(() => started.promise),
+      });
+      const start = server.startLocalServer("Workshop Agent");
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(store.getState().wait?.kind).toBe("updating");
+      await server.settleLocalServer(status("running"));
+      expect(store.getState().wait?.kind).toBe("updating");
+      started.resolve(status("running"));
+      await start;
+      expect(store.getState().wait).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
