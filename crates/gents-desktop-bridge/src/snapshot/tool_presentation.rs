@@ -552,9 +552,9 @@ mod tests {
     #[test]
     fn file_reveal_uses_resolved_result_path_without_changing_display_path() {
         for result in [
-            r#"gents_fs: {"path":"file.txt","resolved_path":"/root/work/file.txt","created":true}
-write_file: wrote file.txt"#,
-            r#"{"path":"file.txt","resolved_path":"/root/work/file.txt","created":true}"#,
+            r#"gents_fs: {"ok":true,"status":"success","tool":"write_file","path":"file.txt","resolved_path":"/root/work/file.txt","returned_count":0,"total_count":0,"truncated":false,"bytes_written":4,"created":true,"content_hash":"hash"}
+write_file: wrote 4 bytes to file.txt"#,
+            r#"{"ok":true,"status":"success","tool":"write_file","path":"file.txt","resolved_path":"/root/work/file.txt","returned_count":0,"total_count":0,"truncated":false,"bytes_written":4,"created":true,"content_hash":"hash"}"#,
         ] {
             let projected = project_file_edit(
                 &tool(
@@ -572,7 +572,11 @@ write_file: wrote file.txt"#,
                 panic!("expected file edit");
             };
             assert_eq!(path.as_deref(), Some("file.txt"));
-            assert_eq!(reveal_path.as_deref(), Some("/root/work/file.txt"));
+            assert_eq!(
+                reveal_path.as_deref(),
+                Some("/root/work/file.txt"),
+                "native file result: {result}"
+            );
         }
     }
 
