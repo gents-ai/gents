@@ -552,10 +552,18 @@ async fn generated_count_carriers_bind_admission_parser_and_storage() {
         let schema = case["schema"].as_str().unwrap();
         let admitted = case["accepted"].as_bool().unwrap();
         assert_eq!(super::can_hold_canonical_count(schema), admitted, "{case}");
+        let collection = format!("CountCarrier{index}");
+        if let Some(expected_error) = case["schema_error"].as_str() {
+            let error = node
+                .add_schema(&format!("type {collection} {{ count: {schema} }}"))
+                .await
+                .unwrap_err();
+            assert!(format!("{error:#}").contains(expected_error), "{error:#}");
+            continue;
+        }
         if case["storage"] != true {
             continue;
         }
-        let collection = format!("CountCarrier{index}");
         node.add_schema(&format!("type {collection} {{ count: {schema} }}"))
             .await
             .unwrap();

@@ -31,11 +31,18 @@ private def witnessValue (field : Field) : WireValue :=
 private def probeValue (field : Field) : WireValue :=
   if field == .dateTime then .text "2026-10-09T00:00:00Z" else witnessValue field
 
+/-- DefraDB has no non-nillable DocID scalar. ID! remains a spelling-adapter
+case, but cannot appear on a real introspected field; native binding must
+assert SDL rejection rather than claim a storage witness for it. -/
+private def schemaError (c : FieldCase) : Option String :=
+  if c.schema == "ID!" then some "NonNull variant for type ID is not supported" else none
+
 private def fieldCaseJson (c : FieldCase) : String :=
   "{\"schema\":" ++ jsonString c.schema ++
   ",\"accepted\":" ++ (if canCarry c.field then "true" else "false") ++
   ",\"witness\":" ++ (if canCarry c.field then wireJson (witnessValue c.field) else "null") ++
-  ",\"storage\":" ++ (if canCarry c.field || c.field == .dateTime then "true" else "false") ++
+  ",\"storage\":" ++ (if (schemaError c).isNone && (canCarry c.field || c.field == .dateTime) then "true" else "false") ++
+  ",\"schema_error\":" ++ ((schemaError c).map jsonString).getD "null" ++
   ",\"probe\":" ++ wireJson (probeValue c.field) ++
   ",\"probe_expected\":" ++ ((parseWire (probeValue c.field) 256).map toString).getD "null" ++ "}"
 
