@@ -1218,6 +1218,27 @@ pub(crate) async fn resolve_canonical_replay_tags(
         .collect()
 }
 
+/// Physical header IDs of the session, the facts the twin and ambiguity checks
+/// of [`resolve_canonical_replay_tags`] range over. Headers are create-only, so
+/// an unchanged set means no header that could add a candidate has arrived.
+pub(crate) async fn canonical_replay_header_ids(
+    node: &EmbeddedNode,
+    scope: CanonicalReplayScope<'_>,
+) -> Result<BTreeSet<String>> {
+    let session_filter =
+        session_scope_filter(scope.agent_did, scope.session_id, scope.requester_did);
+    let response = ReadAccess::Node(node)
+        .query(
+            &format!(r#"{{ AgentMessage(filter: {{ {session_filter} }}) {{ _docID }} }}"#),
+            "load_canonical_replay_header_ids",
+        )
+        .await?;
+    rows_value(&response, "AgentMessage")?
+        .iter()
+        .map(|row| Ok(required_row_str(row, "_docID")?.to_owned()))
+        .collect()
+}
+
 /// Test convenience; production uses the batch owner even for a single turn.
 #[cfg(test)]
 pub(crate) async fn resolve_canonical_replay_tag(
