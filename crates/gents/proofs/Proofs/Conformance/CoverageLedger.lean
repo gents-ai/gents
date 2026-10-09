@@ -898,7 +898,7 @@ def caseCoverage : List CoverageEntry :=
       "self_config_cases"
       "SelfConfigCases"
       "conformance::generated_self_config_cases_fence_patch_merge"
-      "Covers production patch admissibility and accepted merges, and replays guarded rows through the production Tools/Behavior no-lockout guards, the Backend auth fence and the Profile account choice fence. Reference validation and unchanged stored state after rejection require the shared configuration transaction owner.")
+      "Covers production patch admissibility and accepted merges, replays every Tools row through the always-on operator-grant guard (guard_tools_keep_grants) and every Context and Behavior row, clone rows included, through reselection_keeps_grants, and replays guarded rows through the production Tools/Behavior no-lockout guards, the Backend auth fence and the Profile account choice fence. Reference validation and unchanged stored state after rejection require the shared configuration transaction owner.")
       "self-config" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
       "session_recovery_cases"
@@ -1279,6 +1279,11 @@ def caseCoverage : List CoverageEntry :=
       "graph_pipeline_run_terminal_cases"
       "GraphPipelineRunTerminalCases"
       "conformance::graph_pipeline::generated_run_terminal_cases_fence_completion_cas")
+      "graph-pipeline" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "graph_pipeline_edge_delivery_cases"
+      "GraphPipelineEdgeDeliveryCases"
+      "conformance::graph_pipeline::generated_edge_delivery_cases_fence_graph_edge_admission")
       "graph-pipeline" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "restart_disposition_cases"

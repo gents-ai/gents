@@ -294,7 +294,6 @@ async fn own_tools_refuse_a_group_set_that_silently_drops_existing_settings() {
                     Some(json!({"enable_defra_query":true,"datastore_tool_surface_ids":["engineer-mailbox"]})),
                 ),
             ],
-            false,
         ))
         .await
         .unwrap();

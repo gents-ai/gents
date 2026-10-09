@@ -225,8 +225,9 @@ pub struct EventSource {
 /// Shared validation requires correlation and expected_count or timeout_secs.
 /// Counts/timeouts must be positive; min_count defaults to 1 and cannot exceed
 /// a known expected count. Source-field counts are validated on delivery too.
-/// Graph compilation additionally requires expected_count >= 2 and rejects
-/// latest_only concurrency; shared types do not widen existing graph semantics.
+/// Graph compilation additionally requires expected_count >= 2 and refuses
+/// latest_only concurrency on every graph edge (Lean
+/// `GraphPipeline.graphEdgeValid`); shared types do not widen graph semantics.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]

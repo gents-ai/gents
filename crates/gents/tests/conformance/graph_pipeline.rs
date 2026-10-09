@@ -1,9 +1,12 @@
+use gents::document_config::EventGroup;
 use gents::graph_pipeline::{
-    compile_graph, CompilerPolicy, EntryBinding, GraphIntent, GraphLimits, GraphNode,
-    PortCardinality, PortRef, PortSpec, ResultCardinality, ResultContract, StageCapability,
+    compile_graph, CompilerPolicy, DeliveryConcurrency, DiagnosticCode, EntryBinding, GraphEdge,
+    GraphIntent, GraphLimits, GraphNode, PortCardinality, PortRef, PortSpec, ResultCardinality,
+    ResultContract, StageCapability,
 };
 
 use super::lean_contract_snapshot;
+use crate::lean_vocab_test::{LeanGraphBoundsFault, LeanGraphTopologyFault};
 
 const CALLER_DID: &str = "did:key:graph-composer";
 
@@ -81,15 +84,47 @@ fn valid_fixture() -> (GraphIntent, Vec<StageCapability>) {
     (intent, vec![capability])
 }
 
+/// Give the worker a second, optional input on its own output's collection and
+/// wire its output into it: the smallest graph whose only compile fault is
+/// `Cycle` (one node, one self-edge, every port and binding otherwise valid).
+/// The two-node cycle is covered by
+/// `graph_pipeline::tests::rejects_cycles_and_unreachable_nodes`.
+fn make_cyclic(intent: &mut GraphIntent, capabilities: &mut [StageCapability]) {
+    capabilities[0].input_ports.push(PortSpec {
+        name: "feedback".to_owned(),
+        collection: "ExperimentResult".to_owned(),
+        schema: "ExperimentResult/v1".to_owned(),
+        correlation_field: "graph_run_id".to_owned(),
+        cardinality: PortCardinality::One,
+        required: false,
+    });
+    intent.edges.push(GraphEdge {
+        from: PortRef {
+            node_id: "worker".to_owned(),
+            port: "result".to_owned(),
+        },
+        to: PortRef {
+            node_id: "worker".to_owned(),
+            port: "feedback".to_owned(),
+        },
+        delivery: None,
+        concurrency: DeliveryConcurrency::Parallel,
+        predicate: None,
+    });
+}
+
 #[test]
 fn generated_validation_cases_fence_whole_graph_compilation_gate() {
     let cases = &lean_contract_snapshot().graph_pipeline_validation_cases;
-    assert_eq!(cases.len(), 32, "Lean must emit the full five-bit matrix");
+    assert_eq!(
+        cases.len(),
+        72,
+        "Lean must emit the full topology and bounds fault matrix"
+    );
 
-    // Single-bit cases pin the concrete diagnostic channel so rejection must
-    // come from the declared gate, not an unrelated compiler check. Multi-bit
+    // Single-fault cases pin the concrete diagnostic channel so rejection must
+    // come from the declared gate, not an unrelated compiler check. Multi-fault
     // cases legitimately emit several codes at once.
-    use gents::graph_pipeline::DiagnosticCode;
     for test_case in cases {
         let (mut intent, mut capabilities) = valid_fixture();
         let mut expected_codes = Vec::new();
@@ -97,17 +132,32 @@ fn generated_validation_cases_fence_whole_graph_compilation_gate() {
             intent.entries[0].schema = "WrongSchema/v1".to_owned();
             expected_codes.push(DiagnosticCode::SchemaMismatch);
         }
-        if !test_case.topology_valid {
-            intent.entries.clear();
-            expected_codes.push(DiagnosticCode::MissingInputBinding);
+        match test_case.topology_fault {
+            LeanGraphTopologyFault::Valid => {}
+            LeanGraphTopologyFault::MissingInputBinding => {
+                intent.entries.clear();
+                expected_codes.push(DiagnosticCode::MissingInputBinding);
+            }
+            LeanGraphTopologyFault::Cycle => {
+                make_cyclic(&mut intent, &mut capabilities);
+                expected_codes.push(DiagnosticCode::Cycle);
+            }
         }
         if !test_case.capabilities_authorized {
             capabilities[0].allowed_callers.clear();
             expected_codes.push(DiagnosticCode::UnauthorizedCapability);
         }
-        if !test_case.within_bounds {
-            intent.limits.max_nodes = 0;
-            expected_codes.push(DiagnosticCode::NodeLimitExceeded);
+        match test_case.bounds_fault {
+            LeanGraphBoundsFault::Within => {}
+            LeanGraphBoundsFault::NodeLimit => {
+                intent.limits.max_nodes = 0;
+                expected_codes.push(DiagnosticCode::NodeLimitExceeded);
+            }
+            LeanGraphBoundsFault::InvocationCeiling => {
+                intent.limits.max_total_invocations =
+                    CompilerPolicy::default().max_total_invocations + 1;
+                expected_codes.push(DiagnosticCode::PlatformLimitExceeded);
+            }
         }
         if !test_case.terminal_result_declared {
             intent.results.clear();
@@ -126,6 +176,19 @@ fn generated_validation_cases_fence_whole_graph_compilation_gate() {
             "{}",
             test_case.name
         );
+        if let Err(error) = &compiled {
+            let saw_cycle = error
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == DiagnosticCode::Cycle);
+            assert_eq!(
+                saw_cycle,
+                test_case.topology_fault == LeanGraphTopologyFault::Cycle,
+                "{}: Cycle must be reported exactly for the cycle fault; observed {:?}",
+                test_case.name,
+                error.diagnostics
+            );
+        }
         if let [expected_code] = expected_codes.as_slice() {
             let error = compiled.unwrap_err();
             assert!(
@@ -169,8 +232,8 @@ fn generated_revision_gate_cases_fence_publication_and_start_readiness() {
     let cases = &lean_contract_snapshot().graph_pipeline_revision_gate_cases;
     assert_eq!(
         cases.len(),
-        32,
-        "Lean must emit the complete revision gate matrix"
+        24,
+        "Lean must emit every status, completeness and pointer"
     );
 
     for test_case in cases {
@@ -182,13 +245,13 @@ fn generated_revision_gate_cases_fence_publication_and_start_readiness() {
         );
         assert_eq!(
             decision.may_activate, test_case.expected_activate,
-            "{} activate",
-            test_case.name
+            "{} activate (pointer {:?})",
+            test_case.name, test_case.active_pointer
         );
         assert_eq!(
             decision.may_start, test_case.expected_start,
-            "{} start",
-            test_case.name
+            "{} start (pointer {:?})",
+            test_case.name, test_case.active_pointer
         );
     }
 }
@@ -223,6 +286,164 @@ fn generated_run_terminal_cases_fence_completion_cas() {
         assert_eq!(
             decision.may_cancel, test_case.expected_cancel,
             "{} cancel",
+            test_case.name
+        );
+    }
+}
+
+fn port(name: &str, collection: &str, cardinality: PortCardinality, required: bool) -> PortSpec {
+    PortSpec {
+        name: name.to_owned(),
+        collection: collection.to_owned(),
+        schema: format!("{collection}/v1"),
+        correlation_field: "graph_run_id".to_owned(),
+        cardinality,
+        required,
+    }
+}
+
+/// Two task nodes joined by `extract.finding -> review.finding`. A grouped edge
+/// needs a Many target (the compiler's cardinality rule), so the target port
+/// follows whether the case carries a group; port cardinality is a separate
+/// rule, held valid so delivery and concurrency are the only variables.
+fn edge_fixture(grouped: bool) -> (GraphIntent, Vec<StageCapability>) {
+    let target = if grouped {
+        PortCardinality::Many
+    } else {
+        PortCardinality::One
+    };
+    let capability = |id: &str, inputs: Vec<PortSpec>, outputs: Vec<PortSpec>| StageCapability {
+        agent_did: CALLER_DID.to_owned(),
+        capability_id: id.to_owned(),
+        revision: "v1".to_owned(),
+        target: gents::graph_pipeline::StageTarget::Task {
+            task_id: format!("{id}-task"),
+        },
+        input_ports: inputs,
+        output_ports: outputs,
+        allowed_callers: vec![CALLER_DID.to_owned()],
+        workspace_authority: None,
+        tags: Vec::new(),
+    };
+    let capabilities = vec![
+        capability(
+            "extract",
+            vec![port("job", "ExperimentJob", PortCardinality::One, true)],
+            vec![port(
+                "finding",
+                "ExperimentFinding",
+                PortCardinality::One,
+                false,
+            )],
+        ),
+        capability(
+            "review",
+            vec![port("finding", "ExperimentFinding", target, true)],
+            vec![],
+        ),
+    ];
+    let node = |id: &str| GraphNode {
+        session: None,
+        node_id: id.to_owned(),
+        capability_id: id.to_owned(),
+        capability_revision: "v1".to_owned(),
+    };
+    let intent = GraphIntent {
+        agent_did: CALLER_DID.to_owned(),
+        graph_id: "lean-edge-delivery-fixture".to_owned(),
+        nodes: vec![node("extract"), node("review")],
+        edges: vec![GraphEdge {
+            from: PortRef {
+                node_id: "extract".to_owned(),
+                port: "finding".to_owned(),
+            },
+            to: PortRef {
+                node_id: "review".to_owned(),
+                port: "finding".to_owned(),
+            },
+            delivery: None,
+            concurrency: DeliveryConcurrency::Parallel,
+            predicate: None,
+        }],
+        entries: vec![EntryBinding {
+            name: "job".to_owned(),
+            collection: "ExperimentJob".to_owned(),
+            schema: "ExperimentJob/v1".to_owned(),
+            input_contract: None,
+            input_schema: None,
+            prepare: None,
+            to: PortRef {
+                node_id: "extract".to_owned(),
+                port: "job".to_owned(),
+            },
+        }],
+        results: vec![ResultContract {
+            name: "findings".to_owned(),
+            from: PortRef {
+                node_id: "extract".to_owned(),
+                port: "finding".to_owned(),
+            },
+            cardinality: ResultCardinality::AtMost { count: 8 },
+            terminal: true,
+        }],
+        limits: GraphLimits {
+            max_nodes: 2,
+            max_edges: 1,
+            max_depth: 2,
+            max_fan_out: 1,
+            max_total_invocations: 8,
+            max_runtime_secs: 60,
+        },
+        tags: Vec::new(),
+    };
+    (intent, capabilities)
+}
+
+#[test]
+fn generated_edge_delivery_cases_fence_graph_edge_admission() {
+    let cases = &lean_contract_snapshot().graph_pipeline_edge_delivery_cases;
+    assert_eq!(
+        cases.len(),
+        44,
+        "Lean must emit every concurrency mode against every delivery shape"
+    );
+    for test_case in cases {
+        let delivery: Option<EventGroup> = test_case.delivery.clone().map(|value| {
+            serde_json::from_value(value)
+                .unwrap_or_else(|error| panic!("{}: delivery {error}", test_case.name))
+        });
+        let concurrency: DeliveryConcurrency =
+            serde_json::from_value(serde_json::Value::String(test_case.concurrency.clone()))
+                .unwrap_or_else(|error| panic!("{}: concurrency {error}", test_case.name));
+        let (mut intent, capabilities) = edge_fixture(delivery.is_some());
+        intent.edges[0].delivery = delivery;
+        intent.edges[0].concurrency = concurrency;
+
+        let compiled = compile_graph(
+            &intent,
+            &capabilities,
+            CALLER_DID,
+            &CompilerPolicy::default(),
+        );
+        assert_eq!(
+            compiled.is_ok(),
+            test_case.expected_valid,
+            "{}: {:?}",
+            test_case.name,
+            compiled.as_ref().err().map(|error| &error.diagnostics)
+        );
+        // The wire name, not the Rust variant, so the channel assertion is
+        // independent of the enum spelling.
+        let refused_for_concurrency = compiled.as_ref().err().is_some_and(|error| {
+            error.diagnostics.iter().any(|diagnostic| {
+                serde_json::to_value(&diagnostic.code).unwrap() == "invalid_edge_concurrency"
+                    && diagnostic.path == "/edges/0/concurrency"
+            })
+        });
+        assert_eq!(
+            refused_for_concurrency,
+            !test_case.expected_concurrency_valid,
+            "{}: the edge-concurrency diagnostic must fire exactly when Lean refuses the concurrency",
             test_case.name
         );
     }

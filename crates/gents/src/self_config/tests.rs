@@ -1099,6 +1099,137 @@ async fn graph_tools_start_observe_and_cancel_on_the_current_node() {
     assert_ne!(cancelled["status"], "succeeded");
 }
 
+/// A `graph_id` run goes through the same selection owner as a package run:
+/// a digest that is not the active revision is refused there, naming the
+/// active one, before any start transaction, and the `graph_id` and digest
+/// `list_graphs` returns start the graph's only entry on the default input.
+#[tokio::test]
+async fn run_graph_by_graph_id_is_selected_through_the_shared_owner() {
+    let node = build_persona_node().await;
+    let identity = persona_identity("run-graph-by-id");
+    let agent_did = identity.did().to_string();
+    crate::test_support::install_test_behavior(&node, &agent_did, "setup").await;
+    let (_home, plugins) = crate::test_support::home_with_fixture_pack("review_graph");
+    let mut tool_config = config(&[]);
+    tool_config.behavior_id = "setup".to_owned();
+    tool_config.enable_pack_install = true;
+    tool_config.enable_graph_tools = true;
+    let tools = build_self_config_tools(
+        node.clone(),
+        agent_did,
+        Some(identity),
+        &tool_config,
+        plugins,
+    );
+    let call = |name: &str, args: Value| {
+        let tool = tools
+            .iter()
+            .find(|tool| tool.name() == name)
+            .unwrap_or_else(|| panic!("missing tool {name}"));
+        tool.call(args.to_string())
+    };
+    let slots = [
+        "--inference-slot",
+        "coordinator=setup:inference",
+        "--inference-slot",
+        "worker=setup:inference",
+        "--inference-slot",
+        "verifier=setup:inference",
+    ];
+    let mut preview = vec!["pack", "preview", "install", "fixture/review_graph"];
+    preview.extend(slots);
+    let preview: Value = serde_json::from_str(
+        &call(CONFIG_TOOL_NAME, json!({"argv": preview}))
+            .await
+            .expect("the pack previews"),
+    )
+    .unwrap();
+    let digest = preview["artifact_digest"].as_str().unwrap().to_owned();
+    let mut install = vec![
+        "pack",
+        "install",
+        "fixture/review_graph",
+        "--digest",
+        digest.as_str(),
+    ];
+    install.extend(slots);
+    call(CONFIG_TOOL_NAME, json!({"argv": install}))
+        .await
+        .expect("the pack installs");
+
+    let stale = format!("sha256:{}", "0".repeat(64));
+    let refused = call(
+        RUN_GRAPH_TOOL_NAME,
+        json!({"graph_id": "code-review", "revision_digest": stale.clone(), "input": {}}),
+    )
+    .await
+    .expect_err("a digest that is not the active revision is refused")
+    .to_string();
+    assert!(
+        refused.contains("graph code-review is active at revision sha256:"),
+        "{refused}"
+    );
+    assert!(refused.contains(&format!("not {stale}")), "{refused}");
+
+    let list: Value = serde_json::from_str(
+        &call(LIST_GRAPHS_TOOL_NAME, json!({}))
+            .await
+            .expect("the installed graph is listed"),
+    )
+    .unwrap();
+    let graph_id = list["graphs"][0]["definition"]["graph_id"].clone();
+    let revision_digest = list["graphs"][0]["active_plan"]["digest"].clone();
+    let started: Value = serde_json::from_str(
+        &call(
+            RUN_GRAPH_TOOL_NAME,
+            json!({"graph_id": graph_id, "revision_digest": revision_digest}),
+        )
+        .await
+        .expect("the listed graph_id and digest start without entry or input"),
+    )
+    .unwrap();
+    assert_eq!(started["receipt"]["graph_id"], graph_id, "{started}");
+    assert_eq!(
+        started["receipt"]["revision_digest"], revision_digest,
+        "{started}"
+    );
+    assert_eq!(started["receipt"]["entry_name"], "review", "{started}");
+    call(
+        CANCEL_GRAPH_RUN_TOOL_NAME,
+        json!({"run_id": started["receipt"]["run_id"], "reason": "test cleanup"}),
+    )
+    .await
+    .expect("the pinned run cancels");
+}
+
+/// Read from the registered tool, so it binds whichever source supplies the
+/// in-session definitions: a `graph_id` run may omit entry and input too.
+#[tokio::test]
+async fn run_graph_description_makes_entry_optional_for_every_selection() {
+    let mut tool_config = config(&[]);
+    tool_config.enable_graph_tools = true;
+    let tools = build_self_config_tools(
+        build_persona_node().await,
+        "did:key:zSelfConfigTest".to_owned(),
+        None,
+        &tool_config,
+        test_plugins(),
+    );
+    let definition = tools
+        .iter()
+        .find(|tool| tool.name() == RUN_GRAPH_TOOL_NAME)
+        .expect("run_graph registered")
+        .definition(String::new())
+        .await;
+    assert!(
+        definition
+            .description
+            .contains("Supply entry only when the graph has more than one"),
+        "{}",
+        definition.description
+    );
+}
+
 /// `RunGraphTool`'s host-ceiling gate for an entry whose `prepare` declares a
 /// `git_diff` host step: refused when the current behavior has no effective
 /// read authority, and refused again once it does but the named repository
@@ -1181,6 +1312,25 @@ async fn run_graph_refuses_a_git_diff_prepare_without_ceiling_authority() {
         off.to_string()
             .contains("requires effective read authority"),
         "{off:#}"
+    );
+    let pinned_off = tools
+        .iter()
+        .find(|tool| tool.name() == RUN_GRAPH_TOOL_NAME)
+        .expect("run_graph registered")
+        .call(
+            json!({
+                "graph_id": receipt.graph_id,
+                "revision_digest": receipt.revision_digest,
+            })
+            .to_string(),
+        )
+        .await
+        .expect_err("a graph_id run of the same entry meets the same ceiling");
+    assert!(
+        pinned_off
+            .to_string()
+            .contains("requires effective read authority"),
+        "{pinned_off:#}"
     );
 
     // Grant a read-only process ceiling rooted at a directory that does not
@@ -1466,6 +1616,353 @@ async fn config_tools_cannot_self_grant_pack_install() {
     );
 }
 
+#[test]
+fn operator_grants_project_from_the_tools_group() {
+    let project = |tools: Value| OperatorGrants::from_tools_json(tools.as_object().unwrap());
+    assert_eq!(project(json!({})).unwrap(), OperatorGrants::default());
+    assert_eq!(
+        project(json!({"self_config": null})).unwrap(),
+        OperatorGrants::default()
+    );
+    assert!(
+        project(json!({"self_config": {"enable_self_config": true, "enable_pack_install": true}}))
+            .unwrap()
+            .pack_install
+    );
+    assert!(
+        project(json!({"self_config": {"unknown": 1}})).is_err(),
+        "a group that does not decode fails closed"
+    );
+}
+
+/// Replace a Tools document through the operator route (no self-config
+/// guard), as the desktop and `config apply` do.
+async fn operator_replace_tools(node: &defra_node::EmbeddedNode, tools: Value) {
+    use crate::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
+    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+        collection: crate::Collection::Tools,
+        add: tools.clone(),
+        update: tools,
+    }])
+    .unwrap();
+    ConfigAccess::transact_local(node, None, "test.operator_tools", |txn| {
+        let plan = &plan;
+        Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
+    })
+    .await
+    .unwrap();
+}
+
+/// The operator grants pack installation on `tools_id`.
+async fn operator_grant_pack_install(node: &defra_node::EmbeddedNode, owner: &str, tools_id: &str) {
+    operator_replace_tools(
+        node,
+        json!({"agent_did": owner, "tools_id": tools_id,
+               "self_config": {"enable_self_config": true, "enable_pack_install": true}}),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn config_tools_unrelated_edit_on_granted_tools_is_accepted() {
+    let node = build_persona_node().await;
+    let identity = persona_identity("granted-tools-edit");
+    let owner = identity.did().to_string();
+    crate::test_support::install_test_behavior(&node, &owner, "granted").await;
+    operator_grant_pack_install(&node, &owner, "granted:tools").await;
+    let mut tool_config = config(&["tools"]);
+    tool_config.behavior_id = "granted".to_string();
+    let tools = build_self_config_tools(node, owner, Some(identity), &tool_config, test_plugins());
+
+    let edited = call_config_tool(
+        &tools,
+        vec![
+            "tools".into(),
+            "edit".into(),
+            "--set".into(),
+            r#"subagents={"enabled":true}"#.into(),
+        ],
+    )
+    .await
+    .expect("an edit that raises no grant is accepted without holding it");
+    assert_eq!(
+        serde_json::from_str::<Value>(&edited).unwrap()["committed"],
+        true
+    );
+    call_config_tool(
+        &tools,
+        vec![
+            "tools".into(),
+            "edit".into(),
+            "--set".into(),
+            format!(
+                "self_config={}",
+                json!({"enable_self_config": true, "enable_pack_install": true,
+                       "self_config_preview": true})
+            ),
+        ],
+    )
+    .await
+    .expect("keeping a stored grant while rewriting its group is not a raise");
+}
+
+#[tokio::test]
+async fn built_ins_enable_graph_tools_remains_self_grantable() {
+    let node = build_persona_node().await;
+    let identity = persona_identity("graph-tools-self-grant");
+    let agent_did = identity.did().to_string();
+    crate::test_support::install_test_behavior(&node, &agent_did, "setup").await;
+    let mut tool_config = config(&["tools"]);
+    tool_config.behavior_id = "setup".to_string();
+    let tools = build_self_config_tools(
+        node,
+        agent_did,
+        Some(identity),
+        &tool_config,
+        test_plugins(),
+    );
+    let applied = call_config_tool(
+        &tools,
+        vec![
+            "tools".into(),
+            "edit".into(),
+            "--set".into(),
+            r#"built_ins={"enable_graph_tools":true}"#.into(),
+        ],
+    )
+    .await
+    .expect("presenting graph run tools is not an operator-managed grant");
+    assert_eq!(
+        serde_json::from_str::<Value>(&applied).unwrap()["committed"],
+        true
+    );
+}
+
+#[tokio::test]
+async fn config_tools_holder_may_grant_pack_install_to_a_sibling() {
+    let node = build_persona_node().await;
+    let identity = persona_identity("pack-holder-sibling");
+    let agent_did = identity.did().to_string();
+    crate::test_support::install_test_behavior(&node, &agent_did, "setup").await;
+    crate::test_support::install_test_behavior(&node, &agent_did, "sibling").await;
+    let mut tool_config = config(&["persona", "tools"]);
+    tool_config.behavior_id = "setup".to_string();
+    tool_config.enable_pack_install = true;
+    let tools = build_self_config_tools(
+        node,
+        agent_did,
+        Some(identity),
+        &tool_config,
+        test_plugins(),
+    );
+    let applied = call_config_tool(
+        &tools,
+        vec![
+            "tools".into(),
+            "edit".into(),
+            "--behavior".into(),
+            "sibling".into(),
+            "--set".into(),
+            r#"self_config={"enable_self_config":true,"enable_pack_install":true}"#.into(),
+        ],
+    )
+    .await
+    .expect("a holder may grant pack installation to a sibling");
+    assert_eq!(
+        serde_json::from_str::<Value>(&applied).unwrap()["committed"],
+        true
+    );
+}
+
+fn argv_of(words: &[&str]) -> Vec<String> {
+    words.iter().map(|word| (*word).to_owned()).collect()
+}
+
+/// The `error` message of a refused `config` call, read from its JSON
+/// failure envelope, so quoted ids compare unescaped.
+fn config_error_message(error: crate::llm::tool::ToolError) -> String {
+    let crate::llm::tool::ToolError::ToolCallError(error) = error else {
+        panic!("missing typed config error: {error}");
+    };
+    let envelope: Value =
+        serde_json::from_str(&error.to_string()).expect("a config refusal is a JSON envelope");
+    envelope["error"]
+        .as_str()
+        .expect("the envelope carries an error message")
+        .to_owned()
+}
+
+/// `call_config_tool`, with a refusal reduced to its envelope's message.
+async fn config_call_message(
+    tools: &[Box<dyn crate::llm::tool::ToolDyn>],
+    argv: Vec<String>,
+) -> Result<String, String> {
+    let tool = tools
+        .iter()
+        .find(|tool| tool.name() == CONFIG_TOOL_NAME)
+        .expect("config registered");
+    tool.call(json!({ "argv": argv }).to_string())
+        .await
+        .map_err(config_error_message)
+}
+
+/// `worker` (the invoker) and `sibling` with plain chains, and two chains
+/// whose Tools the operator granted pack installation; the config tool runs
+/// as `worker` with the agent catalog grant, holding the grant or not.
+async fn reselection_tools(
+    label: &str,
+    hold_pack_install: bool,
+) -> Vec<Box<dyn crate::llm::tool::ToolDyn>> {
+    let node = build_persona_node().await;
+    let identity = persona_identity(label);
+    let owner = identity.did().to_string();
+    for behavior in ["worker", "sibling", "granted", "granted-2"] {
+        crate::test_support::install_test_behavior(&node, &owner, behavior).await;
+    }
+    operator_grant_pack_install(&node, &owner, "granted:tools").await;
+    operator_grant_pack_install(&node, &owner, "granted-2:tools").await;
+    let mut tool_config = config(&["persona", "behavior", "tools"]);
+    tool_config.behavior_id = "worker".to_owned();
+    tool_config.enable_pack_install = hold_pack_install;
+    build_self_config_tools(node, owner, Some(identity), &tool_config, test_plugins())
+}
+
+#[tokio::test]
+async fn context_reselect_cannot_acquire_grants() {
+    let tools = reselection_tools("context-reselect", false).await;
+    for target in [None, Some("sibling")] {
+        let mut argv = argv_of(&["behavior", "context", "edit"]);
+        if let Some(target) = target {
+            argv.extend(argv_of(&["--behavior", target]));
+        }
+        argv.extend(argv_of(&["--set", r#"tools_id="granted:tools""#]));
+        let refused = config_call_message(&tools, argv)
+            .await
+            .expect_err("re-pointing a Context at granted Tools must not acquire the grant");
+        assert!(
+            refused.contains(
+                "tools_id \"granted:tools\" selects Tools carrying an operator grant this agent does not hold"
+            ),
+            "{target:?}: {refused}"
+        );
+        assert!(
+            refused.contains("cannot be self-granted"),
+            "{target:?}: {refused}"
+        );
+    }
+    let missing = call_config_tool(
+        &tools,
+        argv_of(&[
+            "behavior",
+            "context",
+            "edit",
+            "--set",
+            r#"tools_id="missing""#,
+        ]),
+    )
+    .await
+    .expect_err("a missing Tools reference is still refused");
+    assert!(
+        !missing.contains("operator grant"),
+        "the reference validator, not the grant guard, refuses a missing document: {missing}"
+    );
+    let holder = reselection_tools("context-reselect-holder", true).await;
+    call_config_tool(
+        &holder,
+        argv_of(&[
+            "behavior",
+            "context",
+            "edit",
+            "--set",
+            r#"tools_id="granted:tools""#,
+        ]),
+    )
+    .await
+    .expect("an agent holding the grant may select Tools that carry it");
+}
+
+#[tokio::test]
+async fn behavior_reselect_cannot_acquire_grants() {
+    let tools = reselection_tools("behavior-reselect", false).await;
+    for target in ["worker", "sibling"] {
+        let refused = config_call_message(
+            &tools,
+            argv_of(&[
+                "behavior",
+                "edit",
+                target,
+                "--set",
+                r#"context_id="granted:context""#,
+            ]),
+        )
+        .await
+        .expect_err("re-pointing a Behavior at a granted chain must not acquire the grant");
+        assert!(
+            refused.contains(
+                "context_id \"granted:context\" selects Tools carrying an operator grant this agent does not hold"
+            ),
+            "{target}: {refused}"
+        );
+    }
+    let holder = reselection_tools("behavior-reselect-holder", true).await;
+    call_config_tool(
+        &holder,
+        argv_of(&[
+            "behavior",
+            "edit",
+            "sibling",
+            "--set",
+            r#"context_id="granted:context""#,
+        ]),
+    )
+    .await
+    .expect("an agent holding the grant may select a chain that carries it");
+}
+
+/// A non-holder may move between two Tools documents that both carry the
+/// grant: nothing is raised above the previous selection.
+#[tokio::test]
+async fn context_reselect_between_granted_tools_is_accepted() {
+    let tools = reselection_tools("context-between-granted", false).await;
+    call_config_tool(
+        &tools,
+        argv_of(&[
+            "behavior",
+            "context",
+            "edit",
+            "--behavior",
+            "granted",
+            "--set",
+            r#"tools_id="granted-2:tools""#,
+        ]),
+    )
+    .await
+    .expect("re-pointing between granted Tools raises nothing");
+}
+
+#[tokio::test]
+async fn context_create_selecting_granted_tools_requires_the_grant() {
+    let create = argv_of(&[
+        "context",
+        "create",
+        "fresh:context",
+        "--set",
+        r#"tools_id="granted:tools""#,
+    ]);
+    let tools = reselection_tools("context-create-granted", false).await;
+    let refused = config_call_message(&tools, create.clone())
+        .await
+        .expect_err("a new Context must not select Tools whose grant the agent does not hold");
+    assert!(
+        refused.contains("selects Tools carrying an operator grant this agent does not hold"),
+        "{refused}"
+    );
+    let holder = reselection_tools("context-create-holder", true).await;
+    call_config_tool(&holder, create)
+        .await
+        .expect("an agent holding the grant may create a Context that selects it");
+}
+
 // -- behavior commands (#Task 5) --
 
 #[test]
@@ -1677,7 +2174,6 @@ async fn skill_import_previews_without_writes_and_requires_file_authority() {
                 "root": root.path().to_str().unwrap(), "files": {"mode": "ReadOnly"}
             })),
         )],
-        false,
     ))
     .await
     .unwrap();
@@ -1846,7 +2342,6 @@ async fn configuration_discovery_is_read_only_root_bounded_and_sanitized() {
                 "root": root.path().to_str().unwrap(), "files": {"mode": "ReadOnly"}
             })),
         )],
-        false,
     ))
     .await
     .unwrap();
@@ -1963,7 +2458,6 @@ async fn setup_discovery_clarification_apply_and_verification_preserve_disabled_
                 "files": {"mode": "ReadOnly"}
             })),
         )],
-        false,
     ))
     .await
     .unwrap();
@@ -2367,7 +2861,6 @@ async fn datastore_preview_create_and_sparse_edit_use_owned_patch_path() {
                 "datastore_tool_surface_ids": ["jobs"]
             })),
         )],
-        false,
     ))
     .await
     .unwrap();
@@ -2807,6 +3300,7 @@ async fn behavior_only_grant_cannot_change_default_and_writes_require_exact_sign
         foreign_identity.as_ref(),
         &params,
         &Default::default(),
+        &OperatorGrants::default(),
     )
     .await
     .expect_err("foreign signer must fail before authoring a request");
@@ -3040,7 +3534,6 @@ async fn config_targets_owned_working_behavior_for_all_bound_documents() {
                 "self_config".into(),
                 Some(json!({"enable_self_config": true})),
             )],
-            false,
         ))
         .await
         .unwrap();
@@ -3954,6 +4447,115 @@ async fn persona_clone_accepts_sibling_behavior_id() {
 }
 
 #[tokio::test]
+async fn persona_clone_cannot_copy_unheld_grants() {
+    let node = build_persona_node().await;
+    let identity = persona_identity("persona-clone-grants");
+    let agent_did = identity.did().to_string();
+    crate::test_support::install_test_behavior(&node, &agent_did, "granted").await;
+    operator_grant_pack_install(&node, &agent_did, "granted:tools").await;
+    let tools = build_self_config_tools(
+        node.clone(),
+        agent_did.clone(),
+        Some(identity.clone()),
+        &config(&["persona"]),
+        test_plugins(),
+    );
+    let tool = take_persona_tool(tools);
+    for argv in [
+        json!([
+            "behavior",
+            "clone",
+            "--display-name",
+            "Granted Copy",
+            "--from",
+            "granted",
+            "--profile",
+            "granted:inference"
+        ]),
+        json!([
+            "behavior",
+            "preview",
+            "clone",
+            "--display-name",
+            "Granted Copy",
+            "--from",
+            "granted",
+            "--profile",
+            "granted:inference"
+        ]),
+    ] {
+        let refused = config_error_message(
+            tool.call(json!({"argv": argv}).to_string())
+                .await
+                .expect_err("a clone must not copy grants the invoking agent does not hold"),
+        );
+        assert!(
+            refused.contains(
+                "clone source \"granted\" carries an operator grant this agent does not hold"
+            ),
+            "{argv}: {refused}"
+        );
+        assert!(
+            refused.contains("cannot be self-granted"),
+            "{argv}: {refused}"
+        );
+    }
+    assert!(
+        load_persona_rows_for_test(&node, &agent_did)
+            .await
+            .is_empty(),
+        "the refused clone must not author a request"
+    );
+}
+
+#[tokio::test]
+async fn persona_clone_by_holder_copies_granted_source() {
+    let node = build_persona_node().await;
+    let identity = persona_identity("persona-clone-holder");
+    let agent_did = identity.did().to_string();
+    crate::test_support::install_test_behavior(&node, &agent_did, "granted").await;
+    operator_grant_pack_install(&node, &agent_did, "granted:tools").await;
+    let mut tool_config = config(&["persona"]);
+    tool_config.enable_pack_install = true;
+    let tools = build_self_config_tools(
+        node.clone(),
+        agent_did.clone(),
+        Some(identity),
+        &tool_config,
+        test_plugins(),
+    );
+    let tool = take_persona_tool(tools);
+    tool.call(
+        json!({"argv": ["behavior", "preview", "clone", "--display-name", "Granted Copy",
+                        "--from", "granted", "--profile", "granted:inference"]})
+        .to_string(),
+    )
+    .await
+    .expect("a holder may preview copying a granted source");
+    let args = json!({"argv": ["behavior", "clone", "--display-name", "Granted Copy",
+                               "--from", "granted", "--profile", "granted:inference"]})
+    .to_string();
+    let call = tokio::spawn(async move { tool.call(args).await });
+    let mut authored = false;
+    for _ in 0..50 {
+        if load_persona_rows_for_test(&node, &agent_did)
+            .await
+            .iter()
+            .any(|row| row.clone_from.as_deref() == Some("granted"))
+        {
+            authored = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    call.abort();
+    assert!(
+        authored,
+        "a holder's clone of a granted source authors a request"
+    );
+}
+
+#[tokio::test]
 async fn canonical_self_config_preview_and_apply_preserve_scope_and_reject_lockout() {
     let node = build_persona_node().await;
     let identity = persona_identity("canonical-self-config");
@@ -3969,7 +4571,7 @@ async fn canonical_self_config_preview_and_apply_preserve_scope_and_reject_locko
         Some(json!({"enable_self_config":true})),
     )];
     let preview = core
-        .preview(tools_request(&core, patch.clone(), false))
+        .preview(tools_request(&core, patch.clone()))
         .await
         .unwrap();
     assert!(!preview.committed);
@@ -3978,16 +4580,10 @@ async fn canonical_self_config_preview_and_apply_preserve_scope_and_reject_locko
         .await
         .unwrap();
     assert!(read["documents"]["Tools"]["self_config"].is_null());
-    core.apply(tools_request(&core, patch, false))
-        .await
-        .unwrap();
+    core.apply(tools_request(&core, patch)).await.unwrap();
     let guarded = core.clone().with_no_lockout(true);
     assert!(guarded
-        .apply(tools_request(
-            &guarded,
-            vec![("self_config".into(), None)],
-            false,
-        ))
+        .apply(tools_request(&guarded, vec![("self_config".into(), None)],))
         .await
         .is_err());
     assert!(guarded
@@ -4009,7 +4605,6 @@ async fn canonical_self_config_preview_and_apply_preserve_scope_and_reject_locko
         .preview(tools_request(
             &core,
             vec![("host".into(), Some(json!({"unexpected":true})))],
-            false,
         ))
         .await
         .is_err());
@@ -4072,20 +4667,20 @@ async fn direct_tools_preview_and_apply_enforce_and_persist_canonical_workspace_
 
     let authored_inside = selected.join("detour").join("..");
     let preview = core
-        .preview(tools_request(&core, patch(&authored_inside), false))
+        .preview(tools_request(&core, patch(&authored_inside)))
         .await
         .expect("preview admits a descendant and does not persist it");
     assert!(!preview.committed);
     assert!(core
-        .preview(tools_request(&core, patch(&sibling), false))
+        .preview(tools_request(&core, patch(&sibling)))
         .await
         .is_err());
     assert!(core
-        .apply(tools_request(&core, patch(&sibling), false))
+        .apply(tools_request(&core, patch(&sibling)))
         .await
         .is_err());
 
-    core.apply(tools_request(&core, patch(&authored_inside), false))
+    core.apply(tools_request(&core, patch(&authored_inside)))
         .await
         .expect("apply admits the selected root");
     let tools_id = format!("{behavior_id}:tools");
@@ -4935,6 +5530,7 @@ async fn persona_profile_pick_cannot_switch_account() {
             identity.as_ref(),
             &refused,
             &Default::default(),
+            &OperatorGrants::default(),
         )
         .await
         .expect_err("switching to another account must be refused");
@@ -4956,6 +5552,7 @@ async fn persona_profile_pick_cannot_switch_account() {
             identity.as_ref(),
             &accepted,
             &Default::default(),
+            &OperatorGrants::default(),
         )
         .await
         .unwrap();
@@ -4994,9 +5591,15 @@ async fn persona_preview_agrees_with_the_account_choice_fence() {
             .collect();
         let params = behavior_params("preview", Some(operation.into()), &argv).unwrap();
         let preview: Value = serde_json::from_str(
-            &persona_preview(&node, &owner, &params, &Default::default())
-                .await
-                .unwrap(),
+            &persona_preview(
+                &node,
+                &owner,
+                &params,
+                &Default::default(),
+                &OperatorGrants::default(),
+            )
+            .await
+            .unwrap(),
         )
         .unwrap();
         assert_eq!(
@@ -5061,6 +5664,7 @@ async fn persona_clone_inherited_compaction_cannot_switch_account() {
                 &owner,
                 &clone("preview", source, profile),
                 &Default::default(),
+                &OperatorGrants::default(),
             )
             .await
             .unwrap(),
@@ -5073,6 +5677,7 @@ async fn persona_clone_inherited_compaction_cannot_switch_account() {
             identity.as_ref(),
             &clone("clone", source, profile),
             &Default::default(),
+            &OperatorGrants::default(),
         )
         .await
         .expect_err("inheriting another account's compaction must be refused");
@@ -5089,6 +5694,7 @@ async fn persona_clone_inherited_compaction_cannot_switch_account() {
             identity.as_ref(),
             &clone("clone", "src-original", profile),
             &Default::default(),
+            &OperatorGrants::default(),
         )
         .await
         .unwrap();
@@ -5316,7 +5922,6 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
                 ),
                 ("subagents".into(), Some(json!({"enabled": true}))),
             ],
-            false,
         ))
         .await
         .unwrap();

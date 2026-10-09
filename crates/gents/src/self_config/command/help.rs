@@ -30,7 +30,7 @@ impl ConfigCommandTool {
     /// following the layering on [`ConfigCommandTool`]. Help is plain text
     /// with no envelope: recipes read as native JSON without escaping.
     pub(super) fn help(&self, resource: Option<&str>, command: Vec<&str>) -> Result<String> {
-        let enabled = model_resources(&self.categories, self.allow_pack_install);
+        let enabled = model_resources(&self.categories, self.core.held_grants().pack_install);
         let Some(requested) = resource else {
             return Ok(self.help_index(&enabled));
         };

@@ -1005,7 +1005,24 @@ pub(crate) struct PackRemoveArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct GraphRunArgs {
-    pub(crate) package: String,
+    #[arg(
+        required_unless_present = "graph_id",
+        help = "Installed package whose active graph to run; or use --graph-id with --digest"
+    )]
+    pub(crate) package: Option<String>,
+    #[arg(
+        long = "graph-id",
+        requires = "digest",
+        conflicts_with = "package",
+        help = "Run this graph by id instead of by package; requires --digest"
+    )]
+    pub(crate) graph_id: Option<String>,
+    #[arg(
+        long,
+        requires = "graph_id",
+        help = "The graph's active revision digest (sha256:...); any other revision is refused"
+    )]
+    pub(crate) digest: Option<String>,
     #[arg(
         long,
         help = "The entry to start; required when the installed plan has more than one"

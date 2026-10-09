@@ -154,6 +154,32 @@ source consistency checks, not a separate runtime compatibility version.
   a client snapshot no longer grows with the number of started sessions
   (#2291).
 
+### Breaking
+
+- Graph compilation refuses a requested `limits.max_total_invocations` outside
+  `1..=1024` (`platform_limit_exceeded` at `/limits/max_total_invocations`).
+  Pack build, check and install recompile shipped graphs, so a pack that asks
+  for more, or for zero, stops installing.
+- Graph compilation refuses `latest_only` concurrency on every graph edge
+  (`invalid_edge_concurrency`), grouped or not: on a per-document edge it
+  supersedes the trigger's in-flight requests and would cancel fan-out
+  items, and on a grouped edge it never applies.
+- Self-configuration selection changes and clones are now bounded by the
+  operator-grant guard, as Tools writes are.
+
+### Added
+
+- `gents graph run --graph-id ID --digest sha256:…` runs an active graph by id,
+  pinned to its revision; `graph run` and `graph watch` accept
+  `--output ndjson` (one compact JSON object per line). The `run_graph` tool's
+  `graph_id` runs select and prepare their entry like package runs.
+
+### Fixed
+
+- Self-configuration no longer refuses edits of Tools that already carry
+  `self_config.enable_pack_install`; a write may still raise the grant only
+  when the invoking agent holds it.
+
 ## 0.20.0 - 2026-10-05
 
 - Trimmed tool results are recoverable: `sessions` gains an `output`

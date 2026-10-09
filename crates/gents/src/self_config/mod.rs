@@ -19,8 +19,9 @@ mod text_tests;
 
 pub use ops::{
     apply_tool_grant_selection, guard_backend_auth, guard_backend_choice,
-    guard_behavior_keeps_reach, guard_tools_keep_control, validate_tool_network_selection,
-    PatchOutcome, SelfConfigCore, EFFECT_TIMING_NOTE,
+    guard_behavior_keeps_reach, guard_tools_keep_control, guard_tools_keep_grants,
+    reselection_keeps_grants, validate_tool_network_selection, OperatorGrants, PatchOutcome,
+    SelfConfigCore, EFFECT_TIMING_NOTE,
 };
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -167,8 +168,9 @@ fn fence_profile_pick(request: &mut ApplyRequest<'static>) {
 }
 
 /// Model-facing patches may target any owned behavior, including the invoking
-/// configurator itself; the no-lockout guard is its only self-protection
-/// (Lean `SelfConfig.keepsControl`). Keep the shared-reference check inside the
+/// configurator itself; its lockout protection is the no-lockout guard (Lean
+/// `SelfConfig.keepsControl`), and operator grants are bounded in the validate
+/// slot (Lean `SelfConfig.keepsGrants`). Keep the shared-reference check inside the
 /// same transaction as validation/publication so a stale preflight cannot
 /// authorize a write.
 fn protect_working_behavior(mut request: ApplyRequest<'static>) -> ApplyRequest<'static> {
@@ -243,13 +245,10 @@ fn protect_working_behavior(mut request: ApplyRequest<'static>) -> ApplyRequest<
     });
     request
 }
-fn tools_request(
-    core: &SelfConfigCore,
-    patch: SelfConfigPatch,
-    allow_pack_install: bool,
-) -> ApplyRequest<'static> {
+fn tools_request(core: &SelfConfigCore, patch: SelfConfigPatch) -> ApplyRequest<'static> {
     let mut request = anchored_request(SelfConfigTarget::Tools, "tools_id", patch);
     let ceiling_root = core.process_ceiling().root.clone();
+    let held = core.held_grants().clone();
     request.normalize = Box::new(move |txn, _, _, merged| {
         let ceiling_root = ceiling_root.clone();
         Box::pin(async move {
@@ -268,23 +267,13 @@ fn tools_request(
             Ok(())
         })
     });
-    request.validate = Box::new(move |_, _, _, merged| {
+    request.validate = Box::new(move |_, _, stored, merged| {
+        let stored = stored.clone();
         let merged = merged.clone();
+        let held = held.clone();
         Box::pin(async move {
             validate_merged_selection(&merged)?;
-            if !allow_pack_install {
-                let grants_pack_install = merged
-                    .get("self_config")
-                    .and_then(Value::as_object)
-                    .and_then(|config| config.get("enable_pack_install"))
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
-                anyhow::ensure!(
-                    !grants_pack_install,
-                    "pack installation is operator-managed and cannot be self-granted"
-                );
-            }
-            Ok(())
+            guard_tools_keep_grants(&held, Some(&stored), &merged)
         })
     });
     request.guard = Box::new(|_, stored, merged| guard_tools_keep_control(stored, merged));
@@ -296,7 +285,7 @@ fn tools_request(
 /// no-lockout guard would catch, so such a patch is refused and names what it
 /// would drop unless `allow_drop` names the group. This confirms intent; it
 /// narrows no legal transition (Lean `SelfConfig.keepsControl` stays the only
-/// self-protection). Like that guard it applies only to the invoker under
+/// lockout protection). Like that guard it applies only to the invoker under
 /// no_lockout, which the Engineer's grant sets.
 fn refuse_silent_tools_drops(
     mut request: ApplyRequest<'static>,
@@ -1003,6 +992,7 @@ async fn persona_preview(
     agent_did: &str,
     args: &ConfigurePersonaParams,
     process_ceiling: &crate::tool_surface::SelfConfigProcessCeiling,
+    held: &OperatorGrants,
 ) -> Result<String> {
     let operation = args
         .operation
@@ -1029,6 +1019,21 @@ async fn persona_preview(
         "disable" => ("disable", PersonaOp::Disable, None),
         other => bail!("unknown preview operation {other:?}; use create|edit|clone|disable"),
     };
+    if let Some(source) = clone_from.as_deref() {
+        let actor = ::identity::Did::new(agent_did.to_owned())
+            .context("the agent DID is not ACP-addressable")?;
+        crate::config_client::ConfigAccess::transact_local_readonly(
+            node,
+            Some(actor),
+            "self_config.preview_clone_grants",
+            |txn| {
+                Box::pin(
+                    async move { clone_keeps_grants_in_txn(txn, agent_did, source, held).await },
+                )
+            },
+        )
+        .await?;
+    }
     let store =
         GraphqlPersonaRequestStore::with_ceiling(node.clone(), process_ceiling.root.clone());
     let catalog = store.load_catalog_view(agent_did).await?;
@@ -1223,6 +1228,7 @@ async fn persona_mutate(
     identity: &dyn AgentIdentity,
     args: &ConfigurePersonaParams,
     process_ceiling: &crate::tool_surface::SelfConfigProcessCeiling,
+    held: &OperatorGrants,
 ) -> Result<String> {
     anyhow::ensure!(
         identity.did() == agent_did,
@@ -1318,6 +1324,9 @@ async fn persona_mutate(
             let next_profile = record.profile_id.as_deref();
             let clone_from = record.clone_from.as_deref();
             Box::pin(async move {
+                if let Some(source) = clone_from {
+                    clone_keeps_grants_in_txn(txn, agent_did, source, held).await?;
+                }
                 guard_persona_profile_choice(
                     txn,
                     agent_did,
@@ -1511,6 +1520,29 @@ async fn persona_mutate(
         })
     });
     ordered! {"status": status, "recovery": recovery, "request": row}.pretty()
+}
+
+/// The clone bound (Lean `SelfConfig.reselectionKeepsGrants` with no previous
+/// selection): a clone copies its source's whole Tools document, operator
+/// grants included, so its grants are bounded like a Tools write over a
+/// document with no grant: pack installation only when the invoking agent
+/// holds it.
+/// Checked in the transaction that authors the request, and on preview. The
+/// reconciler publishes the clone later from the source as it is then, without
+/// the invoker's grants, so a grant an operator adds to the source in that
+/// window is copied; operator writes are unguarded by design.
+async fn clone_keeps_grants_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    agent_did: &str,
+    source_behavior_id: &str,
+    held: &OperatorGrants,
+) -> Result<()> {
+    let source_tools = ops::behavior_tools_in_txn(txn, agent_did, source_behavior_id).await?;
+    reselection_keeps_grants(held, None, source_tools.as_ref()).with_context(|| {
+        format!(
+            "clone source {source_behavior_id:?} carries an operator grant this agent does not hold; clone a source without it or ask the operator to grant it"
+        )
+    })
 }
 
 /// Install document and graph packs from the home's pack store or the registry through the
@@ -2547,7 +2579,7 @@ impl Tool for RunGraphTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_owned(),
-            description: "Start an installed graph on this managed node as the current principal. Supply package (and, if the package has more than one entry, entry) plus input matching that entry's advertised input_schema for a package run; list_graphs returns each entry's input_schema. For another graph, supply the exact graph_id, revision_digest, entry, and input returned by list_graphs. Returns a durable run receipt and observed initial state.".to_owned(),
+            description: "Start an installed graph on this managed node as the current principal. Select it by package, or by the exact graph_id and revision_digest that list_graphs returns. Supply entry only when the graph has more than one, and input matching that entry's input_schema from list_graphs (default {}). Returns a durable run receipt and observed initial state.".to_owned(),
             parameters: json!({
                 "type":"object",
                 "properties":{
@@ -2564,110 +2596,102 @@ impl Tool for RunGraphTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let access = graph_access(&self.node);
-        let (graph_id, digest, prepared) = if let Some(package) = args.package.as_deref() {
-            if args.graph_id.is_some() || args.revision_digest.is_some() {
+        let selector = match (
+            args.package.as_deref(),
+            args.graph_id.as_deref(),
+            args.revision_digest.as_deref(),
+        ) {
+            (Some(name), None, None) => crate::graph_package::GraphRunSelector::Package {
+                name,
+                coordinate: None,
+            },
+            (None, Some(graph_id), Some(digest)) => {
+                crate::graph_package::GraphRunSelector::Pinned { graph_id, digest }
+            }
+            (Some(_), _, _) => {
                 return Err(anyhow!(
                     "package runs must not include generic graph_id/revision_digest selectors"
                 )
-                .into());
+                .into())
             }
-            let plan = crate::graph_package::load_installed_package_plan(
-                &access,
-                package,
-                self.core.agent_did(),
-            )
-            .await?
-            .with_context(|| {
-                format!(
-                    "package {package:?} is not installed; run config pack install {package} first"
-                )
-            })?;
-            let attribution = plan
-                .package
-                .as_ref()
-                .context("active graph revision has no package attribution")?;
-            if attribution.name != package {
+            (None, Some(_), None) => {
                 return Err(anyhow!(
-                    "active graph package attribution changed; call list_graphs again"
+                    "a graph_id run requires the revision_digest list_graphs returns"
+                )
+                .into())
+            }
+            (None, None, _) => {
+                return Err(anyhow!(
+                    "run_graph requires package or graph_id; list_graphs returns both"
+                )
+                .into())
+            }
+        };
+        let plan = crate::graph_package::select_run_plan(&access, self.core.agent_did(), &selector)
+            .await?
+            .with_context(|| match selector {
+                crate::graph_package::GraphRunSelector::Package { name, .. } => format!(
+                    "package {name:?} is not installed; run config pack install {name} first"
+                ),
+                crate::graph_package::GraphRunSelector::Pinned { graph_id, .. } => {
+                    format!("graph {graph_id:?} has no active revision; call list_graphs again")
+                }
+            })?;
+        // The same selection `prepare_entry_run` makes below, so the
+        // ceiling decision can never disagree with which entry actually
+        // runs (a mismatch here would let a model-invoked run reach a
+        // `git_diff` host step with no ceiling at all).
+        let selected_entry = crate::graph_package::select_entry(&plan, args.entry.as_deref()).ok();
+        let requires_git_diff_ceiling = selected_entry
+            .and_then(|entry| entry.prepare.as_ref())
+            .is_some_and(|prepare| {
+                prepare
+                    .host
+                    .iter()
+                    .any(|step| matches!(step, crate::graph_pipeline::HostInput::GitDiff { .. }))
+            });
+        let host_root = if requires_git_diff_ceiling {
+            let effective = self
+                .core
+                .read_effective_config(&BTreeSet::new(), false, false)
+                .await?;
+            let effective_file_mode = effective
+                .pointer("/runtime_effective/effective/file_mode")
+                .and_then(Value::as_str)
+                .map(crate::tool_surface::FileToolMode::parse)
+                .transpose()?
+                .unwrap_or_default();
+            if effective_file_mode == crate::tool_surface::FileToolMode::Off {
+                return Err(anyhow!(
+                    "this graph's prepare step requires effective read authority on the current behavior"
                 )
                 .into());
             }
-            // The same selection `prepare_entry_run` makes below, so the
-            // ceiling decision can never disagree with which entry actually
-            // runs (a mismatch here would let a model-invoked run reach a
-            // `git_diff` host step with no ceiling at all).
-            let selected_entry =
-                crate::graph_package::select_entry(&plan, args.entry.as_deref()).ok();
-            let requires_git_diff_ceiling = selected_entry
-                .and_then(|entry| entry.prepare.as_ref())
-                .is_some_and(|prepare| {
-                    prepare.host.iter().any(|step| {
-                        matches!(step, crate::graph_pipeline::HostInput::GitDiff { .. })
-                    })
-                });
-            let host_root = if requires_git_diff_ceiling {
-                let effective = self
-                    .core
-                    .read_effective_config(&BTreeSet::new(), false, false)
-                    .await?;
-                let effective_file_mode = effective
-                    .pointer("/runtime_effective/effective/file_mode")
-                    .and_then(Value::as_str)
-                    .map(crate::tool_surface::FileToolMode::parse)
-                    .transpose()?
-                    .unwrap_or_default();
-                if effective_file_mode == crate::tool_surface::FileToolMode::Off {
-                    return Err(anyhow!(
-                        "this graph's prepare step requires effective read authority on the current behavior"
-                    )
-                    .into());
-                }
-                let effective_root = effective
-                    .pointer("/runtime_effective/effective/root")
-                    .and_then(Value::as_str)
-                    .context(
-                        "this graph's prepare step requires an explicit effective managed root",
-                    )?;
-                Some(std::path::PathBuf::from(effective_root))
-            } else {
-                None
-            };
-            let prepared = crate::graph_package::prepare_entry_run(
-                &access,
-                self.core.agent_did(),
-                crate::graph_package::EntryRunRequest {
-                    plan: &plan,
-                    entry: args.entry.as_deref(),
-                    input: args.input.unwrap_or_else(|| json!({})),
-                    host_root: host_root.as_deref(),
-                    plugins: &self.plugins,
-                },
-            )
-            .await?;
-            (plan.graph_id, plan.digest, prepared)
+            let effective_root = effective
+                .pointer("/runtime_effective/effective/root")
+                .and_then(Value::as_str)
+                .context("this graph's prepare step requires an explicit effective managed root")?;
+            Some(std::path::PathBuf::from(effective_root))
         } else {
-            (
-                args.graph_id
-                    .context("run_graph requires package or graph_id")?,
-                args.revision_digest
-                    .context("generic graph run requires revision_digest from list_graphs")?,
-                crate::graph_package::PreparedEntryRun {
-                    entry_name: args
-                        .entry
-                        .context("generic graph run requires entry from list_graphs")?,
-                    input: args.input.context(
-                        "generic graph run requires input matching the advertised entry contract",
-                    )?,
-                    origin: crate::graph_pipeline::EntryInputOrigin::Operator,
-                    documents: 0,
-                },
-            )
+            None
         };
+        let prepared = crate::graph_package::prepare_entry_run(
+            &access,
+            self.core.agent_did(),
+            crate::graph_package::EntryRunRequest {
+                plan: &plan,
+                entry: args.entry.as_deref(),
+                input: args.input.unwrap_or_else(|| json!({})),
+                host_root: host_root.as_deref(),
+                plugins: &self.plugins,
+            },
+        )
+        .await?;
         let receipt = crate::graph_pipeline::start_graph_run_with_access(
             &access,
             self.core.agent_did(),
-            &graph_id,
-            Some(&digest),
+            &plan.graph_id,
+            Some(&plan.digest),
             &prepared.entry_name,
             prepared.input,
             prepared.origin,
@@ -2846,7 +2870,10 @@ pub fn build_self_config_tools(
         match SelfConfigCore::new(node.clone(), agent_did.clone(), config.behavior_id.clone()) {
             Ok(core) => core
                 .with_no_lockout(config.no_lockout)
-                .with_process_ceiling(config.process_ceiling.clone()),
+                .with_process_ceiling(config.process_ceiling.clone())
+                .with_held_grants(OperatorGrants {
+                    pack_install: config.enable_pack_install,
+                }),
             Err(error) => {
                 tracing::warn!(
                     behavior_id = %config.behavior_id,
@@ -2897,7 +2924,6 @@ pub fn build_self_config_tools(
         categories: config.categories.clone(),
         no_lockout: config.no_lockout,
         preview: config.preview,
-        allow_pack_install: config.enable_pack_install,
         process_ceiling: config.process_ceiling.clone(),
         execution: Arc::new(execution::ExecutionObservation::default()),
         plugins,
