@@ -321,6 +321,8 @@ describe("session timeline page merging", () => {
         content: "repeat",
         selectedSkillIds: [],
         lifecycleState: "pending",
+        foldedIntoRequestId: null,
+        origin: null,
         createdAt: null,
       },
     ];
@@ -361,6 +363,8 @@ describe("session timeline page merging", () => {
       content: "repeat",
       selectedSkillIds: [],
       lifecycleState: "processing",
+      foldedIntoRequestId: null,
+      origin: null,
       createdAt: null,
     });
     const older = session(["k1"], { ...page, hasOlder: false });
@@ -406,6 +410,8 @@ describe("session timeline page merging", () => {
         content: "same text",
         selectedSkillIds: [],
         lifecycleState: "pending",
+        foldedIntoRequestId: null,
+        origin: null,
         createdAt: null,
       });
       const incoming = session(["k1", "k2"], page);
@@ -451,6 +457,8 @@ describe("session timeline page merging", () => {
         content: "same text",
         selectedSkillIds: [],
         lifecycleState: "pending",
+        foldedIntoRequestId: null,
+        origin: null,
         createdAt: null,
       });
       const incoming = session(["k1", "k2"], page);

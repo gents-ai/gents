@@ -358,6 +358,7 @@ const userEntry = (
   itemKey,
   requestId: "doc-request",
   inputRequestId: input,
+  ownsTurn: itemKey === "authored:doc-request:prompt",
   sequence,
   content,
   timestamp: null,

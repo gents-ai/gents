@@ -51,6 +51,8 @@ export const pendingUserTurn = (
   content: "",
   selectedSkillIds: [],
   lifecycleState: null,
+  foldedIntoRequestId: null,
+  origin: null,
   createdAt: null,
   ...item,
   kind: "pendingUserTurn",

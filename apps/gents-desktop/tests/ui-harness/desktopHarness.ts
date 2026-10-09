@@ -2654,6 +2654,8 @@ export function createDesktopUiHarness(
                     content: "again",
                     selectedSkillIds: [],
                     lifecycleState: "pending",
+                    foldedIntoRequestId: null,
+                    origin: null,
                     createdAt: STARTED_AT,
                   }
                 : {
