@@ -988,6 +988,7 @@ async fn control_watcher_proposes_a_new_fingerprint_when_the_named_plugin_instal
             crate::document_config::PluginToolRef {
                 plugin: "fixture/list_files".to_string(),
                 digest: None,
+                input_fields: Vec::new(),
             },
             None
         )],

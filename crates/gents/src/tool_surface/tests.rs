@@ -1311,7 +1311,7 @@ async fn plugin_only_bindings_are_captured_for_trigger_execution() {
         Vec::new(),
     )
     .unwrap()
-    .resolve(&node, "did:key:z-test-agent")
+    .resolve(&node, "did:key:z-test-agent", &Default::default())
     .await
     .unwrap();
     assert_eq!(
