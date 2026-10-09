@@ -266,6 +266,8 @@ async fn retry_backoff_cannot_renew_an_expired_execution_lease() {
     );
 }
 
+/// Scheduler delay can exhaust the claim deadline before the first dispatch;
+/// retry admission itself is checked with fixed time in the retry owner tests.
 #[tokio::test]
 async fn deadline_tight_fails_cleanly() {
     let marker = "deadline-tight";
@@ -290,7 +292,6 @@ async fn deadline_tight_fails_cleanly() {
     )
     .await;
 
-    let started = Instant::now();
     let request_id = "req-deadline-tight";
     let request_doc_id = create_runtime_request(
         db.node.as_ref(),
@@ -304,17 +305,15 @@ async fn deadline_tight_fails_cleanly() {
 
     wait_for_request_lifecycle_state(db.node.as_ref(), &request_doc_id, "failed").await;
     assert!(
-        started.elapsed() < Duration::from_secs(3),
-        "deadline fail-fast should not wait for the retry ladder; elapsed={:?}",
-        started.elapsed()
-    );
-    assert_eq!(
-        backend.observed_requests(marker),
-        1,
+        backend.observed_requests(marker) <= 1,
         "deadline overshoot should prevent a second provider call"
     );
     let calls = fetch_inference_calls(db.node.as_ref(), request_id).await;
-    assert_eq!(call_states(&calls), vec!["failed"]);
+    assert!(calls.len() <= 1, "deadline must prevent a retry: {calls:?}");
+    assert!(
+        call_states(&calls).iter().all(|state| *state == "failed"),
+        "deadline must fail every started inference call: {calls:?}"
+    );
     let request = fetch_terminal_request(db.node.as_ref(), &request_doc_id).await;
     assert_eq!(request.lifecycle_state, RequestLifecycleState::Failed);
     assert_eq!(request.terminal_output, TerminalOutput::NoMessage);

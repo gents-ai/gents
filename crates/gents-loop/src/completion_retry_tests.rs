@@ -220,6 +220,20 @@ fn rate_limited_keeps_ladder_delay_when_larger_than_hint() {
 }
 
 #[test]
+fn tight_interactive_deadline_rejects_first_retry_without_consuming_budget() {
+    let mut state = CompletionRetryState::new(CompletionRetryPolicy::interactive_default());
+    let now = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+    let error = transient("HTTP status 503 before tight deadline");
+    let deadline = now + chrono::Duration::seconds(1);
+
+    match state.on_pre_stream_failure(&error, &error.to_string(), now, Some(deadline)) {
+        PreStreamDirective::Fail { reason } => assert!(reason.contains("request deadline")),
+        other => panic!("expected deadline rejection before retry, got {other:?}"),
+    }
+    assert_eq!(state.retry_count(), 0);
+}
+
+#[test]
 fn deadline_fail_fast_when_next_delay_overshoots() {
     let mut state = CompletionRetryState::new(CompletionRetryPolicy::scheduled_default());
     let now = Utc::now();
