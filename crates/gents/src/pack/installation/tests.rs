@@ -313,7 +313,7 @@ async fn a_plugin_store_change_keeps_a_documents_install_record() {
     );
 }
 
-/// A pack whose configuration is only its principal records no documents,
+/// A pack whose configuration is only its Node records no documents,
 /// yet is a pack install: listed, removable, and kept by plugin-store
 /// changes, unlike a plugin-store record.
 #[tokio::test]

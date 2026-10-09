@@ -426,7 +426,7 @@ async fn engineer_p2p_live_comparison() -> Result<()> {
             .iter()
             .find(|b| b.agent_id == "engineer")
             .ok_or_else(|| {
-                anyhow::anyhow!("ready runtime did not resolve the Engineer behavior")
+                anyhow::anyhow!("ready runtime did not resolve the Engineer Agent")
             })?;
         let surface = behavior
             .tools

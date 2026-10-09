@@ -193,7 +193,7 @@ impl DocumentResolveContext {
     /// only, since production always carries the runtime's own executor.
     #[cfg(test)]
     pub(crate) fn for_tests(
-        identity: Arc<dyn AgentIdentity>,
+        identity: Arc<dyn NodeIdentity>,
         tool_ceiling: ToolCeiling,
         backend_health: BackendHealthMap,
     ) -> Self {
