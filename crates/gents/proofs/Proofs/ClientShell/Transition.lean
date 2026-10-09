@@ -7,13 +7,23 @@ def workflowAfterSelectSession
       if sid' = sid then .awaiting sid' req else .idle
   | w                 => w
 
+/-- A submission is observed once its request is the session's turn, is
+queued behind it, or was folded into a claimed turn. A fold can happen before
+any snapshot showed the request queued. -/
+def observesRequest (obs : SessionObservation) (req : RequestId) : Prop :=
+  obs.latestObservedRequest = some req ∨ req ∈ obs.queuedRequests ∨
+    req ∈ obs.foldedRequests
+
+instance (obs : SessionObservation) (req : RequestId) : Decidable (observesRequest obs req) := by
+  unfold observesRequest; infer_instance
+
 def snapshotAdvanceWorkflow
     (w : SubmissionWorkflow) (store : LocalStore) : SubmissionWorkflow :=
   match w with
   | .awaiting sid req =>
     match store.find sid with
     | some obs =>
-      if obs.latestObservedRequest = some req then .idle else w
+      if observesRequest obs req then .idle else w
     | none     => w
   | w' => w'
 

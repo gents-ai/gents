@@ -6,7 +6,10 @@
 export type BuiltInTools = {
 /**
  * Native graph discovery/run/status/result/cancel, independent of self-config
- * and pack installation. Existing graph caller admission still applies.
+ * and pack installation. Existing graph caller admission still applies. Not an
+ * operator-managed grant: a self-config write may set it, because it presents
+ * run tools only and run authority stays with each graph's `allowed_callers`
+ * (Lean `PeerRegistryDiscovery.PersonaRequest.graphToolPresented`).
  */
 enable_graph_tools?: boolean | null,
 /**

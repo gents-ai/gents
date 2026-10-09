@@ -44,7 +44,7 @@ theorem provider_commit_preserves_claim_and_queue
     (operation : CompletionRetry.CanonicalGate.Operation)
     (h : commitProvider before actor now operation = .ok after) :
     after.claimed = before.claimed ∧
-    after.queue = before.queue := by
+    after.queue.active = before.queue.active := by
   unfold commitProvider at h
   split at h <;> try contradiction
   cases hc : CompletionRetry.CanonicalGate.commit (before) actor now operation with
@@ -57,7 +57,7 @@ theorem provider_commit_preserves_claim_and_queue
         (CompletionRetry.CanonicalGate.gateOperation operation) hg
       simp [hc] at h
       cases h
-      exact ⟨hf.2.1, hf.1⟩
+      exact ⟨hf.2.2.2.1, hf.1⟩
 
 theorem provider_commit_is_actual_gate_commit
     (before after : World) (actor : Gate.Actor) (now : Time)

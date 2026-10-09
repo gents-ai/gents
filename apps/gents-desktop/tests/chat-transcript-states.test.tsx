@@ -425,6 +425,8 @@ describe("ChatTranscriptPanel states", () => {
           content: "check the upgrade",
           selectedSkillIds: [],
           lifecycleState: "pending",
+          foldedIntoRequestId: null,
+          origin: null,
           createdAt: "2026-08-20T19:40:12Z",
         }}
       />,
@@ -446,6 +448,8 @@ describe("ChatTranscriptPanel states", () => {
           content: "do the thing",
           selectedSkillIds: [],
           lifecycleState: "pending",
+          foldedIntoRequestId: null,
+          origin: null,
           createdAt: null,
         }}
       />,
@@ -476,6 +480,8 @@ describe("ChatTranscriptPanel states", () => {
           content: "check the upgrade",
           selectedSkillIds: [],
           lifecycleState: "pending",
+          foldedIntoRequestId: null,
+          origin: null,
           createdAt: null,
         }}
       />,
@@ -787,6 +793,8 @@ describe("ChatTranscriptPanel states", () => {
           content: "follow up",
           selectedSkillIds: [],
           lifecycleState: "pending",
+          foldedIntoRequestId: null,
+          origin: null,
           createdAt: "2026-08-20T20:00:00Z",
         }}
       />,

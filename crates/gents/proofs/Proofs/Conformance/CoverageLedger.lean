@@ -898,7 +898,7 @@ def caseCoverage : List CoverageEntry :=
       "self_config_cases"
       "SelfConfigCases"
       "conformance::generated_self_config_cases_fence_patch_merge"
-      "Covers production patch admissibility and accepted merges, and replays guarded rows through the production Tools/Behavior no-lockout guards, the Backend auth fence and the Profile account choice fence. Reference validation and unchanged stored state after rejection require the shared configuration transaction owner.")
+      "Covers production patch admissibility and accepted merges, replays every Tools row through the always-on operator-grant guard (guard_tools_keep_grants) and every Context and Behavior row, clone rows included, through reselection_keeps_grants, and replays guarded rows through the production Tools/Behavior no-lockout guards, the Backend auth fence and the Profile account choice fence. Reference validation and unchanged stored state after rejection require the shared configuration transaction owner.")
       "self-config" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
       "session_recovery_cases"
@@ -1048,6 +1048,11 @@ def caseCoverage : List CoverageEntry :=
       "gents_desktop_bridge::snapshot::tests::session_state::session_snapshot_projection_consumes_generated_client_shell_contract_cases")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
+      "client_session_turn_cases"
+      "ClientSessionTurnCases"
+      "gents_desktop_bridge::snapshot::tests::session_state::session_snapshot_binds_generated_session_turn_cases")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
       "client_behavior_readiness_cases"
       "ClientBehaviorReadinessCases"
       "conformance::client_runtime::generated_behavior_readiness_cases_drive_the_production_projector")
@@ -1116,6 +1121,32 @@ def caseCoverage : List CoverageEntry :=
       "interrupt::queue_tests::generated_interrupt_queue_events_bind_to_native_rows"
       "Sequential cases bind Local and HTTP latch/drain, scheduled-origin eligibility, exact pending membership, notification bindings and replay. Native publisher timestamps do not bind modeled equal-time queue ordering. Background-process survival is a separate obligation.")
       "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "fold_queue_cases"
+      "FoldQueueCases"
+      "lifecycle::queue::tests::folding::generated_fold_queue_cases_bind_to_native_claims"
+      "Generated scripts drive the native claim transaction with an explicit verified-admission set, publish selected messages through the authored publication owner and finish turns, binding active, pending, selected and terminal rows and supersession pointers. The daemon's admission verification that produces that set is exercised natively, not generated.")
+      "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "handover_fold_cases"
+      "HandoverFoldCases"
+      "lifecycle::queue::tests::folding::generated_handover_fold_claims_bind_to_native_claims")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "fold_publication_cases"
+      "FoldPublicationCases"
+      "lifecycle::queue::tests::folding::generated_fold_publication_scripts_bind_to_native_owners")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "retry_selection_cases"
+      "RetrySelectionCases"
+      "agent::daemon::inference::tests::generated_retry_selection_cases_bind_to_the_daemon")
+      "request-lifecycle" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "fold_turn_input_cases"
+      "FoldTurnInputCases"
+      "agent::loop_stream::tests::folded_prompts_publish_and_send_in_queue_order")
+      "request-lifecycle" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
       "interrupt_queue_cases"
       "InterruptQueueHttpOverlapCases"
@@ -1279,6 +1310,11 @@ def caseCoverage : List CoverageEntry :=
       "graph_pipeline_run_terminal_cases"
       "GraphPipelineRunTerminalCases"
       "conformance::graph_pipeline::generated_run_terminal_cases_fence_completion_cas")
+      "graph-pipeline" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "graph_pipeline_edge_delivery_cases"
+      "GraphPipelineEdgeDeliveryCases"
+      "conformance::graph_pipeline::generated_edge_delivery_cases_fence_graph_edge_admission")
       "graph-pipeline" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "restart_disposition_cases"

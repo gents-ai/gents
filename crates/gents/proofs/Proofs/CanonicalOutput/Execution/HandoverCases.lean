@@ -40,6 +40,42 @@ def claimedNext : Option World := do
     { scope := ⟨1, 1, none⟩, active := none, pending := [nextEntry], terminal := ∅ }
   claimAndActivate { gate with queue := queue, claimed := none } 1 6 nextActivation
 
+def followingEntry (requestId : RequestId) (createdAt : Time) : SessionQueue.QueueEntry :=
+  { requestId, createdAt, source := .user, policy := .append
+  , queueKey := none, queuedAfter := some 10 }
+
+/-- A verified-folding claim through the handover owner: the queue it installs
+selects exactly the verified run behind the claimed head. -/
+structure FoldClaimCase where
+  name : String
+  pending : List SessionQueue.QueueEntry
+  admitted : List RequestId
+  deriving Repr
+
+def foldClaimCases : List FoldClaimCase :=
+  [ ⟨"handover_claim_selects_verified_run",
+      [nextEntry, followingEntry 903 7, followingEntry 904 8], [903, 904]⟩
+  , ⟨"handover_claim_without_verification_selects_nothing",
+      [nextEntry, followingEntry 903 7], []⟩
+  , ⟨"handover_claim_stops_at_unverified_message",
+      [nextEntry, followingEntry 903 7, followingEntry 904 8], [904]⟩ ]
+
+def foldClaim (value : FoldClaimCase) : Option SessionQueue.SessionQueueState := do
+  let parent ← terminalRunningParent
+  let gate ← Gate.acquire (Gate.initial parent) 1 true
+  let queue : SessionQueue.SessionQueueState :=
+    { scope := ⟨1, 1, none⟩, active := none, pending := value.pending, terminal := ∅ }
+  let claimed ← claimAndActivate { gate with queue := queue, claimed := none } 1 6
+    { nextActivation with admitted := value.admitted }
+  pure claimed.queue
+
+theorem handover_fold_claims_select_verified_runs :
+    foldClaimCases.map (fun value => (foldClaim value).map fun queue =>
+      (queue.active, queue.folding.map (·.requestId), queue.pending.map (·.requestId))) =
+    [ some (some 902, [903, 904], [])
+    , some (some 902, [], [903])
+    , some (some 902, [], [903, 904]) ] := by native_decide
+
 def actualHandoverLateToolAndFinish : Option Bool := do
   let claimed ← claimedNext
   let held ← reacquire claimed

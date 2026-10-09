@@ -7,7 +7,8 @@ use gents::config_client::ConfigAccess;
 use gents::graph_package::{
     default_graph_package_install_bindings, install_loaded_graph_package,
     load_archive_graph_package_with_environment, load_installed_package_plan, prepare_entry_run,
-    EntryRunRequest, GraphInstallRecord, GraphPackageInstallBindings,
+    select_run_plan, EntryRunRequest, GraphInstallRecord, GraphPackageInstallBindings,
+    GraphRunSelector,
 };
 use gents::graph_pipeline::{
     activate_graph_revision_with_access, load_active_graph_plan_with_access,
@@ -26,7 +27,7 @@ use crate::cli::{
     GraphCancelArgs, GraphCommand, GraphResultArgs, GraphRunArgs, GraphScopeArgs, GraphToggleArgs,
     GraphWatchArgs, PackInstallArgs,
 };
-use crate::{print_json, resolve_agent_did, resolve_config_access};
+use crate::{print_json, print_ndjson, resolve_agent_did, resolve_config_access};
 
 pub(crate) async fn dispatch(command: GraphCommand) -> Result<()> {
     match command {
@@ -253,40 +254,28 @@ async fn run(args: GraphRunArgs) -> Result<()> {
             "graph run requires the local Gents server to be running so workspace and request recovery remain active"
         );
     };
-    let (namespace, name) = super::pack::split_namespace(&args.package);
-    let coordinate = format!("{namespace}/{name}");
-    let plan = load_installed_package_plan(&access, name, &actor)
+    let package = args.package.as_deref().map(super::pack::split_namespace);
+    let coordinate = package.map(|(namespace, name)| format!("{namespace}/{name}"));
+    let selector = match (package, args.graph_id.as_deref(), args.digest.as_deref()) {
+        (Some((_, name)), None, None) => GraphRunSelector::Package {
+            name,
+            coordinate: coordinate.as_deref(),
+        },
+        (None, Some(graph_id), Some(digest)) => GraphRunSelector::Pinned { graph_id, digest },
+        _ => anyhow::bail!("graph run takes PACKAGE, or --graph-id ID with --digest sha256:..."),
+    };
+    let plan = select_run_plan(&access, &actor, &selector)
         .await?
-        .with_context(|| {
-            format!(
+        .with_context(|| match selector {
+            GraphRunSelector::Package { .. } => format!(
                 "graph is not installed; run `gents pack install {}` first",
-                args.package
-            )
+                args.package.as_deref().unwrap_or_default()
+            ),
+            GraphRunSelector::Pinned { graph_id, .. } => {
+                format!("graph {graph_id:?} has no active revision for {actor}")
+            }
         })?;
     let graph_id = plan.graph_id.clone();
-    let active_package = plan
-        .package
-        .as_ref()
-        .context("active revision has no package attribution")?;
-    if active_package.name != name {
-        anyhow::bail!(
-            "active revision does not belong to package {:?}",
-            args.package
-        );
-    }
-    let record = gents::pack::read_installed_pack(&access, &actor, &coordinate)
-        .await?
-        .with_context(|| {
-            format!("{coordinate} has no installation record; run `gents pack install {coordinate}` to reinstall")
-        })?;
-    if active_package.package_digest != record.digest {
-        anyhow::bail!(
-            "the active revision of {coordinate} was built from {} but the installed pack is {}; \
-             run `gents pack install {coordinate}` again",
-            active_package.package_digest,
-            record.digest
-        );
-    }
     let digest = plan.digest.clone();
     let input = apply_input_fields(parse_input_arg(args.input.as_deref())?, &args.field)?;
     let plugin_home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
@@ -323,11 +312,12 @@ async fn run(args: GraphRunArgs) -> Result<()> {
         )
         .await
     } else {
-        match args
-            .output
-            .ensure_supported("graph run", &[OutputFormat::Text, OutputFormat::Json])?
-        {
+        match args.output.ensure_supported(
+            "graph run",
+            &[OutputFormat::Text, OutputFormat::Json, OutputFormat::Ndjson],
+        )? {
             OutputFormat::Json => print_json(&serde_json::to_value(receipt)?),
+            OutputFormat::Ndjson => print_ndjson(&serde_json::to_value(receipt)?),
             OutputFormat::Text => {
                 let mut out = io::stdout().lock();
                 writeln!(out, "Started {}", receipt.run_id)?;
@@ -662,6 +652,18 @@ fn print_result_text(view: &GraphRunView) -> Result<()> {
     write_result_text(&mut io::stdout().lock(), view)
 }
 
+/// One observation of a watched run. NDJSON is one compact object per line;
+/// the last line's `run.status` and the exit code mark the end.
+fn emit_progress(out: &mut impl io::Write, format: OutputFormat, value: &Value) -> Result<()> {
+    let line = match format {
+        OutputFormat::Json => serde_json::to_string_pretty(value)?,
+        OutputFormat::Ndjson => serde_json::to_string(value)?,
+        other => anyhow::bail!("graph progress has no {} rendering", other.as_str()),
+    };
+    writeln!(out, "{line}")?;
+    out.flush().context("writing graph progress to stdout")
+}
+
 async fn watch_run(
     access: &ConfigAccess,
     actor: &str,
@@ -669,8 +671,10 @@ async fn watch_run(
     interval: Duration,
     output: OutputFormat,
 ) -> Result<()> {
-    let output =
-        output.ensure_supported("graph watch", &[OutputFormat::Text, OutputFormat::Json])?;
+    let output = output.ensure_supported(
+        "graph watch",
+        &[OutputFormat::Text, OutputFormat::Json, OutputFormat::Ndjson],
+    )?;
     let mut last = Value::Null;
     let redraw = output == OutputFormat::Text && io::stdout().is_terminal();
     loop {
@@ -690,7 +694,9 @@ async fn watch_run(
         let current = json!({ "run": progress(&view), "activity": activity, "usage": usage });
         if current != last {
             match output {
-                OutputFormat::Json => print_json(&current)?,
+                OutputFormat::Json | OutputFormat::Ndjson => {
+                    emit_progress(&mut io::stdout().lock(), output, &current)?
+                }
                 OutputFormat::Text => print_progress_text(&view, &activity, redraw)?,
                 _ => unreachable!("validated output format"),
             }
@@ -764,6 +770,36 @@ async fn toggle(args: GraphToggleArgs, enabled: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ndjson_emits_one_compact_line_per_observation() {
+        let observations = [
+            json!({"run": {"status": "running"}, "activity": {"rows": [1, 2]}}),
+            json!({"run": {"status": "succeeded"}, "activity": {}}),
+        ];
+        let mut out = Vec::new();
+        for observation in &observations {
+            emit_progress(&mut out, OutputFormat::Ndjson, observation).unwrap();
+        }
+        let text = String::from_utf8(out).unwrap();
+        assert_eq!(text.matches('\n').count(), 2, "{text}");
+        for (line, observation) in text.lines().zip(&observations) {
+            assert_eq!(&serde_json::from_str::<Value>(line).unwrap(), observation);
+        }
+    }
+
+    #[test]
+    fn json_progress_stays_pretty_and_other_formats_are_refused() {
+        let mut out = Vec::new();
+        emit_progress(
+            &mut out,
+            OutputFormat::Json,
+            &json!({"run": {"status": "running"}}),
+        )
+        .unwrap();
+        assert!(String::from_utf8(out).unwrap().contains("\n  \"run\""));
+        assert!(emit_progress(&mut Vec::new(), OutputFormat::Table, &json!({})).is_err());
+    }
 
     #[test]
     fn parse_input_arg_defaults_to_an_empty_object() {

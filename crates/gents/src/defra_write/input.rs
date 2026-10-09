@@ -3,7 +3,7 @@ use serde_json::{json, Value};
 
 use crate::graphql::escape_graphql_string;
 
-pub(super) fn parameters(schema: &str) -> Result<Value> {
+pub(crate) fn parameters(schema: &str) -> Result<Value> {
     let base = schema.trim_end_matches('!');
     let mut shape = if let Some(item) = base.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
         json!({"type":"array", "items":parameters(item)?})
@@ -57,7 +57,7 @@ fn admits_count(kind: &Value) -> bool {
     matches!(kind.as_str(), Some("integer" | "number" | "string"))
 }
 
-pub(super) fn validate_input(
+pub(crate) fn validate_input(
     schema: &str,
     required: bool,
     filled: bool,

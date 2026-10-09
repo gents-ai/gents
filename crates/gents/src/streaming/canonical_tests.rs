@@ -186,6 +186,7 @@ async fn owned_input_handoff_publishes_context_and_prompt_once_before_provider_o
                 .process_item(Ok(LoopStreamItem::AuthoredInputReady {
                     context: Some(context.clone()),
                     prompt: prompt.clone(),
+                    folded: Vec::new(),
                 }))
                 .await
                 .unwrap();
@@ -330,6 +331,7 @@ async fn first_publication_rejects_native_message_that_differs_from_reconstructi
             expected: Arc::new(expected),
             tool_deadline_at: lifecycle.claimed_deadline_at().unwrap().to_rfc3339(),
             background_calls: Vec::new(),
+            consumes_folded: None,
         },
     )
     .await
@@ -368,6 +370,7 @@ async fn publish_tool_turn_for_rollback_test(
         expected: Arc::new(message.clone()),
         tool_deadline_at: lifecycle.claimed_deadline_at().unwrap().to_rfc3339(),
         background_calls: Vec::new(),
+        consumes_folded: None,
     };
     // Exercise the canonical publication owner, not a test-side write script.
     super::canonical::publish_provider_turn(node, lifecycle.execution_generation().unwrap(), plan)
@@ -748,6 +751,7 @@ async fn provider_closure_cannot_precede_committed_source_timestamp() {
             expected: Arc::new(message),
             tool_deadline_at: lifecycle.claimed_deadline_at().unwrap().to_rfc3339(),
             background_calls: Vec::new(),
+            consumes_folded: None,
         },
         now,
     )

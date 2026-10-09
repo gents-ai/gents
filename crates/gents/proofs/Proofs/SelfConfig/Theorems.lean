@@ -226,4 +226,98 @@ theorem runStep_identity_immutable (validate guard : Doc → Bool) (t : Target)
       have himm := identity_immutable t (s t) p k hk
       simp [runStep, hstep, hm, himm]
 
+theorem Grants.le_refl (g : Grants) : g.le g = true := by
+  cases h : g.packInstall <;> simp [Grants.le, h]
+
+theorem Grants.boundedBy_self (g held : Grants) : g.boundedBy g held = true := by
+  cases h : g.packInstall <;> simp [Grants.boundedBy, h]
+
+/-- A write whose grants stay within the stored Tools is accepted whatever
+the invoker holds. -/
+theorem Grants.boundedBy_of_le_stored {c s : Grants} (held : Grants)
+    (h : c.le s = true) : c.boundedBy s held = true := by
+  cases hc : c.packInstall <;> cases hs : s.packInstall <;>
+    simp_all [Grants.le, Grants.boundedBy]
+
+/-- A write whose pack installation stays within what the invoker holds is
+accepted whatever the stored Tools carry: a holder may grant pack installation
+to a sibling. -/
+theorem Grants.boundedBy_of_le_held {c held : Grants} (s : Grants)
+    (h : c.le held = true) : c.boundedBy s held = true := by
+  cases hc : c.packInstall <;> cases hh : held.packInstall <;>
+    simp_all [Grants.le, Grants.boundedBy]
+
+/-- Raising pack installation above the stored Tools needs the invoker to
+hold it, whatever other grants the documents carry. -/
+theorem grant_widening_requires_held (decode : Doc → Option Grants) (held : Grants)
+    (stored candidate : Doc) (s c : Grants)
+    (hs : decode stored = some s) (hc : decode candidate = some c)
+    (hcp : c.packInstall = true) (hsp : s.packInstall = false)
+    (h : keepsGrants decode held stored candidate = true) :
+    held.packInstall = true := by
+  simpa [keepsGrants, Grants.boundedBy, hs, hc, hcp, hsp] using h
+
+/-- An edit that leaves the grants as stored is accepted whatever the invoker
+holds. -/
+theorem unrelated_edit_preserves_grants (decode : Doc → Option Grants) (held : Grants)
+    (stored candidate : Doc) (g : Grants)
+    (hs : decode stored = some g) (hc : decode candidate = some g) :
+    keepsGrants decode held stored candidate = true := by
+  simp [keepsGrants, hs, hc, Grants.boundedBy_self]
+
+/-- Holding no grant, raising pack installation is refused. -/
+theorem self_grant_without_held_refused (decode : Doc → Option Grants)
+    (stored candidate : Doc)
+    (hs : decode stored = some Grants.bot)
+    (hc : decode candidate = some { Grants.bot with packInstall := true }) :
+    keepsGrants decode Grants.bot stored candidate = false := by
+  simp [keepsGrants, hs, hc, Grants.boundedBy, Grants.bot]
+
+/-- An accepted Tools write under the always-on grant guard keeps the bound,
+whatever the opt-in lockout guard decides. -/
+theorem accepted_tools_write_keeps_grants (decode : Doc → Option Grants) (held : Grants)
+    (validate lockout : Doc → Bool) (stored : Doc) (p : Patch) (merged : Doc)
+    (h : step validate
+      (fun candidate => keepsGrants decode held stored candidate && lockout candidate)
+      .tools stored p = some merged) :
+    keepsGrants decode held stored merged = true := by
+  have hg := (step_accept_validates validate _ .tools stored p merged h).2
+  simp only [Bool.and_eq_true] at hg
+  exact hg.1
+
+theorem chain_widening_requires_held (decode : Doc → Option Grants) (held : Grants)
+    (resolve : Doc → Option Doc) (stored candidate storedTools candidateTools : Doc)
+    (s c : Grants)
+    (hs : resolve stored = some storedTools) (hc : resolve candidate = some candidateTools)
+    (hds : decode storedTools = some s) (hdc : decode candidateTools = some c)
+    (hcp : c.packInstall = true) (hsp : s.packInstall = false)
+    (h : chainKeepsGrants decode held resolve stored candidate = true) :
+    held.packInstall = true := by
+  simp only [chainKeepsGrants, reselectionKeepsGrants, hs, hc] at h
+  exact grant_widening_requires_held decode held storedTools candidateTools s c hds hdc hcp hsp h
+
+theorem chain_unchanged_selection_keeps_grants (decode : Doc → Option Grants)
+    (held : Grants) (resolve : Doc → Option Doc) (stored candidate tools : Doc) (g : Grants)
+    (hs : resolve stored = some tools) (hc : resolve candidate = some tools)
+    (hd : decode tools = some g) :
+    chainKeepsGrants decode held resolve stored candidate = true := by
+  simp only [chainKeepsGrants, reselectionKeepsGrants, hs, hc]
+  exact unrelated_edit_preserves_grants decode held tools tools g hd hd
+
+theorem chain_without_tools_is_unconstrained (decode : Doc → Option Grants)
+    (held : Grants) (resolve : Doc → Option Doc) (stored candidate : Doc)
+    (hc : resolve candidate = none) :
+    chainKeepsGrants decode held resolve stored candidate = true := by
+  cases hs : resolve stored <;> simp [chainKeepsGrants, reselectionKeepsGrants, hs, hc]
+
+/-- With no previous selection, newly selecting Tools that carry pack
+installation needs the invoker to hold it: a new Context and a clone acquire
+nothing. -/
+theorem reselection_from_nothing_requires_held (decode : Doc → Option Grants)
+    (held : Grants) (tools : Doc) (c : Grants)
+    (hd : decode tools = some c) (hcp : c.packInstall = true)
+    (h : reselectionKeepsGrants decode held none (some tools) = true) :
+    held.packInstall = true := by
+  simpa [reselectionKeepsGrants, hd, Grants.boundedBy, Grants.bot, hcp] using h
+
 end SelfConfig

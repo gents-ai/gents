@@ -74,6 +74,9 @@ structure Activation where
   generation : Generation
   duration : Time
   deadline : Time
+  /-- Pending requests whose signed admission the claim verified for folding
+  (`SessionQueue.claimFolding`); empty claims only the head. -/
+  admitted : List RequestId := []
   deriving DecidableEq, Repr
 
 structure ClaimedBinding where

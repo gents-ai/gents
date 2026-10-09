@@ -96,6 +96,32 @@ fn parse_server(extra: &[&str]) -> ServeArgs {
 }
 
 #[test]
+fn mcp_graph_tools_require_enable_mcp_and_an_unrestricted_scope() {
+    assert!(
+        Cli::try_parse_from(["gents", "server", "--mcp-graph-tools"]).is_err(),
+        "--mcp-graph-tools needs --enable-mcp"
+    );
+    assert!(
+        Cli::try_parse_from([
+            "gents",
+            "server",
+            "--enable-mcp",
+            "--mcp-graph-tools",
+            "--mcp-query-collection",
+            "AgentRequest",
+        ])
+        .is_err(),
+        "graph reads are offered only with the unrestricted read scope"
+    );
+    let args = parse_server(&["--enable-mcp", "--mcp-graph-tools"]);
+    assert!(args.enable_mcp && args.mcp_graph_tools);
+    assert!(
+        !parse_server(&["--enable-mcp"]).mcp_graph_tools,
+        "graph reads are off by default"
+    );
+}
+
+#[test]
 fn native_service_commands_keep_install_and_start_separate() {
     let install = Cli::try_parse_from([
         "gents",
@@ -667,7 +693,7 @@ fn graph_run_watch_result_cancel_and_toggle_parse() {
         "--watch",
     ]) {
         GraphCommand::Run(args) => {
-            assert_eq!(args.package, "code_review");
+            assert_eq!(args.package.as_deref(), Some("code_review"));
             assert_eq!(args.entry.as_deref(), Some("review"));
             assert_eq!(args.input.as_deref(), Some(r#"{"base":"origin/main"}"#));
             assert_eq!(args.field, vec!["head=HEAD".to_owned()]);
@@ -691,6 +717,42 @@ fn graph_run_watch_result_cancel_and_toggle_parse() {
     assert!(
         matches!(parse_graph(&["enable", "code_review"]), GraphCommand::Enable(args) if args.package == "code_review")
     );
+}
+
+#[test]
+fn graph_run_selects_a_package_or_a_pinned_graph_id() {
+    match parse_graph(&["run", "--graph-id", "code-review", "--digest", "sha256:abc"]) {
+        GraphCommand::Run(args) => {
+            assert!(args.package.is_none());
+            assert_eq!(args.graph_id.as_deref(), Some("code-review"));
+            assert_eq!(args.digest.as_deref(), Some("sha256:abc"));
+        }
+        _ => panic!("expected graph run"),
+    }
+    for argv in [
+        vec!["gents", "graph", "run"],
+        vec!["gents", "graph", "run", "--graph-id", "code-review"],
+        vec!["gents", "graph", "run", "--digest", "sha256:abc"],
+        vec![
+            "gents",
+            "graph",
+            "run",
+            "code_review",
+            "--graph-id",
+            "code-review",
+            "--digest",
+            "sha256:abc",
+        ],
+    ] {
+        assert!(
+            Cli::try_parse_from(argv.clone()).is_err(),
+            "{argv:?} must not parse"
+        );
+    }
+    assert!(matches!(
+        parse_graph(&["watch", "run-1", "--output", "ndjson"]),
+        GraphCommand::Watch(args) if args.output == crate::cli::output_format::OutputFormat::Ndjson
+    ));
 }
 
 fn parse_pack(argv: &[&str]) -> PackCommand {

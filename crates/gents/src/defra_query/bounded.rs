@@ -116,6 +116,37 @@ impl BoundedQueryTool {
         crate::document_config::reject_protected_collection_name(&self.decl.collection)
     }
 
+    async fn filter_parameters(&self) -> Result<Map<String, Value>> {
+        let version = crate::config_client::ConfigAccess::Local(self.node.clone())
+            .collection_version(&self.decl.collection)
+            .await?
+            .ok_or_else(|| anyhow!("collection `{}` is not available", self.decl.collection))?;
+        let schema: ::schema::CollectionVersion = serde_json::from_value(version)?;
+        self.model_filter_fields()
+            .map(|field| {
+                let native = schema
+                    .fields
+                    .iter()
+                    .find(|native| native.name == field.name)
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "field `{}` is absent from `{}`",
+                            field.name,
+                            self.decl.collection
+                        )
+                    })?;
+                let parameter_type = format!(
+                    "{}{}",
+                    native.kind.graphql_type_name().trim_end_matches('!'),
+                    if field.required { "!" } else { "" }
+                );
+                let mut shape = crate::defra_write::field_parameters(&parameter_type)?;
+                shape["description"] = json!(format!("Filter {} by exact match.", field.name));
+                Ok((field.name.clone(), shape))
+            })
+            .collect()
+    }
+
     fn model_filter_fields(&self) -> impl Iterator<Item = &crate::document_config::WriteToolField> {
         self.decl
             .filter_fields
@@ -245,15 +276,7 @@ impl BoundedQueryTool {
             let value = if let Some(fill) = &field.fill {
                 Some(Value::String(fill.resolve(&field.name)?))
             } else {
-                match args.get(&field.name) {
-                    None | Some(Value::Null) => None,
-                    Some(Value::String(text)) => Some(Value::String(text.clone())),
-                    Some(_) => bail!(
-                        "filter `{}` for tool `{}` must be a string",
-                        field.name,
-                        self.decl.tool_name
-                    ),
-                }
+                args.get(&field.name).cloned()
             };
             match value {
                 Some(Value::Null) | None => {
@@ -328,14 +351,18 @@ impl Tool for BoundedQueryTool {
             }),
         );
         let mut required = Vec::new();
+        match self.filter_parameters().await {
+            Ok(filters) => properties.extend(filters),
+            Err(error) => {
+                tracing::error!(tool = %self.decl.tool_name, %error, "bounded query schema unavailable");
+                return ToolDefinition {
+                    name: self.decl.tool_name.clone(),
+                    description: "Unavailable: collection schema could not be resolved.".into(),
+                    parameters: json!({"type":"object", "properties":{}, "additionalProperties":false}),
+                };
+            }
+        }
         for field in self.model_filter_fields() {
-            properties.insert(
-                field.name.clone(),
-                json!({
-                    "type": "string",
-                    "description": format!("Filter {} by exact match.", field.name)
-                }),
-            );
             if field.required {
                 required.push(Value::String(field.name.clone()));
             }
@@ -421,6 +448,75 @@ mod tests {
     use super::*;
     use crate::document_config::{QueryToolDecl, WriteToolField, WriteToolFieldFill};
     use crate::llm::tool::Tool;
+
+    #[tokio::test]
+    async fn native_scalar_filters_match_lean_admission() {
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        node.add_schema(
+            "type ScalarRecord { text: String count: Int measure: Float64 enabled: Boolean }",
+        )
+        .await
+        .unwrap();
+        crate::config_client::ConfigAccess::write_local_response(
+            &node, "test.scalar_filter.seed",
+            r#"mutation { add_ScalarRecord(input: {text: "measurement", count: 86, measure: 0.5, enabled: false}) {_docID} }"#,
+        ).await.unwrap();
+        for case in crate::lean_vocab_test::lean_write_input_cases() {
+            if case["nullable"] != false || case["required"] != true || case["filled"] != false {
+                continue;
+            }
+            let (field, kind) = match case["expected"].as_str().unwrap() {
+                "text" => ("text", "string"),
+                "integer" => ("count", "integer"),
+                "number" => ("measure", "number"),
+                "boolean" => ("enabled", "boolean"),
+                other => panic!("unknown kind {other}"),
+            };
+            let value = match case["actual"].as_str() {
+                None => None,
+                Some("text") => Some(json!("measurement")),
+                Some("integer") => Some(json!(86)),
+                Some("number") => Some(json!(0.5)),
+                Some("boolean") => Some(json!(false)),
+                Some("array") => Some(json!([1])),
+                Some("object") => Some(json!({"x":1})),
+                Some("null") => Some(Value::Null),
+                other => panic!("unknown kind {other:?}"),
+            };
+            let tool = BoundedQueryTool::new(
+                node.clone(),
+                QueryToolDecl {
+                    tool_name: "read_scalar".into(),
+                    collection: "ScalarRecord".into(),
+                    description: String::new(),
+                    fields: vec![field.into()],
+                    filter_fields: vec![WriteToolField {
+                        name: field.into(),
+                        required: true,
+                        fill: None,
+                    }],
+                },
+            );
+            let definition = tool.definition(String::new()).await;
+            assert_eq!(
+                definition.parameters["properties"][field]["type"],
+                json!(kind)
+            );
+            let args = value
+                .map(|value| Map::from_iter([(field.into(), value)]))
+                .unwrap_or_default();
+            let result = tool.call(BoundedQueryParams(args)).await;
+            assert_eq!(
+                result.is_ok(),
+                case["accepted"] == true,
+                "{case}: {result:?}"
+            );
+            if case["expected"] == case["actual"] {
+                let payload: Value = serde_json::from_str(&result.unwrap()).unwrap();
+                assert_eq!(payload["count"], 1, "{case}");
+            }
+        }
+    }
 
     async fn node_with_findings() -> Arc<EmbeddedNode> {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
@@ -640,7 +736,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejects_non_string_model_filter() {
+    async fn rejects_number_for_native_string_filter() {
         let node = node_with_findings().await;
         let tool = BoundedQueryTool::new(
             node,
@@ -661,7 +757,7 @@ mod tests {
         let err = Tool::call(&tool, BoundedQueryParams(args))
             .await
             .unwrap_err();
-        assert!(err.to_string().contains("must be a string"));
+        assert!(err.to_string().contains("String"), "{err}");
     }
 
     #[tokio::test]

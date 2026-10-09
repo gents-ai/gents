@@ -61,12 +61,18 @@ pub(super) fn build_pending_turn(
     if !gents::lifecycle::request_content_owns_user_projection(&request_input) {
         return None;
     }
+    let folded_into = gents::lifecycle::folded_into(request);
 
     let lifecycle_state = request
         .lifecycle_state
         .map(|state| state.as_str().to_string());
     let content = normalize_optional(request.content.as_deref())?;
-    let request_doc_id = request.doc_id.as_deref();
+    // A folded row is consumed in the transaction that publishes its entry
+    // under the claiming request; a replica can hold the row first.
+    let owner = gents::lifecycle::input_message_owner(request);
+    if folded_into.is_some() && owner.is_none() {
+        return None;
+    }
     // Pending ownership is session state, not visible-page state. A materialized
     // user row outside the current window must still suppress the request-owned
     // placeholder at the tip.
@@ -96,12 +102,12 @@ pub(super) fn build_pending_turn(
             return None;
         }
     }
-    let prompt_message_key = request_doc_id.map(authored_prompt_message_key);
-    let exact_owner = transcript.messages.iter().any(|row| {
-        request_doc_id.is_some()
-            && row.message.request_doc_id.as_deref() == request_doc_id
-            && row.message.role == gents_protocol::output::MessageRole::User
-            && prompt_message_key.as_deref() == Some(row.message.message_key.as_str())
+    let exact_owner = owner.is_some_and(|(owner_doc_id, owner_key)| {
+        transcript.messages.iter().any(|row| {
+            row.message.request_doc_id.as_deref() == Some(owner_doc_id.as_str())
+                && row.message.role == gents_protocol::output::MessageRole::User
+                && row.message.message_key == owner_key
+        })
     });
     if exact_owner {
         return None;
@@ -113,6 +119,8 @@ pub(super) fn build_pending_turn(
         content: content.to_string(),
         selected_skill_ids: request_input.selected_skill_ids,
         lifecycle_state,
+        folded_into_request_id: folded_into.map(str::to_owned),
+        origin: super::request_origin_view(store, request),
         created_at: normalize_optional(request.created_at.as_deref()),
     })
 }

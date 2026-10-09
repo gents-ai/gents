@@ -222,6 +222,8 @@ function session(
     retryEligibility: { eligible: false, denialReason: "notFailed" },
     latestRequestOutcome: null,
     pendingTurn: null,
+    queuedTurns: [],
+    foldedInputs: [],
     context: {
       estimatedDurableTokens: 0,
       estimatedConversationTokens: 0,
@@ -240,6 +242,7 @@ function session(
       itemKey: key,
       requestId: key,
       ownsTurn: true,
+      inputRequestId: key,
       sequence: Number(key.slice(1)),
       content: key,
       timestamp: null,
@@ -250,6 +253,56 @@ function session(
 }
 
 describe("session timeline page merging", () => {
+  it("an older page's folded entry retires a stale pending copy of that input", () => {
+    const current = session(["k8"], {
+      totalItems: -1,
+      totalItemsExact: false,
+      pageItems: 2,
+      hasOlder: true,
+      hasNewer: false,
+      oldestItemKey: "pending-folded",
+      newestItemKey: "k8",
+    });
+    current.timelineItems.unshift({
+      kind: "pendingUserTurn",
+      itemKey: "pending-folded",
+      requestId: "folded",
+      content: "also this",
+      selectedSkillIds: [],
+      lifecycleState: "superseded",
+      foldedIntoRequestId: "head",
+      origin: null,
+      createdAt: null,
+    });
+    const older = session([], {
+      totalItems: -1,
+      totalItemsExact: false,
+      pageItems: 1,
+      hasOlder: false,
+      hasNewer: true,
+      oldestItemKey: "authored:doc-head:folded:doc-folded",
+      newestItemKey: "authored:doc-head:folded:doc-folded",
+    });
+    older.timelineItems = [
+      {
+        kind: "userMessage",
+        itemKey: "authored:doc-head:folded:doc-folded",
+        requestId: "doc-head",
+        inputRequestId: "folded",
+        ownsTurn: false,
+        sequence: 3,
+        content: "also this",
+        timestamp: null,
+        reconstruction: { state: "ready" },
+      },
+    ];
+    const merged = mergeOlderSessionTimelinePage(current, older);
+    expect(merged.timelineItems.map((item) => item.itemKey)).toEqual([
+      "authored:doc-head:folded:doc-folded",
+      "k8",
+    ]);
+  });
+
   it("keeps distinct requests with identical content across older pages", () => {
     const page = {
       totalItems: 2,
@@ -268,6 +321,8 @@ describe("session timeline page merging", () => {
         content: "repeat",
         selectedSkillIds: [],
         lifecycleState: "pending",
+        foldedIntoRequestId: null,
+        origin: null,
         createdAt: null,
       },
     ];
@@ -308,6 +363,8 @@ describe("session timeline page merging", () => {
       content: "repeat",
       selectedSkillIds: [],
       lifecycleState: "processing",
+      foldedIntoRequestId: null,
+      origin: null,
       createdAt: null,
     });
     const older = session(["k1"], { ...page, hasOlder: false });
@@ -317,6 +374,7 @@ describe("session timeline page merging", () => {
         itemKey: "authored-r",
         requestId: "r",
         ownsTurn: true,
+        inputRequestId: "r",
         sequence: 1,
         content: "repeat",
         timestamp: null,
@@ -352,6 +410,8 @@ describe("session timeline page merging", () => {
         content: "same text",
         selectedSkillIds: [],
         lifecycleState: "pending",
+        foldedIntoRequestId: null,
+        origin: null,
         createdAt: null,
       });
       const incoming = session(["k1", "k2"], page);
@@ -397,6 +457,8 @@ describe("session timeline page merging", () => {
         content: "same text",
         selectedSkillIds: [],
         lifecycleState: "pending",
+        foldedIntoRequestId: null,
+        origin: null,
         createdAt: null,
       });
       const incoming = session(["k1", "k2"], page);
@@ -405,6 +467,7 @@ describe("session timeline page merging", () => {
         itemKey: "authored-r",
         requestId: "r",
         ownsTurn: true,
+        inputRequestId: "r",
         sequence: 3,
         content: "same text",
         timestamp: null,
@@ -427,6 +490,58 @@ describe("session timeline page merging", () => {
         "k1",
         "k2",
         "authored-r",
+      ]);
+    },
+  );
+
+  it.each(["older", "tip"] as const)(
+    "replaces a queued trigger input with its published automated item when the %s page arrives",
+    (direction) => {
+      const page = {
+        totalItems: 3,
+        pageItems: 2,
+        hasOlder: true,
+        hasNewer: false,
+        oldestItemKey: "k1",
+        newestItemKey: "k2",
+      };
+      const origin = {
+        kind: "trigger" as const,
+        triggerId: "nightly",
+        triggerKind: "schedule",
+      };
+      const current = session(["k1", "k2"], page);
+      current.timelineItems.unshift({
+        kind: "pendingUserTurn",
+        itemKey: "pending-t",
+        requestId: "t",
+        content: "write the report",
+        selectedSkillIds: [],
+        lifecycleState: "pending",
+        foldedIntoRequestId: null,
+        origin,
+        createdAt: null,
+      });
+      const incoming = session(["k1", "k2"], page);
+      incoming.timelineItems.push({
+        kind: "automatedInput",
+        itemKey: "authored:doc-t:prompt",
+        requestId: "doc-t",
+        inputRequestId: "t",
+        sequence: 3,
+        origin,
+        content: "write the report",
+        timestamp: null,
+        reconstruction: { state: "ready" },
+      });
+      const merged =
+        direction === "tip"
+          ? mergeSessionTipSnapshot(current, incoming)
+          : mergeOlderSessionTimelinePage(incoming, current);
+      expect(merged.timelineItems.map((item) => item.itemKey)).toEqual([
+        "k1",
+        "k2",
+        "authored:doc-t:prompt",
       ]);
     },
   );

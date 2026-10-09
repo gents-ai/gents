@@ -59,9 +59,9 @@ mod tool_dispatch;
 mod turn_threading;
 
 pub use contract::{
-    LoopConfig, LoopReplayInput, LoopStreamItem, RenderedRequestSink, ReplayEvidenceResolver,
-    ReplayEvidenceRow, ReplayEvidenceViolation, StructuredOutputConfig, TaggedMessage,
-    TurnCompactionOutcome, TurnCompactionRequest,
+    AuthoredInput, FoldedPrompt, LoopConfig, LoopReplayInput, LoopStreamItem, RenderedRequestSink,
+    ReplayEvidenceResolver, ReplayEvidenceRow, ReplayEvidenceViolation, StructuredOutputConfig,
+    TaggedMessage, TurnCompactionOutcome, TurnCompactionRequest,
 };
 pub use one_shot::{
     run_loop_to_text, run_loop_to_typed, AuxiliaryPersistenceFailure, OneShotNoVisibleOutput,
@@ -174,6 +174,7 @@ where
             )))
         })?;
         let history = entry_projection;
+        let authored_prompt = prompt.message.clone();
         // Prior requests' per-request context rows must not re-enter provider
         // history. The current context is assembled into `new_messages`.
         // Repair may rewrite both vectors in place after provider rejection.
@@ -188,6 +189,12 @@ where
         // prompt (mirrors Lean `PromptAssembly.Template.assembleWithContext`).
         let mut new_messages: Vec<TaggedMessage> =
             assemble_new_messages(config.context_message.clone(), prompt);
+        new_messages.extend(
+            config
+                .folded_prompts
+                .iter()
+                .map(|folded| TaggedMessage::unassociated(folded.message.clone())),
+        );
         // Request-local and cumulative across turns, retries, and compaction.
         let mut invalid_tool_progress = invalid_tool_progress::InvalidToolProgress::default();
         let mut repeated_tool_failure = repeated_tool_failure::RepeatedToolFailure::default();
@@ -224,6 +231,25 @@ where
             current_turn += 1;
 
             let turn_index = current_turn - 1;
+            // The admitted input is published before anything can reduce the
+            // provider projection or persist a reduction checkpoint, so a
+            // restored checkpoint always follows its accepted input.
+            if current_turn == 1 && hook.is_some() && turn_index == 0 && !config.resume_from_history {
+                let authored = config.authored_input.clone().unwrap_or_else(|| AuthoredInput {
+                    context: config.context_message.clone(),
+                    prompt: authored_prompt.clone(),
+                    folded: config.folded_prompts.clone(),
+                });
+                yield LoopStreamItem::AuthoredInputReady {
+                    context: authored.context,
+                    prompt: authored.prompt,
+                    folded: authored
+                        .folded
+                        .into_iter()
+                        .map(|folded| (folded.key, folded.message))
+                        .collect(),
+                };
+            }
             let preparation_started = std::time::Instant::now();
             let (mut request, turn_context_decision) = build_budgeted_request(
                 &model,
@@ -282,16 +308,6 @@ where
                         reason,
                     })))?;
                 }
-            }
-
-            // A resumed checkpoint already includes its original authored
-            // input. New executions publish under their live request owner,
-            // before dispatch, not when the request is merely queued.
-            if current_turn == 1 && hook.is_some() && turn_index == 0 && !config.resume_from_history {
-                yield LoopStreamItem::AuthoredInputReady {
-                    context: config.context_message.clone(),
-                    prompt: current_prompt.clone(),
-                };
             }
 
             let mut attempt = 0_u32;

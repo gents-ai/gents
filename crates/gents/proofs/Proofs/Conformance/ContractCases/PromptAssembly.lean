@@ -35,7 +35,8 @@ structure CurrentInputHeaderCase where
 def CurrentInputHeaderCase.model (row : CurrentInputHeaderCase) :
     PromptAssembly.CurrentInput.HistoryRow :=
   { requestId := some row.request
-  , canonicalCurrentInput := row.kind == "prompt" || row.kind == "context" }
+  , canonicalCurrentInput :=
+      row.kind == "prompt" || row.kind == "context" || row.kind == "folded" }
 
 structure CurrentInputCase where
   name : String
@@ -52,6 +53,9 @@ def currentInputCases : List CurrentInputCase :=
       [⟨"older", "context"⟩, ⟨"older", "prompt"⟩]⟩
   , ⟨"only_rebuilt_input_is_removed", "current",
       [⟨"current", "prompt"⟩, ⟨"current", "context"⟩]⟩
+  , ⟨"folded_messages_are_rebuilt_input", "current",
+      [⟨"older", "folded"⟩, ⟨"current", "prompt"⟩, ⟨"current", "folded"⟩,
+       ⟨"current", "assistant"⟩]⟩
   ]
 
 def CurrentInputCase.retainedIndices (witness : CurrentInputCase) : List Nat :=

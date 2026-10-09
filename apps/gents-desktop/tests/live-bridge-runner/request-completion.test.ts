@@ -49,6 +49,8 @@ function session(state: string, requestId = target.requestId): DesktopSessionSna
     latestRequestId: requestId,
     retryEligibility: { eligible: false, denialReason: "notFailed" },
     latestRequestOutcome: state === "running" ? null : { failureReason: null },
+    queuedTurns: [],
+    foldedInputs: [],
     pendingTurn:
       state === "running"
         ? {
@@ -56,6 +58,8 @@ function session(state: string, requestId = target.requestId): DesktopSessionSna
             content: "follow-up prompt",
             selectedSkillIds: [],
             lifecycleState: "claimed",
+            foldedIntoRequestId: null,
+            origin: null,
             createdAt: "2026-09-28T02:49:28Z",
           }
         : null,

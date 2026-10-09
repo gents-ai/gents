@@ -17,6 +17,8 @@ import Proofs.SessionHydration
 import Proofs.Session.Properties
 import Proofs.Session.Interrupt
 import Proofs.Session.InterruptCases
+import Proofs.Session.Fold
+import Proofs.Session.FoldCases
 import Proofs.Transcript
 import Proofs.CanonicalOutput
 import Proofs.StreamingResponse.ReasoningAudit

@@ -68,14 +68,17 @@ structure Control where
   /-- `self_config.self_config_no_lockout`: this guard applies to later writes. -/
   noLockout : Bool
   /-- The effective self-config categories grant `tools`, the one category that
-  can restore every Tools group, categories and grants included. -/
+  can restore every Tools group and the categories. Widening the categories is
+  accepted: categories carry no operator-managed capability, which `keepsGrants`
+  bounds independently. -/
   toolsAuthority : Bool
   deriving DecidableEq, Repr
 
 /-- A capability the invoker had must remain. -/
 def retained (old new : Bool) : Bool := !old || new
 
-/-- No lockout (#1796) is the only self-protection. The Engineer is a full
+/-- No lockout (#1796) is the only lockout protection; operator grants are
+bounded separately by `keepsGrants`. The Engineer is a full
 self-writing agent: it may edit its own Tools and target itself with
 automation, and every such write is checked the normal way (preview, ACP, typed
 validation). It is refused only a candidate that turns off its self-config tool,
@@ -91,6 +94,73 @@ def keepsControl (decode : Doc → Option Control) (stored candidate : Doc) : Bo
         && retained old.noLockout new.noLockout
         && retained old.toolsAuthority new.toolsAuthority
   | _, _ => false
+
+/-- Operator-managed grants projected from a Tools document by the canonical
+typed decoder; absent flags are false. -/
+structure Grants where
+  /-- `self_config.enable_pack_install`. -/
+  packInstall : Bool
+  deriving DecidableEq, Repr
+
+/-- No grant. -/
+def Grants.bot : Grants := { packInstall := false }
+
+/-- Every grant `a` carries is also in `b`, grant by grant. -/
+def Grants.le (a b : Grants) : Bool := (!a.packInstall || b.packInstall)
+
+/-- Whether each grant the candidate `c` carries stays within its own bound
+against the stored Tools `s` and the invoker's `held` grants. Pack
+installation is held-bounded: the candidate may carry it only when `s` carries
+it or the invoker holds it. Each grant is judged on its own, never as a whole
+vector, so raising one grant is decided independently of every other grant
+the documents carry. -/
+def Grants.boundedBy (c s held : Grants) : Bool :=
+  (!c.packInstall || s.packInstall || held.packInstall)
+
+/-- A self-config write is accepted when every operator-managed grant of the
+candidate stays within its own bound against the Tools document it replaces
+(`Grants.boundedBy`). Pack installation may be raised only up to what the
+invoking agent holds (held-bounded), so a holder may grant it to a sibling and
+nobody else can. A write that raises nothing is accepted whatever the invoker
+holds, so editing a sibling that already carries a grant is not a self-grant. Unlike
+`keepsControl` this guard always runs: the native owner calls it from the
+shared validate slot, not the opt-in no-lockout slot. The native graph tool
+flag is not a grant (`PeerRegistryDiscovery.PersonaRequest.graphToolPresented`):
+it presents run tools whose authority stays with each graph's allowed callers.
+Operator writes (the desktop, `config apply`) do not pass through this guard. -/
+def keepsGrants (decode : Doc → Option Grants) (held : Grants) (stored candidate : Doc) :
+    Bool :=
+  match decode stored, decode candidate with
+  | some s, some c => c.boundedBy s held
+  | _, _ => false
+
+/-- The grant bound across a reselection. A write that changes which Tools
+document a Context or Behavior selects is bounded like a Tools write from the
+previously selected Tools (`keepsGrants`), so a re-point cannot acquire what a
+Tools write could not. With no previous selection (a new Context, or a clone,
+which copies its source's whole Tools document, operator grants included) the
+newly selected Tools are bounded like a Tools write over a document with no
+grant (`Grants.bot`): each grant within its own bound with nothing stored, so
+pack installation needs the invoker to hold it. Selecting no Tools carries no
+grant. A clone is checked when its request is created and
+previewed; the reconciler publishes it later from the source as it is then,
+without the invoker's grants, so a grant an operator adds to the source in that
+window is copied. Operator writes are unguarded by design. -/
+def reselectionKeepsGrants (decode : Doc → Option Grants) (held : Grants)
+    (before after : Option Doc) : Bool :=
+  match before, after with
+  | _, none => true
+  | some storedTools, some candidateTools =>
+      keepsGrants decode held storedTools candidateTools
+  | none, some candidateTools => (decode candidateTools).any (·.boundedBy Grants.bot held)
+
+/-- `reselectionKeepsGrants` on the Tools documents a Context or Behavior
+selects. `resolve` follows the chain through the owner-scoped reads the native
+guard uses; `none` selects no Tools, including a reference to a missing
+document, which the reference validator refuses on its own. -/
+def chainKeepsGrants (decode : Doc → Option Grants) (held : Grants)
+    (resolve : Doc → Option Doc) (stored candidate : Doc) : Bool :=
+  reselectionKeepsGrants decode held (resolve stored) (resolve candidate)
 
 /-- The invoker's reachability, projected from its own behavior document:
 `enabled` (absent is true) and whether its tags carry the Setup tag. -/

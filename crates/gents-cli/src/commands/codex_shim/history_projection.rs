@@ -491,9 +491,26 @@ fn project_turn_group(
     let Some(first_request) = requests.first() else {
         return turn_value(turn_id, codex::TurnStatus::Completed, Vec::new(), None);
     };
-    let tail_request = requests.last().unwrap_or(first_request);
+    fn folded_into_group<'a>(
+        request: &'a AgentRequestRow,
+        requests: &[AgentRequestRow],
+    ) -> Option<&'a str> {
+        gents::lifecycle::folded_into(request).filter(|head| {
+            requests.iter().any(|other| {
+                other.request_id == *head && gents::lifecycle::folded_into(other).is_none()
+            })
+        })
+    }
+    let tail_request = requests
+        .iter()
+        .rev()
+        .find(|request| folded_into_group(request, requests).is_none())
+        .unwrap_or(first_request);
     let mut items = Vec::new();
-    for request in requests {
+    for request in requests
+        .iter()
+        .filter(|request| folded_into_group(request, requests).is_none())
+    {
         let tools = tools_by_request
             .get(&request.request_id)
             .cloned()
@@ -502,6 +519,7 @@ fn project_turn_group(
             .get(&request.request_id)
             .map(Vec::as_slice)
             .unwrap_or(&[]);
+        let start = items.len();
         append_request_items(
             record,
             &mut items,
@@ -510,6 +528,15 @@ fn project_turn_group(
             compactions,
             messages_by_sequence,
         );
+        let at = start + usize::from(user_message_item(request).is_some());
+        let folded = requests
+            .iter()
+            .filter(|folded| {
+                folded_into_group(folded, requests) == Some(request.request_id.as_str())
+            })
+            .filter_map(user_message_item)
+            .collect::<Vec<_>>();
+        items.splice(at..at, folded);
     }
 
     let status = turn_status(tail_request);
@@ -537,6 +564,19 @@ fn project_turn_group(
     }
 }
 
+fn user_message_item(request: &AgentRequestRow) -> Option<codex::ThreadItem> {
+    let request_content = request.content.as_deref().unwrap_or_default();
+    (!request_content.trim().is_empty() && !is_background_completion(request)).then(|| {
+        codex::ThreadItem::UserMessage {
+            id: format!("gents-user-{}", request.request_id),
+            content: vec![codex::UserInput::Text {
+                text: request_content.to_string(),
+                text_elements: Vec::new(),
+            }],
+        }
+    })
+}
+
 fn append_request_items(
     record: &CodexThreadRecord,
     items: &mut Vec<codex::ThreadItem>,
@@ -559,16 +599,7 @@ fn append_request_items(
             .then_with(|| left.started_at.cmp(&right.started_at))
     });
 
-    let request_content = request.content.as_deref().unwrap_or_default();
-    if !request_content.trim().is_empty() && !is_background_completion(request) {
-        items.push(codex::ThreadItem::UserMessage {
-            id: format!("gents-user-{}", request.request_id),
-            content: vec![codex::UserInput::Text {
-                text: request_content.to_string(),
-                text_elements: Vec::new(),
-            }],
-        });
-    }
+    items.extend(user_message_item(request));
 
     items.extend(
         compactions
@@ -974,6 +1005,80 @@ mod tests {
                 .any(|item| matches!(item, codex::ThreadItem::UserMessage { .. })),
             "the scheduler's control prompt must not appear as user-authored input"
         );
+    }
+
+    #[test]
+    fn folded_message_follows_its_answering_request_and_never_ends_the_turn() {
+        let record = CodexThreadRecord {
+            session_id: "thread-1".to_string(),
+            cwd: PathBuf::from("/tmp/project"),
+            archived: false,
+            loaded: true,
+            memory_mode: "disabled".to_string(),
+            name: String::new(),
+            settings_json: "{}".to_string(),
+            git_info: None,
+            projection_started: None,
+            session: None,
+            latest_request: None,
+            subagent: None,
+        };
+        let queued =
+            json!({"queue":{"source":"user","policy":"append","queued_after_request_id":"root"}});
+        let head = request_row(json!({
+            "_docID": "head-doc",
+            "request_id": "head",
+            "content": "how are we looking",
+            "lifecycle_state": "completed",
+            "input": queued,
+            "execution_origin": "interactive"
+        }));
+        let folded = request_row(json!({
+            "_docID": "folded-doc",
+            "request_id": "folded",
+            "content": "we should move faster",
+            "lifecycle_state": "superseded",
+            "superseded_by_request": "head",
+            "failure_reason": gents::lifecycle::FOLDED_REASON,
+            "input": queued,
+            "execution_origin": "interactive"
+        }));
+        let messages = BTreeMap::from([(
+            3,
+            message_row(
+                "answer",
+                Some("head-doc"),
+                3,
+                gents_protocol::message::Message::assistant("both answered"),
+            ),
+        )]);
+        let turn = project_turn_group(
+            &record,
+            "root",
+            &[head, folded],
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &messages,
+        );
+        assert_eq!(turn.status, codex::TurnStatus::Completed);
+        let user_ids = turn
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                codex::ThreadItem::UserMessage { id, .. } => Some(id.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(user_ids, ["gents-user-head", "gents-user-folded"]);
+        assert!(matches!(
+            turn.items.as_slice(),
+            [
+                codex::ThreadItem::UserMessage { .. },
+                codex::ThreadItem::UserMessage { .. },
+                ..
+            ]
+        ));
+        assert!(turn.items.len() > 2, "the answer follows both messages");
     }
 
     #[test]

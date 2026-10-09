@@ -71,6 +71,7 @@ import Proofs.Conformance.RootAdmission
 import Proofs.Conformance.Contracts.Json.ExecutionGate
 import Proofs.Conformance.Contracts.Json.DispatchObservation
 import Proofs.Conformance.Contracts.Json.InterruptQueue
+import Proofs.Conformance.Contracts.Json.FoldQueue
 import Proofs.Conformance.Contracts.Json.WorkerCapacity
 import Proofs.Conformance.Contracts.Json.CausalHop
 import Proofs.Conformance.Contracts.Json.PayloadPresentation
@@ -124,6 +125,8 @@ def snapshotJson : String :=
       ++ Conformance.GraphPipelineContracts.revisionGateCasesJson ++ ","
     ++ "\"graph_pipeline_run_terminal_cases\":"
       ++ Conformance.GraphPipelineContracts.runTerminalCasesJson ++ ","
+    ++ "\"graph_pipeline_edge_delivery_cases\":"
+      ++ Conformance.GraphPipelineContracts.edgeDeliveryCasesJson ++ ","
     ++ "\"request_transition_cases\":"
       ++ jsonArray (requestTransitionCases.map lifecycleTransitionCaseJson) ++ ","
     ++ "\"provider_eof_cases\":"
@@ -138,6 +141,16 @@ def snapshotJson : String :=
       ++ Conformance.ExecutionGateContracts.casesJson ++ ","
     ++ "\"interrupt_queue_cases\":"
       ++ Conformance.InterruptQueueContracts.casesJson ++ ","
+    ++ "\"fold_queue_cases\":"
+      ++ Conformance.FoldQueueContracts.casesJson ++ ","
+    ++ "\"fold_turn_input_cases\":"
+      ++ Conformance.FoldQueueContracts.turnInputCasesJson ++ ","
+    ++ "\"handover_fold_cases\":"
+      ++ Conformance.FoldQueueContracts.handoverCasesJson ++ ","
+    ++ "\"fold_publication_cases\":"
+      ++ Conformance.FoldQueueContracts.publicationCasesJson ++ ","
+    ++ "\"retry_selection_cases\":"
+      ++ Conformance.FoldQueueContracts.retrySelectionCasesJson ++ ","
     ++ "\"canonical_dispatch_observation_cases\":"
       ++ Conformance.DispatchObservationContracts.casesJson ++ ","
     ++ "\"canonical_spawned_target_rejection_cases\":"
@@ -220,6 +233,8 @@ def snapshotJson : String :=
       ++ toString Conformance.ClientShellContracts.desktopClientShellCaseCount ++ ","
     ++ "\"desktop_client_shell_cases\":"
       ++ Conformance.ClientShellContracts.desktopClientShellCasesJson ++ ","
+    ++ "\"client_session_turn_cases\":"
+      ++ Conformance.ClientShellContracts.sessionTurnCasesJson ++ ","
     ++ "\"request_lifecycle_operator_ui_cases\":"
       ++ Conformance.ClientShellContracts.requestLifecycleOperatorUiCasesJson ++ ","
     ++ "\"client_live_delta_cases\":"

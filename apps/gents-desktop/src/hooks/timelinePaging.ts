@@ -14,8 +14,11 @@ function timelineItemIdentity(item: RenderedTimelineItem) {
 function removeMaterializedPendingTurns(items: RenderedTimelineItem[]) {
   const materialized = new Set(
     items.flatMap((item) =>
-      item.kind === "userMessage" && item.ownsTurn && item.requestId
-        ? [item.requestId]
+      item.kind === "userMessage" || item.kind === "automatedInput"
+        ? [
+            item.inputRequestId ??
+              (item.kind === "userMessage" && item.ownsTurn ? item.requestId : null),
+          ].filter((id): id is string => Boolean(id))
         : [],
     ),
   );
@@ -40,6 +43,8 @@ function timelineItemUnchanged(
       return (
         next.kind === "userMessage" &&
         previous.requestId === next.requestId &&
+        previous.ownsTurn === next.ownsTurn &&
+        previous.inputRequestId === next.inputRequestId &&
         previous.sequence === next.sequence &&
         previous.content === next.content &&
         previous.timestamp === next.timestamp &&
@@ -66,8 +71,24 @@ function timelineItemUnchanged(
         previous.requestId === next.requestId &&
         previous.content === next.content &&
         previous.lifecycleState === next.lifecycleState &&
+        previous.foldedIntoRequestId === next.foldedIntoRequestId &&
+        JSON.stringify(previous.origin) === JSON.stringify(next.origin) &&
         previous.createdAt === next.createdAt &&
         sameOptionalStrings(previous.selectedSkillIds, next.selectedSkillIds)
+      );
+    case "automatedInput":
+      return (
+        next.kind === "automatedInput" &&
+        previous.requestId === next.requestId &&
+        previous.inputRequestId === next.inputRequestId &&
+        previous.sequence === next.sequence &&
+        previous.content === next.content &&
+        previous.timestamp === next.timestamp &&
+        JSON.stringify(previous.origin) === JSON.stringify(next.origin) &&
+        previous.reconstruction.state === next.reconstruction.state &&
+        previous.reconstruction.error === next.reconstruction.error &&
+        previous.reconstruction.deniedDependencyDocId ===
+          next.reconstruction.deniedDependencyDocId
       );
     case "liveAssistant":
       return (

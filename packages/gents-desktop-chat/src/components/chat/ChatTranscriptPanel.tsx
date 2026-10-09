@@ -118,6 +118,8 @@ export function ChatTranscriptPanel({
         content: optimisticPendingTurn.content,
         selectedSkillIds: optimisticPendingTurn.selectedSkillIds,
         lifecycleState: optimisticPendingTurn.lifecycleState,
+        foldedIntoRequestId: null,
+        origin: null,
         createdAt: optimisticPendingTurn.createdAt,
       },
     ];

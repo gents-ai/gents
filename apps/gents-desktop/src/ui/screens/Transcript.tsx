@@ -45,6 +45,12 @@ import {
   type HeldLive,
 } from "./stream-reveal";
 import { type Workers } from "./workers";
+import {
+  AutomatedInput,
+  QueuedInputs,
+  UserInputWithState,
+  pendingInputState,
+} from "./TranscriptInputs";
 import { type ParentWork } from "./parentWork";
 import { WorkerActionsContext, type WorkerActions } from "./WorkerActions";
 import { readableReasoning, reasoningWithheld } from "./tool-summary";
@@ -102,18 +108,42 @@ const TranscriptItem = memo(function TranscriptItem({
 }) {
   const parentWork = useContext(ParentContext);
   switch (item.kind) {
+    case "automatedInput":
+      return (
+        <AutomatedInput
+          origin={item.origin}
+          content={item.content}
+          reconstruction={item.reconstruction}
+        />
+      );
     case "userMessage":
     case "pendingUserTurn": {
+      const state =
+        item.kind === "pendingUserTurn"
+          ? pendingInputState(item.lifecycleState, item.foldedIntoRequestId)
+          : null;
+      if (item.kind === "pendingUserTurn" && item.origin) {
+        return (
+          <AutomatedInput origin={item.origin} content={item.content} state={state} />
+        );
+      }
       const sender = parentWork?.sentBy(item.requestId) ?? null;
+      if (!sender) {
+        return (
+          <UserInputWithState
+            content={item.content ?? ""}
+            state={state}
+            actions={copyActions(item.content)}
+          />
+        );
+      }
       const message = (
         <UserMessage actions={copyActions(item.content)}>{item.content}</UserMessage>
       );
-      if (!sender) return message;
       const senderName = sender.summary?.title ?? "another session";
       /* a turn another session sent wears that session's mark, the way any
          other sender would; its state, where the mark cannot say it, is a
          chip seated on the bubble's bottom edge */
-      const state = item.kind === "pendingUserTurn" ? "Queued" : null;
       return (
         /* the mark hangs in the transcript's right gutter, seated on the
            first line's center: the bubble's own my-1 and py-3 put that 26px
@@ -447,7 +477,7 @@ export const TranscriptPanel = memo(function TranscriptPanel({
         continue;
       }
       const k = e.item.kind;
-      if (k === "userMessage" || k === "pendingUserTurn") {
+      if (k === "userMessage" || k === "pendingUserTurn" || k === "automatedInput") {
         if (last) keys.add(last);
         last = null;
       } else if (k === "assistantMessage" && e.item.content?.trim()) last = e.key;
@@ -556,6 +586,7 @@ export const TranscriptPanel = memo(function TranscriptPanel({
           <ActivityLine status={status} />
         </div>
       </div>
+      <QueuedInputs queued={session?.queuedTurns ?? []} />
     </div>
   );
 });
