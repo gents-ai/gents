@@ -1282,7 +1282,7 @@ async fn output_obligation_accepts_every_count_field_the_runtime_can_parse() -> 
     let owner = "did:key:obligation-owner";
 
     let mut refused = Vec::new();
-    for (surface_id, count_field) in [
+    let count_fields = [
         ("int-count", "total"),
         ("string-count", "expected_total"),
         ("float32-count", "ratio"),
@@ -1292,7 +1292,8 @@ async fn output_obligation_accepts_every_count_field_the_runtime_can_parse() -> 
         ("id-count", "marker"),
         ("non-null-int-count", "required_total"),
         ("non-null-string-count", "required_label"),
-    ] {
+    ];
+    for (surface_id, count_field) in count_fields {
         if let Err(error) = apply(
             &access,
             vec![obligation_surface(
@@ -1321,7 +1322,7 @@ async fn output_obligation_accepts_every_count_field_the_runtime_can_parse() -> 
     .await?;
 
     let surfaces = crate::list_datastore_tool_surfaces(&node, owner).await?;
-    assert_eq!(surfaces.len(), 11, "{surfaces:?}");
+    assert_eq!(surfaces.len(), count_fields.len() + 1, "{surfaces:?}");
     node.shutdown().await;
     Ok(())
 }
@@ -1665,7 +1666,7 @@ async fn event_source_accepts_every_count_field_the_runtime_can_parse() -> Resul
     let owner = "did:key:event-source-owner";
 
     let mut refused = Vec::new();
-    for (id, count_field) in [
+    let count_fields = [
         ("int-count", "total"),
         ("non-null-int-count", "expected_total"),
         ("string-count", "result"),
@@ -1675,7 +1676,8 @@ async fn event_source_accepts_every_count_field_the_runtime_can_parse() -> Resul
         ("json-count", "payload"),
         ("blob-count", "attachment"),
         ("id-count", "marker"),
-    ] {
+    ];
+    for (id, count_field) in count_fields {
         if let Err(error) = apply(
             &access,
             vec![grouped_event_source(
@@ -1690,10 +1692,11 @@ async fn event_source_accepts_every_count_field_the_runtime_can_parse() -> Resul
             refused.push(format!("{count_field}: {error:#}"));
         }
     }
-    for (id, correlation_field) in [
+    let correlation_fields = [
         ("string-correlation", "batch"),
         ("non-null-correlation", "required_batch"),
-    ] {
+    ];
+    for (id, correlation_field) in correlation_fields {
         if let Err(error) = apply(
             &access,
             vec![correlated_event_source(
@@ -1721,7 +1724,10 @@ async fn event_source_accepts_every_count_field_the_runtime_can_parse() -> Resul
     )
     .await?;
 
-    assert_eq!(published_event_sources(&node).await?.len(), 13);
+    assert_eq!(
+        published_event_sources(&node).await?.len(),
+        count_fields.len() + correlation_fields.len() + 1
+    );
     node.shutdown().await;
     Ok(())
 }
