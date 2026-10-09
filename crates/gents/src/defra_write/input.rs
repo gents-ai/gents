@@ -37,7 +37,8 @@ pub(super) fn parameters(schema: &str) -> Result<Value> {
 /// arguments and stored documents respectively.
 ///
 /// `schema` is a native or introspected GraphQL spelling, optionally suffixed
-/// with `!`. Nullability does not change whether a count witness exists.
+/// with `!`. For supported native field types, nullability does not change
+/// whether a count witness exists.
 /// DateTime arguments are strings, but a canonical decimal string is not
 /// RFC3339 and cannot complete a DateTime write. Whole-valued floating fields
 /// have an integer witness; this does not promise arbitrary integer precision.
