@@ -330,8 +330,11 @@ mod reload_tests {
     fn provenance_revision_ignores_transcript_and_lease_but_tracks_remote_completion() {
         use gents_protocol::request_lifecycle::RequestLifecycleState;
 
-        let mut initial = requests(&["remote-child"]);
-        initial.requests[0].lifecycle_state = Some(RequestLifecycleState::Processing);
+        let mut initial = requests(&["parent", "remote-child"]);
+        initial.requests[0].doc_id = Some("parent-doc".into());
+        initial.requests[1].agent_did = Some("did:test:remote".into());
+        initial.requests[1].caused_by_parent_request_doc_id = Some("parent-doc".into());
+        initial.requests[1].lifecycle_state = Some(RequestLifecycleState::Processing);
         let (store, _) = ObservedStore::new(initial);
         let original = store.projection_revision();
         for _ in 0..50 {
@@ -347,7 +350,7 @@ mod reload_tests {
         );
 
         let mut renewed = store.snapshot().as_ref().clone();
-        renewed.requests[0].execution_lease_expires_at = Some("later".into());
+        renewed.requests[1].execution_lease_expires_at = Some("later".into());
         store.merge_observer_patch(renewed);
         assert_eq!(
             store.projection_revision().provenance_version,
@@ -355,7 +358,7 @@ mod reload_tests {
         );
 
         let mut completed = store.snapshot().as_ref().clone();
-        completed.requests[0].lifecycle_state = Some(RequestLifecycleState::Completed);
+        completed.requests[1].lifecycle_state = Some(RequestLifecycleState::Completed);
         store.merge_observer_patch(completed);
         assert_eq!(
             store.projection_revision().provenance_version,

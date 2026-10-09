@@ -62,12 +62,13 @@ const caused = (
   lifecycleState: string,
   byRequest: string,
   byToolCall: string,
+  agentDid = AGENT,
 ): CausedCallView => ({
   requestId: byRequest,
   toolCallId: byToolCall,
   caused: {
     requestId,
-    agentDid: AGENT,
+    agentDid,
     sessionId,
     requesterDid: null,
     lifecycleState,
@@ -350,7 +351,16 @@ describe("subagent lineage freshness", () => {
     try {
       let state = "processing";
       const api = apiWith(async () =>
-        view([caused("r-remote", "session-remote", state, "req-1", "call-1")]),
+        view([
+          caused(
+            "r-remote",
+            "session-remote",
+            state,
+            "req-1",
+            "call-1",
+            "did:key:remote",
+          ),
+        ]),
       );
       const tool = call("req-1", "call-1", "success");
       const items = [group(tool)];
@@ -430,7 +440,16 @@ describe("subagent lineage freshness", () => {
     async (initial) => {
       let lifecycle = initial;
       const api = apiWith(async () =>
-        view([caused("r-1", "session-remote", lifecycle, "req-1", "call-1")]),
+        view([
+          caused(
+            "r-1",
+            "session-remote",
+            lifecycle,
+            "req-1",
+            "call-1",
+            "did:key:remote",
+          ),
+        ]),
       );
       const tool = call("req-1", "call-1", "success");
       const toolRow = group(tool);
