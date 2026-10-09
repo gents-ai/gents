@@ -20,6 +20,7 @@ pub(crate) mod plugin;
 mod run;
 mod scan;
 mod wasm;
+mod workers;
 
 #[cfg(test)]
 mod tests;
@@ -59,6 +60,7 @@ pub(super) struct CallbackEngine {
     group_recovery_cursor: usize,
     rescan_tick: tokio::time::Interval,
     cancel: CancellationToken,
+    workers: Option<workers::CallbackWorkers>,
 }
 
 pub async fn run_callback_engine(
@@ -70,21 +72,26 @@ pub async fn run_callback_engine(
 ) -> Result<()> {
     let mut engine = CallbackEngine::new(node, agent_did.clone(), ceiling.clone(), cancel.clone());
     engine.plugins = plugins;
+    engine.workers = Some(workers::CallbackWorkers::new(
+        workers::PLUGIN_CALLBACK_CONCURRENCY,
+        cancel,
+    ));
     engine.reconcile_bindings().await;
     if let Err(error) = recover_local_invocations(
         engine.node.as_ref(),
         &agent_did,
         ceiling.as_deref(),
         &engine.plugins,
+        Some(&engine),
     )
     .await
     {
         tracing::warn!(%error, "callback recovery sweep failed at startup");
     }
 
-    loop {
+    let result = loop {
         if engine.cancel.is_cancelled() {
-            return Ok(());
+            break Ok(());
         }
         if engine.subscription.is_none() && !engine.desired_collections.is_empty() {
             engine.subscription = Some(engine.subscription_source.subscribe_updates());
@@ -93,7 +100,7 @@ pub async fn run_callback_engine(
         if engine.subscription.is_none() {
             tokio::select! {
                 biased;
-                _ = engine.cancel.cancelled() => return Ok(()),
+                _ = engine.cancel.cancelled() => break Ok(()),
                 _ = engine.rescan_tick.tick() => {
                     engine.reconcile_bindings().await;
                     engine.rescan_created_docs().await;
@@ -102,6 +109,7 @@ pub async fn run_callback_engine(
                         &engine.agent_did,
                         engine.ceiling.as_deref(),
                         &engine.plugins,
+                        Some(&engine),
                     )
                     .await
                     {
@@ -120,7 +128,7 @@ pub async fn run_callback_engine(
                 .expect("subscription is Some when desired_collections is non-empty");
             tokio::select! {
                 biased;
-                _ = engine.cancel.cancelled() => return Ok(()),
+                _ = engine.cancel.cancelled() => break Ok(()),
                 _ = engine.rescan_tick.tick() => true,
                 msg = subscription.recv() => {
                     message = msg;
@@ -136,6 +144,7 @@ pub async fn run_callback_engine(
                 &engine.agent_did,
                 engine.ceiling.as_deref(),
                 &engine.plugins,
+                Some(&engine),
             )
             .await
             {
@@ -144,7 +153,7 @@ pub async fn run_callback_engine(
             continue;
         }
         let Some(message) = message else {
-            return Ok(());
+            break Ok(());
         };
         let Some(update) = message.as_update() else {
             continue;
@@ -152,7 +161,14 @@ pub async fn run_callback_engine(
         engine
             .handle_update(&update.collection_id, &update.doc_id)
             .await;
-    }
+    };
+    engine
+        .workers
+        .as_ref()
+        .expect("live callback workers")
+        .drain()
+        .await;
+    result
 }
 
 #[cfg(test)]

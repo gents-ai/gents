@@ -674,9 +674,19 @@ pub async fn recover_local_invocations(
     agent_did: &str,
     ceiling: Option<&Path>,
     plugins: &PluginExecutor,
+    engine: Option<&super::CallbackEngine>,
 ) -> Result<()> {
-    let invocations = super::documents::list_recoverable_invocations(node, agent_did).await?;
+    let mut invocations = super::documents::list_recoverable_invocations(node, agent_did).await?;
+    if let Some(workers) = engine.and_then(|engine| engine.workers.as_ref()) {
+        workers.prioritize(&mut invocations);
+    }
     for invocation in invocations {
+        if engine
+            .and_then(|engine| engine.workers.as_ref())
+            .is_some_and(|workers| workers.contains(&invocation.invocation_id))
+        {
+            continue;
+        }
         if invocation.owner_agent_did != agent_did {
             continue;
         }
@@ -704,7 +714,7 @@ pub async fn recover_local_invocations(
             continue;
         };
         if let Err(error) =
-            run_owned_invocation(node, &invocation, &callback, ceiling, plugins).await
+            execute_recovered(node, &invocation, &callback, ceiling, plugins, engine).await
         {
             tracing::warn!(
                 invocation_id = %invocation.invocation_id,
@@ -713,7 +723,7 @@ pub async fn recover_local_invocations(
             );
         }
     }
-    retry_failed_plugin_invocations(node, agent_did, ceiling, plugins).await
+    retry_failed_plugin_invocations(node, agent_did, ceiling, plugins, engine).await
 }
 
 /// Runs a failed plugin invocation again once its backoff has passed, while
@@ -723,6 +733,7 @@ async fn retry_failed_plugin_invocations(
     agent_did: &str,
     ceiling: Option<&Path>,
     plugins: &PluginExecutor,
+    engine: Option<&super::CallbackEngine>,
 ) -> Result<()> {
     let now = chrono::Utc::now();
     for failed in super::documents::list_recent_failed(node, agent_did).await? {
@@ -769,7 +780,8 @@ async fn retry_failed_plugin_invocations(
             attempt = attempts + 1,
             "retrying a failed plugin invocation"
         );
-        if let Err(error) = run_owned_invocation(node, &pending, &callback, ceiling, plugins).await
+        if let Err(error) =
+            execute_recovered(node, &pending, &callback, ceiling, plugins, engine).await
         {
             tracing::warn!(
                 invocation_id = %pending.invocation_id,
@@ -779,6 +791,21 @@ async fn retry_failed_plugin_invocations(
         }
     }
     Ok(())
+}
+
+async fn execute_recovered(
+    node: &EmbeddedNode,
+    invocation: &CallbackInvocationDoc,
+    callback: &crate::document_config::Callback,
+    ceiling: Option<&Path>,
+    plugins: &PluginExecutor,
+    engine: Option<&super::CallbackEngine>,
+) -> Result<()> {
+    if let Some(engine) = engine {
+        engine.execute_invocation(invocation, callback).await
+    } else {
+        run_owned_invocation(node, invocation, callback, ceiling, plugins).await
+    }
 }
 
 pub async fn finish_succeeded_if_docs_ready(
