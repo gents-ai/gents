@@ -66,6 +66,8 @@ function session(overrides: Partial<DesktopSessionSnapshot>): DesktopSessionSnap
     retryEligibility: { eligible: false, denialReason: null },
     latestRequestOutcome: null,
     pendingTurn: null,
+    queuedTurns: [],
+    foldedInputs: [],
     context: {
       estimatedDurableTokens: 0,
       estimatedConversationTokens: 0,

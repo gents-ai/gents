@@ -141,7 +141,7 @@ def evaluateCore (operation : Operation) (world : World) : Except Error World :=
   | .accept generation closing message admissions =>
       (acceptAndPublish world generation closing message admissions).mapError .execution
   | .authored generation closing message =>
-      (publishAuthored world generation closing message).mapError .execution
+      (publishAuthoredComposed world generation closing message).mapError .execution
   | .headerOnly generation message admissions =>
       (publishHeaderOnly world generation message admissions).mapError .execution
   | .dispatch generation permit => (Execution.dispatch world generation permit).mapError .execution
@@ -220,8 +220,11 @@ theorem evaluate_nextSequence_monotone (operation : Operation) (before after : W
       exact acceptAndPublish_nextSeq_monotone before after generation closing message
         admissions (mapError_success Error.execution _ _ h)
   | authored generation closing message =>
-      exact publishAuthored_nextSeq_monotone before after generation closing message
-        (mapError_success Error.execution _ _ h)
+      rcases publishAuthoredComposed_success before after generation closing message
+        (mapError_success Error.execution _ _ h) with rfl | ⟨published, hp, rfl | ⟨_, rfl⟩⟩
+      · exact Nat.le_refl _
+      · exact publishAuthored_nextSeq_monotone before _ generation closing message hp
+      · exact publishAuthored_nextSeq_monotone before published generation closing message hp
   | headerOnly generation message admissions =>
       exact publishHeaderOnly_nextSeq_monotone before after generation message admissions
         (mapError_success Error.execution _ _ h)
@@ -294,11 +297,17 @@ def scheduling (state : World) (actor : Actor) (event : StorageWriteGate.Event) 
 def atTime (world : World) (now : Time) : World :=
   { world with lease := { world.lease with now := now } }
 
+/-- A gated commit keeps the composed control state. The only queue effect a
+commit carries is an authored publication consuming its selected message
+(`publishAuthoredComposed`): the active request and pending queue stay with
+the handover owner. -/
 def finishCommit (before execution : World) : World :=
   { execution with
     gateOwner := before.gateOwner
     gateSchedule := { before.gateSchedule with phase := .releasable }
-    queue := before.queue
+    queue := { before.queue with
+      folding := execution.queue.folding
+      terminal := execution.queue.terminal }
     claimed := before.claimed
     retry := before.retry }
 
@@ -385,12 +394,14 @@ theorem committed_gate_stays_held (before after : World) (actor : Actor) (now : 
 
 theorem commit_preserves_composed_control (before after : World) (actor : Actor) (now : Time)
     (operation : Operation) (h : commit before actor now operation = some after) :
-    after.queue = before.queue ∧ after.claimed = before.claimed ∧ after.retry = before.retry := by
+    after.queue.active = before.queue.active ∧ after.queue.pending = before.queue.pending ∧
+      after.queue.scope = before.queue.scope ∧
+      after.claimed = before.claimed ∧ after.retry = before.retry := by
   unfold commit at h
   split at h <;> try contradiction
   cases heval : evaluate operation (atTime before now) with
   | error error => simp [heval] at h
-  | ok execution => simp [heval] at h; cases h; exact ⟨rfl, rfl, rfl⟩
+  | ok execution => simp [heval] at h; cases h; exact ⟨rfl, rfl, rfl, rfl, rfl⟩
 
 /-- Even when storage has returned, a sibling cannot acquire until the
 existing owner performs the explicit release step. -/
@@ -429,6 +440,18 @@ theorem successful_commit_nextSequence_monotone
       cases h
       exact evaluate_nextSequence_monotone operation (atTime before now) execution heval
 
+private theorem publishAuthored_preserves_request_identity (before after : World)
+    (generation : Generation) (closing : Segment) (message : MessageEnvelope)
+    (h : publishAuthored before generation closing message = .ok after) :
+    after.requestId = before.requestId ∧ after.sessionId = before.sessionId := by
+  have hcore := checked_core_success _ _ _ h
+  simp only [publishAuthoredCore] at hcore
+  try dsimp only at hcore
+  repeat' first
+    | contradiction
+    | (solve | cases hcore; exact ⟨rfl, rfl⟩)
+    | split at hcore
+
 set_option maxHeartbeats 2000000 in
 /-- Ordinary gated commits cannot retarget the physical request or session.
 Only the separate handover owner changes the active request identity. -/
@@ -457,6 +480,13 @@ theorem evaluate_preserves_request_identity (operation : Operation) (before afte
   case closeAuxiliary generation closing =>
     rcases closeAuxiliary_success_effect before after generation closing
       (mapError_success Error.execution _ _ h) with rfl | ⟨_, rfl⟩ <;> exact ⟨rfl, rfl⟩
+  case authored generation closing message =>
+    rcases publishAuthoredComposed_success before after generation closing message
+      (mapError_success Error.execution _ _ h) with rfl | ⟨published, hp, rfl | ⟨_, rfl⟩⟩
+    · exact ⟨rfl, rfl⟩
+    · exact publishAuthored_preserves_request_identity before _ generation closing message hp
+    · exact publishAuthored_preserves_request_identity before published generation closing
+        message hp
   case toolComplete document authority record message =>
     have hcomposed := mapError_success Error.delivery _ _ h
     obtain ⟨closed, hclose, hdeliver⟩ := ToolDelivery.completeAndDeliver_success

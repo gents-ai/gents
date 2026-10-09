@@ -18,6 +18,8 @@ mod projection_acp_policy_lifecycle;
 mod provider_fixture_redaction;
 #[path = "e2e_runtime/provider_fixture_replay.rs"]
 mod provider_fixture_replay;
+#[path = "e2e_runtime/queued_user_messages.rs"]
+mod queued_user_messages;
 #[path = "e2e_runtime/rendered_request_capture.rs"]
 mod rendered_request_capture;
 #[path = "e2e_runtime/runtime_observability.rs"]

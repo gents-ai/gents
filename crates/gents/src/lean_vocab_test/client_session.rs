@@ -27,9 +27,37 @@ pub(crate) struct LeanClientShellCase {
     pub(crate) desktop_preferred_request_id: Option<usize>,
     pub(crate) desktop_observed_request_id: Option<usize>,
     pub(crate) desktop_observed_turn_state: Option<String>,
+    pub(crate) desktop_queued_request_ids: Vec<usize>,
+    pub(crate) desktop_folded_request_ids: Vec<usize>,
+    pub(crate) desktop_rows: Vec<LeanSessionTurnRow>,
     pub(crate) desktop_expected_latest_request_id: Option<usize>,
     pub(crate) desktop_expected_turn_state: Option<String>,
     pub(crate) desktop_expect_pending_turn: Option<bool>,
+}
+
+/// `ClientShell.SessionTurn.Row`: one request row of a session.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanSessionTurnRow {
+    pub(crate) doc: usize,
+    pub(crate) request: usize,
+    pub(crate) requester: usize,
+    pub(crate) state: String,
+    pub(crate) folded_into: Option<usize>,
+    pub(crate) queued_after: Option<usize>,
+    pub(crate) retry_parent: Option<usize>,
+}
+
+/// `SessionTurnCases`: rows in arrival order, the last being newest, and the
+/// turn, queue and folded requests `SessionTurn` computes from them.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanSessionTurnCase {
+    pub(crate) name: String,
+    pub(crate) rows: Vec<LeanSessionTurnRow>,
+    pub(crate) expected_turn_doc: usize,
+    pub(crate) expected_queued_docs: Vec<usize>,
+    pub(crate) expected_folded_requests: Vec<usize>,
 }
 
 #[derive(Debug, Deserialize)]

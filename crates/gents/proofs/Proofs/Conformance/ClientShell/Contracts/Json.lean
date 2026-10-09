@@ -4,6 +4,9 @@ namespace Conformance.ClientShellContracts
 
 open Conformance.Contracts
 
+def jsonNatList (values : List Nat) : String :=
+  "[" ++ String.intercalate "," (values.map toString) ++ "]"
+
 def ClientShellContractCase.toJson (witness : ClientShellContractCase) : String :=
   "{"
     ++ "\"name\":" ++ jsonString witness.name ++ ","
@@ -40,6 +43,8 @@ def ClientShellContractCase.toJson (witness : ClientShellContractCase) : String 
     ++ "\"frontend_session_latest_request_id\":" ++ jsonNatOption witness.frontendSessionLatestRequestId ++ ","
     ++ "\"frontend_session_turn_state\":" ++ jsonStringOption witness.frontendSessionTurnState ++ ","
     ++ "\"frontend_session_pending_request_id\":" ++ jsonNatOption witness.frontendSessionPendingRequestId ++ ","
+    ++ "\"frontend_session_queued_request_ids\":" ++ jsonNatList witness.frontendSessionQueuedRequestIds ++ ","
+    ++ "\"frontend_session_folded_request_ids\":" ++ jsonNatList witness.frontendSessionFoldedRequestIds ++ ","
     ++ "\"frontend_local_workflow_kind\":" ++ jsonString witness.frontendLocalWorkflowKind ++ ","
     ++ "\"frontend_local_workflow_session\":" ++ jsonNatOption witness.frontendLocalWorkflowSession ++ ","
     ++ "\"frontend_local_workflow_request\":" ++ jsonNatOption witness.frontendLocalWorkflowRequest ++ ","
@@ -58,6 +63,9 @@ def ClientShellContractCase.toJson (witness : ClientShellContractCase) : String 
     ++ "\"desktop_preferred_request_id\":" ++ jsonNatOption witness.desktopPreferredRequestId ++ ","
     ++ "\"desktop_observed_request_id\":" ++ jsonNatOption witness.desktopObservedRequestId ++ ","
     ++ "\"desktop_observed_turn_state\":" ++ jsonStringOption witness.desktopObservedTurnState ++ ","
+    ++ "\"desktop_queued_request_ids\":" ++ jsonNatList witness.desktopQueuedRequestIds ++ ","
+    ++ "\"desktop_folded_request_ids\":" ++ jsonNatList witness.desktopFoldedRequestIds ++ ","
+    ++ "\"desktop_rows\":" ++ SessionTurnCases.rowsJson witness.desktopRows ++ ","
     ++ "\"desktop_expected_latest_request_id\":" ++ jsonNatOption witness.desktopExpectedLatestRequestId ++ ","
     ++ "\"desktop_expected_turn_state\":" ++ jsonStringOption witness.desktopExpectedTurnState ++ ","
     ++ "\"desktop_expect_pending_turn\":" ++ jsonBoolOption witness.desktopExpectPendingTurn
@@ -80,6 +88,10 @@ def desktopClientShellCasesJson : String :=
 
 def desktopClientShellCaseCount : Nat :=
   desktopClientShellCases.length
+
+def sessionTurnCasesJson : String := SessionTurnCases.casesJson
+
+def sessionTurnCaseCount : Nat := SessionTurnCases.caseCount
 
 def requestLifecycleOperatorUiCases : List ClientShellContractCase :=
   desktopClientShellCases.filter (fun witness => witness.desktopObservedTurnState.isSome)

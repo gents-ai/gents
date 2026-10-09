@@ -474,8 +474,11 @@ private theorem evaluate_preserves (operation : Gate.Operation) (before after : 
       exact accept_preserves before after generation closing message admissions unique
         (mapError_success Gate.Error.execution _ _ h)
   | authored generation closing message =>
-      exact authored_preserves before after generation closing message unique
-        (mapError_success Gate.Error.execution _ _ h)
+      rcases publishAuthoredComposed_success before after generation closing message
+        (mapError_success Gate.Error.execution _ _ h) with rfl | ⟨published, hp, rfl | ⟨_, rfl⟩⟩
+      · exact unique
+      · exact authored_preserves before _ generation closing message unique hp
+      · exact authored_preserves before published generation closing message unique hp
   | headerOnly generation message admissions =>
       exact closureUnique_of_segments_eq unique
         (headerOnly_segments before after generation message admissions

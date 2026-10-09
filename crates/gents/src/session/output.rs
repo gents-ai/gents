@@ -1649,9 +1649,9 @@ async fn verify_replay_capture(
     Ok(Some(CanonicalReplayCapture { issuer, wire, body }))
 }
 
-/// The owned loop rebuilds context and prompt from admission input. Other
-/// publications belonging to that request (notably tool results and background
-/// notifications) remain history. This binds PromptAssembly.CurrentInput;
+/// The owned loop rebuilds context, prompt and folded messages from admission
+/// input. Other publications belonging to that request (notably tool results
+/// and background notifications) remain history. This binds PromptAssembly.CurrentInput;
 /// request membership alone is not an input classification.
 fn is_current_admission_input(
     header: &gents_protocol::output::TranscriptMessage,
@@ -1662,9 +1662,14 @@ fn is_current_admission_input(
             header.publication,
             MessagePublication::RequestExecution { .. }
         )
-        && ["prompt", "context"].into_iter().any(|key| {
+        && (["prompt", "context"].into_iter().any(|key| {
             header.message_key == super::canonical_rows::authored_message_key(request_doc_id, key)
-        })
+        }) || header
+            .message_key
+            .starts_with(&super::canonical_rows::authored_message_key(
+                request_doc_id,
+                &crate::lifecycle::queue::folded_input_key(""),
+            )))
 }
 
 pub(super) async fn load_sequenced_messages(
@@ -1828,7 +1833,7 @@ mod tests {
                 .enumerate()
                 .filter_map(|(index, input)| {
                     let publication = match input.kind.as_str() {
-                        "prompt" | "context" | "assistant" => {
+                        "prompt" | "context" | "folded" | "assistant" => {
                             MessagePublication::RequestExecution {
                                 execution_generation: "observed-generation".into(),
                             }
@@ -1844,10 +1849,12 @@ mod tests {
                         Some(&input.request),
                         publication,
                     );
-                    row.message.message_key = super::super::canonical_rows::authored_message_key(
-                        &input.request,
-                        &input.kind,
-                    );
+                    let key = match input.kind.as_str() {
+                        "folded" => crate::lifecycle::queue::folded_input_key("folded-request"),
+                        kind => kind.to_owned(),
+                    };
+                    row.message.message_key =
+                        super::super::canonical_rows::authored_message_key(&input.request, &key);
                     (!is_current_admission_input(&row.message, &case.current_request))
                         .then_some(index)
                 })

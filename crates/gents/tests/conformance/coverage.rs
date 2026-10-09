@@ -179,7 +179,7 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
     );
     assert_eq!(
         lean_contract_snapshot().frontend_client_shell_cases.len(),
-        25
+        27
     );
     assert_eq!(
         lean_contract_snapshot().desktop_client_shell_case_count,
@@ -187,7 +187,7 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
     );
     assert_eq!(
         lean_contract_snapshot().desktop_client_shell_cases.len(),
-        22
+        24
     );
     assert_eq!(lean_contract_snapshot().tool_preflight_cases.len(), 9);
     assert_eq!(lean_contract_snapshot().tool_retry_cases.len(), 72);
@@ -981,6 +981,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "ClientLiveDeltaCases".to_string(),
         ));
     }
+    if !snapshot.client_session_turn_cases.is_empty() {
+        emitted.insert((
+            "client_session_turn_cases".to_string(),
+            "ClientSessionTurnCases".to_string(),
+        ));
+    }
     if !snapshot.request_lifecycle_operator_ui_cases.is_empty() {
         emitted.insert((
             "request_lifecycle_operator_ui_cases".to_string(),
@@ -1052,6 +1058,33 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         emitted.insert((
             "recovery_sweep_cases".to_string(),
             "RecoverySweepCases".to_string(),
+        ));
+    }
+    if !snapshot.fold_queue_cases.is_empty() {
+        emitted.insert(("fold_queue_cases".to_string(), "FoldQueueCases".to_string()));
+    }
+    if !snapshot.fold_turn_input_cases.is_empty() {
+        emitted.insert((
+            "fold_turn_input_cases".to_string(),
+            "FoldTurnInputCases".to_string(),
+        ));
+    }
+    if !snapshot.retry_selection_cases.is_empty() {
+        emitted.insert((
+            "retry_selection_cases".to_string(),
+            "RetrySelectionCases".to_string(),
+        ));
+    }
+    if !snapshot.fold_publication_cases.is_empty() {
+        emitted.insert((
+            "fold_publication_cases".to_string(),
+            "FoldPublicationCases".to_string(),
+        ));
+    }
+    if !snapshot.handover_fold_cases.is_empty() {
+        emitted.insert((
+            "handover_fold_cases".to_string(),
+            "HandoverFoldCases".to_string(),
         ));
     }
     if !snapshot.interrupt_queue_cases.is_empty() {

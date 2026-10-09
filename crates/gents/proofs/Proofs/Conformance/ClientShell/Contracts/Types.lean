@@ -1,4 +1,5 @@
 import Proofs.ClientShell
+import Proofs.ClientShell.SessionTurn
 import Proofs.Conformance.ContractTypes
 
 namespace Conformance.ClientShellContracts
@@ -48,6 +49,8 @@ structure ClientShellContractCase where
   frontendSessionLatestRequestId : Option RequestId
   frontendSessionTurnState : Option String
   frontendSessionPendingRequestId : Option RequestId
+  frontendSessionQueuedRequestIds : List RequestId
+  frontendSessionFoldedRequestIds : List RequestId
   frontendLocalWorkflowKind : String
   frontendLocalWorkflowSession : Option SessionId
   frontendLocalWorkflowRequest : Option RequestId
@@ -66,6 +69,9 @@ structure ClientShellContractCase where
   desktopPreferredRequestId : Option RequestId
   desktopObservedRequestId : Option RequestId
   desktopObservedTurnState : Option String
+  desktopQueuedRequestIds : List RequestId
+  desktopFoldedRequestIds : List RequestId
+  desktopRows : List ClientShell.SessionTurn.Row
   desktopExpectedLatestRequestId : Option RequestId
   desktopExpectedTurnState : Option String
   desktopExpectPendingTurn : Option Bool
@@ -126,7 +132,6 @@ def sendBlockedReasonName : SendBlockedReason → String
   | .composerEmpty              => "composerEmpty"
   | .mutationInFlight           => "mutationInFlight"
   | .awaitingObservation        => "awaitingObservation"
-  | .awaitingTurnTerminality _  => "awaitingTurnTerminality"
   | .sessionBehaviorMismatch    => "sessionBehaviorMismatch"
   | .sessionAbsent              => "sessionAbsent"
   | .inconsistentObservation    => "inconsistentObservation"
@@ -138,7 +143,6 @@ def frontendBlockedReasonName : SendBlockedReason → String
   | .composerEmpty              => "composerEmpty"
   | .mutationInFlight           => "submittingRequest"
   | .awaitingObservation        => "waitingForRequestObservation"
-  | .awaitingTurnTerminality _  => "awaitingTurnTerminality"
   | .sessionBehaviorMismatch    => "sessionBehaviorMismatch"
   | .sessionAbsent              => "sessionMissingFromSnapshot"
   | .inconsistentObservation    => "inconsistentTurnObservation"
@@ -146,18 +150,22 @@ def frontendBlockedReasonName : SendBlockedReason → String
 
 def sendDecisionKind : SendDecision → String
   | .ready     => "ready"
+  | .queue _   => "queue"
   | .blocked _ => "blocked"
 
 def sendDecisionReason : SendDecision → Option String
   | .ready     => none
+  | .queue _   => none
   | .blocked r => some (sendBlockedReasonName r)
 
 def frontendSendStatus : SendDecision → String
   | .ready     => "ready"
+  | .queue _   => "queue"
   | .blocked _ => "disabled"
 
 def frontendSendReason : SendDecision → Option String
   | .ready     => none
+  | .queue _   => none
   | .blocked r => some (frontendBlockedReasonName r)
 
 def inputName : ShellInput → String

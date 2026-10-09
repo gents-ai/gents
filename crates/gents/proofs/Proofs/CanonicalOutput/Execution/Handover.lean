@@ -70,7 +70,7 @@ def claimAndActivate (state : World) (actor : Gate.Actor) (now : Time)
       state.queue.sessionId != old.sessionId ||
       activation.request.requester != state.queue.scope.requester ||
       !evidenceValid old activation.request activation.evidence then none
-  else match SessionQueue.step? state.queue .claimNext with
+  else match SessionQueue.step? state.queue (.claimFolding activation.admitted) with
   | none => none
   | some queue =>
       if queue.active != some activation.request.entry.requestId ||

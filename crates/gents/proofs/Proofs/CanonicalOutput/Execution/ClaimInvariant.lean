@@ -237,6 +237,23 @@ private theorem evaluate_preserves_purpose_principal
     replace hcore := checked_core_success _ _ _ hcore
     rcases acceptAndPublishCore_success_effect before after generation closing message
       admissions hcore with ⟨rfl, _⟩ | ⟨_, _, rfl, _⟩ <;> exact ⟨rfl, rfl⟩
+  case authored generation closing message =>
+    have hauthored : ∀ published, publishAuthored before generation closing message =
+        .ok published → published.purpose = before.purpose ∧
+          published.principal = before.principal := by
+      intro published hp
+      have hcore := checked_core_success _ _ _ hp
+      simp only [publishAuthoredCore] at hcore
+      try dsimp only at hcore
+      repeat' first
+        | contradiction
+        | (solve | cases hcore; exact ⟨rfl, rfl⟩)
+        | split at hcore
+    rcases publishAuthoredComposed_success before after generation closing message
+      (mapError_success Gate.Error.execution _ _ hc) with rfl | ⟨published, hp, rfl | ⟨_, rfl⟩⟩
+    · exact ⟨rfl, rfl⟩
+    · exact hauthored _ hp
+    · exact hauthored published hp
   case toolComplete document authority record message =>
     have hcomposed := mapError_success Gate.Error.delivery _ _ hc
     obtain ⟨closed, hclose, hdeliver⟩ := ToolDelivery.completeAndDeliver_success
@@ -337,8 +354,7 @@ theorem Trace.claimCoherent {before after : World}
       have hp := commit_preserves_purpose_principal _ _ actor now
         (CompletionRetry.CanonicalGate.gateOperation operation)
         (provider_commit_is_actual_gate_commit _ _ actor now operation h)
-      exact preserve_from_control coherent hi.1 hi.2 hp.1 hp.2 hc.1
-        (congrArg SessionQueue.SessionQueueState.active hc.2)
+      exact preserve_from_control coherent hi.1 hi.2 hp.1 hp.2 hc.1 hc.2
         (provider_preserves_retry_request _ _ actor now operation h)
   | policy before view now operation claimed h =>
       have he := CompletionRetry.CanonicalGate.stepPolicy_preserves_gate now operation h
@@ -356,8 +372,8 @@ theorem Trace.claimCoherent {before after : World}
       have hc := Gate.commit_preserves_composed_control before view actor now operation.val h
       have hi := Gate.successful_commit_preserves_request_identity before view actor now operation.val h
       have hp := commit_preserves_purpose_principal before view actor now operation.val h
-      exact preserve_from_control coherent hi.1 hi.2 hp.1 hp.2 hc.2.1
-        (congrArg SessionQueue.SessionQueueState.active hc.1) (congrArg CompletionRetry.State.request hc.2.2)
+      exact preserve_from_control coherent hi.1 hi.2 hp.1 hp.2 hc.2.2.2.1 hc.1
+        (congrArg CompletionRetry.State.request hc.2.2.2.2)
   | acquire before view actor independent h =>
       rw [Gate.acquire_preserves_durable_world before view actor independent h]
       exact coherent

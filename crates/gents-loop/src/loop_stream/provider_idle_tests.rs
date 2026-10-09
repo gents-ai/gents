@@ -302,6 +302,8 @@ fn config(retry_policy: CompletionRetryPolicy) -> LoopConfig {
         deadline: None,
         max_turns: 4,
         output_obligation_gate: None,
+        folded_prompts: Vec::new(),
+        authored_input: None,
     }
 }
 

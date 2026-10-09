@@ -153,6 +153,7 @@ impl DefraStreamWriter {
                     .context("authored publication is missing request deadline")?
                     .to_rfc3339(),
                 background_calls: Vec::new(),
+                consumes_folded: crate::lifecycle::queue::FoldedConsumption::for_key(request, key),
             },
         )
         .await?;
@@ -399,6 +400,7 @@ impl DefraStreamWriter {
                     .context("accepted tool call is missing its request deadline")?
                     .to_rfc3339(),
                 background_calls: canonical::session_message_call_ids(message),
+                consumes_folded: None,
             },
         )
         .await?;

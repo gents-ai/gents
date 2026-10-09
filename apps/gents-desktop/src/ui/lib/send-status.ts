@@ -7,7 +7,6 @@ import type { ChatBlockedReason, SendStatus } from "@source-inc/gents-desktop-ch
 const TRANSIENT = new Set<ChatBlockedReason>([
   "submittingRequest",
   "waitingForRequestObservation",
-  "awaitingTurnTerminality",
   "inconsistentTurnObservation",
   "sessionMissingFromSnapshot",
 ]);

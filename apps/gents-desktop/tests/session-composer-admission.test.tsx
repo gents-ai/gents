@@ -58,6 +58,8 @@ function heldSession(over: Partial<DesktopSessionSnapshot> = {}) {
     latestRequestOutcome: null,
     goal: null,
     context: null,
+    queuedTurns: [],
+    foldedInputs: [],
     ...over,
   } as unknown as DesktopSessionSnapshot;
 }
@@ -323,15 +325,244 @@ describe("SessionScreen canonical composer admission", () => {
   it("re-enables the rendered existing-session composer after terminal interruption", () => {
     const { app } = screenApp({ session: heldSession({ turnState: "running" }) });
     renderScreen(app);
+    expect(screen.getByRole("button", { name: "Stop" })).toBeEnabled();
     fireEvent.change(screen.getByLabelText("Message"), {
       target: { value: "follow up" },
     });
-    /* while the turn runs the composer offers Stop, not Send */
-    expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+    /* typed text while the turn runs is queued behind it */
+    expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
 
     hold(app, heldSession({ turnState: "interrupted" }));
     expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
     expect(screen.getByLabelText("Message")).toHaveValue("follow up");
+  });
+});
+
+const queuedTurn = (requestId: string, content: string) => ({
+  requestId,
+  content,
+  selectedSkillIds: [],
+  lifecycleState: "pending",
+  foldedIntoRequestId: null,
+  origin: null,
+  createdAt: "2026-10-07T12:00:00Z",
+});
+
+const userEntry = (
+  itemKey: string,
+  sequence: number,
+  content: string,
+  input: string,
+) => ({
+  kind: "userMessage" as const,
+  itemKey,
+  requestId: "doc-request",
+  inputRequestId: input,
+  sequence,
+  content,
+  timestamp: null,
+  reconstruction: { state: "ready" as const },
+});
+
+describe("SessionScreen messages queued behind a running turn", () => {
+  it("keeps the composer usable and admits a message while the turn runs", async () => {
+    const user = userEvent.setup();
+    const { app, sendChatMessage } = screenApp({
+      session: heldSession({
+        turnState: "running",
+        timelineItems: [
+          userEntry("authored:doc-request:prompt", 1, "how are we looking", "request"),
+        ],
+      }),
+    });
+    renderScreen(app);
+    const message = screen.getByRole("textbox", { name: "Message" });
+    expect(message).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Stop" })).toBeEnabled();
+    await user.type(message, "one more thing");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    expect(sendChatMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ content: "one more thing", sessionId: "session" }),
+    );
+  });
+
+  it("shows queued messages after the running turn, in queue order, as queued", () => {
+    const { app } = screenApp({
+      session: heldSession({
+        turnState: "running",
+        timelineItems: [
+          userEntry("authored:doc-request:prompt", 1, "how are we looking", "request"),
+        ],
+        queuedTurns: [
+          queuedTurn("first", "we should move faster"),
+          queuedTurn("second", "and check the tests"),
+        ],
+      }),
+    });
+    renderScreen(app);
+    expect(screen.getAllByTestId("queued-input").map((row) => row.textContent)).toEqual(
+      ["we should move fasterQueued", "and check the testsQueued"],
+    );
+    const text = screen.getByTestId("transcript-panel").textContent ?? "";
+    expect(text.indexOf("how are we looking")).toBeLessThan(
+      text.indexOf("we should move faster"),
+    );
+  });
+
+  it("renders folded messages once, as the claimed turn's own input", () => {
+    const { app } = screenApp({
+      session: heldSession({
+        turnState: "running",
+        timelineItems: [
+          userEntry("authored:doc-request:prompt", 1, "how are we looking", "request"),
+          userEntry(
+            "authored:doc-request:folded:doc-first",
+            2,
+            "we should move faster",
+            "first",
+          ),
+          userEntry(
+            "authored:doc-request:folded:doc-second",
+            3,
+            "and check the tests",
+            "second",
+          ),
+        ],
+        foldedInputs: [
+          { requestId: "first", foldedIntoRequestId: "request" },
+          { requestId: "second", foldedIntoRequestId: "request" },
+        ],
+      }),
+    });
+    renderScreen(app);
+    expect(screen.queryAllByTestId("queued-input")).toHaveLength(0);
+    expect(screen.getAllByText("we should move faster")).toHaveLength(1);
+    expect(screen.getAllByText("and check the tests")).toHaveLength(1);
+    expect(screen.queryByText("Queued")).not.toBeInTheDocument();
+  });
+
+  it("shows a queued message the runtime ended before sending", () => {
+    const { app } = screenApp({
+      session: heldSession({
+        timelineItems: [
+          {
+            kind: "pendingUserTurn",
+            itemKey: "pending-dropped",
+            requestId: "dropped",
+            content: "never sent",
+            selectedSkillIds: [],
+            lifecycleState: "interrupted",
+            foldedIntoRequestId: null,
+            origin: null,
+            createdAt: null,
+          },
+        ] as DesktopSessionSnapshot["timelineItems"],
+      }),
+    });
+    renderScreen(app);
+    expect(screen.getByText("Not sent · interrupted")).toBeInTheDocument();
+  });
+});
+
+describe("SessionScreen automated inputs", () => {
+  const durable = (itemKey: string, sequence: number) => ({
+    itemKey,
+    requestId: `doc-${itemKey}`,
+    sequence,
+    timestamp: null,
+    reconstruction: { state: "ready" as const },
+  });
+
+  it("renders inputs nobody typed in stream order as compact items that expand", async () => {
+    const user = userEvent.setup();
+    const { app } = screenApp({
+      session: heldSession({
+        timelineItems: [
+          { kind: "userMessage", content: "start the review", ...durable("person", 1) },
+          {
+            kind: "assistantMessage",
+            content: "started",
+            reasoning: null,
+            ...durable("answer", 2),
+          },
+          {
+            kind: "automatedInput",
+            origin: {
+              kind: "sessionMessage",
+              senderAgentDid: AGENT,
+              senderSessionId: "sender-session",
+              senderRequestId: "sender-request",
+            },
+            content: "please review the diff\nit is in src/",
+            ...durable("message", 3),
+          },
+          {
+            kind: "automatedInput",
+            origin: { kind: "trigger", triggerId: "nightly", triggerKind: "schedule" },
+            content: "write the nightly report",
+            ...durable("trigger", 4),
+          },
+          {
+            kind: "automatedInput",
+            origin: { kind: "backgroundCompletion" },
+            content: "<subagent-notification>done</subagent-notification>",
+            ...durable("background", 5),
+          },
+          {
+            kind: "automatedInput",
+            origin: { kind: "goalContinuation", goalId: "goal-1", sequence: 2 },
+            content: "You are running under the durable goal controller",
+            ...durable("goal", 6),
+          },
+        ] as DesktopSessionSnapshot["timelineItems"],
+      }),
+    });
+    renderScreen(app);
+    const items = screen.getAllByTestId("automated-input");
+    expect(items.map((item) => item.textContent)).toEqual([
+      expect.stringContaining("Message from another session"),
+      expect.stringContaining("Schedule · nightly"),
+      expect.stringContaining("Background work finished"),
+      expect.stringContaining("Goal continuation · 2"),
+    ]);
+    const text = screen.getByTestId("transcript-panel").textContent ?? "";
+    expect(text.indexOf("started")).toBeLessThan(text.indexOf("Message from"));
+    expect(screen.queryByTestId("automated-input-content")).not.toBeInTheDocument();
+    await user.click(
+      screen.getByRole("button", {
+        name: "Message from another session: show its published input",
+      }),
+    );
+    expect(screen.getByTestId("automated-input-content").textContent).toBe(
+      "please review the diff\nit is in src/",
+    );
+  });
+
+  it("says why an input is unavailable instead of expanding to nothing", async () => {
+    const user = userEvent.setup();
+    const { app } = screenApp({
+      session: heldSession({
+        timelineItems: [
+          {
+            kind: "automatedInput",
+            itemKey: "authored:doc-trigger:prompt",
+            requestId: "doc-trigger",
+            sequence: 1,
+            origin: { kind: "trigger", triggerId: "nightly", triggerKind: "event" },
+            content: null,
+            timestamp: null,
+            reconstruction: { state: "denied", deniedDependencyDocId: "segment" },
+          },
+        ] as DesktopSessionSnapshot["timelineItems"],
+      }),
+    });
+    renderScreen(app);
+    await user.click(
+      screen.getByRole("button", { name: "Event · nightly: show its published input" }),
+    );
+    expect(screen.getByTestId("automated-input-unavailable")).toHaveTextContent(
+      "This input is not shared with this device.",
+    );
   });
 });
 

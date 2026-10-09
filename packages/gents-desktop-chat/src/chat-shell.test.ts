@@ -95,6 +95,8 @@ type LeanClientShellCase = {
   frontend_session_latest_request_id: number | null;
   frontend_session_turn_state: TurnState | null;
   frontend_session_pending_request_id: number | null;
+  frontend_session_queued_request_ids: number[];
+  frontend_session_folded_request_ids: number[];
   frontend_local_workflow_kind: string;
   frontend_local_workflow_session: number | null;
   frontend_local_workflow_request: number | null;
@@ -104,7 +106,7 @@ type LeanClientShellCase = {
   frontend_expected_workflow_request: number | null;
   frontend_expected_workflow_turn_state: TurnState | null;
   frontend_expected_workflow_reason: ChatBlockedReason | null;
-  frontend_expected_send_status: "ready" | "disabled";
+  frontend_expected_send_status: "ready" | "queue" | "disabled";
   frontend_expected_send_blocked_reason: ChatBlockedReason | null;
   frontend_expected_active_request_id: number | null;
   frontend_expected_turn_state: TurnState | null;
@@ -138,6 +140,8 @@ function session(
     retryEligibility: { eligible: false, denialReason: "notFailed" },
     latestRequestOutcome: null,
     pendingTurn: null,
+    queuedTurns: [],
+    foldedInputs: [],
     goal: null,
     timelineItems: [],
     context: {
@@ -287,9 +291,28 @@ function sessionFromContract(contractCase: LeanClientShellCase) {
           )!,
           content: "contract prompt",
           lifecycleState: "processing",
+          foldedIntoRequestId: null,
+          origin: null,
           createdAt: "2026-04-21T12:01:00Z",
         }
       : null,
+    queuedTurns: contractCase.frontend_session_queued_request_ids.map((id) => ({
+      requestId: requestId(id)!,
+      content: "queued prompt",
+      selectedSkillIds: [],
+      lifecycleState: "pending",
+      foldedIntoRequestId: null,
+      origin: null,
+      createdAt: "2026-04-21T12:01:30Z",
+    })),
+    foldedInputs: contractCase.frontend_session_folded_request_ids.map(
+      (id) => ({
+        requestId: requestId(id)!,
+        foldedIntoRequestId: requestId(
+          contractCase.frontend_session_latest_request_id,
+        )!,
+      }),
+    ),
   });
 }
 
@@ -425,7 +448,19 @@ describe("projectChatShell", () => {
     "matches generated Lean ClientShell projection contracts",
     async () => {
       const contractCases = await loadLeanClientShellCases();
-      expect(contractCases).toHaveLength(25);
+      expect(contractCases).toHaveLength(27);
+      expect(
+        contractCases.some(
+          (contractCase) =>
+            contractCase.frontend_session_folded_request_ids.length > 0,
+        ),
+      ).toBe(true);
+      expect(
+        contractCases.some(
+          (contractCase) =>
+            contractCase.frontend_session_queued_request_ids.length > 0,
+        ),
+      ).toBe(true);
 
       for (const contractCase of contractCases) {
         const projection = projectChatShell({
@@ -458,6 +493,13 @@ describe("projectChatShell", () => {
 
         if (contractCase.frontend_expected_send_status === "ready") {
           expect(projection.nonEmptyContentSendStatus).toEqual({ kind: "ready" });
+        } else if (contractCase.frontend_expected_send_status === "queue") {
+          expect(projection.nonEmptyContentSendStatus.kind, contractCase.name).toBe("queue");
+          if (projection.nonEmptyContentSendStatus.kind === "queue") {
+            expect(projection.nonEmptyContentSendStatus.turnState).toBe(
+              contractCase.frontend_expected_turn_state,
+            );
+          }
         } else {
           expect(projection.nonEmptyContentSendStatus.kind).toBe("disabled");
           if (projection.nonEmptyContentSendStatus.kind === "disabled") {
@@ -471,7 +513,7 @@ describe("projectChatShell", () => {
     GENERATED_CONTRACT_TEST_TIMEOUT_MS,
   );
 
-  test("blocks follow up while turn is streaming", () => {
+  test("queues a follow up while the turn is streaming", () => {
     const projection = projectChatShell({
       clientAvailable: true,
       selectedAgentDid: "did:test:amy",
@@ -484,14 +526,14 @@ describe("projectChatShell", () => {
 
     expect(projection.workflow.kind).toBe("turnInProgress");
     expect(projection.nonEmptyContentSendStatus).toEqual({
-      kind: "disabled",
-      reason: "awaitingTurnTerminality",
-      hint: "Turn still running",
+      kind: "queue",
+      turnState: "running",
+      hint: "Queued behind the running turn",
     });
     expect(projection.activityStatus).toEqual({
       kind: "working",
       label: "Agent is working…",
-      detail: "This turn must finish before another message can be sent.",
+      detail: "Messages you send now wait until this turn finishes.",
       animated: true,
     });
   });
@@ -511,15 +553,92 @@ describe("projectChatShell", () => {
     });
 
     expect(projection.nonEmptyContentSendStatus).toEqual({
-      kind: "disabled",
-      reason: "awaitingTurnTerminality",
-      hint: "Waiting for the active turn to start",
+      kind: "queue",
+      turnState: "waitingForClaim",
+      hint: "Queued behind the message waiting to start",
     });
     expect(projection.activityStatus).toEqual({
       kind: "waiting",
       label: "Waiting for the agent…",
-      detail: "Your message is queued until the enrolled agent claims it.",
+      detail:
+        "The agent has not started yet. Messages you send now wait behind it.",
       animated: true,
+    });
+  });
+
+  test("a submission observed as queued tracks the running turn it waits behind", () => {
+    const awaiting: ChatWorkflowState = {
+      kind: "awaitingObservation",
+      agentDid: "did:test:amy",
+      sessionId: "session-1",
+      requestId: "req-queued",
+    };
+    const observed = session({
+      latestRequestId: "req-running",
+      turnState: "running",
+      queuedTurns: [
+        {
+          requestId: "req-queued",
+          content: "and also this",
+          selectedSkillIds: [],
+          lifecycleState: "pending",
+          foldedIntoRequestId: null,
+          origin: null,
+          createdAt: "2026-04-21T00:01:00Z",
+        },
+      ],
+    });
+    const projection = projectChatShell({
+      clientAvailable: true,
+      selectedAgentDid: "did:test:amy",
+      selectedSessionId: "session-1",
+      draft: "one more",
+      sending: false,
+      selectedSessionSummary: null,
+      session: observed,
+      localWorkflow: awaiting,
+    });
+
+    expect(projection.workflow).toEqual({
+      kind: "turnInProgress",
+      agentDid: "did:test:amy",
+      sessionId: "session-1",
+      requestId: "req-running",
+      turnState: "running",
+    });
+    expect(projection.activeRequestId).toBe("req-running");
+    expect(projection.nonEmptyContentSendStatus.kind).toBe("queue");
+    expect(reconcileProjectedWorkflow(awaiting, projection.workflow)).toEqual(
+      projection.workflow,
+    );
+  });
+
+  test("a submission folded before any queued snapshot retires once its turn ends", () => {
+    const awaiting: ChatWorkflowState = {
+      kind: "awaitingObservation",
+      agentDid: "did:test:amy",
+      sessionId: "session-1",
+      requestId: "req-folded",
+    };
+    const projection = projectChatShell({
+      clientAvailable: true,
+      selectedAgentDid: "did:test:amy",
+      selectedSessionId: "session-1",
+      draft: "",
+      sending: false,
+      selectedSessionSummary: null,
+      session: session({
+        latestRequestId: "req-head",
+        turnState: "completed",
+        foldedInputs: [
+          { requestId: "req-folded", foldedIntoRequestId: "req-head" },
+        ],
+      }),
+      localWorkflow: awaiting,
+    });
+    expect(projection.workflow).toEqual({ kind: "ready" });
+    expect(reconcileProjectedWorkflow(awaiting, projection.workflow)).toEqual({
+      kind: "ready",
     });
   });
 
@@ -537,6 +656,8 @@ describe("projectChatShell", () => {
           requestId: "req-new",
           content: "follow up",
           lifecycleState: "processing",
+          foldedIntoRequestId: null,
+          origin: null,
           createdAt: "2026-04-21T00:01:00Z",
         },
       }),
@@ -550,7 +671,7 @@ describe("projectChatShell", () => {
 
     expect(projection.activeRequestId).toBe("req-new");
     expect(projection.workflow.kind).toBe("turnInProgress");
-    expect(projection.nonEmptyContentSendStatus.kind).toBe("disabled");
+    expect(projection.nonEmptyContentSendStatus.kind).toBe("queue");
   });
 
   test("commits terminal projection before observing an automated follow-up", () => {
