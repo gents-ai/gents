@@ -76,7 +76,7 @@ pub(crate) fn usage_error(command: &EvalCommand) -> Option<String> {
 pub(crate) async fn dispatch(command: EvalCommand) -> Result<()> {
     if matches!(
         command,
-        EvalCommand::Run(_) | EvalCommand::Resume(_) | EvalCommand::Init(_)
+        EvalCommand::Run(_) | EvalCommand::Batch(_) | EvalCommand::Resume(_) | EvalCommand::Init(_)
     ) {
         crate::process_resources::prepare()?;
     }
@@ -103,10 +103,15 @@ pub(crate) async fn dispatch(command: EvalCommand) -> Result<()> {
     let registry = CheckRegistry::builtin();
     // Only a command that hosts a loop replaces the default interrupt: a
     // read-only command stays killable by Ctrl-C.
-    let cancel = if matches!(command, EvalCommand::Run(_) | EvalCommand::Resume(_)) {
-        cancel_on_ctrl_c(
-            "interrupt: the run stops launching; resume it to continue, or interrupt again to exit now",
-        )
+    let cancel = if matches!(
+        command,
+        EvalCommand::Run(_) | EvalCommand::Batch(_) | EvalCommand::Resume(_)
+    ) {
+        cancel_on_ctrl_c(if matches!(command, EvalCommand::Batch(_)) {
+            "interrupt: batch runs stop launching; rerun the saved plan to resume, or interrupt again to exit now"
+        } else {
+            "interrupt: the run stops launching; resume it to continue, or interrupt again to exit now"
+        })
     } else {
         CancellationToken::new()
     };
@@ -129,6 +134,7 @@ pub(crate) async fn execute(
 ) -> Result<()> {
     let result = match command {
         EvalCommand::Run(args) => run::run(ctx, &args, deps, out).await,
+        EvalCommand::Batch(args) => batch::run(ctx, &args, deps, out).await,
         EvalCommand::Resume(args) => run::resume(ctx, &args, deps, out).await,
         EvalCommand::List(args) => inspect::list(ctx, &args, out).await,
         EvalCommand::Show(args) => inspect::show(ctx, &args, out).await,
@@ -372,6 +378,7 @@ pub(crate) fn load_policy(arg: &crate::cli::PolicyArg) -> Result<gents::optimiza
     }
 }
 
+mod batch;
 mod checks;
 mod compare;
 mod frame;

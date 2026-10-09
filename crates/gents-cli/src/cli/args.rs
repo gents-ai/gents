@@ -4196,6 +4196,8 @@ pub(crate) enum EvalCommand {
         after_help = EVAL_RUN_AFTER_HELP
     )]
     Run(EvalRunArgs),
+    #[command(about = "Run a saved plan under one shared trial concurrency ceiling")]
+    Batch(EvalBatchArgs),
     #[command(
         about = "Continue a run from what it already wrote",
         after_help = EVAL_RUN_AFTER_HELP
@@ -4241,6 +4243,7 @@ impl EvalCommand {
     pub(crate) fn scope(&self) -> &EvalScopeArgs {
         match self {
             Self::Run(args) => &args.scope,
+            Self::Batch(args) => &args.scope,
             Self::Resume(args) => &args.scope,
             Self::List(args) => &args.scope,
             Self::Show(args) => &args.scope,
@@ -4533,6 +4536,25 @@ pub(crate) fn parse_run_purpose(raw: &str) -> Result<String, String> {
 pub(crate) fn parse_split(raw: &str) -> Result<gents::document_config::EvalSplit, String> {
     serde_json::from_value(serde_json::Value::String(raw.trim().to_owned()))
         .map_err(|_| format!("unknown split {raw:?}; expected train, validation or held_out"))
+}
+
+/// A saved collection of existing `eval run` arguments. The shared ceiling
+/// counts complete trial attempts, not individual provider requests.
+#[derive(clap::Args)]
+pub(crate) struct EvalBatchArgs {
+    /// JSON object with `runs: [{args: ["definition-id", "--cell", ...]}]`.
+    /// Each entry takes `eval run` arguments and a unique explicit `--run-id`;
+    /// use the batch's scope and JSON flags, not per-entry overrides.
+    #[arg(long)]
+    pub(crate) plan: PathBuf,
+    /// Maximum active trials across all entries; each run's own cap still applies.
+    #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
+    pub(crate) concurrency: u32,
+    /// Print every run's report and execution error as one JSON result.
+    #[arg(long)]
+    pub(crate) json: bool,
+    #[command(flatten)]
+    pub(crate) scope: EvalScopeArgs,
 }
 
 // Each stage's captures come from the eval definition (`EvalStage.capture`),

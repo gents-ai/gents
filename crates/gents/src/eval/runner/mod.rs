@@ -254,10 +254,33 @@ pub fn run_finished(record: &RunRecord, trials: &[TrialRecord], run_dir: &Path) 
     slots_owed(record, trials) == 0 && !running_elsewhere(run_dir)
 }
 
-/// How long the loop waits before planning a slot that produced no evidence
-/// again. Not comparability data: a run's result does not depend on it.
+/// A shared ceiling on complete trial attempts across independent runs.
+/// Clones share admission; a permit covers provisioning through durable completion.
+#[derive(Clone, Debug)]
+pub struct TrialBudget(Arc<tokio::sync::Semaphore>);
+
+impl TrialBudget {
+    pub fn new(limit: usize) -> Result<Self> {
+        anyhow::ensure!(
+            limit > 0 && limit <= tokio::sync::Semaphore::MAX_PERMITS,
+            "trial concurrency must be between 1 and {}",
+            tokio::sync::Semaphore::MAX_PERMITS
+        );
+        Ok(Self(Arc::new(tokio::sync::Semaphore::new(limit))))
+    }
+}
+
+impl PartialEq for TrialBudget {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+impl Eq for TrialBudget {}
+
+/// Execution admission and retry waits; neither changes a run's frozen trial policy.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunOptions {
+    pub trial_budget: Option<TrialBudget>,
     pub poll_backoff_base: Duration,
     pub poll_backoff_cap: Duration,
 }
@@ -265,10 +288,22 @@ pub struct RunOptions {
 impl Default for RunOptions {
     fn default() -> Self {
         Self {
+            trial_budget: None,
             poll_backoff_base: Duration::from_secs(5),
             poll_backoff_cap: Duration::from_secs(60),
         }
     }
+}
+
+/// Check for an active run, then validate and freeze without dispatching trials.
+/// This uses the same best-effort concurrent-start check as [`run`].
+pub async fn prepare_run(
+    access: &ConfigAccess,
+    request: &RunRequest,
+    isolation: Isolation,
+) -> Result<FrozenRun> {
+    refuse_if_held(&run_dir(&request.runs_dir, &request.run_id)?)?;
+    freeze(access, request, isolation).await
 }
 
 /// Freeze `request` and run everything it owes.
@@ -282,8 +317,7 @@ pub async fn run(
 ) -> Result<RunOutcome> {
     // Before freezing, which rewrites an existing run's files in place. Two
     // starters racing past this check is the accepted ceiling.
-    refuse_if_held(&run_dir(&request.runs_dir, &request.run_id)?)?;
-    let frozen = freeze(access, request, executor.isolation()).await?;
+    let frozen = prepare_run(access, request, executor.isolation()).await?;
     clear_cancel(&frozen.run_dir)?;
     let recorder = DocumentRecorder::new(access);
     execute_frozen(&frozen, &recorder, executor, registry, cancel, options).await
@@ -381,13 +415,24 @@ pub(crate) async fn execute_frozen(
         // Set when the loop stops launching, so the slots still queued behind
         // the in-flight ones return without doing anything.
         let stop = AtomicBool::new(false);
+        let admission_stopped = CancellationToken::new();
         let mut retried: Vec<u32> = Vec::new();
         let mut tripped: Option<u32> = None;
         let mut failed: Option<anyhow::Error> = None;
         {
             let mut running = futures::stream::iter(planned.iter().map(|slot| {
                 execute_trial(
-                    frozen, slot, recorder, executor, registry, &cancel, &stop, &progress, &views,
+                    frozen,
+                    slot,
+                    recorder,
+                    executor,
+                    registry,
+                    &cancel,
+                    &stop,
+                    &progress,
+                    &views,
+                    options.trial_budget.as_ref(),
+                    &admission_stopped,
                 )
             }))
             .buffer_unordered(concurrency);
@@ -413,6 +458,7 @@ pub(crate) async fn execute_frozen(
                         _ = cancel.cancelled() => {
                             observed_cancel = true;
                             stop.store(true, Ordering::Relaxed);
+                            admission_stopped.cancel();
                             continue;
                         }
                         _ = watch.tick() => {
@@ -439,6 +485,7 @@ pub(crate) async fn execute_frozen(
                         );
                         failed.get_or_insert(error);
                         stop.store(true, Ordering::Relaxed);
+                        admission_stopped.cancel();
                         cancel.cancel();
                         continue;
                     }
@@ -464,6 +511,7 @@ pub(crate) async fn execute_frozen(
                             // run stopped.
                             tripped.get_or_insert(consecutive);
                             stop.store(true, Ordering::Relaxed);
+                            admission_stopped.cancel();
                         }
                     }
                 }
@@ -575,7 +623,24 @@ async fn execute_trial(
     stop: &AtomicBool,
     progress: &Arc<ProgressWriter>,
     views: &ViewWriter,
+    trial_budget: Option<&TrialBudget>,
+    admission_stopped: &CancellationToken,
 ) -> Result<Slot> {
+    if stop.load(Ordering::Relaxed) || cancel_requested(&frozen.run_dir, cancel) {
+        return Ok(Slot::Skipped);
+    }
+    let _permit = if let Some(budget) = trial_budget {
+        let permit = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Ok(Slot::Skipped),
+            _ = admission_stopped.cancelled() => return Ok(Slot::Skipped),
+            permit = budget.0.acquire() => permit.context("trial budget closed")?,
+        };
+        Some(permit)
+    } else {
+        None
+    };
+    // A queued slot may have been stopped while another trial held capacity.
     if stop.load(Ordering::Relaxed) || cancel_requested(&frozen.run_dir, cancel) {
         return Ok(Slot::Skipped);
     }
@@ -1118,6 +1183,7 @@ mod tests {
 
     fn options() -> RunOptions {
         RunOptions {
+            trial_budget: None,
             poll_backoff_base: Duration::from_millis(1),
             poll_backoff_cap: Duration::from_millis(2),
         }
@@ -1135,6 +1201,242 @@ mod tests {
             trial_index: 0,
             attempt,
         }
+    }
+
+    struct BudgetExecutor {
+        started: tokio::sync::mpsc::UnboundedSender<(String, tokio::sync::oneshot::Sender<()>)>,
+        active: std::sync::atomic::AtomicUsize,
+        peak: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl TrialExecutor for BudgetExecutor {
+        fn isolation(&self) -> Isolation {
+            Isolation::Embedded
+        }
+        async fn provision(&self, _spec: &TrialSpec) -> TrialLocator {
+            TrialLocator {
+                trial_node_did: "did:key:trial".into(),
+                session_id: "session".into(),
+                home_hint: None,
+            }
+        }
+        async fn execute(&self, spec: &TrialSpec, _cancel: CancellationToken) -> TrialEvidence {
+            let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+            self.peak.fetch_max(active, Ordering::SeqCst);
+            let (send, receive) = tokio::sync::oneshot::channel();
+            self.started.send((spec.trial_id.clone(), send)).unwrap();
+            receive.await.unwrap();
+            self.active.fetch_sub(1, Ordering::SeqCst);
+            passed()
+        }
+        async fn recollect(
+            &self,
+            _at: &TrialLocator,
+            _captures: &[Capture],
+        ) -> Option<TrialEvidence> {
+            None
+        }
+    }
+
+    #[tokio::test]
+    async fn shared_trial_budget_reuses_capacity_across_runs_without_exceeding_ceiling() {
+        let (launching, pack) = launching("captured_rows_count").await;
+        let mut a = request(&launching, &pack, "budget-a");
+        one_slot(&mut a);
+        a.trials_per_case = 2;
+        let mut b = a.clone();
+        b.run_id = "budget-b".into();
+        let a = prepare_run(&launching.access, &a, Isolation::Embedded)
+            .await
+            .unwrap();
+        let b = prepare_run(&launching.access, &b, Isolation::Embedded)
+            .await
+            .unwrap();
+        let (started, mut starts) = tokio::sync::mpsc::unbounded_channel();
+        let executor = BudgetExecutor {
+            started,
+            active: 0.into(),
+            peak: 0.into(),
+        };
+        let recorder = DocumentRecorder::new(&launching.access);
+        let registry = CheckRegistry::builtin();
+        let mut opts = options();
+        opts.trial_budget = Some(TrialBudget::new(2).unwrap());
+        let observe = async {
+            let first = starts.recv().await.unwrap();
+            let second = starts.recv().await.unwrap();
+            assert_eq!(executor.active.load(Ordering::SeqCst), 2);
+            first.1.send(()).unwrap();
+            let third = starts.recv().await.unwrap();
+            assert_eq!(
+                executor.active.load(Ordering::SeqCst),
+                2,
+                "freed capacity is used while another run remains active"
+            );
+            third.1.send(()).unwrap();
+            second.1.send(()).unwrap();
+            starts.recv().await.unwrap().1.send(()).unwrap();
+        };
+        let (a_result, b_result, ()) = tokio::join!(
+            execute_frozen(
+                &a,
+                &recorder,
+                &executor,
+                &registry,
+                CancellationToken::new(),
+                &opts
+            ),
+            execute_frozen(
+                &b,
+                &recorder,
+                &executor,
+                &registry,
+                CancellationToken::new(),
+                &opts
+            ),
+            observe,
+        );
+        assert_eq!(a_result.unwrap().completed, 2);
+        assert_eq!(b_result.unwrap().completed, 2);
+        assert_eq!(executor.peak.load(Ordering::SeqCst), 2);
+        assert_eq!(opts.trial_budget.as_ref().unwrap().0.available_permits(), 2);
+    }
+
+    #[tokio::test]
+    async fn cancelled_budget_wait_creates_no_attempt_and_does_not_leak_capacity() {
+        assert!(TrialBudget::new(0).is_err());
+        let (launching, pack) = launching("captured_rows_count").await;
+        let mut request = request(&launching, &pack, "budget-cancelled");
+        one_slot(&mut request);
+        let frozen = prepare_run(&launching.access, &request, Isolation::Embedded)
+            .await
+            .unwrap();
+        let budget = TrialBudget::new(1).unwrap();
+        let held = budget.0.acquire().await.unwrap();
+        let cancel = CancellationToken::new();
+        let executor = ScriptedExecutor::new().with_default(passed());
+        let recorder = DocumentRecorder::new(&launching.access);
+        let registry = CheckRegistry::builtin();
+        let progress = ProgressWriter::new(&frozen.run_dir);
+        let views = ViewWriter::default();
+        let stop = AtomicBool::new(false);
+        let admission_stopped = CancellationToken::new();
+        let planned = plan(
+            &frozen.record.origin,
+            &request.run_id,
+            &[],
+            request.max_infra_retries,
+        );
+        let trial = execute_trial(
+            &frozen,
+            &planned[0],
+            &recorder,
+            &executor,
+            &registry,
+            &cancel,
+            &stop,
+            &progress,
+            &views,
+            Some(&budget),
+            &admission_stopped,
+        );
+        tokio::pin!(trial);
+        assert!(futures::poll!(&mut trial).is_pending());
+        cancel.cancel();
+        assert!(matches!(trial.await.unwrap(), Slot::Skipped));
+        assert!(recorder
+            .load_trials(OWNER, &request.run_id)
+            .await
+            .unwrap()
+            .is_empty());
+        drop(held);
+        assert_eq!(budget.0.available_permits(), 1);
+        let mut opts = options();
+        opts.trial_budget = Some(budget.clone());
+        let outcome = execute_frozen(
+            &frozen,
+            &recorder,
+            &executor,
+            &registry,
+            CancellationToken::new(),
+            &opts,
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome.completed, 1);
+        assert_eq!(outcome.abandoned, 0);
+        assert_eq!(budget.0.available_permits(), 1);
+    }
+
+    #[tokio::test]
+    async fn stopped_budget_wait_finishes_without_waiting_for_unrelated_capacity() {
+        assert!(TrialBudget::new(0).is_err());
+        let (launching, pack) = launching("captured_rows_count").await;
+        let mut request = request(&launching, &pack, "budget-cancelled");
+        one_slot(&mut request);
+        let frozen = prepare_run(&launching.access, &request, Isolation::Embedded)
+            .await
+            .unwrap();
+        let budget = TrialBudget::new(1).unwrap();
+        let held = budget.0.acquire().await.unwrap();
+        let cancel = CancellationToken::new();
+        let executor = ScriptedExecutor::new().with_default(passed());
+        let recorder = DocumentRecorder::new(&launching.access);
+        let registry = CheckRegistry::builtin();
+        let progress = ProgressWriter::new(&frozen.run_dir);
+        let views = ViewWriter::default();
+        let stop = AtomicBool::new(false);
+        let admission_stopped = CancellationToken::new();
+        let planned = plan(
+            &frozen.record.origin,
+            &request.run_id,
+            &[],
+            request.max_infra_retries,
+        );
+        let trial = execute_trial(
+            &frozen,
+            &planned[0],
+            &recorder,
+            &executor,
+            &registry,
+            &cancel,
+            &stop,
+            &progress,
+            &views,
+            Some(&budget),
+            &admission_stopped,
+        );
+        tokio::pin!(trial);
+        assert!(futures::poll!(&mut trial).is_pending());
+        stop.store(true, Ordering::Relaxed);
+        admission_stopped.cancel();
+        assert!(matches!(
+            futures::poll!(&mut trial),
+            std::task::Poll::Ready(Ok(Slot::Skipped))
+        ));
+        assert!(recorder
+            .load_trials(OWNER, &request.run_id)
+            .await
+            .unwrap()
+            .is_empty());
+        drop(held);
+        assert_eq!(budget.0.available_permits(), 1);
+        let mut opts = options();
+        opts.trial_budget = Some(budget.clone());
+        let outcome = execute_frozen(
+            &frozen,
+            &recorder,
+            &executor,
+            &registry,
+            CancellationToken::new(),
+            &opts,
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome.completed, 1);
+        assert_eq!(outcome.abandoned, 0);
+        assert_eq!(budget.0.available_permits(), 1);
     }
 
     /// A check that always passes and always has something to say.
@@ -3194,6 +3496,7 @@ mod tests {
         let mut request = request(&launching, &pack, "run-backoff");
         one_slot(&mut request);
         let slow = RunOptions {
+            trial_budget: None,
             poll_backoff_base: Duration::from_secs(30),
             poll_backoff_cap: Duration::from_secs(30),
         };
@@ -3379,6 +3682,7 @@ mod tests {
         assert!(
             [0, 1, 250, 999, 1_000, 5_000, u64::MAX].iter().all(|ms| {
                 let options = RunOptions {
+                    trial_budget: None,
                     poll_backoff_base: Duration::from_millis(*ms),
                     poll_backoff_cap: Duration::from_secs(60),
                 };

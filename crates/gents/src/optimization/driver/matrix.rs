@@ -513,6 +513,7 @@ impl Harness {
             run_options: RunOptions {
                 poll_backoff_base: std::time::Duration::from_millis(1),
                 poll_backoff_cap: std::time::Duration::from_millis(2),
+                trial_budget: None,
             },
         }
     }
