@@ -110,6 +110,14 @@ async fn publish_hook_call(
 
 #[tokio::test]
 async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
+    // Contract loading may synchronously build Lean or wait for another loader.
+    // Complete it before acquiring a live lease on this current-thread runtime.
+    let originating_name = "originating_request_without_matching_requester_is_denied";
+    let originating_case = crate::lean_vocab_test::lean_r6_backgrounding_case(originating_name);
+    let absent_name = "absent_requester_next_turn_authorized";
+    let absent_case = crate::lean_vocab_test::lean_r6_backgrounding_case(absent_name);
+    let empty_name = "empty_requester_does_not_alias_absent";
+    let empty_case = crate::lean_vocab_test::lean_r6_backgrounding_case(empty_name);
     let path = std::env::temp_dir().join(format!("background-hook-scope-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&path).unwrap();
     let identity = crate::KeyIdentity::load_or_create(path.join("agent.key"), None).unwrap();
@@ -183,8 +191,6 @@ async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
     // Exercise the originating-request denial while its owner is live. The
     // owned completion boundary must close it before a second request can
     // claim the same principal's execution slot.
-    let originating_name = "originating_request_without_matching_requester_is_denied";
-    let originating_case = crate::lean_vocab_test::lean_r6_backgrounding_case(originating_name);
     assert!(!originating_case.legal);
     let background = ToolCallLifecycle::load(node.clone(), session_id, &handle)
         .await
@@ -250,8 +256,7 @@ async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
     let next_writer =
         crate::streaming::DefraStreamWriter::new(node.clone(), &did, std::time::Duration::ZERO);
     next.begin_owned_execution(&next_writer).await.unwrap();
-    let absent_name = "absent_requester_next_turn_authorized";
-    assert!(crate::lean_vocab_test::lean_r6_backgrounding_case(absent_name).legal);
+    assert!(absent_case.legal);
     hook.set_active_request_binding(
         Some(next_id.into()),
         Some(next.request().doc_id.clone()),
@@ -271,8 +276,7 @@ async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
     assert_eq!(read["status"], "running", "{absent_name}: {read}");
     assert_eq!(read["tool_call_id"], handle, "{absent_name}");
 
-    let empty_name = "empty_requester_does_not_alias_absent";
-    assert!(!crate::lean_vocab_test::lean_r6_backgrounding_case(empty_name).legal);
+    assert!(!empty_case.legal);
     let empty_scope = crate::background_tools::ProcessControlScope {
         request_id: next_id.into(),
         session_id: session_id.into(),
