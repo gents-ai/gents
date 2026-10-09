@@ -17,6 +17,7 @@ mod input;
 
 pub use input::can_hold_canonical_count;
 pub(crate) use input::parameters as field_parameters;
+pub(crate) use input::validate_input as validate_field_input;
 
 const PLACEHOLDER_TOOL_NAME: &str = "defra_write";
 
