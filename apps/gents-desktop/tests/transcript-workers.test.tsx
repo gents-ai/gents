@@ -392,6 +392,66 @@ describe("subagent lineage freshness", () => {
     }
   });
 
+  it.each(["pending", "empty", "completed"])(
+    "discovers new remote lineage after an initially %s read",
+    async (initial) => {
+      let finishFirst!: (value: SessionProvenanceView) => void;
+      let reads = 0;
+      const api = apiWith(() => {
+        if (++reads === 1)
+          return new Promise((resolve) => {
+            finishFirst = resolve;
+          });
+        return Promise.resolve(
+          view([
+            caused(
+              "new-child",
+              "remote-session",
+              "completed",
+              "req-1",
+              "call-1",
+              "did:key:remote",
+            ),
+          ]),
+        );
+      });
+      const tool = call("req-1", "call-1", "success");
+      const app = appFor(api, [group(tool)]);
+      const observe = (version: number) =>
+        writeSession(app.stores.session, (session) =>
+          session
+            ? {
+                ...session,
+                projectionRevision: {
+                  storeVersion: version,
+                  provenanceVersion: version,
+                },
+              }
+            : session,
+        );
+      observe(1);
+      const { result } = renderWorkers(app);
+      await waitFor(() => expect(api.sessionProvenance).toHaveBeenCalledTimes(1));
+      if (initial !== "pending") {
+        await act(async () =>
+          finishFirst(
+            view(
+              initial === "empty"
+                ? []
+                : [caused("old-child", "old-session", "completed", "req-1", "call-1")],
+            ),
+          ),
+        );
+      }
+      act(() => observe(2));
+      if (initial === "pending") await act(async () => finishFirst(view([])));
+      await waitFor(() =>
+        expect(result.current.byToolCall(tool)?.request.requestId).toBe("new-child"),
+      );
+      expect(api.sessionProvenance).toHaveBeenCalledTimes(2);
+    },
+  );
+
   it("shows a lineage read that took longer than the stream moved", async () => {
     /* the first read finds the caused request running; each later read is
        held until the test lets it answer */

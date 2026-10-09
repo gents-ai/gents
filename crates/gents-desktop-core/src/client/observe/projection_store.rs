@@ -70,6 +70,12 @@ pub struct StorePatchMergeOutcome {
     pub store_version: u64,
 }
 
+enum ProvenanceUpdate {
+    Preserve,
+    Compare,
+    Invalidate,
+}
+
 struct ObservedState {
     snapshot: SharedClientStore,
     revision: StoreProjectionRevision,
@@ -146,12 +152,12 @@ impl ObservedStore {
 
     pub fn replace_snapshot(&self, snapshot: ClientStore) -> u64 {
         let snapshot = snapshot.into_observer_projection();
-        self.update(true, |_| snapshot)
+        self.update(ProvenanceUpdate::Invalidate, |_| snapshot)
     }
 
     pub fn merge_chat_patch(&self, patch: ClientStore) -> u64 {
         let patch = patch.into_observer_projection();
-        self.update(has_provenance_inputs(&patch), |snapshot| {
+        self.update(provenance_update(&patch), |snapshot| {
             snapshot.merge_chat_patch(patch)
         })
     }
@@ -172,7 +178,7 @@ impl ObservedStore {
     ) -> StorePatchMergeOutcome {
         let incoming = incoming.into_observer_projection();
         StorePatchMergeOutcome {
-            store_version: self.update(has_provenance_inputs(&incoming), |snapshot| {
+            store_version: self.update(provenance_update(&incoming), |snapshot| {
                 snapshot.merge_snapshot(incoming)
             }),
         }
@@ -180,14 +186,15 @@ impl ObservedStore {
 
     pub fn replace_agent_snapshot(&self, agent_did: &str, incoming: ClientStore) -> u64 {
         let incoming = incoming.into_observer_projection();
-        self.update(true, |snapshot| {
+        self.update(ProvenanceUpdate::Invalidate, |snapshot| {
             snapshot.replace_agent_scope(agent_did, incoming)
         })
     }
 
     /// A reload may await database reads while an explicit request refresh
     /// publishes newer facts. Check its captured revision under the same lock
-    /// as replacement so that older reads cannot erase those facts.
+    /// as replacement so that older reads cannot erase those facts. An accepted
+    /// reload also invalidates unretained tool-call lineage after lost events.
     pub(crate) fn replace_reloaded_snapshot(
         &self,
         captured: StoreProjectionRevision,
@@ -195,22 +202,28 @@ impl ObservedStore {
         incoming: ClientStore,
     ) -> bool {
         let incoming = incoming.into_observer_projection();
-        self.update_at_revision(Some(captured), true, |snapshot| match agent_did {
-            Some(agent_did) => snapshot.replace_agent_scope(agent_did, incoming),
-            None => incoming,
+        self.update_at_revision(Some(captured), ProvenanceUpdate::Invalidate, |snapshot| {
+            match agent_did {
+                Some(agent_did) => snapshot.replace_agent_scope(agent_did, incoming),
+                None => incoming,
+            }
         })
         .is_some()
     }
 
     /// Publish a structural database change without retaining its transcript
     /// payload in the process-wide observer. Consumers reconcile by issuing a
-    /// bounded DefraDB projection for the selected session.
-    pub fn invalidate_projection(&self) -> u64 {
+    /// bounded DefraDB projection for the selected session. Tool-call changes
+    /// also invalidate lineage, although their payloads are never retained.
+    pub fn invalidate_projection(&self, provenance_changed: bool) -> u64 {
         let notice = {
             let mut state = self.state.write().expect("store snapshot lock poisoned");
             state.revision = StoreProjectionRevision {
                 store_version: state.revision.store_version.saturating_add(1),
-                provenance_version: state.revision.provenance_version,
+                provenance_version: state
+                    .revision
+                    .provenance_version
+                    .saturating_add(u64::from(provenance_changed)),
             };
             StoreUpdateNotice {
                 revision: state.revision,
@@ -223,17 +236,17 @@ impl ObservedStore {
 
     fn update(
         &self,
-        provenance_may_change: bool,
+        provenance: ProvenanceUpdate,
         transform: impl FnOnce(&ClientStore) -> ClientStore,
     ) -> u64 {
-        self.update_at_revision(None, provenance_may_change, transform)
+        self.update_at_revision(None, provenance, transform)
             .expect("unconditional store update")
     }
 
     fn update_at_revision(
         &self,
         captured: Option<StoreProjectionRevision>,
-        provenance_may_change: bool,
+        provenance: ProvenanceUpdate,
         transform: impl FnOnce(&ClientStore) -> ClientStore,
     ) -> Option<u64> {
         let notice = {
@@ -243,9 +256,17 @@ impl ObservedStore {
             }
             let store_version = state.revision.store_version.saturating_add(1);
             let next = transform(state.snapshot.as_ref());
-            let provenance_version = state.revision.provenance_version.saturating_add(u64::from(
-                provenance_may_change && !same_provenance_inputs(state.snapshot.as_ref(), &next),
-            ));
+            let provenance_version =
+                state
+                    .revision
+                    .provenance_version
+                    .saturating_add(u64::from(match provenance {
+                        ProvenanceUpdate::Preserve => false,
+                        ProvenanceUpdate::Compare => {
+                            !same_provenance_inputs(state.snapshot.as_ref(), &next)
+                        }
+                        ProvenanceUpdate::Invalidate => true,
+                    }));
             state.snapshot = Arc::new(next);
             state.revision = StoreProjectionRevision {
                 store_version,
@@ -261,8 +282,12 @@ impl ObservedStore {
     }
 }
 
-fn has_provenance_inputs(patch: &ClientStore) -> bool {
-    !patch.requests.is_empty() || !patch.sessions.is_empty() || !patch.tool_calls.is_empty()
+fn provenance_update(patch: &ClientStore) -> ProvenanceUpdate {
+    if patch.requests.is_empty() && patch.sessions.is_empty() {
+        ProvenanceUpdate::Preserve
+    } else {
+        ProvenanceUpdate::Compare
+    }
 }
 
 /// These are observations used by the lineage read, including the remote
@@ -288,20 +313,6 @@ fn same_provenance_inputs(before: &ClientStore, after: &ClientStore) -> bool {
                 && a.requester_did == b.requester_did
                 && a.provenance == b.provenance
         })
-        && before.tool_calls.len() == after.tool_calls.len()
-        && before
-            .tool_calls
-            .iter()
-            .zip(&after.tool_calls)
-            .all(|(a, b)| {
-                a.doc_id == b.doc_id
-                    && a.agent_did == b.agent_did
-                    && a.session_id == b.session_id
-                    && a.requester_did == b.requester_did
-                    && a.request_id == b.request_id
-                    && a.tool_call_id == b.tool_call_id
-                    && a.tool_name == b.tool_name
-            })
 }
 
 #[cfg(test)]
@@ -338,7 +349,7 @@ mod reload_tests {
         let (store, _) = ObservedStore::new(initial);
         let original = store.projection_revision();
         for _ in 0..50 {
-            store.invalidate_projection();
+            store.invalidate_projection(false);
         }
         assert_eq!(
             store.projection_revision().provenance_version,
@@ -369,6 +380,21 @@ mod reload_tests {
         assert_eq!(
             store.projection_revision().provenance_version,
             settled.provenance_version
+        );
+    }
+
+    #[test]
+    fn accepted_reload_refreshes_unretained_lineage_but_rejected_reload_does_not() {
+        let (store, _) = ObservedStore::new(requests(&["parent"]));
+        let captured = store.projection_revision();
+        store.invalidate_projection(false);
+        let current = store.projection_revision();
+        assert!(!store.replace_reloaded_snapshot(captured, None, requests(&["parent"])));
+        assert_eq!(store.projection_revision(), current);
+        assert!(store.replace_reloaded_snapshot(current, None, requests(&["parent"])));
+        assert_eq!(
+            store.projection_revision().provenance_version,
+            current.provenance_version + 1
         );
     }
 

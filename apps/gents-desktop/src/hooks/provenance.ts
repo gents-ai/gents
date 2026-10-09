@@ -6,7 +6,6 @@ import type {
   SessionSummary,
 } from "@source-inc/gents-desktop-client";
 
-import { isLive } from "../lib/turnState";
 import { createSelectors, type WithSelectors } from "./createSelectors";
 import { heldFor } from "./sessionStore";
 import type { ShellStores } from "./shellProjection";
@@ -46,8 +45,8 @@ type ProvenanceParams = {
  * scope is exact: the session's agent, label and requester, as the session
  * list reports them. It is asked again when the transcript's rows change
  * (a streamed chunk to the live reply does not move them) or the agent's
- * session list does. While a request it caused is live it is also asked
- * when the observed lineage inputs change (`provenanceVersion`), so a
+ * session list does. It is also asked when the observed lineage inputs
+ * change (`provenanceVersion`), so a
  * caused request settling anywhere this desktop observes refreshes it.
  * Streamed transcript changes and lease renewals do not advance that cue;
  * there is no timer of its own.
@@ -59,8 +58,7 @@ type ProvenanceParams = {
  */
 export function createProvenance({ api, stores }: ProvenanceParams) {
   let held: { scope: string; value: SessionProvenanceView } | null = null;
-  /* what the last ask observed: a live lineage arriving starts following the
-     provenance version without asking again for the one it was read at */
+  /* the exact inputs at the last read, including an initially empty lineage */
   let asked: { cues: string; version: number | null } | null = null;
   let out = false;
   let missed = false;
@@ -101,13 +99,8 @@ export function createProvenance({ api, stores }: ProvenanceParams) {
     /* without the session's summary its exact scope is unknown */
     if (!agentDid || !sessionId || !summary) return;
     const version = session?.projectionRevision?.provenanceVersion ?? null;
-    /* the provenance version is followed only while a request it caused is live */
-    const followed = shown?.calls.some((c) => isLive(c.caused.lifecycleState))
-      ? version
-      : null;
     const cues = `${scope}\u0002${state.facts.rowsRevision}\u0002${sessionsCue(sessions)}`;
-    if (asked?.cues === cues && (followed === null || asked.version === followed))
-      return;
+    if (asked?.cues === cues && asked.version === version) return;
     if (out) {
       missed = true;
       return;
