@@ -6,7 +6,7 @@ import { MessageList } from "@source-inc/gents-desktop-chat";
 import { createChatActions } from "../src/hooks/chatActions";
 import {
   projectDeploymentOperationalState,
-  type BehaviorReadinessDecision,
+  type NodeReadinessDecision,
   type DesktopApiAdapter,
 } from "@source-inc/gents-desktop-client";
 import { projectChatShell } from "@source-inc/gents-desktop-chat";
@@ -21,7 +21,7 @@ import { assistantMessage, sessionSnapshot, userMessage } from "./timeline-fixtu
 function chatActions(
   api: DesktopApiAdapter,
   projection: {
-    behaviorReadiness: BehaviorReadinessDecision;
+    agentReadiness: NodeReadinessDecision;
     shellProjection: ReturnType<typeof projectChatShell>;
     retryShellProjection: ReturnType<typeof projectChatShell>;
   },
@@ -29,7 +29,7 @@ function chatActions(
 ) {
   const stores = shellStores({
     deployments: [deployment],
-    selection: { agentDid: deployment.agentDid, sessionId: "s1" },
+    selection: { nodeDid: deployment.nodeDid, sessionId: "s1" },
   });
   const actions = createChatActions({
     api,
@@ -42,49 +42,49 @@ function chatActions(
   return { actions, stores };
 }
 
-const readyBehaviorReadiness = {
+const readyNodeReadiness = {
   kind: "ready",
-  behaviorId: "default",
-  behaviorLabel: "Default",
+  agentId: "default",
+  agentLabel: "Default",
 } as const;
-const unavailableBehaviorReadiness = {
+const unavailableNodeReadiness = {
   kind: "unavailable",
-  behaviorId: "ops",
-  behaviorLabel: "Ops",
+  agentId: "ops",
+  agentLabel: "Ops",
   reason: "backend_temporarily_unavailable",
 } as const;
 
 function operationalStateFor(
-  decision: BehaviorReadinessDecision = readyBehaviorReadiness,
+  decision: NodeReadinessDecision = readyNodeReadiness,
   routeReady = deployment.chatSafe,
 ) {
-  const behaviorId = decision.behaviorId ?? "default";
+  const agentId = decision.agentId ?? "default";
   return projectDeploymentOperationalState({
     ...deployment,
     chatSafe: routeReady,
-    behaviors: [
+    agents: [
       {
-        ...deployment.behaviors[0]!,
-        behaviorId,
-        displayName: decision.kind === "unknown" ? behaviorId : decision.behaviorLabel,
+        ...deployment.agents[0]!,
+        agentId,
+        displayName: decision.kind === "unknown" ? agentId : decision.agentLabel,
         enabled: true,
         isDefault: true,
       },
     ],
-    behaviorReadiness: {
-      ...deployment.behaviorReadiness,
+    nodeReadiness: {
+      ...deployment.nodeReadiness,
       source:
         decision.kind === "unknown"
           ? { state: "unknown", reason: decision.reason }
           : { state: "current" },
-      behaviors: [
+      agents: [
         decision.kind === "unavailable"
           ? {
               state: "unavailable",
-              behaviorId,
+              agentId,
               reason: decision.reason,
             }
-          : { state: "ready", behaviorId },
+          : { state: "ready", agentId },
       ],
     },
   });
@@ -218,7 +218,7 @@ describe("error card retry", () => {
     expect(onRetryMessage).toHaveBeenCalledWith("req-failed");
   });
 
-  it("disables retry while the selected behavior backend is unavailable", () => {
+  it("disables retry while the selected agent backend is unavailable", () => {
     render(
       <ChatTranscriptPanel
         selectedSessionId="s1"
@@ -341,7 +341,7 @@ describe("error card retry", () => {
   it("uses the predecessor-aware retry API when the composer draft is empty", async () => {
     const sendChatMessage = vi.fn();
     const retryRequest = vi.fn().mockResolvedValue({
-      agentDid: deployment.agentDid,
+      nodeDid: deployment.nodeDid,
       sessionId: "s1",
       requestId: "req_retry",
     });
@@ -351,7 +351,7 @@ describe("error card retry", () => {
     } as unknown as DesktopApiAdapter;
     const shellProjection = projectChatShell({
       clientAvailable: true,
-      selectedAgentDid: deployment.agentDid,
+      selectedNodeDid: deployment.nodeDid,
       selectedSessionId: "s1",
       sending: false,
       session,
@@ -362,7 +362,7 @@ describe("error card retry", () => {
     expect(shellProjection.nonEmptyContentSendStatus).toEqual({ kind: "ready" });
 
     const { actions } = chatActions(api, {
-      behaviorReadiness: readyBehaviorReadiness,
+      agentReadiness: readyNodeReadiness,
       shellProjection,
       retryShellProjection: shellProjection,
     });
@@ -370,21 +370,21 @@ describe("error card retry", () => {
     actions.retryMessage("req-failed");
 
     await waitFor(() =>
-      expect(retryRequest).toHaveBeenCalledWith("req-failed", deployment.agentDid),
+      expect(retryRequest).toHaveBeenCalledWith("req-failed", deployment.nodeDid),
     );
     expect(sendChatMessage).not.toHaveBeenCalled();
   });
 
-  it("gates Retry with the persisted session behavior, not the composer selection", async () => {
+  it("gates Retry with the persisted session agent, not the composer selection", async () => {
     const retryRequest = vi.fn().mockResolvedValue({
-      agentDid: deployment.agentDid,
+      nodeDid: deployment.nodeDid,
       sessionId: "s1",
       requestId: "req_retry",
     });
     const reportFailure = vi.fn();
     const composerProjection = projectChatShell({
       clientAvailable: true,
-      selectedAgentDid: deployment.agentDid,
+      selectedNodeDid: deployment.nodeDid,
       selectedSessionId: "s1",
       sending: false,
       session,
@@ -394,20 +394,20 @@ describe("error card retry", () => {
     });
     const blockedRetryProjection = projectChatShell({
       clientAvailable: true,
-      selectedAgentDid: deployment.agentDid,
+      selectedNodeDid: deployment.nodeDid,
       selectedSessionId: "s1",
       sending: false,
       session,
       selectedSessionSummary: null,
       localWorkflow: { kind: "ready" },
-      operationalState: operationalStateFor(unavailableBehaviorReadiness),
+      operationalState: operationalStateFor(unavailableNodeReadiness),
     });
 
     const api = { retryRequest } as unknown as DesktopApiAdapter;
     const { actions: blocked } = chatActions(
       api,
       {
-        behaviorReadiness: readyBehaviorReadiness,
+        agentReadiness: readyNodeReadiness,
         shellProjection: composerProjection,
         retryShellProjection: blockedRetryProjection,
       },
@@ -425,14 +425,14 @@ describe("error card retry", () => {
     const { actions: readyRetry } = chatActions(
       api,
       {
-        behaviorReadiness: unavailableBehaviorReadiness,
+        agentReadiness: unavailableNodeReadiness,
         shellProjection: blockedRetryProjection,
         retryShellProjection: composerProjection,
       },
       reportFailure,
     );
     await readyRetry.retryMessage("req-failed");
-    expect(retryRequest).toHaveBeenCalledWith("req-failed", deployment.agentDid);
+    expect(retryRequest).toHaveBeenCalledWith("req-failed", deployment.nodeDid);
     expect(reportFailure).not.toHaveBeenCalledWith(
       blockedRetryProjection.nonEmptyContentSendStatus.kind === "disabled"
         ? blockedRetryProjection.nonEmptyContentSendStatus.hint
@@ -442,13 +442,13 @@ describe("error card retry", () => {
 
   it("projects an acknowledged send immediately before replication observes it", async () => {
     const sendChatMessage = vi.fn().mockResolvedValue({
-      agentDid: deployment.agentDid,
+      nodeDid: deployment.nodeDid,
       sessionId: "s1",
       requestId: "req_new",
     });
     const shellProjection = projectChatShell({
       clientAvailable: true,
-      selectedAgentDid: deployment.agentDid,
+      selectedNodeDid: deployment.nodeDid,
       selectedSessionId: "s1",
       sending: false,
       session,
@@ -460,7 +460,7 @@ describe("error card retry", () => {
     const { actions, stores } = chatActions(
       { sendChatMessage } as unknown as DesktopApiAdapter,
       {
-        behaviorReadiness: readyBehaviorReadiness,
+        agentReadiness: readyNodeReadiness,
         shellProjection,
         retryShellProjection: shellProjection,
       },

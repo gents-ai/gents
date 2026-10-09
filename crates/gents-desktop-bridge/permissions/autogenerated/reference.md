@@ -9,7 +9,7 @@ Minimal default: core + client-lifecycle (no runtime-admin, no config mutation)
 - `allow-desktop-observer-metrics`
 - `allow-desktop-client-start`
 - `allow-desktop-client-shutdown`
-- `allow-desktop-set-selected-agent`
+- `allow-desktop-set-selected-node`
 - `allow-desktop-app-quit`
 
 ## Permission Table
@@ -24,12 +24,12 @@ Minimal default: core + client-lifecycle (no runtime-admin, no config mutation)
 <tr>
 <td>
 
-`gents-desktop-bridge:allow-desktop-agent-config-save`
+`gents-desktop-bridge:allow-desktop-agent-delete`
 
 </td>
 <td>
 
-Enables the desktop_agent_config_save command without any pre-configured scope.
+Enables the desktop_agent_delete command without any pre-configured scope.
 
 </td>
 </tr>
@@ -37,12 +37,38 @@ Enables the desktop_agent_config_save command without any pre-configured scope.
 <tr>
 <td>
 
-`gents-desktop-bridge:deny-desktop-agent-config-save`
+`gents-desktop-bridge:deny-desktop-agent-delete`
 
 </td>
 <td>
 
-Denies the desktop_agent_config_save command without any pre-configured scope.
+Denies the desktop_agent_delete command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-agent-save`
+
+</td>
+<td>
+
+Enables the desktop_agent_save command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-agent-save`
+
+</td>
+<td>
+
+Denies the desktop_agent_save command without any pre-configured scope.
 
 </td>
 </tr>
@@ -199,58 +225,6 @@ Enables the desktop_backend_save command without any pre-configured scope.
 <td>
 
 Denies the desktop_backend_save command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:allow-desktop-behavior-delete`
-
-</td>
-<td>
-
-Enables the desktop_behavior_delete command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:deny-desktop-behavior-delete`
-
-</td>
-<td>
-
-Denies the desktop_behavior_delete command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:allow-desktop-behavior-save`
-
-</td>
-<td>
-
-Enables the desktop_behavior_save command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:deny-desktop-behavior-save`
-
-</td>
-<td>
-
-Denies the desktop_behavior_save command without any pre-configured scope.
 
 </td>
 </tr>
@@ -570,12 +544,12 @@ Denies the desktop_context_delete command without any pre-configured scope.
 <tr>
 <td>
 
-`gents-desktop-bridge:allow-desktop-default-behavior-set`
+`gents-desktop-bridge:allow-desktop-default-agent-set`
 
 </td>
 <td>
 
-Enables the desktop_default_behavior_set command without any pre-configured scope.
+Enables the desktop_default_agent_set command without any pre-configured scope.
 
 </td>
 </tr>
@@ -583,12 +557,12 @@ Enables the desktop_default_behavior_set command without any pre-configured scop
 <tr>
 <td>
 
-`gents-desktop-bridge:deny-desktop-default-behavior-set`
+`gents-desktop-bridge:deny-desktop-default-agent-set`
 
 </td>
 <td>
 
-Denies the desktop_default_behavior_set command without any pre-configured scope.
+Denies the desktop_default_agent_set command without any pre-configured scope.
 
 </td>
 </tr>
@@ -1317,6 +1291,32 @@ Enables the desktop_network_status command without any pre-configured scope.
 <td>
 
 Denies the desktop_network_status command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-node-config-save`
+
+</td>
+<td>
+
+Enables the desktop_node_config_save command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-node-config-save`
+
+</td>
+<td>
+
+Denies the desktop_node_config_save command without any pre-configured scope.
 
 </td>
 </tr>
@@ -2390,12 +2390,12 @@ Denies the desktop_session_snapshot command without any pre-configured scope.
 <tr>
 <td>
 
-`gents-desktop-bridge:allow-desktop-set-selected-agent`
+`gents-desktop-bridge:allow-desktop-set-selected-node`
 
 </td>
 <td>
 
-Enables the desktop_set_selected_agent command without any pre-configured scope.
+Enables the desktop_set_selected_node command without any pre-configured scope.
 
 </td>
 </tr>
@@ -2403,12 +2403,12 @@ Enables the desktop_set_selected_agent command without any pre-configured scope.
 <tr>
 <td>
 
-`gents-desktop-bridge:deny-desktop-set-selected-agent`
+`gents-desktop-bridge:deny-desktop-set-selected-node`
 
 </td>
 <td>
 
-Denies the desktop_set_selected_agent command without any pre-configured scope.
+Denies the desktop_set_selected_node command without any pre-configured scope.
 
 </td>
 </tr>

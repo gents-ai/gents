@@ -184,10 +184,10 @@ impl ObservedStore {
         }
     }
 
-    pub fn replace_agent_snapshot(&self, agent_did: &str, incoming: ClientStore) -> u64 {
+    pub fn replace_node_snapshot(&self, node_did: &str, incoming: ClientStore) -> u64 {
         let incoming = incoming.into_observer_projection();
         self.update(ProvenanceUpdate::Invalidate, |snapshot| {
-            snapshot.replace_agent_scope(agent_did, incoming)
+            snapshot.replace_node_scope(node_did, incoming)
         })
     }
 
@@ -198,13 +198,13 @@ impl ObservedStore {
     pub(crate) fn replace_reloaded_snapshot(
         &self,
         captured: StoreProjectionRevision,
-        agent_did: Option<&str>,
+        node_did: Option<&str>,
         incoming: ClientStore,
     ) -> bool {
         let incoming = incoming.into_observer_projection();
         self.update_at_revision(Some(captured), ProvenanceUpdate::Invalidate, |snapshot| {
-            match agent_did {
-                Some(agent_did) => snapshot.replace_agent_scope(agent_did, incoming),
+            match node_did {
+                Some(node_did) => snapshot.replace_node_scope(node_did, incoming),
                 None => incoming,
             }
         })
@@ -298,7 +298,7 @@ fn same_provenance_inputs(before: &ClientStore, after: &ClientStore) -> bool {
             a.doc_id == b.doc_id
                 && a.request_id == b.request_id
                 && a.purpose == b.purpose
-                && a.agent_did == b.agent_did
+                && a.node_did == b.node_did
                 && a.session_id == b.session_id
                 && a.requester_did == b.requester_did
                 && a.lifecycle_state == b.lifecycle_state
@@ -308,7 +308,7 @@ fn same_provenance_inputs(before: &ClientStore, after: &ClientStore) -> bool {
         })
         && before.sessions.len() == after.sessions.len()
         && before.sessions.iter().zip(&after.sessions).all(|(a, b)| {
-            a.agent_did == b.agent_did
+            a.node_did == b.node_did
                 && a.session_id == b.session_id
                 && a.requester_did == b.requester_did
                 && a.provenance == b.provenance
@@ -327,7 +327,7 @@ mod reload_tests {
                 .iter()
                 .map(|id| AgentRequestRow {
                     request_id: (*id).into(),
-                    agent_did: Some("did:test:reload".into()),
+                    node_did: Some("did:test:reload".into()),
                     session_id: Some("session".into()),
                     purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
                     ..Default::default()
@@ -343,7 +343,7 @@ mod reload_tests {
 
         let mut initial = requests(&["parent", "remote-child"]);
         initial.requests[0].doc_id = Some("parent-doc".into());
-        initial.requests[1].agent_did = Some("did:test:remote".into());
+        initial.requests[1].node_did = Some("did:test:remote".into());
         initial.requests[1].caused_by_parent_request_doc_id = Some("parent-doc".into());
         initial.requests[1].lifecycle_state = Some(RequestLifecycleState::Processing);
         let (store, _) = ObservedStore::new(initial);

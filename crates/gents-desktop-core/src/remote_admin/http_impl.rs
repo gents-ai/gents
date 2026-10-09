@@ -26,9 +26,9 @@ pub struct HttpRemoteP2pAdmin {
     api_base_path: String,
     client: Client,
     actor: Option<Arc<PrincipalIdentity>>,
-    /// Bearer principal for the node's access control, which admits P2P
-    /// administration only from the served home's principal.
-    node_principal: Option<gents::config_client::GraphqlEndpoint>,
+    /// Bearer identity for the node's access control, which admits P2P
+    /// administration only from the served home's node DID.
+    node_identity: Option<gents::config_client::GraphqlEndpoint>,
     local_resolver: Option<Arc<EmbeddedNode>>,
 }
 
@@ -44,9 +44,9 @@ impl HttpRemoteP2pAdmin {
         Self::new_inner(graphql_url, Some(actor))
     }
 
-    /// Authenticate every admin request as `endpoint`'s principal.
-    pub fn with_node_principal(mut self, endpoint: gents::config_client::GraphqlEndpoint) -> Self {
-        self.node_principal = Some(endpoint);
+    /// Authenticate every admin request as the node DID `endpoint` carries.
+    pub fn with_node_identity(mut self, endpoint: gents::config_client::GraphqlEndpoint) -> Self {
+        self.node_identity = Some(endpoint);
         self
     }
 
@@ -82,7 +82,7 @@ impl HttpRemoteP2pAdmin {
             api_base_path,
             client,
             actor,
-            node_principal: None,
+            node_identity: None,
             local_resolver: None,
         })
     }
@@ -112,8 +112,8 @@ impl HttpRemoteP2pAdmin {
                 .header(ACTOR_SIGNATURE_VERSION_HEADER, ACTOR_SIGNATURE_VERSION);
         }
 
-        if let Some(principal) = self.node_principal.as_ref() {
-            request = principal.authorize(request).map_err(|error| {
+        if let Some(endpoint) = self.node_identity.as_ref() {
+            request = endpoint.authorize(request).map_err(|error| {
                 RemoteP2pAdminError::LocalError(format!(
                     "authenticating remote admin request: {error:#}"
                 ))
@@ -836,7 +836,7 @@ mod tests {
         let server = MockServer::start().await;
         let filters = to_replication_filters(&BTreeMap::from([(
             "AgentRequest".to_string(),
-            gents::agent::p2p_reconcile::equality_filter("agent_did", "did:key:mandrake"),
+            gents::agent::p2p_reconcile::equality_filter("node_did", "did:key:mandrake"),
         )]))
         .expect("representable filter");
         let body = serde_json::json!([

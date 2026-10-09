@@ -21,7 +21,7 @@ describeLive("Tauri app live bridge runner chat", () => {
       await driver.ready();
       await driver.openChat();
       logTurn(
-        `driver ready deployment=${runner.deploymentLabel} agentDid=${runner.agentDid}`,
+        `driver ready deployment=${runner.deploymentLabel} nodeDid=${runner.nodeDid}`,
       );
 
       await driver.typeComposer(FIRST_PROMPT);
@@ -155,8 +155,8 @@ async function exerciseShellWhileTurnRuns(driver: LiveDesktopDriver) {
   await driver.openConfig();
   await driver.openConfigSection("profiles");
   expect(screen.getByRole("button", { name: "New backend" })).toBeInTheDocument();
-  await driver.openConfigSection("behaviors");
-  expect(screen.getByRole("button", { name: "New behavior" })).toBeInTheDocument();
+  await driver.openConfigSection("agents");
+  expect(screen.getByRole("button", { name: "New agent" })).toBeInTheDocument();
 
   await driver.openChat();
   expect(driver.composer()).toBeInTheDocument();

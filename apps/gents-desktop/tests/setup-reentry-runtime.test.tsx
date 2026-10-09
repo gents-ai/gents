@@ -15,7 +15,7 @@ import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
 
 type MockApi = Record<string, ReturnType<typeof vi.fn>>;
 
-const AGENT = deployment.agentDid;
+const NODE_DID = deployment.nodeDid;
 const RAW_FAILURE =
   "storing Claude credential: posting GraphQL mutation to http://127.0.0.1:9191/api/v0/graphql";
 
@@ -23,8 +23,8 @@ function status(overrides: Partial<ManagedServerStatus> = {}): ManagedServerStat
   return {
     state: "stopped",
     autoStart: true,
-    agentName: "Local Agent",
-    agentDid: AGENT,
+    nodeName: "Local Agent",
+    nodeDid: NODE_DID,
     graphql: null,
     effectiveToolCeiling: "readwrite",
     effectiveToolRoot: "/tmp/work",
@@ -59,8 +59,8 @@ const claudeCatalog = {
 };
 
 const account = {
-  credentialId: `claude-subscription:${AGENT}`,
-  agentDid: AGENT,
+  credentialId: `claude-subscription:${NODE_DID}`,
+  nodeDid: NODE_DID,
   provider: "claude-subscription",
   accountId: "acct-1",
   planType: null,
@@ -228,7 +228,7 @@ describe("setup re-entry at the provider step", () => {
     reenter(app);
 
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent(/local agent is not running/i);
+    expect(alert).toHaveTextContent(/local node is not running/i);
     expect(alert.textContent).not.toMatch(/http|graphql|127\.0\.0\.1/i);
     expect(screen.queryByRole("button", { name: "Sign in" })).not.toBeInTheDocument();
     expect(api.claudeLogin).not.toHaveBeenCalled();
@@ -271,7 +271,7 @@ describe("setup re-entry at the provider step", () => {
 
     expect(await screen.findByText("Account connected")).toBeVisible();
     expect(api.retrySaveProviderAccount).toHaveBeenCalledWith(
-      AGENT,
+      NODE_DID,
       "claude-subscription",
     );
     expect(api.claudeLogin).toHaveBeenCalledTimes(1);
@@ -301,7 +301,7 @@ describe("setup re-entry at the provider step", () => {
     expect(await screen.findByText("Account connected")).toBeVisible();
     expect(api.claudeLogin).toHaveBeenCalledTimes(1);
     expect(api.retrySaveProviderAccount).toHaveBeenCalledWith(
-      AGENT,
+      NODE_DID,
       "claude-subscription",
     );
   });
@@ -337,7 +337,7 @@ describe("setup re-entry at the provider step", () => {
         initialStep="inference"
         purpose="add-backend"
         provider="anthropic"
-        agentDid={AGENT}
+        nodeDid={NODE_DID}
         onCancel={vi.fn()}
         onDone={vi.fn()}
       />,
@@ -354,7 +354,7 @@ describe("setup re-entry at the provider step", () => {
     await user.click(await screen.findByRole("button", { name: "Retry save" }));
     expect(await screen.findByText("Account connected")).toBeVisible();
     expect(api.retrySaveProviderAccount).toHaveBeenCalledWith(
-      AGENT,
+      NODE_DID,
       "claude-subscription",
     );
     expect(api.claudeLogin).not.toHaveBeenCalled();
@@ -363,15 +363,15 @@ describe("setup re-entry at the provider step", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("skips the runtime gate for a remote agent", async () => {
+  it("skips the runtime gate for a remote node", async () => {
     const { api, app } = harness();
-    const remote = { ...deployment, agentDid: "did:key:zRemote", source: "enrolled" };
+    const remote = { ...deployment, nodeDid: "did:key:zRemote", source: "enrolled" };
     publish(app, [remote]);
     renderIn(
       app,
       <SetupScreen
         initialStep="inference"
-        agentDid="did:key:zRemote"
+        nodeDid="did:key:zRemote"
         onDone={vi.fn()}
       />,
     );
@@ -396,7 +396,7 @@ describe("setupErrorMessage", () => {
           endpoint: "http://127.0.0.1:9191",
         }),
       ),
-    ).toBe("The agent is not reachable. Make sure it is running, then try again.");
+    ).toBe("The node is not reachable. Make sure it is running, then try again.");
   });
 
   it("keeps messages that are already user-facing", () => {

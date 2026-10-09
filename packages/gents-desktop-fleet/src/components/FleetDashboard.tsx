@@ -20,8 +20,8 @@ export type FleetDashboardProps = {
   syncHealth?: SyncHealthView | null;
   starting: boolean;
   onRequestStatusEnrollment: AddPeerFormProps["onRequestStatusEnrollment"];
-  onOpenChat: (agentDid: string) => void;
-  onOpenConfig: (agentDid: string) => void;
+  onOpenChat: (nodeDid: string) => void;
+  onOpenConfig: (nodeDid: string) => void;
   onRemovePeer?: (peerId: string) => Promise<unknown> | void;
   onRenamePeer?: (peerId: string, label: string) => Promise<unknown> | void;
   brand?: ReactNode;
@@ -129,11 +129,11 @@ export function FleetDashboard({
         <div className="fleet-empty-card panel">
           {brand}
           <div className="fleet-empty-copy">
-            <h2>{localRuntimeSetup ? "Set up Gents" : "Connect your agent"}</h2>
+            <h2>{localRuntimeSetup ? "Set up Gents" : "Connect your node"}</h2>
             <p className="muted">
               {localRuntimeSetup
-                ? "Optionally create an agent on this machine, or skip local setup and connect a remote agent."
-                : "Enroll with a remote agent using its authenticated server offer."}
+                ? "Optionally create a node on this machine, or skip local setup and connect a remote node."
+                : "Enroll with a remote node using its authenticated server offer."}
             </p>
           </div>
           {localRuntimeSetup}
@@ -143,10 +143,10 @@ export function FleetDashboard({
               className="fleet-remote-disclosure"
               data-testid="fleet-remote-disclosure"
             >
-              <summary aria-label="Connect a remote agent">
+              <summary aria-label="Connect a remote node">
                 {localRuntimeSetup
-                  ? "Skip local setup and connect a remote agent…"
-                  : "Connect agent"}
+                  ? "Skip local setup and connect a remote node…"
+                  : "Connect node"}
               </summary>
               <AddPeerForm
                 addingPeer={addingPeer}
@@ -175,7 +175,7 @@ export function FleetDashboard({
             }}
             type="button"
           >
-            Add Agent
+            Add Node
           </button>
         </div>
       </header>
@@ -198,8 +198,8 @@ export function FleetDashboard({
         <table className="fleet-table">
           <thead>
             <tr>
-              <th>Agent</th>
-              <th>Behaviors</th>
+              <th>Node</th>
+              <th>Agents</th>
               <th>Tasks</th>
               <th>Inference</th>
               <th>Tool ceiling</th>

@@ -68,7 +68,7 @@ export function testApp({
   if (deployments) publish(app, deployments);
   app.stores.selection.setState({
     ...(session
-      ? { agentDid: session.agentDid ?? null, sessionId: session.sessionId }
+      ? { nodeDid: session.nodeDid ?? null, sessionId: session.sessionId }
       : {}),
     ...selection,
   });

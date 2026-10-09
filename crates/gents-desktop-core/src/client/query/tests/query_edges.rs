@@ -52,22 +52,22 @@ fn doc_patch_support_excludes_pairing_control_collections() {
 }
 
 #[test]
-fn agent_runtime_queries_cannot_reintroduce_readiness_authority() {
-    let fields = AGENT_RUNTIME_FIELDS.split_whitespace().collect::<Vec<_>>();
+fn node_runtime_queries_cannot_reintroduce_readiness_authority() {
+    let fields = NODE_RUNTIME_FIELDS.split_whitespace().collect::<Vec<_>>();
     for forbidden in [
         "process_state",
         "active_generation",
         "router_generation",
-        "default_behavior_id",
-        "runnable_behavior_count",
-        "unavailable_behavior_count",
+        "default_agent_id",
+        "runnable_agent_count",
+        "unavailable_agent_count",
     ] {
         assert!(!fields.contains(&forbidden), "forbidden field: {forbidden}");
     }
 }
 
 #[tokio::test]
-async fn load_agent_runtimes_hydrates_executor_capacity_and_queue_depth() {
+async fn load_node_runtimes_hydrates_executor_capacity_and_queue_depth() {
     let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
     ensure_runtime_schemas(node.as_ref())
         .await
@@ -76,25 +76,25 @@ async fn load_agent_runtimes_hydrates_executor_capacity_and_queue_depth() {
     let response = node
         .execute(
             r#"mutation {
-                create_AgentRuntime(input: {
-                    agent_did: "did:key:runtime-capacity",
-                    behavior_executor_capacity: 7,
-                    behavior_executor_queue_depth: 3
-                }) { agent_did }
+                create_NodeRuntime(input: {
+                    node_did: "did:key:runtime-capacity",
+                    agent_executor_capacity: 7,
+                    agent_executor_queue_depth: 3
+                }) { node_did }
             }"#,
         )
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
 
-    let runtimes = load_agent_runtimes(node.as_ref())
+    let runtimes = load_node_runtimes(node.as_ref())
         .await
-        .expect("load agent runtimes");
+        .expect("load node runtimes");
     let runtime = runtimes
         .iter()
-        .find(|row| row.agent_did == "did:key:runtime-capacity")
+        .find(|row| row.node_did == "did:key:runtime-capacity")
         .expect("created runtime");
-    assert_eq!(runtime.behavior_executor_capacity, Some(7));
-    assert_eq!(runtime.behavior_executor_queue_depth, Some(3));
+    assert_eq!(runtime.agent_executor_capacity, Some(7));
+    assert_eq!(runtime.agent_executor_queue_depth, Some(3));
 }
 
 #[tokio::test]
@@ -114,8 +114,6 @@ async fn load_agent_tool_calls_hydrates_background_projection_fields() {
                     message_sequence: 1,
                     tool_name: "agent_new",
                     tool_call_id: "start-1",
-                    args: "{}",
-                    result: "",
                     status: "called",
                     lifecycle_state: "running",
                     await_mode: "background",
@@ -137,7 +135,7 @@ async fn load_agent_tool_calls_hydrates_background_projection_fields() {
 }
 
 #[tokio::test]
-async fn load_agent_scoped_snapshot_excludes_other_agents() {
+async fn load_node_scoped_snapshot_excludes_other_nodes() {
     let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
     ensure_runtime_schemas(node.as_ref())
         .await
@@ -146,15 +144,15 @@ async fn load_agent_scoped_snapshot_excludes_other_agents() {
     let mutation = r#"mutation {
         alpha: create_AgentSession(input: {
             session_id: "alpha-1",
-            agent_did: "did:alpha",
-            behavior_id: "default",
+            node_did: "did:alpha",
+            agent_id: "default",
             title: { text: "alpha", source: "user" },
             created_at: "2026-05-07T00:00:00Z"
         }) { _docID }
         beta: create_AgentSession(input: {
             session_id: "beta-1",
-            agent_did: "did:beta",
-            behavior_id: "default",
+            node_did: "did:beta",
+            agent_id: "default",
             title: { text: "beta", source: "user" },
             created_at: "2026-05-07T00:00:00Z"
         }) { _docID }
@@ -166,7 +164,7 @@ async fn load_agent_scoped_snapshot_excludes_other_agents() {
         alpha: create_Goal(input: {
             goal_id: "alpha-goal",
             session_id: "alpha-goal-only",
-            agent_did: "did:alpha",
+            node_did: "did:alpha",
             objective: "goal-only session",
             status: "active",
             created_at: "2026-05-07T00:00:00Z"
@@ -174,7 +172,7 @@ async fn load_agent_scoped_snapshot_excludes_other_agents() {
         beta: create_Goal(input: {
             goal_id: "beta-goal",
             session_id: "beta-goal-only",
-            agent_did: "did:beta",
+            node_did: "did:beta",
             objective: "other agent",
             status: "active",
             created_at: "2026-05-07T00:00:00Z"
@@ -183,14 +181,14 @@ async fn load_agent_scoped_snapshot_excludes_other_agents() {
     let response = node.execute(goal_mutation).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
 
-    let store = load_agent_scoped_snapshot(node.as_ref(), "did:alpha")
+    let store = load_node_scoped_snapshot(node.as_ref(), "did:alpha")
         .await
-        .expect("load_agent_scoped_snapshot");
+        .expect("load_node_scoped_snapshot");
 
     let dids: Vec<&str> = store
         .sessions
         .iter()
-        .map(|session| session.agent_did.as_str())
+        .map(|session| session.node_did.as_str())
         .collect();
     assert_eq!(
         dids.len(),

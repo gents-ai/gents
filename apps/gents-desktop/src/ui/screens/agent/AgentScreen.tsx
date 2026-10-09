@@ -22,11 +22,11 @@ import { nodeOf } from "../../../hooks/fleetStore";
 import { isListed, SECTIONS } from "./sections";
 
 export function AgentScreen({
-  agentDid,
+  nodeDid,
   section,
   item,
 }: {
-  agentDid: string;
+  nodeDid: string;
   section: string;
   item?: string;
 }) {
@@ -37,12 +37,12 @@ export function AgentScreen({
     content.current
       ?.querySelector("[data-slot=scroll-area-viewport]")
       ?.scrollTo({ top: 0 });
-  }, [agentDid, section, item]);
-  const deployment = useFleet((s) => nodeOf(s, agentDid));
+  }, [nodeDid, section, item]);
+  const deployment = useFleet((s) => nodeOf(s, nodeDid));
   if (!deployment) {
     return (
       <p className="p-8 text-sm text-muted-foreground">
-        No agent with that DID on this desktop.
+        No node with that DID on this desktop.
       </p>
     );
   }
@@ -71,7 +71,7 @@ export function AgentScreen({
                   .map((s) => (
                     <SidebarItem
                       key={s.id}
-                      href={href({ name: "agent", agentDid, section: s.id })}
+                      href={href({ name: "agent", nodeDid, section: s.id })}
                       icon={<s.icon />}
                       active={entry === s.id}
                       count={s.count?.(deployment)}
@@ -91,7 +91,7 @@ export function AgentScreen({
               items={listed.map((s) => ({ value: s.id, label: s.label }))}
               value={entry}
               onValueChange={(v) =>
-                v && navigate({ name: "agent", agentDid, section: v })
+                v && navigate({ name: "agent", nodeDid, section: v })
               }
             >
               <SelectTrigger aria-label="Section" className="w-full">
@@ -124,7 +124,7 @@ export function AgentScreen({
           {/* a panel's drafts and dialogs belong to the agent they were opened
               on: switching agents starts every panel over */}
           <div
-            key={deployment.agentDid}
+            key={deployment.nodeDid}
             className="mx-auto max-w-page px-4 py-6 md:px-8 md:py-8"
           >
             {Panel && <Panel deployment={deployment} item={item} />}

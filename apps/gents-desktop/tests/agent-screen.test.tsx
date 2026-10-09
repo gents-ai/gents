@@ -6,29 +6,29 @@ import { describe, expect, it, vi } from "vitest";
 import { AgentScreen } from "../src/ui/screens/agent/AgentScreen";
 import { node, renderIn, testApp } from "./app-fixture";
 
-describe("switching agents on the configuration screen", () => {
-  it("drops a draft opened on the previous agent", async () => {
+describe("switching nodes on the configuration screen", () => {
+  it("drops a draft opened on the previous node", async () => {
     const app = testApp({
-      deployments: [node({ agentDid: "did:key:a" }), node({ agentDid: "did:key:b" })],
+      deployments: [node({ nodeDid: "did:key:a" }), node({ nodeDid: "did:key:b" })],
     });
     const view = renderIn(
       app,
       <TooltipProvider>
-        <AgentScreen agentDid="did:key:a" section="behaviors" />
+        <AgentScreen nodeDid="did:key:a" section="agents" />
       </TooltipProvider>,
     );
-    await userEvent.click(screen.getByRole("button", { name: "New behavior" }));
-    expect(screen.getByRole("button", { name: "Behaviors" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "New agent" }));
+    expect(screen.getByRole("button", { name: "Agents" })).toBeInTheDocument();
 
     act(() =>
       view.rerender(
         <TooltipProvider>
-          <AgentScreen agentDid="did:key:b" section="behaviors" />
+          <AgentScreen nodeDid="did:key:b" section="agents" />
         </TooltipProvider>,
       ),
     );
-    expect(screen.queryByRole("button", { name: "Behaviors" })).toBeNull();
-    expect(screen.getByRole("button", { name: "New behavior" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Agents" })).toBeNull();
+    expect(screen.getByRole("button", { name: "New agent" })).toBeInTheDocument();
   });
 });
 
@@ -42,9 +42,9 @@ describe("moving within the configuration screen", () => {
     } as typeof HTMLElement.prototype.scrollTo;
     return { at, restore: () => (HTMLElement.prototype.scrollTo = original) };
   }
-  const page = (agentDid: string, section: string) => (
+  const page = (nodeDid: string, section: string) => (
     <TooltipProvider>
-      <AgentScreen agentDid={agentDid} section={section} />
+      <AgentScreen nodeDid={nodeDid} section={section} />
     </TooltipProvider>
   );
   /* the scroll area holding the section, not the sidebar beside it */
@@ -53,18 +53,18 @@ describe("moving within the configuration screen", () => {
       .getByRole("combobox", { name: "Section" })
       .closest("[data-slot=scroll-area-viewport]");
 
-  it("starts a new section, or another agent's, at the top of the page", () => {
+  it("starts a new section, or another node's, at the top of the page", () => {
     const app = testApp({
-      deployments: [node({ agentDid: "did:key:a" }), node({ agentDid: "did:key:b" })],
+      deployments: [node({ nodeDid: "did:key:a" }), node({ nodeDid: "did:key:b" })],
     });
     const scrolled = scrolls();
     try {
       const view = renderIn(app, page("did:key:a", "skills"));
       scrolled.at.length = 0;
-      act(() => view.rerender(page("did:key:a", "behaviors")));
+      act(() => view.rerender(page("did:key:a", "agents")));
       expect(scrolled.at).toEqual([content()]);
       scrolled.at.length = 0;
-      act(() => view.rerender(page("did:key:b", "behaviors")));
+      act(() => view.rerender(page("did:key:b", "agents")));
       expect(scrolled.at).toEqual([content()]);
     } finally {
       scrolled.restore();
@@ -74,11 +74,11 @@ describe("moving within the configuration screen", () => {
 
 describe("the inference route", () => {
   it("lists what the Providers page lists, profiles under their backends", async () => {
-    const app = testApp({ deployments: [node({ agentDid: "did:key:a" })] });
+    const app = testApp({ deployments: [node({ nodeDid: "did:key:a" })] });
     renderIn(
       app,
       <TooltipProvider>
-        <AgentScreen agentDid="did:key:a" section="inference" />
+        <AgentScreen nodeDid="did:key:a" section="inference" />
       </TooltipProvider>,
     );
     const [toggle] = screen.getAllByRole("button", { name: /^Show what .* serves$/ });
@@ -93,18 +93,18 @@ describe("turning a task off from its row", () => {
     const saveTaskConfig = vi.fn().mockResolvedValue(undefined);
     const app = testApp({
       api: { patchConfigComponents, saveTaskConfig, fetchClientSnapshot: vi.fn() },
-      deployments: [node({ agentDid: "did:key:a" })],
+      deployments: [node({ nodeDid: "did:key:a" })],
     });
     renderIn(
       app,
       <TooltipProvider>
-        <AgentScreen agentDid="did:key:a" section="tasks" />
+        <AgentScreen nodeDid="did:key:a" section="tasks" />
       </TooltipProvider>,
     );
     await userEvent.click(screen.getByRole("switch", { name: "Task A is on" }));
     await waitFor(() => expect(patchConfigComponents).toHaveBeenCalledOnce());
     expect(patchConfigComponents).toHaveBeenCalledWith({
-      agentDid: "did:key:a",
+      nodeDid: "did:key:a",
       patches: [{ collection: "Task", id: "task-a", changes: { enabled: false } }],
     });
     expect(saveTaskConfig).not.toHaveBeenCalled();

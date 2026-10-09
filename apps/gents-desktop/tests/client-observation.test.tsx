@@ -11,16 +11,16 @@ import { startClientObservation } from "../src/hooks/clientObservation";
 import { node, testApp } from "./app-fixture";
 import { liveAssistant, sessionSnapshot } from "./timeline-fixture";
 
-const AGENT = "did:key:here";
+const NODE_DID = "did:key:here";
 const running = {
   bootstrap: { clientStateExists: true, savedPeers: [] },
   client: {
     deployments: [
       node({
-        agentDid: AGENT,
+        nodeDid: NODE_DID,
         sessions: [
-          { sessionId: "s-1", agentDid: AGENT, requesterDid: null },
-          { sessionId: "s-2", agentDid: AGENT, requesterDid: null },
+          { sessionId: "s-1", nodeDid: NODE_DID, requesterDid: null },
+          { sessionId: "s-2", nodeDid: NODE_DID, requesterDid: null },
         ],
       }),
     ],
@@ -49,7 +49,7 @@ describe("following the client while it runs", () => {
         const api = bridgeApi();
         const session = sessionSnapshot({
           sessionId: "s-1",
-          agentDid: AGENT,
+          nodeDid: NODE_DID,
           turnState: "running",
           latestRequestId: "r-1",
           liveCursor: hasLive ? "source" : null,
@@ -100,7 +100,7 @@ describe("following the client while it runs", () => {
     const app = testApp({
       api: bridgeApi(),
       snapshot: running,
-      selection: { agentDid: AGENT, sessionId: "s-1" },
+      selection: { nodeDid: NODE_DID, sessionId: "s-1" },
     });
     renderHook(() => useClientRuntime(app, listen));
     await waitFor(() => expect(listen).toHaveBeenCalledOnce());
@@ -121,11 +121,11 @@ describe("following the client while it runs", () => {
         client: {
           deployments: [
             ...running.client!.deployments,
-            node({ agentDid: "did:key:there" }),
+            node({ nodeDid: "did:key:there" }),
           ],
         },
       },
-      selection: { agentDid: AGENT, sessionId: "s-1" },
+      selection: { nodeDid: NODE_DID, sessionId: "s-1" },
     });
     renderHook(() =>
       useClientRuntime(
@@ -133,21 +133,21 @@ describe("following the client while it runs", () => {
         vi.fn(async () => () => {}),
       ),
     );
-    await waitFor(() => expect(api.setSelectedAgent).toHaveBeenCalledWith(AGENT));
+    await waitFor(() => expect(api.setSelectedNode).toHaveBeenCalledWith(NODE_DID));
 
     act(() => app.actions.selectSession("s-2"));
     await waitFor(() =>
       expect(api.fetchSessionSnapshot).toHaveBeenCalledWith(
         "s-2",
-        AGENT,
+        NODE_DID,
         null,
         expect.anything(),
       ),
     );
 
-    act(() => app.actions.selectAgent("did:key:there"));
+    act(() => app.actions.selectNode("did:key:there"));
     await waitFor(() =>
-      expect(api.setSelectedAgent).toHaveBeenLastCalledWith("did:key:there"),
+      expect(api.setSelectedNode).toHaveBeenLastCalledWith("did:key:there"),
     );
   });
 
@@ -160,9 +160,9 @@ describe("following the client while it runs", () => {
         vi.fn(async () => () => {}),
       ),
     );
-    await waitFor(() => expect(api.setSelectedAgent).toHaveBeenCalled());
+    await waitFor(() => expect(api.setSelectedNode).toHaveBeenCalled());
     await act(async () => {});
 
-    expect(api.setSelectedAgent.mock.calls).toEqual([[AGENT]]);
+    expect(api.setSelectedNode.mock.calls).toEqual([[NODE_DID]]);
   });
 });

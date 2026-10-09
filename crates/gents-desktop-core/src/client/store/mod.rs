@@ -11,17 +11,16 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use gents::document_config::{
-    AgentBehavior, AgentContext, AgentPrincipal, ChainKeyBindingDocument, CompactionConfig,
+    Agent, AgentContext, AgentTargetDocument, ChainKeyBindingDocument, CompactionConfig,
     DatastoreToolSurfaceDocument, EventSource, InferenceBackend, InferenceBackendObservation,
-    InferenceExecution, InferenceProfile, InferenceSampling, Schedule, ScheduleObservation,
-    SkillDocument, SubagentTargetDocument, Task, ToolServiceRegistry, Tools, Trigger,
-    TriggerObservation,
+    InferenceExecution, InferenceProfile, InferenceSampling, Node, Schedule, ScheduleObservation,
+    SkillDocument, Task, ToolServiceRegistry, Tools, Trigger, TriggerObservation,
 };
 use gents::session::canonical_rows::{OutputSegmentRow, TranscriptMessageRow};
 use gents_protocol::client_protocol::ClientTurnState;
 use gents_protocol::row::{
-    AgentBehaviorReadinessRow, AgentRequestRow, AgentRuntimeRow, AgentToolCallRow,
-    CompactionEntryRow, GoalRow, MailboxItemRow,
+    AgentRequestRow, AgentToolCallRow, CompactionEntryRow, GoalRow, MailboxItemRow,
+    NodeReadinessRow, NodeRuntimeRow,
 };
 use gents_protocol::session::AgentSession;
 use serde::Serialize;
@@ -31,10 +30,10 @@ use self::merge_helpers::*;
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct ClientStoreRows {
-    pub agent_principals: Vec<AgentPrincipal>,
-    pub behaviors: Vec<AgentBehavior>,
-    pub runtimes: Vec<AgentRuntimeRow>,
-    pub behavior_readiness: Vec<AgentBehaviorReadinessRow>,
+    pub nodes: Vec<Node>,
+    pub agents: Vec<Agent>,
+    pub runtimes: Vec<NodeRuntimeRow>,
+    pub node_readiness: Vec<NodeReadinessRow>,
     pub requests: Vec<AgentRequestRow>,
     pub mailbox_items: Vec<MailboxItemRow>,
     #[serde(skip)]
@@ -46,76 +45,76 @@ pub struct ClientStoreRows {
     pub tool_calls: Vec<AgentToolCallRow>,
     pub compaction_entries: Vec<CompactionEntryRow>,
     #[serde(skip)]
-    pub session_source_agent_dids: Vec<Option<String>>,
+    pub session_source_node_dids: Vec<Option<String>>,
     #[serde(skip)]
-    pub tool_call_source_agent_dids: Vec<Option<String>>,
+    pub tool_call_source_node_dids: Vec<Option<String>>,
     #[serde(skip)]
-    pub compaction_entry_source_agent_dids: Vec<Option<String>>,
+    pub compaction_entry_source_node_dids: Vec<Option<String>>,
     pub tasks: Vec<Task>,
     pub schedules: Vec<Schedule>,
     pub schedule_observations: Vec<ScheduleObservation>,
     pub triggers: Vec<Trigger>,
     pub trigger_observations: Vec<TriggerObservation>,
     #[serde(skip)]
-    pub task_source_agent_dids: Vec<Option<String>>,
+    pub task_source_node_dids: Vec<Option<String>>,
     #[serde(skip)]
-    pub schedule_source_agent_dids: Vec<Option<String>>,
+    pub schedule_source_node_dids: Vec<Option<String>>,
     #[serde(skip)]
-    pub schedule_observation_source_agent_dids: Vec<Option<String>>,
+    pub schedule_observation_source_node_dids: Vec<Option<String>>,
     #[serde(skip)]
-    pub trigger_source_agent_dids: Vec<Option<String>>,
+    pub trigger_source_node_dids: Vec<Option<String>>,
     #[serde(skip)]
-    pub trigger_observation_source_agent_dids: Vec<Option<String>>,
+    pub trigger_observation_source_node_dids: Vec<Option<String>>,
     pub skills: Vec<SkillDocument>,
     #[serde(skip)]
-    pub skill_source_agent_dids: Vec<Option<String>>,
+    pub skill_source_node_dids: Vec<Option<String>>,
     pub tools: Vec<Tools>,
     #[serde(skip)]
-    pub tools_source_agent_dids: Vec<Option<String>>,
+    pub tools_source_node_dids: Vec<Option<String>>,
     pub contexts: Vec<AgentContext>,
     #[serde(skip)]
-    pub context_source_agent_dids: Vec<Option<String>>,
+    pub context_source_node_dids: Vec<Option<String>>,
     pub compactions: Vec<CompactionConfig>,
     #[serde(skip)]
-    pub compaction_source_agent_dids: Vec<Option<String>>,
+    pub compaction_source_node_dids: Vec<Option<String>>,
     pub inference_backends: Vec<InferenceBackend>,
     pub backend_observations: Vec<InferenceBackendObservation>,
     pub inference_profiles: Vec<InferenceProfile>,
     pub inference_sampling: Vec<InferenceSampling>,
     #[serde(skip)]
-    pub inference_sampling_source_agent_dids: Vec<Option<String>>,
+    pub inference_sampling_source_node_dids: Vec<Option<String>>,
     pub inference_execution: Vec<InferenceExecution>,
     #[serde(skip)]
-    pub inference_execution_source_agent_dids: Vec<Option<String>>,
+    pub inference_execution_source_node_dids: Vec<Option<String>>,
     pub tool_service_registries: Vec<ToolServiceRegistry>,
     pub event_sources: Vec<EventSource>,
     #[serde(skip)]
-    pub event_source_source_agent_dids: Vec<Option<String>>,
-    pub subagent_targets: Vec<SubagentTargetDocument>,
+    pub event_source_source_node_dids: Vec<Option<String>>,
+    pub agent_targets: Vec<AgentTargetDocument>,
     #[serde(skip)]
-    pub subagent_target_source_agent_dids: Vec<Option<String>>,
+    pub agent_target_source_node_dids: Vec<Option<String>>,
     pub datastore_tool_surfaces: Vec<DatastoreToolSurfaceDocument>,
     #[serde(skip)]
-    pub datastore_tool_surface_source_agent_dids: Vec<Option<String>>,
+    pub datastore_tool_surface_source_node_dids: Vec<Option<String>>,
     pub chain_key_bindings: Vec<ChainKeyBindingDocument>,
     #[serde(skip)]
-    pub chain_key_binding_source_agent_dids: Vec<Option<String>>,
+    pub chain_key_binding_source_node_dids: Vec<Option<String>>,
     #[serde(skip)]
-    pub inference_backend_source_agent_dids: Vec<Option<String>>,
+    pub inference_backend_source_node_dids: Vec<Option<String>>,
     #[serde(skip)]
-    pub backend_observation_source_agent_dids: Vec<Option<String>>,
+    pub backend_observation_source_node_dids: Vec<Option<String>>,
     #[serde(skip)]
-    pub inference_profile_source_agent_dids: Vec<Option<String>>,
+    pub inference_profile_source_node_dids: Vec<Option<String>>,
     #[serde(skip)]
-    pub tool_service_registry_source_agent_dids: Vec<Option<String>>,
+    pub tool_service_registry_source_node_dids: Vec<Option<String>>,
 }
 
 #[derive(Debug, Clone)]
 pub struct ClientStore {
-    pub agent_principals: Vec<AgentPrincipal>,
-    pub behaviors: Vec<AgentBehavior>,
-    pub runtimes: Vec<AgentRuntimeRow>,
-    pub behavior_readiness: Vec<AgentBehaviorReadinessRow>,
+    pub nodes: Vec<Node>,
+    pub agents: Vec<Agent>,
+    pub runtimes: Vec<NodeRuntimeRow>,
+    pub node_readiness: Vec<NodeReadinessRow>,
     pub requests: Vec<AgentRequestRow>,
     pub mailbox_items: Vec<MailboxItemRow>,
     pub transcript_messages: Vec<TranscriptMessageRow>,
@@ -124,53 +123,53 @@ pub struct ClientStore {
     pub goals: Vec<GoalRow>,
     pub tool_calls: Vec<AgentToolCallRow>,
     pub compaction_entries: Vec<CompactionEntryRow>,
-    pub session_source_agent_dids: Vec<Option<String>>,
-    pub tool_call_source_agent_dids: Vec<Option<String>>,
-    pub compaction_entry_source_agent_dids: Vec<Option<String>>,
+    pub session_source_node_dids: Vec<Option<String>>,
+    pub tool_call_source_node_dids: Vec<Option<String>>,
+    pub compaction_entry_source_node_dids: Vec<Option<String>>,
     pub tasks: Vec<Task>,
     pub schedules: Vec<Schedule>,
     pub schedule_observations: Vec<ScheduleObservation>,
     pub triggers: Vec<Trigger>,
     pub trigger_observations: Vec<TriggerObservation>,
-    pub task_source_agent_dids: Vec<Option<String>>,
-    pub schedule_source_agent_dids: Vec<Option<String>>,
-    pub schedule_observation_source_agent_dids: Vec<Option<String>>,
-    pub trigger_source_agent_dids: Vec<Option<String>>,
-    pub trigger_observation_source_agent_dids: Vec<Option<String>>,
+    pub task_source_node_dids: Vec<Option<String>>,
+    pub schedule_source_node_dids: Vec<Option<String>>,
+    pub schedule_observation_source_node_dids: Vec<Option<String>>,
+    pub trigger_source_node_dids: Vec<Option<String>>,
+    pub trigger_observation_source_node_dids: Vec<Option<String>>,
     pub skills: Vec<SkillDocument>,
-    pub skill_source_agent_dids: Vec<Option<String>>,
+    pub skill_source_node_dids: Vec<Option<String>>,
     pub tools: Vec<Tools>,
-    pub tools_source_agent_dids: Vec<Option<String>>,
+    pub tools_source_node_dids: Vec<Option<String>>,
     pub contexts: Vec<AgentContext>,
-    pub context_source_agent_dids: Vec<Option<String>>,
+    pub context_source_node_dids: Vec<Option<String>>,
     pub compactions: Vec<CompactionConfig>,
-    pub compaction_source_agent_dids: Vec<Option<String>>,
+    pub compaction_source_node_dids: Vec<Option<String>>,
     pub inference_backends: Vec<InferenceBackend>,
     pub backend_observations: Vec<InferenceBackendObservation>,
     pub inference_profiles: Vec<InferenceProfile>,
     pub inference_sampling: Vec<InferenceSampling>,
-    pub inference_sampling_source_agent_dids: Vec<Option<String>>,
+    pub inference_sampling_source_node_dids: Vec<Option<String>>,
     pub inference_execution: Vec<InferenceExecution>,
-    pub inference_execution_source_agent_dids: Vec<Option<String>>,
+    pub inference_execution_source_node_dids: Vec<Option<String>>,
     pub tool_service_registries: Vec<ToolServiceRegistry>,
     pub event_sources: Vec<EventSource>,
-    pub event_source_source_agent_dids: Vec<Option<String>>,
-    pub subagent_targets: Vec<SubagentTargetDocument>,
-    pub subagent_target_source_agent_dids: Vec<Option<String>>,
+    pub event_source_source_node_dids: Vec<Option<String>>,
+    pub agent_targets: Vec<AgentTargetDocument>,
+    pub agent_target_source_node_dids: Vec<Option<String>>,
     pub datastore_tool_surfaces: Vec<DatastoreToolSurfaceDocument>,
-    pub datastore_tool_surface_source_agent_dids: Vec<Option<String>>,
+    pub datastore_tool_surface_source_node_dids: Vec<Option<String>>,
     pub chain_key_bindings: Vec<ChainKeyBindingDocument>,
-    pub chain_key_binding_source_agent_dids: Vec<Option<String>>,
-    pub inference_backend_source_agent_dids: Vec<Option<String>>,
-    pub backend_observation_source_agent_dids: Vec<Option<String>>,
-    pub inference_profile_source_agent_dids: Vec<Option<String>>,
-    pub tool_service_registry_source_agent_dids: Vec<Option<String>>,
+    pub chain_key_binding_source_node_dids: Vec<Option<String>>,
+    pub inference_backend_source_node_dids: Vec<Option<String>>,
+    pub backend_observation_source_node_dids: Vec<Option<String>>,
+    pub inference_profile_source_node_dids: Vec<Option<String>>,
+    pub tool_service_registry_source_node_dids: Vec<Option<String>>,
     transcript_messages_by_session_id: HashMap<String, Vec<usize>>,
     output_segments_by_request_doc_id: HashMap<String, Vec<usize>>,
     requests_by_session_id: HashMap<String, Vec<usize>>,
     tool_calls_by_session_id: HashMap<String, Vec<usize>>,
-    runtimes_by_agent_did: HashMap<String, usize>,
-    behavior_readiness_by_agent_did: HashMap<String, usize>,
+    runtimes_by_node_did: HashMap<String, usize>,
+    node_readiness_by_node_did: HashMap<String, usize>,
     request_index_by_id: HashMap<String, usize>,
 }
 
@@ -219,10 +218,10 @@ impl ClientStore {
         self.transcript_messages_by_session_id.clear();
         self.output_segments_by_request_doc_id.clear();
         self.tool_calls.clear();
-        self.tool_call_source_agent_dids.clear();
+        self.tool_call_source_node_dids.clear();
         self.tool_calls_by_session_id.clear();
         self.compaction_entries.clear();
-        self.compaction_entry_source_agent_dids.clear();
+        self.compaction_entry_source_node_dids.clear();
         self
     }
 }

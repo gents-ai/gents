@@ -16,7 +16,7 @@ type PeerActionParams = {
   refreshSnapshot: () => Promise<void>;
   /** shows a failed action to the person, once */
   reportFailure: (message: string) => void;
-  selectAgent: (agentDid: string | null) => void;
+  selectNode: (nodeDid: string | null) => void;
 };
 
 export function createPeerActions({
@@ -26,7 +26,7 @@ export function createPeerActions({
   mutateSnapshot,
   refreshSnapshot,
   reportFailure,
-  selectAgent,
+  selectNode,
 }: PeerActionParams) {
   const setStarting = (starting: boolean) =>
     clientStatus.setStarting(stores.client, starting);
@@ -40,14 +40,14 @@ export function createPeerActions({
         await mutateSnapshot(() => api.shutdownDesktopClient());
       }
       const summary = await api.initLocalStandardRuntime({
-        label: label?.trim() || "Local Agent",
+        label: label?.trim() || "Local Node",
         dangerouslyOverwrite: false,
         reset: false,
       });
       // Init durably writes the local-standard peer entry. Restarting the
       // client is the only supported way to hydrate that trusted local route.
       await ensureDesktopClientStarted();
-      selectAgent(summary.agentDid);
+      selectNode(summary.nodeDid);
       return summary;
     } catch (err) {
       if (clientWasRunning) {
@@ -84,11 +84,11 @@ export function createPeerActions({
     }
   }
 
-  async function removePeer(peerId: string, agentDid?: string) {
+  async function removePeer(peerId: string, nodeDid?: string) {
     try {
       const next = await mutateSnapshot(() => api.removePeer(peerId));
-      if (agentDid && stores.selection.getState().agentDid === agentDid) {
-        selectAgent(null);
+      if (nodeDid && stores.selection.getState().nodeDid === nodeDid) {
+        selectNode(null);
       }
       return next;
     } catch (err) {
@@ -117,7 +117,7 @@ export function createPeerActions({
      */
     requestStatusEnrollment,
     /**
-     * Provisions the local agent and starts the client on its route, then
+     * Provisions the local node and starts the client on its route, then
      * selects it. A running client is stopped first and, if provisioning
      * fails, started again. A failure is not reported here: setup shows it in
      * its step log, with a retry.

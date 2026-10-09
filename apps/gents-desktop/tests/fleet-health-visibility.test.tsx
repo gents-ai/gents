@@ -56,15 +56,16 @@ describe("fleet health visibility", () => {
     );
   });
 
-  it("keeps enrolled chat available when last-known readiness is lagged", () => {
+  it("keeps enrolled chat available when current readiness has an old observation timestamp", () => {
     const stale = {
       ...deployment,
       source: "enrollment",
       dialSucceeded: true,
       lastError: null,
-      behaviorReadiness: {
-        ...deployment.behaviorReadiness,
-        source: { state: "unknown" as const, reason: "readiness_stale" as const },
+      nodeReadiness: {
+        ...deployment.nodeReadiness,
+        source: { state: "current" as const },
+        updatedAt: "2000-01-01T00:00:00Z",
       },
     };
     const syncing = syncHealth({
@@ -86,7 +87,7 @@ describe("fleet health visibility", () => {
   it("shows useful document counts instead of transport identifiers", () => {
     renderRow({ ...deployment, dialSucceeded: true, lastError: null });
     expect(screen.getByTestId("fleet-summary-peer-1")).toHaveTextContent(
-      "2 behaviors · 0 sessions · 2 tasks",
+      "2 agents · 0 sessions · 2 tasks",
     );
     expect(screen.queryByRole("button", { name: "Copy DID" })).not.toBeInTheDocument();
     expect(screen.queryByText(/GraphQL/)).not.toBeInTheDocument();

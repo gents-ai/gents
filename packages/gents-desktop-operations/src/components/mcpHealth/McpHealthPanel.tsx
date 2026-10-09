@@ -20,7 +20,8 @@ export function McpHealthPanel({
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [lastFetchedAt, setLastFetchedAt] = useState<string | null>(null);
-  const [probingServiceId, setProbingServiceId] = useState<string | null>(null);
+  const [probingServiceIds, setProbingServiceIds] = useState<string[]>([]);
+  const pendingProbes = useRef(new Set<string>());
   const [probeOutcomes, setProbeOutcomes] = useState<
     Record<string, McpProbeOutcome>
   >({});
@@ -57,13 +58,21 @@ export function McpHealthPanel({
   }, [refresh]);
 
   const probe = useCallback(
-    async (serviceId: string) => {
-      setProbingServiceId(serviceId);
+    async (probeKey: string) => {
+      const service = services.find(
+        (row) => JSON.stringify([row.nodeDid, row.serviceId]) === probeKey,
+      );
+      if (!service?.nodeDid || pendingProbes.current.has(probeKey)) return;
+      pendingProbes.current.add(probeKey);
+      setProbingServiceIds([...pendingProbes.current]);
       try {
-        const result = await api.probeMcpService(serviceId);
+        const result = await api.probeMcpService(
+          service.nodeDid,
+          service.serviceId,
+        );
         setProbeOutcomes((prev) => ({
           ...prev,
-          [serviceId]: {
+          [probeKey]: {
             at: new Date().toISOString(),
             status: result.status,
             latencyMs: result.latencyMs,
@@ -74,16 +83,17 @@ export function McpHealthPanel({
       } catch (caught) {
         setProbeOutcomes((prev) => ({
           ...prev,
-          [serviceId]: {
+          [probeKey]: {
             at: new Date().toISOString(),
             error: caught instanceof Error ? caught.message : String(caught),
           },
         }));
       } finally {
-        setProbingServiceId(null);
+        pendingProbes.current.delete(probeKey);
+        setProbingServiceIds([...pendingProbes.current]);
       }
     },
-    [api, refresh],
+    [api, refresh, services],
   );
 
   return (
@@ -92,7 +102,7 @@ export function McpHealthPanel({
       loading={loading}
       error={error}
       lastFetchedAt={lastFetchedAt}
-      probingServiceId={probingServiceId}
+      probingServiceIds={probingServiceIds}
       probeOutcomes={probeOutcomes}
       onProbe={(serviceId) => {
         void probe(serviceId);

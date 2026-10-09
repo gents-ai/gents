@@ -1,9 +1,9 @@
-import { selectedBehaviorReadinessDecision } from "@source-inc/gents-desktop-client";
+import { selectedNodeReadinessDecision } from "@source-inc/gents-desktop-client";
 
 import type { NodeView } from "../../hooks/fleetStore";
 
 const READINESS_REASON: Record<string, string> = {
-  behavior_disabled: "behavior is disabled",
+  agent_disabled: "agent is disabled",
   runtime_configuration_invalid: "runtime configuration is invalid",
   backend_not_configured: "no inference backend",
   backend_disabled: "inference backend is disabled",
@@ -16,11 +16,8 @@ const READINESS_REASON: Record<string, string> = {
 };
 
 /** Preserve picker copy while delegating the readiness decision to its owner. */
-export function behaviorReadiness(
-  deployment: NodeView | null,
-  behaviorId: string | null,
-) {
-  const decision = selectedBehaviorReadinessDecision(deployment, behaviorId);
+export function agentReadiness(deployment: NodeView | null, agentId: string | null) {
+  const decision = selectedNodeReadinessDecision(deployment, agentId);
   if (decision.kind === "ready") return { ready: true, reason: null };
   const reason = decision.reason;
   return {

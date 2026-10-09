@@ -22,7 +22,7 @@ describe("createDesktopStore", () => {
     expect(transport.calls).toEqual([
       {
         command: "desktop_session_hydration_retry",
-        args: { sessionId: "session-1", agentDid: null },
+        args: { sessionId: "session-1", nodeDid: null },
       },
     ]);
   });

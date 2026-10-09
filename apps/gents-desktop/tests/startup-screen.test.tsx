@@ -27,7 +27,7 @@ function deferred<T>() {
 const savedPeer = {
   peerId: deployment.peerId,
   label: deployment.label,
-  agentDid: deployment.agentDid,
+  nodeDid: deployment.nodeDid,
   addr: deployment.addr,
   source: deployment.source,
   graphql: deployment.graphql,
@@ -75,7 +75,7 @@ function bridge(
   const api = {
     fetchDesktopSnapshot,
     fetchSessionSnapshot: vi.fn(async () => null),
-    setSelectedAgent: vi.fn(async () => undefined),
+    setSelectedNode: vi.fn(async () => undefined),
     startDesktopClient,
     getInferenceSetupCatalog: vi.fn(async () => ({
       contractVersion: 1,
@@ -125,18 +125,18 @@ describe("desktop startup screen", () => {
     );
 
     expect(screen.getByTestId("startup-screen")).toHaveTextContent(
-      "Checking the background agent",
+      "Checking the background node",
     );
     expect(screen.getByTestId("startup-screen")).toHaveTextContent(
-      "Check local agentWorking",
+      "Check local nodeWorking",
     );
     expect(base.api.fetchDesktopSnapshot).not.toHaveBeenCalled();
 
     status.resolve({
       state: "disabled",
       autoStart: false,
-      agentName: null,
-      agentDid: null,
+      nodeName: null,
+      nodeDid: null,
       graphql: null,
       effectiveToolCeiling: null,
       effectiveToolRoot: null,
@@ -158,7 +158,7 @@ describe("desktop startup screen", () => {
     );
     const managedServerStatus = vi
       .fn()
-      .mockRejectedValueOnce(new Error("background agent unavailable"));
+      .mockRejectedValueOnce(new Error("background node unavailable"));
     render(
       <App
         bridge={{
@@ -259,12 +259,12 @@ describe("desktop startup screen", () => {
     expect(startDesktopClient).not.toHaveBeenCalled();
   });
 
-  it("offers the local agent instead of waiting on a client autostart declined", async () => {
+  it("offers the local node instead of waiting on a client autostart declined", async () => {
     const stopped = {
       state: "stopped" as const,
       autoStart: false,
-      agentName: "Forge",
-      agentDid: null,
+      nodeName: "Forge",
+      nodeDid: null,
       graphql: null,
       effectiveToolCeiling: null,
       effectiveToolRoot: null,
@@ -306,7 +306,7 @@ describe("desktop startup screen", () => {
     });
     expect(screen.queryByTestId("startup-screen")).not.toBeInTheDocument();
     expect(screen.queryByText(/Starting the secure client/)).not.toBeInTheDocument();
-    expect(screen.getByText("Local agent")).toBeInTheDocument();
+    expect(screen.getByText("Local node")).toBeInTheDocument();
     expect(screen.getByTestId("setup-next")).toBeInTheDocument();
     expect(startDesktopClient).not.toHaveBeenCalled();
   });
@@ -315,8 +315,8 @@ describe("desktop startup screen", () => {
     const running = {
       state: "running" as const,
       autoStart: true,
-      agentName: "Forge",
-      agentDid: null,
+      nodeName: "Forge",
+      nodeDid: null,
       graphql: null,
       effectiveToolCeiling: null,
       effectiveToolRoot: null,

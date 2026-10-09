@@ -29,15 +29,15 @@ const SERVE_READY_POLL: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Clone)]
 pub struct DesktopInitOptions {
-    pub agent_home: PathBuf,
+    pub node_home: PathBuf,
     pub desktop_paths: DesktopPaths,
     pub label: String,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct StandardRuntimeDiscovery {
-    pub agent_name: String,
-    pub agent_did: String,
+    pub node_name: String,
+    pub node_did: String,
     pub graphql: String,
     pub p2p_peer_id: String,
     pub p2p_listen_address: String,
@@ -48,12 +48,12 @@ pub(crate) struct StandardRuntimeDiscovery {
 pub struct DesktopInitSummary {
     pub status: &'static str,
     pub source: &'static str,
-    pub agent_home: String,
+    pub node_home: String,
     pub desktop_home: String,
     pub peer_directory: String,
     pub label: String,
-    pub agent_name: String,
-    pub agent_did: String,
+    pub node_name: String,
+    pub node_did: String,
     pub graphql: String,
     pub p2p_transport: String,
     pub p2p_peer_id: String,
@@ -64,8 +64,8 @@ pub struct DesktopInitSummary {
 
 #[derive(Debug, Deserialize)]
 struct StoredInitConfig {
-    agent_name: String,
-    agent_did: String,
+    node_name: String,
+    node_did: String,
     #[serde(default)]
     key_path: Option<String>,
     #[serde(default)]
@@ -77,24 +77,24 @@ struct StoredInitConfig {
 }
 
 /// The operator GraphQL endpoint of a co-hosted runtime, acting as that
-/// runtime's principal.
+/// runtime's node identity.
 ///
 /// The runtime's node access control admits operator writes only from its own
-/// principal. The desktop is that principal's same-user host, so it loads the
-/// key from the recorded runtime home. When the key cannot be loaded the
-/// endpoint is anonymous: reads still work and writes fail with the node's
+/// node DID. The desktop is that node's same-user host, so it loads the key
+/// from the recorded runtime home. When the key cannot be loaded the endpoint
+/// is anonymous: reads still work and writes fail with the node's
 /// authorization error.
 pub fn operator_endpoint(
     record: &crate::client::PeerRecord,
 ) -> Option<gents::config_client::GraphqlEndpoint> {
     let url = record.operator_graphql()?;
-    Some(match load_operator_principal(record) {
-        Ok(()) => gents::config_client::GraphqlEndpoint::as_principal(url, &record.agent_did),
+    Some(match load_operator_node_identity(record) {
+        Ok(()) => gents::config_client::GraphqlEndpoint::as_principal(url, &record.node_did),
         Err(error) => {
             tracing::warn!(
-                agent_did = %record.agent_did,
+                node_did = %record.node_did,
                 error = %format!("{error:#}"),
-                "runtime principal key unavailable; using anonymous operator access"
+                "runtime node identity key unavailable; using anonymous operator access"
             );
             gents::config_client::GraphqlEndpoint::anonymous(url)
         }
@@ -102,13 +102,13 @@ pub fn operator_endpoint(
 }
 
 /// Loads a co-hosted runtime's signing key so this process can act as its
-/// principal toward that runtime's own endpoint.
+/// node identity toward that runtime's own endpoint.
 ///
 /// Only a record for a runtime this desktop hosts qualifies, and only when
-/// its home's live `runtime.json` names both the record's endpoint and
-/// agent, so a bearer is never sent to a remote or re-pointed endpoint.
-fn load_operator_principal(record: &crate::client::PeerRecord) -> Result<()> {
-    if gents::identity::can_mint_defradb_bearer(&record.agent_did) {
+/// its home's live `runtime.json` names both the record's endpoint and node,
+/// so a bearer is never sent to a remote or re-pointed endpoint.
+fn load_operator_node_identity(record: &crate::client::PeerRecord) -> Result<()> {
+    if gents::identity::can_mint_defradb_bearer(&record.node_did) {
         return hosted_runtime_home(record).map(drop);
     }
     let identity = operator_signer(record)?;
@@ -121,13 +121,13 @@ fn load_operator_principal(record: &crate::client::PeerRecord) -> Result<()> {
 }
 
 /// The home of a runtime this desktop hosts, when its live `runtime.json`
-/// names both the record's endpoint and agent.
+/// names both the record's endpoint and node.
 fn hosted_runtime_home(record: &crate::client::PeerRecord) -> Result<&Path> {
     let endpoint = record
         .operator_graphql()
         .context("runtime record is not a runtime this desktop hosts")?;
     let home = record
-        .local_agent_home
+        .local_node_home
         .as_deref()
         .map(str::trim)
         .filter(|home| !home.is_empty())
@@ -136,36 +136,36 @@ fn hosted_runtime_home(record: &crate::client::PeerRecord) -> Result<&Path> {
     let runtime = read_json::<StoredRuntimeState>(&home.join(RUNTIME_STATE_FILE_NAME))
         .context("reading the co-hosted runtime's state")?;
     anyhow::ensure!(
-        runtime.graphql.trim() == endpoint && runtime.agent_did.trim() == record.agent_did,
+        runtime.graphql.trim() == endpoint && runtime.node_did.trim() == record.node_did,
         "runtime home {} does not serve {endpoint} for {}",
         home.display(),
-        record.agent_did
+        record.node_did
     );
     Ok(home)
 }
 
 /// The co-hosted runtime's own identity, which signs the operator commands
 /// its HTTP routes take (the usage read), under the same checks as
-/// [`load_operator_principal`].
+/// [`load_operator_node_identity`].
 pub fn operator_signer(
     record: &crate::client::PeerRecord,
-) -> Result<Arc<dyn gents::identity::AgentIdentity>> {
+) -> Result<Arc<dyn gents::identity::NodeIdentity>> {
     let identity = load_standard_runtime_identity(hosted_runtime_home(record)?)?;
     anyhow::ensure!(
-        identity.did() == record.agent_did,
-        "runtime home identity does not match the recorded agent"
+        identity.did() == record.node_did,
+        "runtime home identity does not match the recorded node"
     );
     Ok(identity)
 }
 
 pub(crate) fn load_standard_runtime_identity(
-    agent_home: &Path,
-) -> Result<Arc<dyn gents::identity::AgentIdentity>> {
+    node_home: &Path,
+) -> Result<Arc<dyn gents::identity::NodeIdentity>> {
     use gents::identity::{
         load_macos_keychain_identity, load_macos_secure_enclave_identity, KeyIdentity,
     };
-    let config = read_json::<StoredInitConfig>(&agent_home.join(INIT_CONFIG_FILE_NAME))?;
-    let identity: Arc<dyn gents::identity::AgentIdentity> = if let Some(path) = config
+    let config = read_json::<StoredInitConfig>(&node_home.join(INIT_CONFIG_FILE_NAME))?;
+    let identity: Arc<dyn gents::identity::NodeIdentity> = if let Some(path) = config
         .key_path
         .as_deref()
         .map(str::trim)
@@ -194,13 +194,13 @@ pub(crate) fn load_standard_runtime_identity(
             )?),
             backend => anyhow::bail!(
                 "local runtime {} has no key path and unsupported identity backend {backend:?}",
-                agent_home.display()
+                node_home.display()
             ),
         }
     };
     anyhow::ensure!(
-        identity.did() == config.agent_did.trim(),
-        "local runtime identity does not match configured agent DID"
+        identity.did() == config.node_did.trim(),
+        "local runtime identity does not match configured node DID"
     );
     Ok(identity)
 }
@@ -208,8 +208,8 @@ pub(crate) fn load_standard_runtime_identity(
 #[derive(Debug, Deserialize)]
 struct StoredRuntimeState {
     graphql: String,
-    agent_name: String,
-    agent_did: String,
+    node_name: String,
+    node_did: String,
     #[serde(default)]
     p2p_transport: String,
     #[serde(default)]
@@ -236,7 +236,7 @@ struct GraphqlResponse {
     errors: Option<Value>,
 }
 
-pub fn default_agent_home() -> Result<PathBuf> {
+pub fn default_node_home() -> Result<PathBuf> {
     gents::home::default_home_dir()
 }
 
@@ -404,22 +404,22 @@ pub async fn init_standard_local_runtime(
     options: DesktopInitOptions,
 ) -> Result<DesktopInitSummary> {
     options.desktop_paths.ensure_root_dirs().await?;
-    let discovery = discover_standard_runtime(&options.agent_home).await?;
+    let discovery = discover_standard_runtime(&options.node_home).await?;
 
     let peer = initialize_local_standard_peer(
         &options.desktop_paths.peer_directory_path(),
         &options.label,
         &discovery.p2p_listen_address,
-        &discovery.agent_did,
+        &discovery.node_did,
         &discovery.graphql,
-        &options.agent_home.display().to_string(),
+        &options.node_home.display().to_string(),
     )
     .await?;
 
     Ok(DesktopInitSummary {
         status: "initialized",
         source: LOCAL_STANDARD_SOURCE,
-        agent_home: options.agent_home.display().to_string(),
+        node_home: options.node_home.display().to_string(),
         desktop_home: options.desktop_paths.root().display().to_string(),
         peer_directory: options
             .desktop_paths
@@ -427,8 +427,8 @@ pub async fn init_standard_local_runtime(
             .display()
             .to_string(),
         label: peer.label,
-        agent_name: discovery.agent_name,
-        agent_did: discovery.agent_did,
+        node_name: discovery.node_name,
+        node_did: discovery.node_did,
         graphql: discovery.graphql,
         p2p_transport: "iroh".to_string(),
         p2p_peer_id: discovery.p2p_peer_id,
@@ -443,14 +443,14 @@ pub async fn init_standard_local_runtime(
 }
 
 pub(crate) async fn discover_standard_runtime(
-    agent_home: &Path,
+    node_home: &Path,
 ) -> Result<StandardRuntimeDiscovery> {
-    let init = read_json::<StoredInitConfig>(&agent_home.join(INIT_CONFIG_FILE_NAME))?;
-    let runtime = read_json::<StoredRuntimeState>(&agent_home.join(RUNTIME_STATE_FILE_NAME))
+    let init = read_json::<StoredInitConfig>(&node_home.join(INIT_CONFIG_FILE_NAME))?;
+    let runtime = read_json::<StoredRuntimeState>(&node_home.join(RUNTIME_STATE_FILE_NAME))
         .with_context(|| {
             format!(
                 "no running local Gents runtime found at {}; run `gents server` first",
-                agent_home.join(RUNTIME_STATE_FILE_NAME).display()
+                node_home.join(RUNTIME_STATE_FILE_NAME).display()
             )
         })?;
 
@@ -480,8 +480,8 @@ pub(crate) async fn discover_standard_runtime(
     .context("local runtime is reachable but did not report a usable P2P peer id")?;
 
     Ok(StandardRuntimeDiscovery {
-        agent_name: runtime.agent_name,
-        agent_did: runtime.agent_did,
+        node_name: runtime.node_name,
+        node_did: runtime.node_did,
         graphql: runtime.graphql,
         p2p_peer_id,
         p2p_listen_address,
@@ -508,7 +508,7 @@ async fn await_serving_runtime_within(
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
         let waiting = match http_get_json::<Value>(client, &status_url).await {
-            Ok(status) => match serving_runtime(&status, &runtime.agent_did)? {
+            Ok(status) => match serving_runtime(&status, &runtime.node_did)? {
                 ObservedServeLifecycle::Ready => return Ok(()),
                 ObservedServeLifecycle::Outdated { version } => {
                     anyhow::bail!(
@@ -539,10 +539,10 @@ async fn await_serving_runtime_within(
 /// is considered, so a stale route is never saved for another runtime.
 fn serving_runtime(status: &Value, expected_did: &str) -> Result<ObservedServeLifecycle> {
     if !well_formed_did(expected_did) {
-        anyhow::bail!("this home has no usable initialized agent DID ({expected_did:?})");
+        anyhow::bail!("this home has no usable initialized node DID ({expected_did:?})");
     }
     let live_did = status
-        .get("agent_did")
+        .get("node_did")
         .and_then(Value::as_str)
         .unwrap_or_default();
     if !well_formed_did(live_did) || live_did != expected_did {
@@ -560,8 +560,8 @@ fn well_formed_did(did: &str) -> bool {
 
 pub fn render_human_summary(summary: &DesktopInitSummary) -> String {
     let discovery_line = format!(
-        "Discovered local Gents runtime: {agent_home}",
-        agent_home = summary.agent_home
+        "Discovered local Gents runtime: {node_home}",
+        node_home = summary.node_home
     );
 
     format!(
@@ -569,7 +569,7 @@ pub fn render_human_summary(summary: &DesktopInitSummary) -> String {
 gents-desktop init complete
 {discovery_line}
 GraphQL reachable: {graphql}
-Agent DID: {agent_did}
+Node DID: {node_did}
 P2P transport: {p2p_transport}
 P2P peer ID: {p2p_peer_id}
 P2P listen address: {p2p_listen_address}
@@ -587,7 +587,7 @@ Next:
 ",
         discovery_line = discovery_line,
         graphql = summary.graphql,
-        agent_did = summary.agent_did,
+        node_did = summary.node_did,
         p2p_transport = summary.p2p_transport,
         p2p_peer_id = summary.p2p_peer_id,
         p2p_listen_address = summary.p2p_listen_address,
@@ -622,15 +622,15 @@ async fn fetch_graphql_runtime_connection_payload(
         None,
     )
     .context("runtime reported a shareable P2P address but no usable peer id")?;
-    let (agent_did, agent_name) = fetch_graphql_agent_identity(client, graphql).await?;
+    let (node_did, node_name) = fetch_graphql_node_identity(client, graphql).await?;
 
     Ok(json!({
         "status": "ok",
         "service": "gents",
         "graphql": graphql,
         "desktop_graphql": graphql,
-        "agent_name": agent_name,
-        "agent_did": agent_did,
+        "node_name": node_name,
+        "node_did": node_did,
         "p2p": {
             "enabled": true,
             "p2p_transport": "iroh",
@@ -644,13 +644,13 @@ async fn fetch_graphql_runtime_connection_payload(
     }))
 }
 
-async fn fetch_graphql_agent_identity(
+async fn fetch_graphql_node_identity(
     client: &reqwest::Client,
     graphql: &str,
 ) -> Result<(String, String)> {
     let query = r#"
         query DesktopRuntimeIdentity {
-            AgentPrincipal { agent_did display_name enabled }
+            Node { node_did display_name enabled }
         }
     "#;
     let response = client
@@ -682,28 +682,28 @@ async fn fetch_graphql_agent_identity(
     let data = response
         .data
         .context("GraphQL identity query returned no data")?;
-    let principals = data
-        .get("AgentPrincipal")
+    let nodes = data
+        .get("Node")
         .and_then(Value::as_array)
-        .context("GraphQL identity query returned no AgentPrincipal rows")?;
-    let enabled = principals
+        .context("GraphQL identity query returned no Node rows")?;
+    let enabled = nodes
         .iter()
         .filter(|row| row.get("enabled").and_then(Value::as_bool) == Some(true))
         .collect::<Vec<_>>();
-    let [principal] = enabled.as_slice() else {
+    let [node] = enabled.as_slice() else {
         anyhow::bail!(
-            "GraphQL identity query must return exactly one enabled AgentPrincipal, found {}",
+            "GraphQL identity query must return exactly one enabled Node, found {}",
             enabled.len()
         );
     };
-    let agent_did = string_at(principal, "/agent_did")
-        .context("enabled AgentPrincipal has no agent_did")?
+    let node_did = string_at(node, "/node_did")
+        .context("enabled Node has no node_did")?
         .to_string();
-    let agent_name = string_at(principal, "/display_name")
-        .context("enabled AgentPrincipal has no display_name")?
+    let node_name = string_at(node, "/display_name")
+        .context("enabled Node has no display_name")?
         .to_string();
 
-    Ok((agent_did, agent_name))
+    Ok((node_did, node_name))
 }
 
 fn errors_is_empty(errors: &Value) -> bool {
@@ -745,18 +745,18 @@ fn validate_runtime_identity(runtime: &StoredRuntimeState, init: &StoredInitConf
             }
         );
     }
-    if !well_formed_did(&init.agent_did) || runtime.agent_did != init.agent_did {
+    if !well_formed_did(&init.node_did) || runtime.node_did != init.node_did {
         anyhow::bail!(
-            "runtime agent DID {:?} does not match initialized agent DID {:?}",
-            runtime.agent_did,
-            init.agent_did
+            "runtime node DID {:?} does not match initialized node DID {:?}",
+            runtime.node_did,
+            init.node_did
         );
     }
-    if runtime.agent_name != init.agent_name {
+    if runtime.node_name != init.node_name {
         anyhow::bail!(
-            "runtime agent name {} does not match initialized agent name {}",
-            runtime.agent_name,
-            init.agent_name
+            "runtime node name {} does not match initialized node name {}",
+            runtime.node_name,
+            init.node_name
         );
     }
 

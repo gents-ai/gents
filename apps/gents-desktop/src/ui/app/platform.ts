@@ -31,13 +31,13 @@ export function usePlatformSetup() {
 
 const TITLES: Partial<Record<Route["name"], string>> = {
   sessions: "Sessions",
-  agents: "Agents",
+  agents: "Nodes",
   mailbox: "Mailbox",
 };
 
-/** The macOS window title: the screen, then the selected agent. */
+/** The macOS window title: the screen, then the selected node. */
 export function useWindowTitle(route: Route) {
-  const agent = useSelectedNode()?.agentPrincipal.displayName ?? null;
+  const agent = useSelectedNode()?.node.displayName ?? null;
   const sessionTitle = useSelectedSessionValue((s) => s?.title ?? null);
   useEffect(() => {
     if (!isMacTauriShell()) return;

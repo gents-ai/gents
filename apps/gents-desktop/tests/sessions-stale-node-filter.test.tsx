@@ -11,7 +11,7 @@ import { node, renderIn, testApp } from "./app-fixture";
 
 const session = (overrides: Partial<SessionSummary>): SessionSummary => ({
   sessionId: "s1",
-  agentDid: "did:key:home",
+  nodeDid: "did:key:home",
   requesterDid: null,
   startedBy: null,
   latestRequestDocId: "physical-1",
@@ -22,7 +22,7 @@ const session = (overrides: Partial<SessionSummary>): SessionSummary => ({
   title: "Greeting",
   previewText: null,
   status: "completed",
-  behaviorId: null,
+  agentId: null,
   taskId: null,
   taskName: null,
   triggerId: null,
@@ -34,13 +34,13 @@ const session = (overrides: Partial<SessionSummary>): SessionSummary => ({
   toolCallCount: null,
   ...overrides,
 });
-const nodeWith = (agentDid: string, sessions: SessionSummary[]) =>
-  node({ agentDid, label: agentDid, source: "enrollment", sessions });
+const nodeWith = (nodeDid: string, sessions: SessionSummary[]) =>
+  node({ nodeDid, label: nodeDid, source: "enrollment", sessions });
 /* the home is the working node, where the list starts */
 const app = (deployments: ReturnType<typeof nodeWith>[]) =>
   testApp({
     snapshot: {
-      bootstrap: { initAgentDid: "did:key:home" },
+      bootstrap: { initNodeDid: "did:key:home" },
       client: { deployments },
     },
   });

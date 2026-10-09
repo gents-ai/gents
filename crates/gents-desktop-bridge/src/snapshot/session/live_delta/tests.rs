@@ -13,7 +13,7 @@ fn rows() -> ClientStoreRows {
             doc_id: Some("physical".into()),
             request_id: "logical".into(),
             session_id: Some("session".into()),
-            agent_did: Some("agent".into()),
+            node_did: Some("node".into()),
             lifecycle_state: Some(RequestLifecycleState::Processing),
             execution_generation: Some("generation".into()),
             execution_lease_secs: Some(300),
@@ -29,7 +29,7 @@ fn segment(ordinal: u32, text: &str) -> OutputSegmentRow {
     OutputSegmentRow {
         doc_id: format!("segment-{ordinal}"),
         segment: OutputSegment {
-            agent_did: "agent".into(),
+            node_did: "node".into(),
             requester_did: None,
             session_id: "session".into(),
             request_doc_id: "physical".into(),
@@ -62,7 +62,7 @@ fn segment(ordinal: u32, text: &str) -> OutputSegmentRow {
 }
 
 fn cursor(store: &ClientStore) -> String {
-    canonical_live_text(store, store, "session", Some("agent"), "logical")
+    canonical_live_text(store, store, "session", Some("node"), "logical")
         .unwrap()
         .cursor
 }
@@ -76,7 +76,7 @@ fn delta(store: &ClientStore, cursor: &str) -> SessionLiveDeltaView {
             provenance_version: 1,
         },
         "session",
-        Some("agent"),
+        Some("node"),
         "logical",
         cursor,
         5,
@@ -133,7 +133,7 @@ fn a_lagging_replica_request_row_binds_the_same_cursor_as_the_full_snapshot() {
     rows.output_segments.push(segment(1, " world"));
     let fresh = ClientStore::from_rows(rows);
     let snapshot_cursor =
-        canonical_live_text(&observed, &fresh, "session", Some("agent"), "logical")
+        canonical_live_text(&observed, &fresh, "session", Some("node"), "logical")
             .unwrap()
             .cursor;
     let result = build_session_live_delta_from_store(
@@ -144,7 +144,7 @@ fn a_lagging_replica_request_row_binds_the_same_cursor_as_the_full_snapshot() {
             provenance_version: 1,
         },
         "session",
-        Some("agent"),
+        Some("node"),
         "logical",
         &snapshot_cursor,
         5,
@@ -194,9 +194,9 @@ fn snapshot_and_delta_preserve_the_same_markdown_bytes() {
     let mut rows = rows();
     rows.sessions.push(gents_protocol::session::AgentSession {
         session_id: "session".into(),
-        agent_did: "agent".into(),
+        node_did: "node".into(),
         requester_did: None,
-        behavior_id: "default".into(),
+        agent_id: "default".into(),
         created_at: "2026-10-07T12:00:00Z".into(),
         closed_at: None,
         title: None,
@@ -226,7 +226,7 @@ fn snapshot_and_delta_preserve_the_same_markdown_bytes() {
             provenance_version: 1,
         },
         "session",
-        Some("agent"),
+        Some("node"),
         "logical",
         snapshot.live_cursor.as_deref().unwrap(),
         content.len(),
@@ -251,20 +251,20 @@ async fn operator_delta_uses_fresh_rows_with_a_payload_free_observer_and_snapsho
     core.add_local_standard_peer_route_for_test(
         "Live test",
         "127.0.0.1:56000/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb",
-        "agent",
+        "node",
         &format!("{}/api/v0/graphql", server.uri()),
         home.path().to_str().unwrap(),
     )
     .await
     .unwrap();
     let mut rows = rows();
-    rows.requests[0].requester_did = Some("agent".into());
-    rows.output_segments[0].segment.requester_did = Some("agent".into());
+    rows.requests[0].requester_did = Some("node".into());
+    rows.output_segments[0].segment.requester_did = Some("node".into());
     rows.sessions.push(gents_protocol::session::AgentSession {
         session_id: "session".into(),
-        agent_did: "agent".into(),
-        requester_did: Some("agent".into()),
-        behavior_id: "default".into(),
+        node_did: "node".into(),
+        requester_did: Some("node".into()),
+        agent_id: "default".into(),
         created_at: "2026-10-07T12:00:00Z".into(),
         closed_at: None,
         title: None,
@@ -276,12 +276,12 @@ async fn operator_delta_uses_fresh_rows_with_a_payload_free_observer_and_snapsho
     core.store().merge_observer_patch(full.clone());
     let observed = core.store().snapshot();
     assert!(observed.output_segments.is_empty());
-    let cursor = canonical_live_text(&observed, &full, "session", Some("agent"), "logical")
+    let cursor = canonical_live_text(&observed, &full, "session", Some("node"), "logical")
         .unwrap()
         .cursor;
     rows.requests[0].execution_lease_expires_at = Some("2026-10-07T12:10:00Z".into());
     let mut append = segment(1, " world");
-    append.segment.requester_did = Some("agent".into());
+    append.segment.requester_did = Some("node".into());
     rows.output_segments.push(append);
     let segments: Vec<_> = rows
         .output_segments
@@ -310,7 +310,7 @@ async fn operator_delta_uses_fresh_rows_with_a_payload_free_observer_and_snapsho
     let result = build_session_live_delta(
         &core,
         "session",
-        Some("agent"),
+        Some("node"),
         "logical",
         &cursor,
         5,
@@ -326,7 +326,7 @@ async fn operator_delta_uses_fresh_rows_with_a_payload_free_observer_and_snapsho
     let missing = build_session_live_delta(
         &core,
         "session",
-        Some("agent"),
+        Some("node"),
         "missing",
         &cursor,
         5,
@@ -352,7 +352,7 @@ async fn operator_delta_uses_fresh_rows_with_a_payload_free_observer_and_snapsho
     let terminal = build_session_live_delta(
         &core,
         "session",
-        Some("agent"),
+        Some("node"),
         "logical",
         &cursor,
         5,

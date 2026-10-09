@@ -21,8 +21,8 @@ describe("managed server launch restoration", () => {
     const api = apiWithManagedServer({
       state: "disabled",
       autoStart: false,
-      agentName: null,
-      agentDid: null,
+      nodeName: null,
+      nodeDid: null,
       graphql: null,
       effectiveToolCeiling: null,
       effectiveToolRoot: null,
@@ -42,8 +42,8 @@ describe("managed server launch restoration", () => {
     const api = apiWithManagedServer({
       state: "stopped",
       autoStart: true,
-      agentName: "Workshop Agent",
-      agentDid: null,
+      nodeName: "Workshop Node",
+      nodeDid: null,
       graphql: null,
       effectiveToolCeiling: null,
       effectiveToolRoot: null,
@@ -63,8 +63,8 @@ describe("managed server launch restoration", () => {
     const api = apiWithManagedServer({
       state: "stopped",
       autoStart: true,
-      agentName: "Workshop Agent",
-      agentDid: null,
+      nodeName: "Workshop Node",
+      nodeDid: null,
       graphql: null,
       effectiveToolCeiling: null,
       effectiveToolRoot: null,

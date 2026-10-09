@@ -6,19 +6,19 @@ import {
   describeLive,
   expectCompletedSession,
   logTurn,
-  waitForBehaviorConfig,
+  waitForAgentConfig,
 } from "./tauri-driver-live/helpers";
 
-describeLive("Tauri app live bridge runner behavior config", () => {
+describeLive("Tauri app live bridge runner agent config", () => {
   it("saves and reloads a context prompt, then uses it on the next turn", async () => {
     await withLiveDesktop(async ({ runner, driver, deployment }) => {
-      const behavior =
-        deployment.behaviors.find((candidate) => candidate.isDefault) ??
-        deployment.behaviors[0];
-      expect(behavior).toBeDefined();
+      const agent =
+        deployment.agents.find((candidate) => candidate.isDefault) ??
+        deployment.agents[0];
+      expect(agent).toBeDefined();
       const suffix = Date.now().toString();
-      const behaviorId = behavior!.behaviorId;
-      const contextId = behavior!.contextId;
+      const agentId = agent!.agentId;
+      const contextId = agent!.contextId;
       const systemPrompt = `You are Amy, a repository analysis agent. When asked for the live config marker, include exactly CONFIG-${suffix}.`;
 
       await driver.ready();
@@ -27,15 +27,15 @@ describeLive("Tauri app live bridge runner behavior config", () => {
         async () => {
           const current = (await runner.fetchSnapshot()).client?.deployments[0];
           expect(current?.runtime?.reconcilePhase).toBe("idle");
-          expect(current?.behaviorReadiness.activeGeneration).toBeGreaterThan(0);
-          previousGeneration = current!.behaviorReadiness.activeGeneration!;
+          expect(current?.nodeReadiness.activeGeneration).toBeGreaterThan(0);
+          previousGeneration = current!.nodeReadiness.activeGeneration!;
         },
         { timeout: 30_000 },
       );
-      /* a behavior edits its own instructions (its context) on its page */
+      /* an agent edits its own instructions (its context) on its page */
       await driver.openConfig();
-      await driver.openConfigSection("behaviors");
-      await driver.openConfigItem(behaviorId);
+      await driver.openConfigSection("agents");
+      await driver.openConfigItem(agentId);
       await waitFor(() => {
         expect(driver.contextSystemPrompt()).toBeInTheDocument();
       });
@@ -43,18 +43,18 @@ describeLive("Tauri app live bridge runner behavior config", () => {
       await driver.replaceContextSystemPrompt(systemPrompt);
       await driver.user.click(screen.getByRole("button", { name: "Save" }));
 
-      await waitForBehaviorConfig(
+      await waitForAgentConfig(
         runner,
-        behaviorId,
-        behavior!.displayName,
+        agentId,
+        agent!.displayName,
         systemPrompt,
         previousGeneration,
       );
-      logTurn(`context config saved behaviorId=${behaviorId} contextId=${contextId}`);
+      logTurn(`context config saved agentId=${agentId} contextId=${contextId}`);
 
       await driver.openConfigSection("agent");
-      await driver.openConfigSection("behaviors");
-      await driver.openConfigItem(behaviorId);
+      await driver.openConfigSection("agents");
+      await driver.openConfigItem(agentId);
       await waitFor(() => {
         expect(driver.contextSystemPrompt()).toHaveValue(systemPrompt);
       });
@@ -64,7 +64,7 @@ describeLive("Tauri app live bridge runner behavior config", () => {
       await driver.pressEnter();
       await waitFor(() => expect(runner.sendResults).toHaveLength(1));
       const submitted = expectLatestSendResult(runner, "config marker turn");
-      expect(submitted.behaviorId).toBe(behaviorId);
+      expect(submitted.agentId).toBe(agentId);
       const session = await runner.waitForRequestCompletion(submitted);
       expectCompletedSession("config marker turn", session);
       const assistantText = session.timelineItems

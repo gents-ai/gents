@@ -19,9 +19,9 @@ type Config = NativeLocalSetup & {
   expectedResponse: string;
 };
 type Evidence = {
-  agentDid: string;
+  nodeDid: string;
   sessionId: string;
-  behaviorId: string;
+  agentId: string;
   requestId: string;
   response: string;
 };
@@ -108,7 +108,7 @@ export async function runNativeLocalE2e(
   await report({ stage: `local-${config.phase}-starting` });
   if (config.phase === "setup") {
     const name = await until(
-      () => labelledInput(document, "Agent name"),
+      () => labelledInput(document, "Node name"),
       "native first-run setup",
     );
     if (!name.readOnly) setValue(name, config.agentLabel);
@@ -193,7 +193,7 @@ export async function runNativeLocalE2e(
     await until(
       () =>
         document.querySelector(
-          '[data-testid="session-screen"] button[aria-label="Behavior"]',
+          '[data-testid="session-screen"] button[aria-label="Agent"]',
         ),
       "session composer after inference was saved",
     );
@@ -211,15 +211,15 @@ export async function runNativeLocalE2e(
     return (
       current.client?.deployments.find((item) =>
         prior
-          ? item.agentDid === prior.agentDid
-          : item.agentPrincipal.displayName === config.agentLabel,
+          ? item.nodeDid === prior.nodeDid
+          : item.node.displayName === config.agentLabel,
       ) ?? null
     );
-  }, "persisted agent deployment");
-  const engineer = deployment.behaviors.find(
+  }, "persisted node deployment");
+  const engineer = deployment.agents.find(
     (item) => item.displayName === "The Engineer" && item.enabled,
   );
-  if (!engineer) throw new Error("The Engineer behavior is absent or disabled");
+  if (!engineer) throw new Error("The Engineer agent is absent or disabled");
   const profile = deployment.inferenceProfiles.find(
     (item) => item.profile_id === engineer.inferenceProfileId,
   );
@@ -271,9 +271,8 @@ export async function runNativeLocalE2e(
   } else {
     (
       await until(
-        () =>
-          document.querySelector<HTMLButtonElement>('button[aria-label="Behavior"]'),
-        "new-session behavior picker",
+        () => document.querySelector<HTMLButtonElement>('button[aria-label="Agent"]'),
+        "new-session agent picker",
       )
     ).click();
     (
@@ -306,7 +305,7 @@ export async function runNativeLocalE2e(
   const session = await until(async () => {
     const current = await snapshot();
     const summary = current.client?.deployments
-      .find((item) => item.agentDid === deployment.agentDid)
+      .find((item) => item.nodeDid === deployment.nodeDid)
       ?.sessions.find(
         (item) =>
           item.latestRequestId &&
@@ -318,7 +317,7 @@ export async function runNativeLocalE2e(
       bridgeCommand("desktop_session_snapshot"),
       {
         sessionId: summary.sessionId,
-        agentDid: deployment.agentDid,
+        nodeDid: deployment.nodeDid,
         requestId: summary.latestRequestId,
       },
     );
@@ -327,16 +326,16 @@ export async function runNativeLocalE2e(
       throw new Error(`Engineer request ended ${detail.turnState}`);
     return detail.turnState === "completed" ? detail : null;
   }, "terminal Engineer response");
-  if (session.behaviorId !== engineer.behaviorId)
-    throw new Error("Conversation used a different behavior");
+  if (session.agentId !== engineer.agentId)
+    throw new Error("Conversation used a different agent");
   await until(
     () => findAssistantResponseMarker(document, config.expectedResponse),
     "Engineer response in native transcript",
   );
   const evidence: Evidence = {
-    agentDid: deployment.agentDid,
+    nodeDid: deployment.nodeDid,
     sessionId: session.sessionId,
-    behaviorId: engineer.behaviorId,
+    agentId: engineer.agentId,
     requestId: session.latestRequestId!,
     response: config.expectedResponse,
   };

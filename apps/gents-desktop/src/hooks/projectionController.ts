@@ -120,7 +120,7 @@ export function createProjectionController({
             // now, but do not block later session reads on its completion.
             snapshots.push(refreshIndex());
           }
-          // The empty composer chooses its behavior from the fleet/config
+          // The empty composer chooses its agent from the fleet/config
           // projection. Refresh it when leaving a session so an operator-side
           // default change made during the completed turn is visible before
           // the next session is created.

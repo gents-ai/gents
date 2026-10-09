@@ -1,38 +1,34 @@
-/* First-run Engineer behavior: a stable configurator that creates the user's
-   working behavior through the canonical persona request owner. */
+/* First-run Engineer: a stable configurator that sets up the user's
+   working agent. */
 import type { NodeView } from "../../hooks/fleetStore";
 import type { ConfigComponentPatch } from "@source-inc/gents-desktop-client";
 
-import sharedSetupPrompt from "../../../../../crates/gents-protocol/prompts/setup.md?raw";
-import setupSelfConfig from "../../../../../crates/gents-protocol/presets/setup-self-config.json";
+import sharedSetupPrompt from "../../../../../crates/gents-protocol/prompts/engineer.md?raw";
+import setupSelfConfig from "../../../../../crates/gents-protocol/presets/engineer-self-config.json";
 import { defaultAgentOf } from "./agents";
 
-export const SETUP_STEWARD_PROMPT = sharedSetupPrompt;
+export const ENGINEER_PROMPT = sharedSetupPrompt;
 
-export const SETUP_STEWARD_DESCRIPTION =
+export const ENGINEER_DESCRIPTION =
   "Walks you through configuring Gents for the work you want to do.";
-export const SETUP_STEWARD_BEHAVIOR_TAG = "gents:setup-steward";
+export const ENGINEER_AGENT_TAG = "gents:engineer";
 
-export function setupStewardPatches(deployment: NodeView): ConfigComponentPatch[] {
-  const behavior =
-    deployment.behaviors.find((row) => row.tags.includes(SETUP_STEWARD_BEHAVIOR_TAG)) ??
+export function engineerPatches(deployment: NodeView): ConfigComponentPatch[] {
+  const agent =
+    deployment.agents.find((row) => row.tags.includes(ENGINEER_AGENT_TAG)) ??
     defaultAgentOf(deployment) ??
-    deployment.behaviors[0];
-  if (!behavior) return [];
-  const context = deployment.contexts.find(
-    (row) => row.context_id === behavior.contextId,
-  );
+    deployment.agents[0];
+  if (!agent) return [];
+  const context = deployment.contexts.find((row) => row.context_id === agent.contextId);
   const toolsId = context?.tools_id;
   const patches: ConfigComponentPatch[] = [
     {
-      collection: "AgentBehavior",
-      id: behavior.behaviorId,
+      collection: "Agent",
+      id: agent.agentId,
       changes: {
         display_name: "The Engineer",
-        description: SETUP_STEWARD_DESCRIPTION,
-        tags: Array.from(
-          new Set([...(behavior.tags ?? []), SETUP_STEWARD_BEHAVIOR_TAG]),
-        ),
+        description: ENGINEER_DESCRIPTION,
+        tags: Array.from(new Set([...(agent.tags ?? []), ENGINEER_AGENT_TAG])),
       },
     },
   ];
@@ -42,7 +38,7 @@ export function setupStewardPatches(deployment: NodeView): ConfigComponentPatch[
       id: context.context_id,
       changes: {
         display_name: "The Engineer",
-        system_prompt: SETUP_STEWARD_PROMPT,
+        system_prompt: ENGINEER_PROMPT,
       },
     });
   }

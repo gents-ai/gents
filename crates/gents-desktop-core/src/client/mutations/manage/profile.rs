@@ -44,14 +44,14 @@ pub async fn upsert_inference_profile(
 #[cfg(test)]
 pub async fn delete_inference_profile(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     id: &str,
 ) -> Result<usize> {
     super::delete_scoped_document_local(
         node,
         "desktop.profile.delete",
         Collection::InferenceProfile,
-        agent_did,
+        node_did,
         id,
     )
     .await
@@ -59,14 +59,14 @@ pub async fn delete_inference_profile(
 
 pub async fn delete_inference_profile_on(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     id: &str,
 ) -> Result<usize> {
     super::delete_scoped_document(
         access,
         "desktop.profile.delete",
         Collection::InferenceProfile,
-        agent_did,
+        node_did,
         id,
     )
     .await
@@ -84,10 +84,10 @@ mod tests {
         let node = Arc::new(EmbeddedNode::builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
         for owner in ["did:test:owner", "did:test:other"] {
-            gents::ensure_agent_principal(&node, owner).await?;
+            gents::ensure_node(&node, owner).await?;
         }
         let backend = serde_json::from_value(
-            json!({"agent_did":"did:test:owner","backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}),
+            json!({"node_did":"did:test:owner","backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}),
         )?;
         gents::config_client::write_inference_backend_document(
             &ConfigAccess::Local(node.clone()),
@@ -95,13 +95,13 @@ mod tests {
         )
         .await?;
         let mut profile: InferenceProfile = serde_json::from_value(
-            json!({"agent_did":"did:test:owner","profile_id":"profile","backend_id":"backend","model_name":"model","reasoning_effort":"high","max_output_tokens":100}),
+            json!({"node_did":"did:test:owner","profile_id":"profile","backend_id":"backend","model_name":"model","reasoning_effort":"high","max_output_tokens":100}),
         )?;
         upsert_inference_profile(&node, &profile).await?;
         profile.max_output_tokens = Some(0);
         assert!(upsert_inference_profile(&node, &profile).await.is_err());
         profile.max_output_tokens = None;
-        profile.agent_did = "did:test:other".into();
+        profile.node_did = "did:test:other".into();
         assert!(upsert_inference_profile(&node, &profile).await.is_err());
         ConfigAccess::transact_local(&node, None, "test.profile.read", |txn| {
             Box::pin(async move {

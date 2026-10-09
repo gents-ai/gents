@@ -10,7 +10,7 @@ const enrollmentRequest: EnrollmentRequestView = {
   adminDid: "did:key:z6MkAmy",
   serverPeer: "server-peer-amy",
   serverLabel: "Amy",
-  ownerAgent: "did:key:z6MkAmy",
+  ownerNode: "did:key:z6MkAmy",
   state: "pending",
   expiresAt: "2099-01-01T00:00:00Z",
 };

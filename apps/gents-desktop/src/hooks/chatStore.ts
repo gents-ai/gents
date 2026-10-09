@@ -61,7 +61,7 @@ export const chat = {
   /** the bridge accepted the request: wait for the transcript to show it */
   awaitObservation(
     store: ChatStore,
-    request: { agentDid: string; sessionId: string; requestId: string },
+    request: { nodeDid: string; sessionId: string; requestId: string },
   ) {
     store.setState({ localWorkflow: { kind: "awaitingObservation", ...request } });
   },

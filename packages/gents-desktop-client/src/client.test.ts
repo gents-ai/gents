@@ -5,7 +5,7 @@ import { BridgeInvokeError } from "./errors.js";
 import { createMemoryTransport } from "./testing.js";
 
 describe("desktop client", () => {
-  it("carries each view's explicit agent through task, schedule and retry actions", async () => {
+  it("carries each view's explicit node through task, schedule and retry actions", async () => {
     const transport = createMemoryTransport({
       handlers: {
         desktop_task_run: () => ({}),
@@ -15,29 +15,29 @@ describe("desktop client", () => {
       },
     });
     const { api } = createDesktopClient(transport);
-    for (const agentDid of ["did:alpha", "did:beta"]) {
-      await api.runTask({ taskId: "daily", agentDid });
-      await api.runSchedule({ scheduleId: "daily", agentDid });
-      await api.retryRequest("same-request-id", agentDid);
-      await api.resendRequest("same-request-id", agentDid);
+    for (const nodeDid of ["did:alpha", "did:beta"]) {
+      await api.runTask({ taskId: "daily", nodeDid });
+      await api.runSchedule({ scheduleId: "daily", nodeDid });
+      await api.retryRequest("same-request-id", nodeDid);
+      await api.resendRequest("same-request-id", nodeDid);
     }
     expect(transport.calls).toEqual(
-      ["did:alpha", "did:beta"].flatMap((agentDid) => [
+      ["did:alpha", "did:beta"].flatMap((nodeDid) => [
         {
           command: "desktop_task_run",
-          args: { request: { taskId: "daily", agentDid } },
+          args: { request: { taskId: "daily", nodeDid } },
         },
         {
           command: "desktop_schedule_run",
-          args: { request: { scheduleId: "daily", agentDid } },
+          args: { request: { scheduleId: "daily", nodeDid } },
         },
         {
           command: "desktop_request_retry",
-          args: { requestId: "same-request-id", agentDid },
+          args: { requestId: "same-request-id", nodeDid },
         },
         {
           command: "desktop_request_resend",
-          args: { requestId: "same-request-id", agentDid },
+          args: { requestId: "same-request-id", nodeDid },
         },
       ]),
     );
@@ -92,7 +92,7 @@ describe("desktop client", () => {
       networkId: "network-1",
       adminDid: "did:key:zAdmin",
       serverPeer: "server-peer-1",
-      ownerAgent: "did:key:zAgent",
+      ownerNode: "did:key:zNode",
       state: "pending_approval",
     };
     const transport = createMemoryTransport({
@@ -120,8 +120,8 @@ describe("desktop client", () => {
     const restarted = {
       state: "running",
       autoStart: true,
-      agentName: "Workshop Agent",
-      agentDid: "did:key:agent",
+      nodeName: "Workshop Node",
+      nodeDid: "did:key:node",
       graphql: "http://127.0.0.1:9191/graphql",
       effectiveToolCeiling: "meta-only",
       effectiveToolRoot: null,
@@ -134,7 +134,7 @@ describe("desktop client", () => {
         desktop_managed_server_restart: (args) => {
           expect(args).toEqual({
             request: {
-              agentName: "Workshop Agent",
+              nodeName: "Workshop Node",
               toolCeiling: "meta-only",
               toolRoot: null,
             },
@@ -145,13 +145,10 @@ describe("desktop client", () => {
     });
 
     await expect(
-      createDesktopClient(transport).api.restartManagedServer(
-        "Workshop Agent",
-        {
-          toolCeiling: "meta-only",
-          toolRoot: null,
-        },
-      ),
+      createDesktopClient(transport).api.restartManagedServer("Workshop Node", {
+        toolCeiling: "meta-only",
+        toolRoot: null,
+      }),
     ).resolves.toEqual(restarted);
     expect(transport.calls.map(({ command }) => command)).toEqual([
       "desktop_managed_server_restart",
@@ -162,8 +159,8 @@ describe("desktop client", () => {
     const status = {
       state: "running",
       autoStart: false,
-      agentName: "Workshop Agent",
-      agentDid: "did:key:agent",
+      nodeName: "Workshop Node",
+      nodeDid: "did:key:node",
       graphql: "http://127.0.0.1:9191/graphql",
       effectiveToolCeiling: "meta-only",
       effectiveToolRoot: null,

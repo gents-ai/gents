@@ -5,7 +5,7 @@ async fn distinct_document_overflow_reloads_once_and_keeps_observing() {
     let (_tempdir, node, store, handle) = build_observer_fixture().await;
     let mut raw = node.subscribe(&[EventName::Update]);
     let mut changes = store.subscribe();
-    seed_principal(node.as_ref(), "did:survives-overflow").await;
+    seed_node(node.as_ref(), "did:survives-overflow").await;
     let update = raw.recv().await.unwrap().as_update().unwrap().clone();
     node.event_bus().unsubscribe(raw.id());
     tokio::time::timeout(Duration::from_secs(5), changes.changed())
@@ -27,17 +27,17 @@ async fn distinct_document_overflow_reloads_once_and_keeps_observing() {
     assert_eq!(after.scope_reloads - before.scope_reloads, 1);
     assert!(store
         .snapshot()
-        .agent_principals
+        .nodes
         .iter()
-        .any(|p| p.agent_did == "did:survives-overflow"));
+        .any(|p| p.node_did == "did:survives-overflow"));
 
-    seed_principal(node.as_ref(), "did:after-overflow").await;
+    seed_node(node.as_ref(), "did:after-overflow").await;
     tokio::time::timeout(Duration::from_secs(5), async {
         while !store
             .snapshot()
-            .agent_principals
+            .nodes
             .iter()
-            .any(|p| p.agent_did == "did:after-overflow")
+            .any(|p| p.node_did == "did:after-overflow")
         {
             changes.changed().await.unwrap();
         }

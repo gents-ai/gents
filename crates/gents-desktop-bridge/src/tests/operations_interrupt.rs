@@ -5,7 +5,7 @@ use crate::types::DesktopInterruptRequest;
 fn user_cancel(request_id: &str) -> DesktopInterruptRequest {
     DesktopInterruptRequest {
         request_id: request_id.into(),
-        agent_did: None,
+        node_did: None,
         cause: "userCancelled".into(),
     }
 }
@@ -32,8 +32,8 @@ async fn interrupt_refuses_a_logical_id_carried_by_two_physical_requests() {
     let duplicate = r#"mutation {
         create_AgentRequest(input: { purpose: "normal",
             request_id: "req_solo",
-            agent_did: "did:test:operator",
-            behavior_id: "test-behavior",
+            node_did: "did:test:operator",
+            agent_id: "test-agent",
             session_id: "sess_other",
             content: "duplicate logical root",
             lifecycle_state: "processing",
@@ -58,7 +58,7 @@ async fn interrupt_request_returns_accepted() {
         &core,
         &DesktopInterruptRequest {
             request_id: "req_solo".into(),
-            agent_did: None,
+            node_did: None,
             cause: "userCancelled".into(),
         },
     )
@@ -76,7 +76,7 @@ async fn interrupt_request_returns_already_interrupted_for_second_call() {
         &core,
         &DesktopInterruptRequest {
             request_id: "req_solo".into(),
-            agent_did: None,
+            node_did: None,
             cause: "userCancelled".into(),
         },
     )
@@ -86,7 +86,7 @@ async fn interrupt_request_returns_already_interrupted_for_second_call() {
         &core,
         &DesktopInterruptRequest {
             request_id: "req_solo".into(),
-            agent_did: None,
+            node_did: None,
             cause: "userCancelled".into(),
         },
     )
@@ -117,7 +117,7 @@ async fn interrupt_request_rejects_terminal_request_without_latching_it() {
         &core,
         &DesktopInterruptRequest {
             request_id: "req_solo".into(),
-            agent_did: None,
+            node_did: None,
             cause: "userCancelled".into(),
         },
     )
@@ -139,7 +139,7 @@ async fn interrupt_request_rejects_non_user_cancelled_cause() {
         &core,
         &DesktopInterruptRequest {
             request_id: "req_solo".into(),
-            agent_did: None,
+            node_did: None,
             cause: "deadline".into(),
         },
     )
@@ -155,7 +155,7 @@ async fn interrupt_request_reaches_only_the_named_request() {
         &core,
         &DesktopInterruptRequest {
             request_id: "req_parent".into(),
-            agent_did: Some("did:test:operator".into()),
+            node_did: Some("did:test:operator".into()),
             cause: "userCancelled".into(),
         },
     )
@@ -179,13 +179,13 @@ async fn interrupt_request_reaches_only_the_named_request() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn interrupt_request_stops_a_caused_request_on_its_own_agent() {
+async fn interrupt_request_stops_a_caused_request_on_its_own_node() {
     let (core, _tmp, _) = seed_provenance_fixture().await;
     let result = interrupt_request(
         &core,
         &DesktopInterruptRequest {
             request_id: "req_peer".into(),
-            agent_did: Some("did:test:other".into()),
+            node_did: Some("did:test:other".into()),
             cause: "userCancelled".into(),
         },
     )

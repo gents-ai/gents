@@ -14,7 +14,7 @@ export type StageCapability = {
  * Owner of this capability and its referenced task. Every caller,
  * including this owner, needs explicit allowed_callers admission and ACP.
  */
-agent_did: string, capability_id: string, revision: string, target: StageTarget, input_ports?: Array<PortSpec> | null, output_ports?: Array<PortSpec> | null,
+node_did: string, capability_id: string, revision: string, target: StageTarget, input_ports?: Array<PortSpec> | null, output_ports?: Array<PortSpec> | null,
 /**
  * Empty means nobody, not everybody.
  */

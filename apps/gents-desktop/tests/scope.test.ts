@@ -18,20 +18,16 @@ import {
 import { workingNode } from "@/lib/nodes";
 import { fleetFor } from "./shell-fixture";
 
-const session = (id: string, agentDid: string, behaviorId: string, updatedAt: string) =>
-  ({ sessionId: id, agentDid, behaviorId, updatedAt }) as unknown as SessionSummary;
-const item = (
-  id: string,
-  agentDid: string,
-  targetBehaviorId: string,
-  status = "open",
-) => ({ itemId: id, agentDid, targetBehaviorId, status }) as unknown as MailboxItemView;
+const session = (id: string, nodeDid: string, agentId: string, updatedAt: string) =>
+  ({ sessionId: id, nodeDid, agentId, updatedAt }) as unknown as SessionSummary;
+const item = (id: string, nodeDid: string, targetAgentId: string, status = "open") =>
+  ({ itemId: id, nodeDid, targetAgentId, status }) as unknown as MailboxItemView;
 const node = (
-  agentDid: string,
+  nodeDid: string,
   source: string,
   sessions: SessionSummary[],
   mailboxItems: MailboxItemView[] = [],
-) => ({ agentDid, source, sessions, mailboxItems }) as unknown as DeploymentView;
+) => ({ nodeDid, source, sessions, mailboxItems }) as unknown as DeploymentView;
 
 const local = node(
   "did:local",

@@ -126,10 +126,10 @@ export function toolSummary(t: RenderedToolCallView): {
         mono: true,
       };
     }
-    case "subagent":
+    case "agent":
       return {
-        kind: `subagent · ${p.action}`,
-        primary: p.action === "list" ? "agents" : (p.name ?? p.sessionId ?? "subagent"),
+        kind: `agent · ${p.action}`,
+        primary: p.action === "list" ? "agents" : (p.name ?? p.sessionId ?? "agent"),
         secondary: compact(p.description),
       };
     case "process":

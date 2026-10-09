@@ -1,6 +1,6 @@
 /* A tool call, shown by what it did rather than by its raw document: the
    same summary and body the desktop's ToolGroup builds from the
-   presentation kinds (command, fileRead, fileEdit, subagent, process,
+   presentation kinds (command, fileRead, fileEdit, agent, process,
    mcp, generic). Used by the activity steps in the transcript and by the
    trace panel. */
 
@@ -209,7 +209,7 @@ export function ToolBody({ tool }: { tool: RenderedToolCallView }) {
           <Payload label="output" value={p.fallbackOutput} />
         </>
       )}
-      {p.kind === "subagent" && (
+      {p.kind === "agent" && (
         <>
           <Payload
             label={p.action === "start" ? "assignment" : "message"}

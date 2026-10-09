@@ -8,45 +8,41 @@ import {
   logTurn,
 } from "./tauri-driver-live/helpers";
 
-const SUBAGENT_PROMPT =
-  "Use the configured local subagent target. Call agent_new with that agent and ask it to read workspace/AGENTS.md and return the phrase live-subagent-smoke with one short finding. Then reply with one sentence saying it has started.";
+const AGENT_TARGET_PROMPT =
+  "Use the configured local agent target. Call agent_new with that agent and ask it to read workspace/AGENTS.md and return the phrase live-agent-smoke with one short finding. Then reply with one sentence saying it has started.";
 const FOLLOW_UP_PROMPT =
-  "Without calling tools, reply with one short sentence containing live-subagent-followup.";
+  "Without calling tools, reply with one short sentence containing live-agent-followup.";
 
-describeLive("Tauri app live subagent sessions", () => {
+describeLive("Tauri app live agent sessions", () => {
   it("starts a session with a configured target and projects its provenance", async () => {
     await withLiveDesktop(async ({ runner, driver, deployment }) => {
-      const defaultBehavior = deployment.behaviors.find(
-        (behavior) =>
-          behavior.behaviorId === deployment.agentPrincipal.defaultBehaviorId,
+      const defaultAgent = deployment.agents.find(
+        (agent) => agent.agentId === deployment.node.defaultAgentId,
       );
       const context = deployment.contexts.find(
-        (candidate) => candidate.context_id === defaultBehavior?.contextId,
+        (candidate) => candidate.context_id === defaultAgent?.contextId,
       );
       const defaultTools = deployment.tools.find(
         (tools) => tools.tools_id === context?.tools_id,
       );
-      const targetId = defaultTools?.subagents?.target_ids?.[0];
-      const subagentTarget = deployment.subagentTargets.find(
+      const targetId = defaultTools?.agents?.target_ids?.[0];
+      const agentTarget = deployment.agentTargets.find(
         (target) => target.target_id === targetId,
       );
-      expect(
-        subagentTarget,
-        "live fixture did not expose a subagent target",
-      ).toBeDefined();
-      const subagentBehaviorId = subagentTarget?.behavior_id;
-      expect(defaultTools?.subagents?.enabled).toBe(true);
+      expect(agentTarget, "live fixture did not expose an agent target").toBeDefined();
+      const targetAgentId = agentTarget?.agent_id;
+      expect(defaultTools?.agents?.enabled).toBe(true);
 
       await driver.ready();
       await driver.openChat();
-      logTurn(`subagent driver ready target=${subagentBehaviorId}`);
+      logTurn(`agent target driver ready target=${targetAgentId}`);
 
-      await driver.typeComposer(SUBAGENT_PROMPT);
+      await driver.typeComposer(AGENT_TARGET_PROMPT);
       await driver.pressEnter();
       await waitFor(() => {
         expect(runner.sendResults).toHaveLength(1);
       });
-      const submitted = expectLatestSendResult(runner, "subagent turn");
+      const submitted = expectLatestSendResult(runner, "agent target turn");
       const session = await runner.waitForRequestCompletion(submitted);
       if (session.turnState !== "completed") {
         const diagnostics = await runner.fetchRequestDiagnostics(
@@ -54,13 +50,13 @@ describeLive("Tauri app live subagent sessions", () => {
           submitted.requestId,
         );
         throw new Error(
-          `subagent turn failed diagnostics=${JSON.stringify(diagnostics)}`,
+          `agent target turn failed diagnostics=${JSON.stringify(diagnostics)}`,
         );
       }
-      expectCompletedSession("subagent turn", session);
+      expectCompletedSession("agent target turn", session);
       expect(
         hasAssistantResponse(session.timelineItems),
-        `subagent turn rendered no assistant response: ${JSON.stringify(
+        `agent target turn rendered no assistant response: ${JSON.stringify(
           session.timelineItems.slice(-8),
         )}`,
       ).toBe(true);
@@ -75,21 +71,42 @@ describeLive("Tauri app live subagent sessions", () => {
 
       await waitFor(
         async () => {
+          const fleet = await runner.adapter.fetchDesktopSnapshot();
+          const parentSummary = fleet.client?.deployments
+            .flatMap((node) => node.sessions)
+            .find(
+              (candidate) =>
+                candidate.nodeDid === runner.nodeDid &&
+                candidate.sessionId === submitted.sessionId,
+            );
+          expect(
+            parentSummary,
+            "the submitted session must have an exact scope",
+          ).toBeDefined();
+          expect(
+            parentSummary?.requesterDid,
+            "the desktop sender signs its session",
+          ).toBeTruthy();
           const provenance = await runner.adapter.sessionProvenance({
             sessionId: submitted.sessionId,
-            agentDid: runner.agentDid,
+            nodeDid: runner.nodeDid,
+            requesterDid: parentSummary!.requesterDid,
           });
-          /* the request started another session: its subagent */
+          /* the request started another session: its agent target */
           expect(provenance.started.length).toBeGreaterThan(0);
           const child = provenance.started[0]!;
           expect(child.sessionId).not.toBe(submitted.sessionId);
 
-          /* the started session runs the subagent's behavior, and finished */
-          const fleet = await runner.adapter.fetchDesktopSnapshot();
+          /* the started session runs the target's agent, and finished */
           const childSummary = fleet.client?.deployments
             .flatMap((node) => node.sessions)
-            .find((session) => session.sessionId === child.sessionId);
-          expect(childSummary?.behaviorId).toBe(subagentBehaviorId);
+            .find(
+              (candidate) =>
+                candidate.nodeDid === child.nodeDid &&
+                candidate.sessionId === child.sessionId &&
+                candidate.requesterDid === child.requesterDid,
+            );
+          expect(childSummary?.agentId).toBe(targetAgentId);
           expect(
             childSummary?.turnState,
             `expected the started session to complete; started=${JSON.stringify(provenance.started)}`,
@@ -97,20 +114,20 @@ describeLive("Tauri app live subagent sessions", () => {
 
           const childProvenance = await runner.adapter.sessionProvenance({
             sessionId: child.sessionId,
-            agentDid: runner.agentDid,
+            nodeDid: child.nodeDid,
+            requesterDid: child.requesterDid,
           });
           expect(childProvenance.startedBy?.sessionId).toBe(submitted.sessionId);
 
           const childProfile = deployment.inferenceProfiles.find(
             (profile) =>
               profile.profile_id ===
-              deployment.behaviors.find(
-                (behavior) => behavior.behaviorId === childSummary?.behaviorId,
-              )?.inferenceProfileId,
+              deployment.agents.find((agent) => agent.agentId === childSummary?.agentId)
+                ?.inferenceProfileId,
           );
           expect(
             childProfile,
-            "the target behavior should reference a resolvable inference profile",
+            "the target agent should reference a resolvable inference profile",
           ).toBeDefined();
         },
         { timeout: 120_000 },
@@ -120,11 +137,14 @@ describeLive("Tauri app live subagent sessions", () => {
         expect(driver.composer()).toBeInTheDocument();
       });
       await driver.typeComposer(FOLLOW_UP_PROMPT);
+      await waitFor(() => {
+        expect(driver.sendButton()).toBeEnabled();
+      });
       await driver.pressEnter();
       await waitFor(() => {
         expect(runner.sendResults).toHaveLength(2);
       });
-      const followUp = expectLatestSendResult(runner, "subagent follow-up");
+      const followUp = expectLatestSendResult(runner, "agent target follow-up");
       expect(followUp.sessionId).toBe(submitted.sessionId);
       expect(followUp.requestId).not.toBe(submitted.requestId);
       logTurn(
@@ -132,11 +152,11 @@ describeLive("Tauri app live subagent sessions", () => {
       );
 
       const followUpSession = await runner.waitForRequestCompletion(followUp);
-      expectCompletedSession("subagent follow-up", followUpSession);
+      expectCompletedSession("agent target follow-up", followUpSession);
       expect(followUpSession.latestRequestId).toBe(followUp.requestId);
       expect(
         hasAssistantResponse(followUpSession.timelineItems),
-        `subagent follow-up rendered no assistant response: ${JSON.stringify(
+        `agent target follow-up rendered no assistant response: ${JSON.stringify(
           followUpSession.timelineItems.slice(-8),
         )}`,
       ).toBe(true);
@@ -155,8 +175,8 @@ describeLive("Tauri app live subagent sessions", () => {
 
       const followUpReply = collectAssistantText(followUpSession.timelineItems);
       expect(
-        /live-subagent-followup/i.test(followUpReply),
-        `follow-up reply did not echo the sentinel "live-subagent-followup"; reply=${followUpReply.slice(0, 400)}`,
+        /live-agent-followup/i.test(followUpReply),
+        `follow-up reply did not echo the sentinel "live-agent-followup"; reply=${followUpReply.slice(0, 400)}`,
       ).toBe(true);
     });
   }, 600_000);

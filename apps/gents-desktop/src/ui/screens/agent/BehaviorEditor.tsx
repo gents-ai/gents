@@ -1,13 +1,13 @@
-/* One behavior's editor, with its context edited inline. The data model
-   is unchanged (Behavior and AgentContext stay two documents), but the
-   context is a visible block on the behavior: pick one, see who else uses
+/* One agent's editor, with its context edited inline. The data model
+   is unchanged (Agent and AgentContext stay two documents), but the
+   context is a visible block on the agent: pick one, see who else uses
    it, duplicate it or start empty, and edit its instructions and
    capabilities in place. Everything waits for one Save. */
 import type { NodeView } from "../../../hooks/fleetStore";
 import { dependentsWarning } from "./dependents";
 import { Fragment, useRef, useState } from "react";
 import { ArrowLeftRight, ArrowUpRight, Copy, MoreHorizontal, Plus } from "lucide-react";
-import type { AgentContext, BehaviorView } from "@source-inc/gents-desktop-client";
+import type { AgentContext, AgentView } from "@source-inc/gents-desktop-client";
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -27,8 +27,8 @@ import {
   DropdownMenuTrigger,
 } from "@gents/ui/components/dropdown-menu";
 import { href } from "@/lib/router";
-import { behaviorReadiness } from "@/lib/behavior-readiness";
-import { AccessSentence, BehaviorAvatar } from "../parts";
+import { agentReadiness } from "@/lib/agent-readiness";
+import { AccessSentence, AgentInitials } from "../parts";
 import {
   AreaRow,
   ChipsRow,
@@ -67,17 +67,17 @@ import {
   type SaveIntent,
 } from "./behaviorDraft";
 import { ContextPicker } from "./ContextPicker";
-import { contextOutcome, writeBehaviorDraft } from "./behaviorSave";
+import { contextOutcome, writeAgentDraft } from "./behaviorSave";
 
 export function BehaviorEditor({
   deployment,
-  behavior,
+  agent,
   draft: draftMode,
   embedded = false,
 }: {
   deployment: NodeView;
-  behavior: BehaviorView;
-  /* a new behavior that exists only on this page until Save */
+  agent: AgentView;
+  /* a new agent that exists only on this page until Save */
   draft?: DraftMode;
   /* in a sheet beside another page: no Danger zone */
   embedded?: boolean;
@@ -85,21 +85,21 @@ export function BehaviorEditor({
   const { changeConfig } = useApp().actions;
   const base = {
     name: "agent" as const,
-    agentDid: deployment.agentDid,
-    section: "behaviors",
+    nodeDid: deployment.nodeDid,
+    section: "agents",
   };
   const context: AgentContext | null =
-    deployment.contexts.find((c) => c.context_id === behavior.contextId) ?? null;
+    deployment.contexts.find((c) => c.context_id === agent.contextId) ?? null;
   const saved: Draft = {
-    displayName: behavior.displayName,
-    description: behavior.description ?? "",
-    tags: behavior.tags ?? [],
+    displayName: agent.displayName,
+    description: agent.description ?? "",
+    tags: agent.tags ?? [],
     /* a draft starts its own empty instructions; Save creates them */
-    contextChoice: draftMode ? EMPTY : (behavior.contextId ?? ""),
+    contextChoice: draftMode ? EMPTY : (agent.contextId ?? ""),
     contextName: "",
     copiedFrom: "",
     ...contextFields(context),
-    inferenceProfileId: behavior.inferenceProfileId ?? "",
+    inferenceProfileId: agent.inferenceProfileId ?? "",
   };
   /* an unused context offered for deletion after a save: the typed-name
      confirmation every delete goes through */
@@ -120,10 +120,10 @@ export function BehaviorEditor({
     saved,
     async (next, intent) => {
       const want = (intent ?? {}) as SaveIntent;
-      const written = await writeBehaviorDraft({
+      const written = await writeAgentDraft({
         changeConfig,
         deployment,
-        behavior,
+        agent,
         next,
         asCopy: Boolean(want.copy),
         draftMode,
@@ -133,7 +133,7 @@ export function BehaviorEditor({
         newContextId: () => (pendingContextId.current ??= newId("ctx")),
       });
       if (written.creating) pendingContextId.current = null;
-      const { said, unused } = contextOutcome(deployment, behavior, context, written);
+      const { said, unused } = contextOutcome(deployment, agent, context, written);
       if (!said.length) return undefined;
       return {
         savedToast: `Saved. ${said.join(" ")}`,
@@ -147,12 +147,12 @@ export function BehaviorEditor({
       problems: (next) => problems(deployment, next, draftMode !== undefined),
     },
   );
-  const id = (f: string) => `${behavior.behaviorId}-${f}`;
+  const id = (f: string) => `${agent.agentId}-${f}`;
   const errors = d.problems;
-  /* a draft closes only once the bridge has the behavior */
+  /* a draft closes only once the bridge has the agent */
   const finish = async (intent: SaveIntent) => {
     const ok = await d.save(intent);
-    if (ok && draftMode) draftMode.onSaved(behavior.behaviorId);
+    if (ok && draftMode) draftMode.onSaved(agent.agentId);
   };
   /* problems stay at their fields; Save takes you to the first one */
   const fields = Object.fromEntries(
@@ -177,17 +177,17 @@ export function BehaviorEditor({
     deployment.contexts.find((c) => c.context_id === d.draft.copiedFrom) ?? null;
   const others = selected
     ? usersOf(deployment, selected.context_id).filter(
-        (b) => b.behaviorId !== behavior.behaviorId,
+        (b) => b.agentId !== agent.agentId,
       )
     : [];
   /* a change to shared instructions asks, at Save, whose change it is */
   const [confirmShared, setConfirmShared] = useState(false);
   /* what the save waiting on that question should also do */
   const [pendingIntent, setPendingIntent] = useState<SaveIntent>({});
-  /* switching to another behavior's instructions opens the picker inline */
+  /* switching to another agent's instructions opens the picker inline */
   const [switching, setSwitching] = useState(false);
   const shared = others.length > 0;
-  /* a changed field on instructions other behaviors also use */
+  /* a changed field on instructions other agents also use */
   const sharedEdit =
     selected !== null &&
     shared &&
@@ -232,8 +232,8 @@ export function BehaviorEditor({
   };
   const newLabel = d.draft.contextName.trim() || "New context";
   /* who points at each context, counted once per render */
-  const usersByContext = new Map<string, BehaviorView[]>();
-  for (const b of deployment.behaviors) {
+  const usersByContext = new Map<string, AgentView[]>();
+  for (const b of deployment.agents) {
     if (!b.contextId) continue;
     const list = usersByContext.get(b.contextId);
     if (list) list.push(b);
@@ -254,7 +254,7 @@ export function BehaviorEditor({
     : null;
   /* so the context page's Back returns here */
   const rememberOrigin = () => {
-    if (selected) rememberContextOrigin(selected.context_id, behavior.behaviorId);
+    if (selected) rememberContextOrigin(selected.context_id, agent.agentId);
   };
   const toolsSharers = d.draft.toolsId
     ? deployment.contexts.filter(
@@ -262,23 +262,23 @@ export function BehaviorEditor({
       )
     : [];
   const toolsNote = !d.draft.toolsId
-    ? "No tools: the behavior can only talk."
+    ? "No tools: the agent can only talk."
     : toolsSharers.length
       ? `Also used by ${toolsSharers.length} other ${toolsSharers.length === 1 ? "context" : "contexts"}; edits to the document reach them too.`
-      : "Only this behavior uses these tools.";
+      : "Only this agent uses these tools.";
   /* the block only speaks up when there is something to act on: shared
      instructions, or ones that Save will create */
   const sharedWith = listNames(others.map((b) => b.displayName));
   const ownership = creating
     ? copiedFrom
-      ? `A copy of ${nameOf(copiedFrom)} for this behavior, created when you save.`
-      : "New empty instructions for this behavior, created when you save."
+      ? `A copy of ${nameOf(copiedFrom)} for this agent, created when you save.`
+      : "New empty instructions for this agent, created when you save."
     : null;
-  /* the behaviors that share these instructions, each a link; past two,
+  /* the agents that share these instructions, each a link; past two,
      the rest are counted and the count opens the context, which lists them */
-  const behaviorLink = (b: BehaviorView) => (
+  const agentLink = (b: AgentView) => (
     <a
-      href={href({ ...base, item: b.behaviorId })}
+      href={href({ ...base, item: b.agentId })}
       className="text-foreground underline-offset-2 hover:underline"
     >
       {b.displayName}
@@ -290,14 +290,14 @@ export function BehaviorEditor({
         Shared with{" "}
         {others.length <= 2 ? (
           others.map((b, i) => (
-            <Fragment key={b.behaviorId}>
+            <Fragment key={b.agentId}>
               {i > 0 && " and "}
-              {behaviorLink(b)}
+              {agentLink(b)}
             </Fragment>
           ))
         ) : (
           <>
-            {behaviorLink(others[0]!)} and{" "}
+            {agentLink(others[0]!)} and{" "}
             <a
               href={contextLink ?? undefined}
               onClick={rememberOrigin}
@@ -311,57 +311,53 @@ export function BehaviorEditor({
     ) : null;
   /* its context id points at nothing: deleted from under it */
   const dangling = Boolean(d.draft.contextChoice) && !creating && !selected;
-  /* a context only this behavior uses can go with it */
+  /* a context only this agent uses can go with it */
   const soleContext =
     context &&
     (usersByContext.get(context.context_id) ?? []).every(
-      (b) => b.behaviorId === behavior.behaviorId,
+      (b) => b.agentId === agent.agentId,
     )
       ? context
       : null;
-  const readiness = behaviorReadiness(deployment, behavior.behaviorId);
-  const env = deployment.behaviorEnvironments.find(
-    (e) => e.behaviorId === behavior.behaviorId,
-  );
+  const readiness = agentReadiness(deployment, agent.agentId);
+  const env = deployment.agentEnvironments.find((e) => e.agentId === agent.agentId);
   /* said under the summary only when something needs attention */
   const attention =
-    behavior.enabled && !readiness.ready ? `It can’t run: ${readiness.reason}.` : null;
+    agent.enabled && !readiness.ready ? `It can’t run: ${readiness.reason}.` : null;
   return (
     <>
       <header
-        data-testid="behavior-header"
+        data-testid="agent-header"
         className="mb-8 rounded-3xl bg-raised px-5 py-4 shadow-sm ring-1 ring-foreground/5"
       >
         {/* avatar top-aligned beside the text; above it on phones */}
         <div className="flex min-w-0 items-start gap-3 max-md:flex-col">
-          <BehaviorAvatar
-            name={
-              draftMode ? d.draft.displayName.trim() || "New" : behavior.displayName
-            }
+          <AgentInitials
+            name={draftMode ? d.draft.displayName.trim() || "New" : agent.displayName}
             className="size-10 shrink-0 text-sm"
           />
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="truncate font-heading text-lg font-medium text-heading">
                 {draftMode
-                  ? d.draft.displayName.trim() || "New behavior"
-                  : behavior.displayName}
+                  ? d.draft.displayName.trim() || "New agent"
+                  : agent.displayName}
               </h2>
-              {behavior.isDefault && <Badge variant="secondary">Default</Badge>}
+              {agent.isDefault && <Badge variant="secondary">Default</Badge>}
               {draftMode && <Badge variant="secondary">Draft</Badge>}
             </div>
             {draftMode ? null : (
               <>
                 <p
-                  data-testid="behavior-summary"
+                  data-testid="agent-summary"
                   className="mt-0.5 text-sm text-muted-foreground"
                 >
-                  <AccessSentence name={behavior.displayName} env={env} />
+                  <AccessSentence name={agent.displayName} env={env} />
                 </p>
                 {attention && (
                   <p
-                    id={`${behavior.behaviorId}-status-note`}
-                    data-testid="behavior-status-note"
+                    id={`${agent.agentId}-status-note`}
+                    data-testid="agent-status-note"
                     className="mt-0.5 text-sm text-muted-foreground"
                   >
                     {attention}
@@ -375,8 +371,8 @@ export function BehaviorEditor({
 
       <Group title="About">
         {!draftMode && (
-          <FactRow label="Behavior ID" mono>
-            {behavior.behaviorId}
+          <FactRow label="Agent ID" mono>
+            {agent.agentId}
           </FactRow>
         )}
         <TextRow
@@ -389,7 +385,7 @@ export function BehaviorEditor({
         <AreaRow
           id={id("description")}
           label="Description"
-          description="One or two sentences, shown in the behavior picker."
+          description="One or two sentences, shown in the agent picker."
           value={d.draft.description}
           onChange={(v) => d.set("description", v)}
           rows={2}
@@ -416,7 +412,7 @@ export function BehaviorEditor({
               Instructions and tools
             </h3>
             <p className="mt-1.5 text-sm text-muted-foreground">
-              What this behavior is told, and what it may use.
+              What this agent is told, and what it may use.
             </p>
           </div>
           {(selected || creating) && (
@@ -439,7 +435,7 @@ export function BehaviorEditor({
                     className="whitespace-nowrap"
                     onClick={() => setSwitching(true)}
                   >
-                    <ArrowLeftRight /> Use another behavior’s instructions
+                    <ArrowLeftRight /> Use another agent’s instructions
                   </DropdownMenuItem>
                   {shared && (
                     <DropdownMenuItem
@@ -501,8 +497,8 @@ export function BehaviorEditor({
               }
             >
               {dangling
-                ? "Its instructions were deleted. Start again, or use another behavior’s."
-                : "No instructions yet, so this behavior has no prompt and no tools."}
+                ? "Its instructions were deleted. Start again, or use another agent’s."
+                : "No instructions yet, so this agent has no prompt and no tools."}
             </p>
             <div className="mt-3 flex flex-wrap gap-2">
               <Button
@@ -514,7 +510,7 @@ export function BehaviorEditor({
                 <Plus /> Start empty
               </Button>
               <Button variant="quiet" size="sm" onClick={() => setSwitching(true)}>
-                Use another behavior’s…
+                Use another agent’s…
               </Button>
             </div>
           </div>
@@ -566,7 +562,7 @@ export function BehaviorEditor({
               <ChipsRow
                 id={id("skills")}
                 label="Skills"
-                description="None means the behavior runs without skills."
+                description="None means the agent runs without skills."
                 value={d.draft.skillIds}
                 onChange={(v) => d.set("skillIds", v)}
                 error={errors.skillIds}
@@ -605,7 +601,7 @@ export function BehaviorEditor({
         <RefRow
           id={id("profile")}
           label="Inference profile"
-          description="The backend, model and sampling this behavior runs on."
+          description="The backend, model and sampling this agent runs on."
           value={d.draft.inferenceProfileId}
           onChange={(v) => d.set("inferenceProfileId", v)}
           none="None"
@@ -703,9 +699,9 @@ export function BehaviorEditor({
           <AlertDialogHeader>
             <AlertDialogTitle>This also changes {sharedWith}</AlertDialogTitle>
             <AlertDialogDescription>
-              {behavior.displayName} shares its instructions and tools with {sharedWith}
-              . Save the change for {others.length === 1 ? "both" : "all of them"}, or
-              give {behavior.displayName} its own copy and leave the others as they are.
+              {agent.displayName} shares its instructions and tools with {sharedWith}.
+              Save the change for {others.length === 1 ? "both" : "all of them"}, or
+              give {agent.displayName} its own copy and leave the others as they are.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -745,7 +741,7 @@ export function BehaviorEditor({
           onDelete={() =>
             changeConfig("deleteContextConfig", {
               contextId: confirmUnused.context_id,
-              agentDid: deployment.agentDid,
+              nodeDid: deployment.nodeDid,
             })
           }
         />
@@ -766,8 +762,8 @@ export function BehaviorEditor({
       />
       {!draftMode && !embedded && (
         <DeleteButton
-          label={behavior.displayName}
-          warning={dependentsWarning(deployment, "behavior", behavior.behaviorId)}
+          label={agent.displayName}
+          warning={dependentsWarning(deployment, "agent", agent.agentId)}
           base={base}
           companion={
             soleContext
@@ -776,15 +772,15 @@ export function BehaviorEditor({
                   onDelete: () =>
                     changeConfig("deleteContextConfig", {
                       contextId: soleContext.context_id,
-                      agentDid: deployment.agentDid,
+                      nodeDid: deployment.nodeDid,
                     }),
                 }
               : undefined
           }
           onDelete={() =>
-            changeConfig("deleteBehaviorConfig", {
-              behaviorId: behavior.behaviorId,
-              agentDid: deployment.agentDid,
+            changeConfig("deleteAgentConfig", {
+              agentId: agent.agentId,
+              nodeDid: deployment.nodeDid,
             })
           }
         />

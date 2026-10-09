@@ -6,4 +6,4 @@ import type { ConfigComponentPatch } from "./ConfigComponentPatch.js";
  * omitted values remain unchanged, including redacted credentials. All edits
  * are validated and committed together. No implicit creation or removal.
  */
-export type ConfigComponentsPatchRequest = { agentDid: string, patches: Array<ConfigComponentPatch>, };
+export type ConfigComponentsPatchRequest = { nodeDid: string, patches: Array<ConfigComponentPatch>, };

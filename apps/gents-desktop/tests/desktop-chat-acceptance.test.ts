@@ -16,8 +16,8 @@ function fixture(
   retry: (requestId: string) => Promise<unknown> = async () => null,
 ) {
   const stores = shellStores({
-    deployments: [{ agentDid: "agent", sessions: [], mailboxItems: [] }],
-    selection: { agentDid: "agent", sessionId: "session" },
+    deployments: [{ nodeDid: "agent", sessions: [], mailboxItems: [] }],
+    selection: { nodeDid: "agent", sessionId: "session" },
   });
   const store = stores.selection;
   const effects = {
@@ -35,7 +35,7 @@ function fixture(
     api: { sendChatMessage: send, retryRequest: retry } as unknown as DesktopApiAdapter,
     stores,
     project: () =>
-      admittingProjection("coding", blocked ? "Behavior is unavailable" : undefined),
+      admittingProjection("coding", blocked ? "Agent is unavailable" : undefined),
   });
   return {
     actions,
@@ -81,35 +81,35 @@ describe("canonical chat submission acceptance", () => {
   it("releases only the submitting workflow owned by the completed callback", () => {
     const owned: ChatWorkflowState = {
       kind: "submittingRequest",
-      agentDid: "agent-a",
+      nodeDid: "agent-a",
       sessionId: "session-a",
     };
     const newer: ChatWorkflowState = {
       kind: "submittingRequest",
-      agentDid: "agent-b",
+      nodeDid: "agent-b",
       sessionId: "session-b",
     };
     expect(releaseOwnedSubmissionWorkflow(owned, owned)).toEqual({ kind: "ready" });
     expect(releaseOwnedSubmissionWorkflow(newer, owned)).toBe(newer);
 
     const deployment = {
-      agentDid: "agent-b",
+      nodeDid: "agent-b",
       source: "enrollment",
       dialSucceeded: true,
       chatSafe: true,
       lastError: null,
       runtime: null,
-      agentPrincipal: { agentDid: "agent-b", defaultBehaviorId: "coding" },
-      behaviorReadiness: {
+      node: { nodeDid: "agent-b", defaultAgentId: "coding" },
+      nodeReadiness: {
         source: { state: "current" },
         activeGeneration: 1,
         routerGeneration: 1,
         updatedAt: "2026-09-15T00:00:00Z",
-        behaviors: [{ state: "ready", behaviorId: "coding" }],
+        agents: [{ state: "ready", agentId: "coding" }],
       },
-      behaviors: [
+      agents: [
         {
-          behaviorId: "coding",
+          agentId: "coding",
           displayName: "Coding",
           enabled: true,
           isDefault: true,
@@ -118,7 +118,7 @@ describe("canonical chat submission acceptance", () => {
     };
     const projection = projectChatShell({
       clientAvailable: true,
-      selectedAgentDid: "agent-b",
+      selectedNodeDid: "agent-b",
       selectedSessionId: null,
       sending: false,
       session: null,
@@ -132,21 +132,21 @@ describe("canonical chat submission acceptance", () => {
     expect(projection.workflow).toEqual({ kind: "ready" });
     expect(projection.nonEmptyContentSendStatus).toEqual({ kind: "ready" });
   });
-  it("does not bypass a stale admission blocker when a behavior is picked and sent in one event", async () => {
+  it("does not bypass a stale admission blocker when an agent is picked and sent in one event", async () => {
     const send = vi.fn();
     const f = fixture(send, true);
     await expect(
       f.actions.sendMessage("review this", "new-choice"),
     ).resolves.toBeNull();
     expect(send).not.toHaveBeenCalled();
-    expect(f.reportFailure).toHaveBeenLastCalledWith("Behavior is unavailable");
+    expect(f.reportFailure).toHaveBeenLastCalledWith("Agent is unavailable");
   });
   it("records an accepted pending request without depending on a successful refresh", async () => {
     const accepted = {
       sessionId: "session",
       requestId: "request",
-      agentDid: "agent",
-      behaviorId: "coding",
+      nodeDid: "agent",
+      agentId: "coding",
     };
     const f = fixture(async () => accepted);
     await expect(f.actions.sendMessage("review this")).resolves.toEqual(accepted);
@@ -159,7 +159,7 @@ describe("canonical chat submission acceptance", () => {
     );
     expect(f.getWorkflow()).toEqual({
       kind: "awaitingObservation",
-      agentDid: "agent",
+      nodeDid: "agent",
       sessionId: "session",
       requestId: "request",
     });
@@ -185,8 +185,8 @@ describe("canonical chat submission acceptance", () => {
     const pending = deferred<{
       sessionId: string;
       requestId: string;
-      agentDid: string;
-      behaviorId: string;
+      nodeDid: string;
+      agentId: string;
     }>();
     const f = fixture(() => pending.promise);
     const submitted = f.actions.sendMessage("review this");
@@ -196,8 +196,8 @@ describe("canonical chat submission acceptance", () => {
     const accepted = {
       sessionId: "origin-session",
       requestId: "request",
-      agentDid: "agent",
-      behaviorId: "coding",
+      nodeDid: "agent",
+      agentId: "coding",
     };
     pending.resolve(accepted);
 

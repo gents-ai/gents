@@ -1,6 +1,6 @@
 /* Where the person left the lists: what the sessions list and the mailbox
    are narrowed to. It outlives the visit, in this browser's storage, so a
-   narrowing is there when they come back. It names data (nodes, behaviors)
+   narrowing is there when they come back. It names data (nodes, agents)
    that can come and go, so it is read back leniently and kept apart from
    the person's preferences. */
 import { useStore } from "zustand";

@@ -20,7 +20,7 @@ type ReadinessApi = Pick<
 export const MANAGED_RUNTIME_READY_TIMEOUT_MS = 30_000;
 
 const RUNTIME_UNAVAILABLE =
-  "The local agent is not running, so provider sign-in is unavailable. Start the agent and try again.";
+  "The local node is not running, so provider sign-in is unavailable. Start the node and try again.";
 
 /** Raised when the managed runtime cannot be brought to a serving state. */
 export class ManagedRuntimeUnavailableError extends Error {
@@ -52,7 +52,7 @@ export async function waitForManagedRuntimePairing(
   const status = await api.managedServerStatus();
   if (!status.pairingReady) {
     throw new ManagedRuntimeUnavailableError(
-      "The local agent started, but secure background pairing is not ready.",
+      "The local node started, but secure background pairing is not ready.",
     );
   }
   return status;
@@ -68,7 +68,7 @@ export async function waitForManagedRuntimePairing(
  */
 export async function ensureManagedRuntimeServing(
   api: ReadinessApi,
-  fallbackAgentName: string,
+  fallbackNodeName: string,
   options: {
     timeoutMs?: number;
     intervalMs?: number;
@@ -94,14 +94,14 @@ export async function ensureManagedRuntimeServing(
     if (needsStart) {
       const startManagedServer = api.startManagedServer;
       if (!startManagedServer) {
-        throw new ManagedRuntimeUnavailableError("The local agent is not running.");
+        throw new ManagedRuntimeUnavailableError("The local node is not running.");
       }
-      const agentName =
-        status.agentName?.trim() || fallbackAgentName.trim() || "Local Agent";
+      const nodeName =
+        status.nodeName?.trim() || fallbackNodeName.trim() || "Local Node";
       try {
         await observeManagedServerOperation(
           api,
-          () => startManagedServer(agentName),
+          () => startManagedServer(nodeName),
           onWait,
         );
       } catch (cause) {

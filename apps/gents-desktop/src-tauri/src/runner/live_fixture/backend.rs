@@ -13,7 +13,7 @@ pub(crate) struct LiveBackendOverride {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct AgentBackendConfig {
+pub(crate) struct LiveBackendConfig {
     pub(crate) endpoint: String,
     pub(crate) model_name: String,
     pub(crate) provider_kind: BackendProviderKind,
@@ -21,7 +21,7 @@ pub(crate) struct AgentBackendConfig {
     pub(crate) api_key_env_var: Option<String>,
 }
 
-impl AgentBackendConfig {
+impl LiveBackendConfig {
     pub(crate) fn resolve(override_config: Option<&LiveBackendOverride>) -> Result<Self> {
         let endpoint = override_config
             .and_then(|config| normalize_optional_owned(config.inference_url.as_ref()))
@@ -81,10 +81,10 @@ impl AgentBackendConfig {
     }
 }
 
-const LIVE_SUBAGENT_BACKEND_PREFIX: &str = "GENTS_DESKTOP_LIVE_SUBAGENT_BACKEND";
+const LIVE_TARGET_BACKEND_PREFIX: &str = "GENTS_DESKTOP_LIVE_TARGET_BACKEND";
 
 #[derive(Debug, Clone, Default)]
-pub(crate) struct LiveSubagentBackendOverride {
+pub(crate) struct LiveTargetBackendOverride {
     pub(crate) inference_url: Option<String>,
     pub(crate) model_name: Option<String>,
     pub(crate) provider: Option<String>,
@@ -92,34 +92,34 @@ pub(crate) struct LiveSubagentBackendOverride {
     pub(crate) api_key_env_var: Option<String>,
 }
 
-impl AgentBackendConfig {
-    pub(crate) fn resolve_subagent(
-        override_config: Option<&LiveSubagentBackendOverride>,
-        primary: &AgentBackendConfig,
+impl LiveBackendConfig {
+    pub(crate) fn resolve_target(
+        override_config: Option<&LiveTargetBackendOverride>,
+        primary: &LiveBackendConfig,
     ) -> Result<Option<Self>> {
         let endpoint = override_config
             .and_then(|c| normalize_optional_owned(c.inference_url.as_ref()))
-            .or_else(|| optional_env(&format!("{LIVE_SUBAGENT_BACKEND_PREFIX}_ENDPOINT")));
+            .or_else(|| optional_env(&format!("{LIVE_TARGET_BACKEND_PREFIX}_ENDPOINT")));
         if endpoint.is_none() {
             return Ok(None);
         }
         let model_name = override_config
             .and_then(|c| normalize_optional_owned(c.model_name.as_ref()))
-            .or_else(|| optional_env(&format!("{LIVE_SUBAGENT_BACKEND_PREFIX}_MODEL")))
+            .or_else(|| optional_env(&format!("{LIVE_TARGET_BACKEND_PREFIX}_MODEL")))
             .unwrap_or_else(|| primary.model_name.clone());
         let provider_kind = override_config
             .and_then(|c| normalize_optional_owned(c.provider.as_ref()))
-            .or_else(|| optional_env(&format!("{LIVE_SUBAGENT_BACKEND_PREFIX}_PROVIDER")));
+            .or_else(|| optional_env(&format!("{LIVE_TARGET_BACKEND_PREFIX}_PROVIDER")));
         let api_key = override_config
             .and_then(|c| normalize_optional_owned(c.api_key.as_ref()))
-            .or_else(|| optional_env(&format!("{LIVE_SUBAGENT_BACKEND_PREFIX}_API_KEY")));
+            .or_else(|| optional_env(&format!("{LIVE_TARGET_BACKEND_PREFIX}_API_KEY")));
         let api_key_env_var = override_config
             .and_then(|c| normalize_optional_owned(c.api_key_env_var.as_ref()))
-            .or_else(|| optional_env(&format!("{LIVE_SUBAGENT_BACKEND_PREFIX}_API_KEY_ENV_VAR")));
+            .or_else(|| optional_env(&format!("{LIVE_TARGET_BACKEND_PREFIX}_API_KEY_ENV_VAR")));
         if let Some(env_var_name) = api_key_env_var.as_deref() {
             std::env::var(env_var_name).with_context(|| {
                 format!(
-                    "set {env_var_name} because {LIVE_SUBAGENT_BACKEND_PREFIX}_API_KEY_ENV_VAR points at it"
+                    "set {env_var_name} because {LIVE_TARGET_BACKEND_PREFIX}_API_KEY_ENV_VAR points at it"
                 )
             })?;
         }

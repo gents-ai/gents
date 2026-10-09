@@ -28,8 +28,8 @@ import { LocalServer } from "../src/ui/screens/agent/LocalServer";
 const base: ManagedServerStatus = {
   state: "running",
   autoStart: true,
-  agentName: "Workshop Agent",
-  agentDid: "did:key:agent",
+  nodeName: "Workshop Agent",
+  nodeDid: "did:key:agent",
   graphql: "http://127.0.0.1:9191/graphql",
   effectiveToolCeiling: "readwrite",
   effectiveToolRoot: "/Users/test",
@@ -162,9 +162,9 @@ describe("runtimeStillBooting is a wait, not a failure", () => {
       stopManagedServer: vi.fn(),
     } as unknown as DesktopApiAdapter;
     renderIn(testApp({ api }), <LocalServer />);
-    await user.click(await screen.findByRole("button", { name: "Start agent" }));
+    await user.click(await screen.findByRole("button", { name: "Start node" }));
     expect(await screen.findByText("Updating data…")).toBeInTheDocument();
-    await vi.waitFor(() => expect(toast).toHaveBeenCalledWith("Agent started"), {
+    await vi.waitFor(() => expect(toast).toHaveBeenCalledWith("Node started"), {
       timeout: 5_000,
     });
     expect(toast).not.toHaveBeenCalledWith(expect.stringContaining("failed"));
@@ -197,15 +197,15 @@ describe("the local server's status", () => {
     } as unknown as DesktopApiAdapter;
     const app = testApp({ api, snapshot: { bootstrap: {}, client: null } });
     renderIn(app, <LocalServer />);
-    await screen.findByRole("button", { name: "Stop agent" });
+    await screen.findByRole("button", { name: "Stop node" });
     act(() =>
       publishSnapshot(app, { bootstrap: { moved: true }, client: null } as never),
     );
 
-    await user.click(screen.getByRole("button", { name: "Stop agent" }));
-    await screen.findByRole("button", { name: "Start agent" });
+    await user.click(screen.getByRole("button", { name: "Stop node" }));
+    await screen.findByRole("button", { name: "Start node" });
     await act(async () => late(base));
 
-    expect(screen.getByRole("button", { name: "Start agent" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start node" })).toBeInTheDocument();
   });
 });

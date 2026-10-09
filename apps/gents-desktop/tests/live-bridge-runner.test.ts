@@ -54,8 +54,8 @@ describe("live bridge runner invocation", () => {
       {
         inferenceUrl: "http://workstation-1:8000/v1",
         modelName: "primary",
-        subagentInferenceUrl: "http://workstation-2:8000/v1",
-        subagentModelName: "delegate",
+        agentTargetInferenceUrl: "http://workstation-2:8000/v1",
+        agentTargetModelName: "delegate",
       },
       { [LIVE_RUNNER_BINARY_ENV]: process.execPath },
     );
@@ -66,9 +66,9 @@ describe("live bridge runner invocation", () => {
       "http://workstation-1:8000/v1",
       "--model-name",
       "primary",
-      "--subagent-inference-url",
+      "--agent-target-inference-url",
       "http://workstation-2:8000/v1",
-      "--subagent-model-name",
+      "--agent-target-model-name",
       "delegate",
     ]);
   });
@@ -185,7 +185,7 @@ describe.skipIf(process.platform === "win32")(
         kind: "ready",
         baseUrl: "http://127.0.0.1:1234",
         deploymentLabel: "fixture",
-        agentDid: "did:key:fixture",
+        nodeDid: "did:key:fixture",
         toolRoot: "/tmp/fixture",
       };
       const child = spawnRunnerFixture(`
@@ -214,7 +214,7 @@ describe.skipIf(process.platform === "win32")(
           kind: "ready",
           baseUrl: "http://127.0.0.1:1234",
           deploymentLabel: "graceful-fixture",
-          agentDid: "did:key:graceful-fixture",
+          nodeDid: "did:key:graceful-fixture",
           toolRoot: "/tmp/graceful-fixture",
         })}\n`,
       )});
@@ -242,7 +242,7 @@ describe.skipIf(process.platform === "win32")(
           kind: "ready",
           baseUrl: "http://127.0.0.1:1234",
           deploymentLabel: "stalled-fixture",
-          agentDid: "did:key:stalled-fixture",
+          nodeDid: "did:key:stalled-fixture",
           toolRoot: "/tmp/stalled-fixture",
         })}\n`,
       )});
@@ -337,7 +337,7 @@ describe.skipIf(process.platform === "win32")(
           kind: "ready",
           baseUrl: "http://127.0.0.1:1234",
           deploymentLabel: "eperm-fixture",
-          agentDid: "did:key:eperm-fixture",
+          nodeDid: "did:key:eperm-fixture",
           toolRoot: "/tmp/eperm-fixture",
         })}\n`,
       )});

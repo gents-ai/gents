@@ -19,13 +19,13 @@ pub(super) fn derive_turn(
     derive_client_turn(&attempts)
 }
 
-pub(super) fn derive_turn_for_agent(
+pub(super) fn derive_turn_for_node(
     store: &ClientStore,
     session_id: &str,
-    agent_did: &str,
+    node_did: &str,
 ) -> Option<gents_protocol::client_protocol::ClientTurnState> {
-    let turn_request_id = store.turn_request_id_for_session_for_agent(session_id, agent_did)?;
-    let attempts = attempt_chain_for_request_for_agent(store, &turn_request_id, agent_did);
+    let turn_request_id = store.turn_request_id_for_session_for_node(session_id, node_did)?;
+    let attempts = attempt_chain_for_request_for_node(store, &turn_request_id, node_did);
     derive_client_turn(&attempts)
 }
 
@@ -155,12 +155,12 @@ pub(super) fn derive_turn_for_request(
     derive_client_turn(&attempts)
 }
 
-pub(super) fn derive_turn_for_request_for_agent(
+pub(super) fn derive_turn_for_request_for_node(
     store: &ClientStore,
     request_id: &str,
-    agent_did: &str,
+    node_did: &str,
 ) -> Option<gents_protocol::client_protocol::ClientTurnState> {
-    let attempts = attempt_chain_for_request_for_agent(store, request_id, agent_did);
+    let attempts = attempt_chain_for_request_for_node(store, request_id, node_did);
     derive_client_turn(&attempts)
 }
 
@@ -185,10 +185,10 @@ fn attempt_chain_for_request(store: &ClientStore, request_id: &str) -> Vec<Attem
     attempts
 }
 
-fn attempt_chain_for_request_for_agent(
+fn attempt_chain_for_request_for_node(
     store: &ClientStore,
     request_id: &str,
-    agent_did: &str,
+    node_did: &str,
 ) -> Vec<AttemptView> {
     let mut attempts = Vec::new();
     let mut cursor = Some(request_id.to_string());
@@ -200,7 +200,7 @@ fn attempt_chain_for_request_for_agent(
         }
         let Some((index, row)) = store.requests.iter().enumerate().find(|(_index, row)| {
             row.request_id == current_request_id
-                && row.agent_did.as_deref().is_none_or(|did| did == agent_did)
+                && row.node_did.as_deref().is_none_or(|did| did == node_did)
         }) else {
             break;
         };

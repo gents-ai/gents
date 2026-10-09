@@ -17,7 +17,7 @@ function renderComposer(
       activeRequestId={overrides.activeRequestId ?? null}
       activityStatus={overrides.activityStatus ?? null}
       approxSerializedBytes={21000}
-      behaviorLabel="default"
+      agentLabel="default"
       canSend
       draft=""
       interruptVisible={overrides.interruptVisible ?? false}
@@ -102,7 +102,7 @@ describe("ChatComposer chrome", () => {
       activityStatus: {
         kind: "blocked",
         label: "Agent is unavailable",
-        detail: "Behavior backend is unavailable",
+        detail: "Agent backend is unavailable",
         animated: false,
       },
       onConfigureInference,
@@ -129,9 +129,9 @@ describe("ChatComposer chrome", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("no longer renders store internals or permanent behavior chrome", () => {
+  it("no longer renders store internals or permanent agent chrome", () => {
     renderComposer();
-    expect(screen.queryByText(/Selected behavior/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Selected agent/)).not.toBeInTheDocument();
     expect(screen.queryByText(/rows \//)).not.toBeInTheDocument();
   });
 });

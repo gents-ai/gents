@@ -30,8 +30,8 @@ const UNRELATED = {
 function session(content: string): DesktopSessionSnapshot {
   return {
     sessionId: "session-long",
-    agentDid: "did:test:agent",
-    behaviorId: "behavior-default",
+    nodeDid: "did:test:node",
+    agentId: "agent-default",
     title: "Long session",
     previewText: content,
     status: "completed",

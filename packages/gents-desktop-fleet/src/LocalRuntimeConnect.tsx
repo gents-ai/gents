@@ -11,8 +11,8 @@ export type LocalRuntimeConnectProps = {
   loading?: boolean;
   copy?: Pick<FleetCopy, "runtimeProductName" | "cliBinaryName">;
   onConnect: (label?: string | null) => Promise<unknown>;
-  onStartServer?: (agentName: string) => Promise<unknown>;
-  onCommitServerAutoStart?: (agentName: string) => Promise<unknown>;
+  onStartServer?: (nodeName: string) => Promise<unknown>;
+  onCommitServerAutoStart?: (nodeName: string) => Promise<unknown>;
 };
 
 export function LocalRuntimeConnect({
@@ -25,18 +25,18 @@ export function LocalRuntimeConnect({
   onCommitServerAutoStart,
 }: LocalRuntimeConnectProps) {
   const [error, setError] = useState<string | null>(null);
-  const [newAgentName, setNewAgentName] = useState("Local Agent");
-  const agentName =
-    bootstrap?.initAgentName?.trim() || newAgentName.trim() || "Local Agent";
+  const [newNodeName, setNewNodeName] = useState("Local Node");
+  const nodeName =
+    bootstrap?.initNodeName?.trim() || newNodeName.trim() || "Local Node";
   const identity =
-    bootstrap?.initAgentDid?.trim() || bootstrap?.defaultAgentHome || "";
+    bootstrap?.initNodeDid?.trim() || bootstrap?.defaultNodeHome || "";
 
   async function connect() {
     setError(null);
     try {
-      await onStartServer?.(agentName);
-      await onConnect(agentName);
-      await onCommitServerAutoStart?.(agentName);
+      await onStartServer?.(nodeName);
+      await onConnect(nodeName);
+      await onCommitServerAutoStart?.(nodeName);
     } catch (connectError) {
       setError(formatPeerConnectionError(connectError, "local-runtime", copy));
     }
@@ -46,17 +46,17 @@ export function LocalRuntimeConnect({
     <section className="fleet-local-runtime">
       <div className="fleet-local-runtime-copy">
         <span className="eyebrow">Local runtime</span>
-        {onStartServer && !bootstrap?.agentHomeExists ? (
+        {onStartServer && !bootstrap?.nodeHomeExists ? (
           <label>
-            <span>Agent name</span>
+            <span>Node name</span>
             <input
-              data-testid="fleet-local-agent-name"
-              value={newAgentName}
-              onChange={(event) => setNewAgentName(event.target.value)}
+              data-testid="fleet-local-node-name"
+              value={newNodeName}
+              onChange={(event) => setNewNodeName(event.target.value)}
             />
           </label>
         ) : (
-          <strong>{agentName}</strong>
+          <strong>{nodeName}</strong>
         )}
         {identity ? (
           <span className="muted mono" title={identity}>
@@ -76,10 +76,10 @@ export function LocalRuntimeConnect({
             ? "Starting..."
             : "Connecting..."
           : onStartServer
-            ? bootstrap?.agentHomeExists
-              ? "Start Local Agent"
-              : "Create & Start Local Agent"
-            : "Connect Local Agent"}
+            ? bootstrap?.nodeHomeExists
+              ? "Start Local Node"
+              : "Create & Start Local Node"
+            : "Connect Local Node"}
       </button>
       {error ? <p className="fleet-local-runtime-error">{error}</p> : null}
     </section>

@@ -1,7 +1,7 @@
 import type { RequestDiagnosticsBundle } from "../live-bridge-runner";
 
 export type SubmittedRequest = {
-  agentDid: string;
+  nodeDid: string;
   requestId: string;
   sessionId: string;
 };
@@ -9,7 +9,7 @@ export type SubmittedRequest = {
 export type LiveSmokeRunnerInfo = {
   baseUrl: string;
   deploymentLabel: string;
-  agentDid: string;
+  nodeDid: string;
   toolRoot: string;
   dataRoot?: string;
 };
@@ -42,7 +42,7 @@ export function liveSmokeSummary(evidence: LiveSmokeEvidence) {
     "",
     `Deployment: \`${evidence.deploymentLabel}\``,
     `Bridge URL: \`${evidence.baseUrl}\``,
-    `Agent DID: \`${evidence.agentDid}\``,
+    `Node DID: \`${evidence.nodeDid}\``,
     `Tool root: \`${evidence.toolRoot}\``,
     "",
     "| Field | Value |",
@@ -76,7 +76,7 @@ export function liveSmokeFailureSummary(evidence: LiveSmokeFailureEvidence) {
     "",
     `Deployment: \`${evidence.runner.deploymentLabel}\``,
     `Bridge URL: \`${evidence.runner.baseUrl}\``,
-    `Agent DID: \`${evidence.runner.agentDid}\``,
+    `Node DID: \`${evidence.runner.nodeDid}\``,
     `Tool root: \`${evidence.runner.toolRoot}\``,
     `Data root: \`${evidence.runner.dataRoot ?? "not reported"}\``,
     "",

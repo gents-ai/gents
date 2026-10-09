@@ -109,7 +109,7 @@ export function groupLabel(members: GroupMember[]): string {
           ? "edit"
           : p.kind === "command"
             ? "command"
-            : p.kind === "subagent"
+            : p.kind === "agent"
               ? "worker"
               : "other";
     counts.set(kind, (counts.get(kind) ?? 0) + 1);
@@ -151,7 +151,7 @@ export function liveGroupLabel(members: GroupMember[]): string | null {
         ? `${p.created ? "Writing" : "Editing"} ${file(p.path)}`
         : p.kind === "command"
           ? `Running ${line(p.command)}`
-          : p.kind === "subagent"
+          : p.kind === "agent"
             ? `Working with ${p.name ?? "an agent"}`
             : `Using ${toolName ?? "a tool"}`;
   return `${doing}…`;

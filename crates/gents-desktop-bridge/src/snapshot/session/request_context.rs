@@ -2,7 +2,7 @@ use super::*;
 
 pub(super) async fn load_latest_session_request_context(
     node: &gents::defra_node::EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     request_ids: &[String],
 ) -> anyhow::Result<Option<LoadedRequestContext>> {
     if request_ids.is_empty() {
@@ -18,7 +18,7 @@ pub(super) async fn load_latest_session_request_context(
             InferenceCall(
                 filter: {{
                     request_id: {{ _in: [{request_ids}] }},
-                    agent_did: {{ _eq: "{agent_did}" }},
+                    node_did: {{ _eq: "{node_did}" }},
                     call_kind: {{ _eq: "inference" }}
                 }},
                 order: {{ queued_at: DESC }},
@@ -31,7 +31,7 @@ pub(super) async fn load_latest_session_request_context(
                 context_accounting_json
             }}
         }}"#,
-        agent_did = gents::graphql::escape_graphql_string(agent_did),
+        node_did = gents::graphql::escape_graphql_string(node_did),
     );
     let response = gents::graphql::graphql_with_transaction_retry(
         &node,

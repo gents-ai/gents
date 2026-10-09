@@ -1,5 +1,5 @@
 /* Sessions: a heading row with search and New, then plain rows on the
-   ground: title, the behavior's chip, and when it last moved. */
+   ground: title, the agent's chip, and when it last moved. */
 import { memo, useLayoutEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import {
@@ -27,10 +27,10 @@ import {
   sessionsInScope,
   type Scope,
 } from "@/lib/scope";
-import { useHomeDid, useInScope, useSelectedAgentDid } from "@/hooks/useClient";
+import { useHomeDid, useInScope, useSelectedNodeDid } from "@/hooks/useClient";
 import { sessionKeyOf } from "../../hooks/fleetStore";
 import { nodeDidOf, nodeOfSession } from "@/lib/nodes";
-import { NodeBehaviorStack } from "./NodeBehaviorStack";
+import { NodeAgentStack } from "./NodeBehaviorStack";
 import { NodeAxis } from "./NodeAxis";
 import { SessionStatus } from "./SessionStatus";
 import { isLive } from "@/lib/live";
@@ -52,9 +52,9 @@ export function SessionsScreen({
 }) {
   const nodes = useFleet(useShallow(fleetNodes));
   const homeDid = useHomeDid();
-  const selectedNodeDid = useSelectedAgentDid();
+  const selectedNodeDid = useSelectedNodeDid();
   const [query, setQuery] = useState<string | null>(null);
-  /* the three axes the summary carries: behavior, state, and what started it */
+  /* the three axes the summary carries: agent, state, and what started it */
   const filter = useListViews((v) => v.sessionFilter);
   /* which parents are showing their workers; a person who opened one meant it */
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
@@ -406,9 +406,9 @@ const SessionRow = memo(function SessionRow({
             {session.title ?? "Untitled"}
           </span>
         </p>
-        <NodeBehaviorStack
+        <NodeAgentStack
           nodeDid={nodeOfSession(session)}
-          behaviorId={session.behaviorId}
+          agentId={session.agentId}
           size={child ? "sm" : "md"}
           workers={workers}
         />

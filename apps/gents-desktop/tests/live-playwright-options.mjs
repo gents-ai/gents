@@ -41,11 +41,11 @@ export function resolveLivePlaywrightOptions(rawArgv, rawEnv) {
   const provider = takeFlag(argv, "--provider");
   const apiKey = takeFlag(argv, "--api-key");
   const apiKeyEnvVar = takeFlag(argv, "--api-key-env-var");
-  const subagentInferenceUrl = takeFlag(argv, "--subagent-inference-url");
-  const subagentModelName = takeFlag(argv, "--subagent-model-name");
-  const subagentProvider = takeFlag(argv, "--subagent-provider");
-  const subagentApiKey = takeFlag(argv, "--subagent-api-key");
-  const subagentApiKeyEnvVar = takeFlag(argv, "--subagent-api-key-env-var");
+  const agentTargetInferenceUrl = takeFlag(argv, "--agent-target-inference-url");
+  const agentTargetModelName = takeFlag(argv, "--agent-target-model-name");
+  const agentTargetProvider = takeFlag(argv, "--agent-target-provider");
+  const agentTargetApiKey = takeFlag(argv, "--agent-target-api-key");
+  const agentTargetApiKeyEnvVar = takeFlag(argv, "--agent-target-api-key-env-var");
 
   const env = {
     ...rawEnv,
@@ -85,11 +85,11 @@ export function resolveLivePlaywrightOptions(rawArgv, rawEnv) {
     provider,
     apiKey,
     apiKeyEnvVar,
-    subagentInferenceUrl,
-    subagentModelName,
-    subagentProvider,
-    subagentApiKey,
-    subagentApiKeyEnvVar,
+    agentTargetInferenceUrl,
+    agentTargetModelName,
+    agentTargetProvider,
+    agentTargetApiKey,
+    agentTargetApiKeyEnvVar,
   });
 
   return {
@@ -125,21 +125,23 @@ function applyProviderFlags(
     provider,
     apiKey,
     apiKeyEnvVar,
-    subagentInferenceUrl,
-    subagentModelName,
-    subagentProvider,
-    subagentApiKey,
-    subagentApiKeyEnvVar,
+    agentTargetInferenceUrl,
+    agentTargetModelName,
+    agentTargetProvider,
+    agentTargetApiKey,
+    agentTargetApiKeyEnvVar,
   },
 ) {
   if (provider) env.GENTS_TAURI_LIVE_PROVIDER = provider;
   if (apiKey) env.GENTS_TAURI_LIVE_API_KEY = apiKey;
   if (apiKeyEnvVar) env.GENTS_TAURI_LIVE_API_KEY_ENV_VAR = apiKeyEnvVar;
-  if (subagentInferenceUrl)
-    env.GENTS_TAURI_LIVE_SUBAGENT_INFERENCE_URL = subagentInferenceUrl;
-  if (subagentModelName) env.GENTS_TAURI_LIVE_SUBAGENT_MODEL_NAME = subagentModelName;
-  if (subagentProvider) env.GENTS_TAURI_LIVE_SUBAGENT_PROVIDER = subagentProvider;
-  if (subagentApiKey) env.GENTS_TAURI_LIVE_SUBAGENT_API_KEY = subagentApiKey;
-  if (subagentApiKeyEnvVar)
-    env.GENTS_TAURI_LIVE_SUBAGENT_API_KEY_ENV_VAR = subagentApiKeyEnvVar;
+  if (agentTargetInferenceUrl)
+    env.GENTS_TAURI_LIVE_AGENT_TARGET_INFERENCE_URL = agentTargetInferenceUrl;
+  if (agentTargetModelName)
+    env.GENTS_TAURI_LIVE_AGENT_TARGET_MODEL_NAME = agentTargetModelName;
+  if (agentTargetProvider)
+    env.GENTS_TAURI_LIVE_AGENT_TARGET_PROVIDER = agentTargetProvider;
+  if (agentTargetApiKey) env.GENTS_TAURI_LIVE_AGENT_TARGET_API_KEY = agentTargetApiKey;
+  if (agentTargetApiKeyEnvVar)
+    env.GENTS_TAURI_LIVE_AGENT_TARGET_API_KEY_ENV_VAR = agentTargetApiKeyEnvVar;
 }

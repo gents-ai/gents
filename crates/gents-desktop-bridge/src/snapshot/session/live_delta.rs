@@ -38,7 +38,7 @@ pub(super) fn canonical_live_text(
     request_store: &gents_desktop_core::client::ClientStore,
     canonical_store: &gents_desktop_core::client::ClientStore,
     session_id: &str,
-    agent_did: Option<&str>,
+    node_did: Option<&str>,
     request_id: &str,
 ) -> Option<CanonicalLiveText> {
     use gents_protocol::output::live::{LiveView, OwnerLiveness};
@@ -47,11 +47,11 @@ pub(super) fn canonical_live_text(
     let request = request_store.requests.iter().find(|request| {
         request.request_id == request_id
             && request.session_id.as_deref() == Some(session_id)
-            && agent_did.is_none_or(|agent_did| request.agent_did.as_deref() == Some(agent_did))
+            && node_did.is_none_or(|node_did| request.node_did.as_deref() == Some(node_did))
     })?;
     let request_doc_id = request.doc_id.as_deref()?;
     let execution_generation = request.execution_generation.as_deref()?;
-    let request_agent_did = request.agent_did.as_deref()?;
+    let request_node_did = request.node_did.as_deref()?;
     let gents_protocol::output::live::LiveTargetSelection::Selected {
         source,
         writer,
@@ -70,7 +70,7 @@ pub(super) fn canonical_live_text(
         &source,
         &writer,
         message_id.as_deref(),
-        request_agent_did,
+        request_node_did,
         request.requester_did.as_deref(),
         &canonical_store.transcript_messages,
         &canonical_store.output_segments,
@@ -103,7 +103,7 @@ pub(super) fn canonical_live_text(
     }
     let identity = serde_json::to_vec(&(
         session_id,
-        request_agent_did,
+        request_node_did,
         request.requester_did.as_deref(),
         request_id,
         request_doc_id,
@@ -169,7 +169,7 @@ fn accepts_live_cursor(base: Option<&str>, current: Option<&str>, terminal: bool
 pub async fn build_session_live_delta(
     core: &ClientCore,
     session_id: &str,
-    agent_did: Option<&str>,
+    node_did: Option<&str>,
     request_id: &str,
     base_live_cursor: &str,
     base_content_byte_len: usize,
@@ -180,9 +180,9 @@ pub async fn build_session_live_delta(
     let started = std::time::Instant::now();
     let (observed, revision) = core.store().snapshot_with_revision();
     let mut live_store = ClientStore::default();
-    if let Some(agent_did) = agent_did {
+    if let Some(node_did) = node_did {
         if core
-            .session_unreadable_reason(session_id, agent_did)
+            .session_unreadable_reason(session_id, node_did)
             .is_none()
         {
             let matches = observed
@@ -191,22 +191,22 @@ pub async fn build_session_live_delta(
                 .filter(|row| {
                     row.request_id == request_id
                         && row.session_id.as_deref() == Some(session_id)
-                        && row.agent_did.as_deref() == Some(agent_did)
+                        && row.node_did.as_deref() == Some(node_did)
                 })
                 .collect::<Vec<_>>();
             if let [request] = matches.as_slice() {
                 let operator = core
-                    .operator_graphql(agent_did)
+                    .operator_graphql(node_did)
                     .map(gents::config_client::ConfigAccess::Graphql);
-                let principal = core.transcript_principal_scope(agent_did);
+                let node_scope = core.transcript_node_scope(node_did);
                 let session = observed
                     .sessions
                     .iter()
-                    .find(|row| row.session_id == session_id && row.agent_did == agent_did);
+                    .find(|row| row.session_id == session_id && row.node_did == node_did);
                 let requester = gents_desktop_core::client::session_transcript_requester_scope(
                     session,
-                    Some(agent_did),
-                    principal.as_deref(),
+                    Some(node_did),
+                    node_scope.as_deref(),
                     operator.is_some(),
                 );
                 if request.requester_did == requester {
@@ -232,7 +232,7 @@ pub async fn build_session_live_delta(
         &live_store,
         revision,
         session_id,
-        agent_did,
+        node_did,
         request_id,
         base_live_cursor,
         base_content_byte_len,
@@ -260,7 +260,7 @@ pub(crate) fn build_session_live_delta_from_store(
     store: &ClientStore,
     revision: gents_desktop_core::client::StoreProjectionRevision,
     session_id: &str,
-    agent_did: Option<&str>,
+    node_did: Option<&str>,
     request_id: &str,
     base_live_cursor: &str,
     base_content_byte_len: usize,
@@ -272,9 +272,9 @@ pub(crate) fn build_session_live_delta_from_store(
         store_version: revision.store_version,
         provenance_version: revision.provenance_version,
     };
-    let turn_state = agent_did.map_or_else(
+    let turn_state = node_did.map_or_else(
         || store.derive_turn_for_request(request_id),
-        |agent| store.derive_turn_for_request_for_agent(request_id, agent),
+        |node| store.derive_turn_for_request_for_node(request_id, node),
     );
     let mut result = SessionLiveDeltaView {
         outcome: "snapshotRequired".into(),
@@ -289,7 +289,7 @@ pub(crate) fn build_session_live_delta_from_store(
     if !is_live_turn_state(turn_state) {
         return result;
     }
-    let Some(live) = canonical_live_text(request_store, store, session_id, agent_did, request_id)
+    let Some(live) = canonical_live_text(request_store, store, session_id, node_did, request_id)
     else {
         return result;
     };

@@ -3,7 +3,7 @@ use super::*;
 fn request(origin: &str, retry_count: i64, max_retries: i64) -> AgentRequestRow {
     serde_json::from_value(serde_json::json!({
         "request_id": "request-1",
-        "agent_did": "did:test:agent",
+        "node_did": "did:test:node",
         "requester_did": "did:test:requester",
         "session_id": "session-1",
         "content": "try this",

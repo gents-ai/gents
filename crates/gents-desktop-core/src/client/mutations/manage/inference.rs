@@ -44,14 +44,14 @@ pub async fn upsert_inference_backend(
 #[cfg(test)]
 pub async fn delete_inference_backend(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     id: &str,
 ) -> Result<usize> {
     super::delete_scoped_document_local(
         node,
         "desktop.inference_backend.delete",
         Collection::InferenceBackend,
-        agent_did,
+        node_did,
         id,
     )
     .await
@@ -59,14 +59,14 @@ pub async fn delete_inference_backend(
 
 pub async fn delete_inference_backend_on(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     id: &str,
 ) -> Result<usize> {
     super::delete_scoped_document(
         access,
         "desktop.inference_backend.delete",
         Collection::InferenceBackend,
-        agent_did,
+        node_did,
         id,
     )
     .await
@@ -85,21 +85,21 @@ mod tests {
         let node = Arc::new(EmbeddedNode::builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
         for owner in ["did:test:owner", "did:test:other"] {
-            gents::ensure_agent_principal(&node, owner).await?;
+            gents::ensure_node(&node, owner).await?;
         }
         let mut backend: InferenceBackend = serde_json::from_value(json!({
-            "agent_did":"did:test:owner", "backend_id":"shared", "name":"Backend",
+            "node_did":"did:test:owner", "backend_id":"shared", "name":"Backend",
             "provider_kind":"OpenAiCompatible", "endpoint":"http://localhost:8000/v1",
             "auth":{"kind":"unauthenticated"}
         }))?;
         upsert_inference_backend(&node, &backend).await?;
         let mut other = backend.clone();
-        other.agent_did = "did:test:other".into();
+        other.node_did = "did:test:other".into();
         upsert_inference_backend(&node, &other).await?;
         // The retained profile below names this model; publication admits a
         // profile only against its backend's observed catalog.
         let catalog: BackendModelCatalog = serde_json::from_value(json!({
-            "agent_did": null,
+            "node_did": null,
             "observed_at": "2026-09-10T00:00:00Z",
             "models": [{"model_name": "model"}],
         }))?;
@@ -115,7 +115,7 @@ mod tests {
         upsert_inference_backend(&node, &backend).await?;
         let observation = gents::backend_registry::lookup_backend_observation(
             &node,
-            &backend.agent_did,
+            &backend.node_did,
             &backend.backend_id,
         )
         .await?;
@@ -124,29 +124,27 @@ mod tests {
         invalid.auth = BackendAuth::ApiKey { key: " ".into() };
         assert!(upsert_inference_backend(&node, &invalid).await.is_err());
         let profile: InferenceProfile = serde_json::from_value(json!({
-            "agent_did":backend.agent_did, "profile_id":"profile", "backend_id":"shared", "model_name":"model"
+            "node_did":backend.node_did, "profile_id":"profile", "backend_id":"shared", "model_name":"model"
         }))?;
         gents::config_client::write_inference_profile_document(
             &ConfigAccess::Local(node.clone()),
             &profile,
         )
         .await?;
-        assert!(
-            delete_inference_backend(&node, &backend.agent_did, "shared")
-                .await
-                .is_err()
-        );
+        assert!(delete_inference_backend(&node, &backend.node_did, "shared")
+            .await
+            .is_err());
         assert_eq!(
-            delete_inference_backend(&node, &other.agent_did, "shared").await?,
+            delete_inference_backend(&node, &other.node_did, "shared").await?,
             1
         );
         assert_eq!(
-            delete_inference_backend(&node, &other.agent_did, "shared").await?,
+            delete_inference_backend(&node, &other.node_did, "shared").await?,
             0
         );
         assert!(gents::backend_registry::lookup_backend_observation(
             &node,
-            &backend.agent_did,
+            &backend.node_did,
             "shared"
         )
         .await?

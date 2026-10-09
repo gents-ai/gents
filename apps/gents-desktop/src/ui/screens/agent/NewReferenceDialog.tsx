@@ -54,11 +54,11 @@ export function NewReferenceDialog({
   /* the drafted document, or null when cancelled */
   onClose: (drafted: NewReference | null) => void;
 }) {
-  const agent_did = deployment.agentDid;
+  const node_did = deployment.nodeDid;
   const [name, setName] = useState("");
   const [prompt, setPrompt] = useState("");
-  const [behaviorId, setBehaviorId] = useState(
-    defaultAgentOf(deployment)?.behaviorId ?? deployment.behaviors[0]?.behaviorId ?? "",
+  const [agentId, setAgentId] = useState(
+    defaultAgentOf(deployment)?.agentId ?? deployment.agents[0]?.agentId ?? "",
   );
   const [preset, setPreset] = useState<(typeof PRESETS)[number]["id"]>("daily");
   const [cron, setCron] = useState("");
@@ -79,15 +79,15 @@ export function NewReferenceDialog({
     try {
       if (kind === "task") {
         if (!prompt.trim()) throw new Error("Say what the agent should do.");
-        if (!behaviorId) throw new Error("Choose the behavior that runs it.");
+        if (!agentId) throw new Error("Choose the agent that runs it.");
         finish({
           kind,
           document: {
-            agent_did,
+            node_did,
             task_id: newId("task"),
             display_name: name.trim() || prompt.trim().split("\n")[0].slice(0, 60),
             description: null,
-            behavior_id: behaviorId,
+            agent_id: agentId,
             prompt_template: prompt.trim(),
             emit_outcome: false,
             goal_objective_template: null,
@@ -108,17 +108,17 @@ export function NewReferenceDialog({
         finish({
           kind,
           document: {
-            agent_did,
+            node_did,
             schedule_id,
             display_name:
-              name.trim() || cadenceInWords({ agent_did, schedule_id, cadence }),
+              name.trim() || cadenceInWords({ node_did, schedule_id, cadence }),
             cadence,
           },
         });
       } else if (kind === "event") {
         if (!collection.trim()) throw new Error("Name the collection to watch.");
         const document = {
-          agent_did,
+          node_did,
           event_source_id: newId("evsrc"),
           display_name: null as string | null,
           source_collection: collection.trim(),
@@ -161,21 +161,21 @@ export function NewReferenceDialog({
                 />
               </Field>
               <Field>
-                <FieldLabel htmlFor="new-ref-behavior">Who</FieldLabel>
+                <FieldLabel htmlFor="new-ref-agent">Who</FieldLabel>
                 <Select
-                  items={deployment.behaviors.map((b) => ({
-                    value: b.behaviorId,
+                  items={deployment.agents.map((b) => ({
+                    value: b.agentId,
                     label: b.displayName,
                   }))}
-                  value={behaviorId}
-                  onValueChange={(v) => v && setBehaviorId(v)}
+                  value={agentId}
+                  onValueChange={(v) => v && setAgentId(v)}
                 >
-                  <SelectTrigger id="new-ref-behavior" className="w-full">
+                  <SelectTrigger id="new-ref-agent" className="w-full">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {deployment.behaviors.map((b) => (
-                      <SelectItem key={b.behaviorId} value={b.behaviorId}>
+                    {deployment.agents.map((b) => (
+                      <SelectItem key={b.agentId} value={b.agentId}>
                         {b.displayName}
                       </SelectItem>
                     ))}

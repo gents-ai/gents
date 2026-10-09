@@ -2,7 +2,7 @@
 import type { InferenceAuthMethod } from "./InferenceAuthMethod.js";
 import type { InferenceProviderId } from "./InferenceProviderId.js";
 
-export type InferenceDiscoveryRequest = { requestKey: string, agentDid: string, provider: InferenceProviderId, authMethod: InferenceAuthMethod, endpoint: string,
+export type InferenceDiscoveryRequest = { requestKey: string, nodeDid: string, provider: InferenceProviderId, authMethod: InferenceAuthMethod, endpoint: string,
 /**
  * Ephemeral connection input. It is consumed for this request and is
  * never reflected into a response or desktop snapshot.

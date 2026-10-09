@@ -19,7 +19,7 @@ impl Default for BridgeConfig {
         Self {
             home: HomePolicy::Default,
             bootstrap: BootstrapPolicy::LocalRuntimeAllowed {
-                agent_home: AgentHomePolicy::Default,
+                node_home: NodeHomePolicy::Default,
             },
             app_meta: AppMeta {
                 app_name: "gents-desktop".into(),
@@ -47,12 +47,12 @@ pub enum HomePolicy {
 
 #[derive(Debug, Clone)]
 pub enum BootstrapPolicy {
-    LocalRuntimeAllowed { agent_home: AgentHomePolicy },
+    LocalRuntimeAllowed { node_home: NodeHomePolicy },
     PairedRemoteOnly,
 }
 
 #[derive(Debug, Clone)]
-pub enum AgentHomePolicy {
+pub enum NodeHomePolicy {
     Default,
     Fixed(PathBuf),
 }

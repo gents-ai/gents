@@ -80,7 +80,7 @@ export function createShellActions({
       mutateSnapshot,
       refreshSnapshot,
       reportFailure,
-      selectAgent: route.selectAgent,
+      selectNode: route.selectNode,
     }),
     ...createConfigActions({ api, mutateSnapshot, reportFailure }),
     ...createHostActions({ api }),

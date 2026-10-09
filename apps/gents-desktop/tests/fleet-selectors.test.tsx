@@ -13,9 +13,9 @@ const AGENT = "did:key:here";
 const summary = (sessionId: string, title: string) =>
   ({
     sessionId,
-    agentDid: AGENT,
+    nodeDid: AGENT,
     requesterDid: null,
-    behaviorId: null,
+    agentId: null,
     title,
     turnState: null,
     updatedAt: null,
@@ -25,7 +25,7 @@ const item = (itemId: string): MailboxItemView => ({
   itemId,
   itemKey: itemId,
   requesterDid: "did:key:person",
-  agentDid: AGENT,
+  nodeDid: AGENT,
   status: "open",
   kind: "ask",
   action: "reply",
@@ -38,8 +38,8 @@ const item = (itemId: string): MailboxItemView => ({
   requestId: null,
   graphRunId: null,
   causeDocId: null,
-  targetAgentDid: AGENT,
-  targetBehaviorId: "default",
+  targetNodeDid: AGENT,
+  targetAgentId: "default",
   expectedCollection: null,
   parentItemId: null,
   deadlineAt: null,
@@ -47,7 +47,7 @@ const item = (itemId: string): MailboxItemView => ({
 });
 
 const here = (over: Record<string, unknown> = {}) =>
-  node({ agentDid: AGENT, sessions: [summary("s-1", "one")], ...over });
+  node({ nodeDid: AGENT, sessions: [summary("s-1", "one")], ...over });
 
 /* renders `ui` under `app` and counts the commits that reach it */
 function commitsOf(app: ReturnType<typeof testApp>, ui: React.ReactElement) {
@@ -63,7 +63,7 @@ function commitsOf(app: ReturnType<typeof testApp>, ui: React.ReactElement) {
 
 describe("screens read the fleet by what they show", () => {
   it("a mailbox item arriving does not re-render the sessions list", () => {
-    const app = testApp({ deployments: [here()], selection: { agentDid: AGENT } });
+    const app = testApp({ deployments: [here()], selection: { nodeDid: AGENT } });
     const commits = commitsOf(app, <SessionsScreen />);
     const before = commits();
     act(() => publish(app, [here({ mailboxItems: [item("m-1")] })]));
@@ -71,7 +71,7 @@ describe("screens read the fleet by what they show", () => {
   });
 
   it("a session in scope changing re-renders the sessions list", () => {
-    const app = testApp({ deployments: [here()], selection: { agentDid: AGENT } });
+    const app = testApp({ deployments: [here()], selection: { nodeDid: AGENT } });
     const commits = commitsOf(app, <SessionsScreen />);
     const before = commits();
     act(() => publish(app, [here({ sessions: [summary("s-1", "renamed")] })]));
@@ -81,7 +81,7 @@ describe("screens read the fleet by what they show", () => {
   it("a session no item names changing does not re-render the mailbox", () => {
     const app = testApp({
       deployments: [here({ mailboxItems: [item("m-1")] })],
-      selection: { agentDid: AGENT },
+      selection: { nodeDid: AGENT },
     });
     const commits = commitsOf(app, <MailboxScreen />);
     const before = commits();

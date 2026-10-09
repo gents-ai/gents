@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { ChipsRow, TagsRow } from "../src/ui/screens/agent/editors";
-import { BehaviorHoverCard } from "../src/ui/screens/HoverCards";
+import { AgentHoverCard } from "../src/ui/screens/HoverCards";
 import { deployment } from "./config-panel-wiring/fixtures";
 
 describe("settings polish", () => {
@@ -62,20 +62,20 @@ describe("settings polish", () => {
     expect(onChange).toHaveBeenCalledWith(["coding"]);
   });
 
-  it("explains behavior readiness and links to the canonical settings route", async () => {
+  it("explains agent readiness and links to the canonical settings route", async () => {
     render(
-      <BehaviorHoverCard deployment={deployment} behaviorId="default">
-        <button type="button">Default behavior</button>
-      </BehaviorHoverCard>,
+      <AgentHoverCard deployment={deployment} agentId="default">
+        <button type="button">Default agent</button>
+      </AgentHoverCard>,
     );
     const user = userEvent.setup();
 
-    await user.hover(screen.getByRole("button", { name: "Default behavior" }));
-    const card = await screen.findByTestId("behavior-hover-card");
+    await user.hover(screen.getByRole("button", { name: "Default agent" }));
+    const card = await screen.findByTestId("agent-hover-card");
     expect(card).toHaveTextContent("StatusEnabled");
     expect(screen.getByRole("link", { name: "Settings" })).toHaveAttribute(
       "href",
-      "/agents/did%3Akey%3Az6MkAgent/behaviors/default",
+      "/agents/did%3Akey%3Az6MkAgent/agents/default",
     );
   });
 });

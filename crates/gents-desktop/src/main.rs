@@ -7,7 +7,7 @@ use std::time::Duration;
 use clap::{Parser, Subcommand};
 use gents_desktop_core::client::DesktopPaths;
 use gents_desktop_core::local_runtime::{
-    dangerously_overwrite_desktop_home, default_agent_home, init_standard_local_runtime,
+    dangerously_overwrite_desktop_home, default_node_home, init_standard_local_runtime,
     render_human_summary, reset_desktop_runtime_state, DesktopInitOptions,
 };
 use tracing_subscriber::{prelude::*, EnvFilter};
@@ -30,8 +30,8 @@ enum Command {
 
 #[derive(Debug, clap::Args)]
 struct InitArgs {
-    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
-    agent_home: Option<PathBuf>,
+    #[arg(long, help = "Node home directory. Defaults to ~/.gents")]
+    node_home: Option<PathBuf>,
     #[arg(
         long,
         help = "Desktop data directory. Defaults to the platform-local desktop data dir"
@@ -81,11 +81,11 @@ fn run_command(command: Command) -> anyhow::Result<()> {
             } else if args.reset {
                 let _ = reset_desktop_runtime_state(&desktop_paths)?;
             }
-            let agent_home = args.agent_home.unwrap_or(default_agent_home()?);
+            let node_home = args.node_home.unwrap_or(default_node_home()?);
             let summary = runtime.block_on(init_standard_local_runtime(DesktopInitOptions {
-                agent_home,
+                node_home,
                 desktop_paths,
-                label: args.label.unwrap_or_else(|| "Local Agent".to_string()),
+                label: args.label.unwrap_or_else(|| "Local Node".to_string()),
             }))?;
             if args.json {
                 println!("{}", serde_json::to_string_pretty(&summary)?);

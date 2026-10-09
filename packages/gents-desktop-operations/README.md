@@ -1,7 +1,7 @@
 # @source-inc/gents-desktop-operations
 
 Focused operator surfaces for backend/MCP health, request traces,
-and workspace inspection. Tool lifecycle, background work, and subagent progress
+and workspace inspection. Tool lifecycle, background work, and caused work progress
 belong to the conversation timeline in `@source-inc/gents-desktop-chat`.
 
 ```ts

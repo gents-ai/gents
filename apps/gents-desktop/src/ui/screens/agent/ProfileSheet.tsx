@@ -19,7 +19,7 @@ export function ProfileSheet({
   /* the backend it is added to (a backend's Add profile row) */
   backendId?: string;
 }) {
-  const { accounts } = useAccounts(deployment.agentDid);
+  const { accounts } = useAccounts(deployment.nodeDid);
   const [draft, setDraft] = useState(() =>
     newProfileDocument(deployment, backendId, accounts),
   );

@@ -8,30 +8,30 @@ import {
 } from "../src/hooks/fleetStore";
 
 const session = (
-  agentDid: string,
+  nodeDid: string,
   sessionId: string,
   startedBy?: string,
   title = sessionId,
 ) => ({
-  agentDid,
+  nodeDid,
   sessionId,
   requesterDid: "me",
   title,
   startedBy: startedBy
-    ? { agentDid: "a", sessionId: startedBy, requesterDid: "me" }
+    ? { nodeDid: "a", sessionId: startedBy, requesterDid: "me" }
     : null,
 });
 
 const read = (parentTitle = "parent") =>
   ({
-    bootstrap: { initAgentDid: "a" },
+    bootstrap: { initNodeDid: "a" },
     client: {
       deployments: [
         {
-          agentDid: "a",
+          nodeDid: "a",
           source: "enrollment",
           label: "home",
-          behaviors: [{ behaviorId: "a:default" }],
+          agents: [{ agentId: "a:default" }],
           sessions: [
             session("a", "parent", undefined, parentTitle),
             session("a", "local-worker", "parent"),
@@ -39,10 +39,10 @@ const read = (parentTitle = "parent") =>
           mailboxItems: [{ itemId: "m1", status: "open" }],
         },
         {
-          agentDid: "b",
+          nodeDid: "b",
           source: "enrollment",
           label: "remote",
-          behaviors: [],
+          agents: [],
           sessions: [session("b", "remote-worker", "parent"), session("b", "alone")],
           mailboxItems: [],
         },
@@ -66,7 +66,7 @@ describe("the fleet store", () => {
       "parent",
     );
     expect(state.nodes.a).not.toHaveProperty("sessions");
-    expect(state.bySessionId.alone?.agentDid).toBe("b");
+    expect(state.bySessionId.alone?.nodeDid).toBe("b");
   });
 
   it("keeps every object when a read says nothing new", () => {

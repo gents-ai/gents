@@ -10,13 +10,13 @@ import { CopyButton } from "@source-inc/gents-desktop-ui";
 import { useOperationsApi } from "../../apiContext.js";
 
 export type RequestTracePanelProps = {
-  agentDid: string;
+  nodeDid: string;
   rootRequestId?: string | null;
   api?: DesktopApiAdapter;
 };
 
 export function RequestTracePanel({
-  agentDid,
+  nodeDid,
   rootRequestId,
   api: explicitApi,
 }: RequestTracePanelProps) {
@@ -34,7 +34,7 @@ export function RequestTracePanel({
     setLoading(true);
     setError(null);
     try {
-      const next = await api.fetchRequestTimeline(agentDid, rootRequestId);
+      const next = await api.fetchRequestTimeline(nodeDid, rootRequestId);
       if (generationRef.current === generation) {
         setTimeline(next);
       }
@@ -47,7 +47,7 @@ export function RequestTracePanel({
         setLoading(false);
       }
     }
-  }, [agentDid, api, rootRequestId]);
+  }, [nodeDid, api, rootRequestId]);
 
   useEffect(() => {
     setTimeline(null);

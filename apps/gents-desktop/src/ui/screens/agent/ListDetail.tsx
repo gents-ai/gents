@@ -433,7 +433,7 @@ export function ListDetail({
 
 /* what a section's documents are called, for the delete wording */
 export const NOUNS: Record<string, string> = {
-  behaviors: "behavior",
+  agents: "agent",
   contexts: "context",
   skills: "skill",
   inference: "backend",

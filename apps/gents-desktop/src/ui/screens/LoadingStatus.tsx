@@ -5,7 +5,7 @@ import { cn } from "@gents/ui/lib/utils";
 import { navigate } from "@/lib/router";
 import { toastFailure } from "@/lib/failure";
 import { useApp, useView } from "@/app/AppContext";
-import { useSelectedAgentDid } from "@/hooks/useClient";
+import { useSelectedNodeDid } from "@/hooks/useClient";
 
 const LABEL = {
   retryLocal: "Try again",
@@ -24,7 +24,7 @@ export function LoadingStatus() {
     stores,
     actions: { refreshSnapshot, retrySessionHydration },
   } = useApp();
-  const agentDid = useSelectedAgentDid();
+  const nodeDid = useSelectedNodeDid();
   const selectedSessionId = stores.selection.use.sessionId();
   const [busy, setBusy] = useState(false);
   if (!status) return null;
@@ -33,9 +33,7 @@ export function LoadingStatus() {
     if (!action) return;
     if (action === "configureInference") {
       navigate(
-        agentDid
-          ? { name: "agent", agentDid, section: "inference" }
-          : { name: "agents" },
+        nodeDid ? { name: "agent", nodeDid, section: "inference" } : { name: "agents" },
       );
       return;
     }

@@ -4,15 +4,15 @@ import { exactControl, labelledInput, persistedSessionControl } from "./nativeLo
 describe("native local setup selectors", () => {
   it("finds both nested setup fields and the separately labelled tool root", () => {
     document.body.innerHTML = `
-      <label><span>Agent name</span><input id="name"></label>
+      <label><span>Node name</span><input id="name"></label>
       <label for="root">Tool root</label><input id="root">
       <label><span>Endpoint</span><input id="endpoint"></label>`;
-    expect(labelledInput(document, "Agent name")?.id).toBe("name");
+    expect(labelledInput(document, "Node name")?.id).toBe("name");
     expect(labelledInput(document, "Tool root")?.id).toBe("root");
     expect(labelledInput(document, "Endpoint")?.id).toBe("endpoint");
   });
 
-  it("selects the exact enabled Engineer option instead of a similarly named behavior", () => {
+  it("selects the exact enabled Engineer option instead of a similarly named agent", () => {
     document.body.innerHTML = `
       <button role="option"><span>The Engineer staging</span></button>
       <button role="option" disabled><span>The Engineer</span></button>

@@ -4,8 +4,8 @@ import { describe, expect, it } from "vitest";
 import { MessageList } from "@source-inc/gents-desktop-chat";
 import type { RenderedTimelineItem } from "@source-inc/gents-desktop-client";
 
-describe("subagent transcript tool", () => {
-  it("renders a running subagent start as an open lifecycle card", () => {
+describe("agent transcript tool", () => {
+  it("renders a running agent start as an open lifecycle card", () => {
     const items: RenderedTimelineItem[] = [
       {
         kind: "toolGroup",
@@ -18,7 +18,7 @@ describe("subagent transcript tool", () => {
             statusKind: "running",
             awaitMode: "background",
             presentation: {
-              kind: "subagent",
+              kind: "agent",
               action: "start",
               name: "researcher",
               sessionId: "session-123456789",
@@ -59,7 +59,7 @@ describe("subagent transcript tool", () => {
             statusKind: "success",
             awaitMode: "background",
             presentation: {
-              kind: "subagent",
+              kind: "agent",
               action: "message",
               name: "reviewer",
               sessionId: "session-complete",

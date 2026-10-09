@@ -40,21 +40,21 @@ export function liveRunnerOptionsFromEnv(
     apiKeyEnvVar:
       process.env.GENTS_TAURI_LIVE_API_KEY_ENV_VAR ??
       process.env.GENTS_DESKTOP_LIVE_BACKEND_API_KEY_ENV_VAR,
-    subagentInferenceUrl:
-      process.env.GENTS_TAURI_LIVE_SUBAGENT_INFERENCE_URL ??
-      process.env.GENTS_DESKTOP_LIVE_SUBAGENT_BACKEND_ENDPOINT,
-    subagentModelName:
-      process.env.GENTS_TAURI_LIVE_SUBAGENT_MODEL_NAME ??
-      process.env.GENTS_DESKTOP_LIVE_SUBAGENT_BACKEND_MODEL,
-    subagentProvider:
-      process.env.GENTS_TAURI_LIVE_SUBAGENT_PROVIDER ??
-      process.env.GENTS_DESKTOP_LIVE_SUBAGENT_BACKEND_PROVIDER,
-    subagentApiKey:
-      process.env.GENTS_TAURI_LIVE_SUBAGENT_API_KEY ??
-      process.env.GENTS_DESKTOP_LIVE_SUBAGENT_BACKEND_API_KEY,
-    subagentApiKeyEnvVar:
-      process.env.GENTS_TAURI_LIVE_SUBAGENT_API_KEY_ENV_VAR ??
-      process.env.GENTS_DESKTOP_LIVE_SUBAGENT_BACKEND_API_KEY_ENV_VAR,
+    agentTargetInferenceUrl:
+      process.env.GENTS_TAURI_LIVE_AGENT_TARGET_INFERENCE_URL ??
+      process.env.GENTS_DESKTOP_LIVE_TARGET_BACKEND_ENDPOINT,
+    agentTargetModelName:
+      process.env.GENTS_TAURI_LIVE_AGENT_TARGET_MODEL_NAME ??
+      process.env.GENTS_DESKTOP_LIVE_TARGET_BACKEND_MODEL,
+    agentTargetProvider:
+      process.env.GENTS_TAURI_LIVE_AGENT_TARGET_PROVIDER ??
+      process.env.GENTS_DESKTOP_LIVE_TARGET_BACKEND_PROVIDER,
+    agentTargetApiKey:
+      process.env.GENTS_TAURI_LIVE_AGENT_TARGET_API_KEY ??
+      process.env.GENTS_DESKTOP_LIVE_TARGET_BACKEND_API_KEY,
+    agentTargetApiKeyEnvVar:
+      process.env.GENTS_TAURI_LIVE_AGENT_TARGET_API_KEY_ENV_VAR ??
+      process.env.GENTS_DESKTOP_LIVE_TARGET_BACKEND_API_KEY_ENV_VAR,
     ...overrides,
   };
 }

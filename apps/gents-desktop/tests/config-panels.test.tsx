@@ -2,13 +2,14 @@ import { act, renderHook, screen, waitFor, within } from "@testing-library/react
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { selection } from "../src/hooks/selectionStore";
+import { href } from "../src/ui/lib/router";
 import { publishSnapshot, renderIn, testApp, withApp } from "./app-fixture";
 
 import type { DesktopClientSnapshot } from "@source-inc/gents-desktop-client";
 import { AgentPanel } from "../src/ui/screens/agent/AgentPanel";
 import { BehaviorEditor } from "../src/ui/screens/agent/BehaviorEditor";
-import { BehaviorsPanel } from "../src/ui/screens/agent/BehaviorsPanel";
-import { newBehaviorView } from "../src/ui/screens/agent/behaviorDraft";
+import { AgentsPanel } from "../src/ui/screens/agent/BehaviorsPanel";
+import { newAgentView } from "../src/ui/screens/agent/behaviorDraft";
 import { ContextsPanel } from "../src/ui/screens/agent/ContextsPanel";
 import { EventSourcesPanel } from "../src/ui/screens/agent/EventSourcesPanel";
 import { InferencePanel } from "../src/ui/screens/agent/InferencePanel";
@@ -32,9 +33,9 @@ type MockApi = Record<string, ReturnType<typeof vi.fn>>;
 
 function harness() {
   const api: MockApi = {
+    saveNodeConfig: vi.fn().mockResolvedValue({}),
+    setDefaultAgent: vi.fn().mockResolvedValue({}),
     saveAgentConfig: vi.fn().mockResolvedValue({}),
-    setDefaultBehavior: vi.fn().mockResolvedValue({}),
-    saveBehaviorConfig: vi.fn().mockResolvedValue({}),
     patchConfigComponents: vi.fn().mockResolvedValue({}),
     applyConfigComponents: vi.fn().mockResolvedValue({}),
     saveBackendConfig: vi.fn().mockResolvedValue({}),
@@ -72,7 +73,7 @@ function harness() {
     runSchedule: vi.fn().mockResolvedValue({ requestId: "request-schedule" }),
     saveEventSourceConfig: vi.fn().mockResolvedValue({}),
     saveTriggerConfig: vi.fn().mockResolvedValue({}),
-    deleteBehaviorConfig: vi.fn().mockResolvedValue({}),
+    deleteAgentConfig: vi.fn().mockResolvedValue({}),
     deleteContextConfig: vi.fn().mockResolvedValue({}),
     deleteToolsConfig: vi.fn().mockResolvedValue({}),
     deleteToolServiceConfig: vi.fn().mockResolvedValue({}),
@@ -117,7 +118,7 @@ describe("configuration panels", () => {
     const { app } = harness();
     renderIn(app, <SetupScreen onDone={vi.fn()} />);
     expect(
-      screen.getByText("Continue the agent already on this computer."),
+      screen.getByText("Continue the node already on this computer."),
     ).toBeVisible();
     expect(
       screen.getByText(/Found an existing Gents home for Local Agent/),
@@ -162,7 +163,7 @@ describe("configuration panels", () => {
       app,
       <SetupScreen
         initialStep="inference"
-        agentDid="did:test:agent-a"
+        nodeDid="did:test:agent-a"
         onDone={vi.fn()}
       />,
     );
@@ -170,7 +171,7 @@ describe("configuration panels", () => {
     view.rerender(
       <SetupScreen
         initialStep="inference"
-        agentDid="did:test:agent-b"
+        nodeDid="did:test:agent-b"
         onDone={vi.fn()}
       />,
     );
@@ -261,7 +262,7 @@ describe("configuration panels", () => {
         inferenceSampling: existingSampling
           ? [
               {
-                agent_did: deployment.agentDid,
+                node_did: deployment.nodeDid,
                 sampling_id: "sampling-custom",
                 temperature: 0.4,
                 top_p: null,
@@ -365,7 +366,7 @@ describe("configuration panels", () => {
     expect(await screen.findByText("grok-4.6")).toBeVisible();
     expect(api.discoverInferenceModels).toHaveBeenCalledWith(
       expect.objectContaining({
-        agentDid: deployment.agentDid,
+        nodeDid: deployment.nodeDid,
         provider: "grok",
         authMethod: "grok_oauth",
         apiKey: null,
@@ -438,7 +439,7 @@ describe("configuration panels", () => {
       enabled = true,
     ) => ({
       credentialId,
-      agentDid: deployment.agentDid,
+      nodeDid: deployment.nodeDid,
       provider: "claude-subscription",
       accountId,
       planType: null,
@@ -478,15 +479,15 @@ describe("configuration panels", () => {
         await user.click(screen.getByRole("button", { name: "Disconnect" }));
         await user.click(screen.getByRole("button", { name: "Disconnect now" }));
         expect(api.disconnectProviderAccount).toHaveBeenCalledWith(
-          deployment.agentDid,
+          deployment.nodeDid,
           credentialId,
         );
       });
     }
 
     for (const [item, auth] of [
-      ["claude-2", { kind: "principal_oauth", account_ref: "acct-2" }],
-      ["claude", { kind: "principal_oauth" }],
+      ["claude-2", { kind: "node_oauth", account_ref: "acct-2" }],
+      ["claude", { kind: "node_oauth" }],
     ] as const) {
       it(`saving ${item} keeps its account reference`, async () => {
         const { api, app } = harness();
@@ -784,7 +785,7 @@ describe("configuration panels", () => {
             expect(api.renameProviderAccount).toHaveBeenCalledTimes(1),
           );
           expect(api.renameProviderAccount).toHaveBeenCalledWith(
-            deployment.agentDid,
+            deployment.nodeDid,
             "private-credential-id-Work",
             "Work 2",
           );
@@ -824,7 +825,7 @@ describe("configuration panels", () => {
             expect(api.disconnectProviderAccount).toHaveBeenCalledTimes(1),
           );
           expect(api.disconnectProviderAccount).toHaveBeenCalledWith(
-            deployment.agentDid,
+            deployment.nodeDid,
             "private-credential-id-Work",
           );
           expectNoConfigWrite(api);
@@ -850,7 +851,7 @@ describe("configuration panels", () => {
             expect(api.removeProviderAccount).toHaveBeenCalledTimes(1),
           );
           expect(api.removeProviderAccount).toHaveBeenCalledWith(
-            deployment.agentDid,
+            deployment.nodeDid,
             "private-credential-id-Work",
           );
           expectNoConfigWrite(api);
@@ -924,7 +925,7 @@ describe("configuration panels", () => {
           const { api, app } = setup();
           await waitFor(() => expect(api.readProviderUsage).toHaveBeenCalledTimes(1));
           expect(api.readProviderUsage).toHaveBeenCalledWith(
-            deployment.agentDid,
+            deployment.nodeDid,
             false,
             null,
           );
@@ -940,7 +941,7 @@ describe("configuration panels", () => {
           api.readProviderUsage.mockRejectedValue(new Error("agent not running"));
           view.rerender(
             <InferencePanel
-              deployment={{ ...rowsDeployment, agentDid: "did:key:z6MkTestOther" }}
+              deployment={{ ...rowsDeployment, nodeDid: "did:key:z6MkTestOther" }}
             />,
           );
           await waitFor(() => expect(api.readProviderUsage).toHaveBeenCalledTimes(2));
@@ -1025,7 +1026,7 @@ describe("configuration panels", () => {
           ]);
           await user.click(screen.getByRole("button", { name: "Refresh" }));
           expect(api.readProviderUsage).toHaveBeenLastCalledWith(
-            deployment.agentDid,
+            deployment.nodeDid,
             true,
             "claude-subscription",
           );
@@ -1036,7 +1037,7 @@ describe("configuration panels", () => {
           await screen.findByText("no cap on this key");
           await openrouter.user.click(screen.getByRole("button", { name: "Refresh" }));
           expect(openrouter.api.readProviderUsage).toHaveBeenLastCalledWith(
-            deployment.agentDid,
+            deployment.nodeDid,
             true,
             null,
           );
@@ -1279,22 +1280,22 @@ describe("configuration panels", () => {
     expect(api.applyConfigComponents).not.toHaveBeenCalled();
   });
 
-  it("requires the agent identity fields and saves editable principal tags", async () => {
+  it("requires the node identity fields and saves editable node tags", async () => {
     const { api, app } = harness();
     renderIn(app, <AgentPanel deployment={deployment} />);
-    expectFields(["Display name", "Default behavior", "Enabled", "Tags"]);
+    expectFields(["Display name", "Default agent", "Enabled", "Tags"]);
 
     const user = await replace("Display name", " ");
     await user.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Display name is required",
     );
-    expect(api.saveAgentConfig).not.toHaveBeenCalled();
+    expect(api.saveNodeConfig).not.toHaveBeenCalled();
 
     await replace("Display name", "Acceptance Agent");
     await replace("Tags", "acceptance{Enter}desktop{Enter}");
     await user.click(screen.getByRole("button", { name: "Save" }));
-    expect(api.saveAgentConfig).toHaveBeenCalledWith(
+    expect(api.saveNodeConfig).toHaveBeenCalledWith(
       expect.objectContaining({
         document: expect.objectContaining({
           display_name: "Acceptance Agent",
@@ -1306,7 +1307,7 @@ describe("configuration panels", () => {
 
   it("validates and saves every behavior-owned setting without changing Setup", async () => {
     const { api, app } = harness();
-    renderIn(app, <BehaviorsPanel deployment={deployment} behaviorId="ops" />);
+    renderIn(app, <AgentsPanel deployment={deployment} agentId="ops" />);
     expectFields([
       "Display name",
       "Description",
@@ -1317,35 +1318,35 @@ describe("configuration panels", () => {
     const user = await replace("Display name", " ");
     await user.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Give the behavior a name.",
+      "Give the agent a name.",
     );
-    expect(api.saveBehaviorConfig).not.toHaveBeenCalled();
+    expect(api.saveAgentConfig).not.toHaveBeenCalled();
   });
 
   it("opens a new behavior as an unsaved, disabled draft until the operator saves it", async () => {
     const { api, app } = harness();
-    renderIn(app, <BehaviorsPanel deployment={deployment} />);
+    renderIn(app, <AgentsPanel deployment={deployment} />);
     const user = userEvent.setup();
 
-    await user.click(screen.getByRole("button", { name: "New behavior" }));
+    await user.click(screen.getByRole("button", { name: "New agent" }));
 
     expect(screen.getByLabelText("Display name")).toHaveValue("");
-    expect(api.saveBehaviorConfig).not.toHaveBeenCalled();
+    expect(api.saveAgentConfig).not.toHaveBeenCalled();
     expect(api.applyConfigComponents).not.toHaveBeenCalled();
 
     await user.type(screen.getByLabelText("Display name"), "Reviewer");
     await user.click(screen.getByRole("button", { name: "Create" }));
-    /* the new context and the behavior that points at it are one apply */
+    /* the new context and the agent that points at it are one apply */
     await waitFor(() => expect(api.applyConfigComponents).toHaveBeenCalledTimes(1));
     const request = api.applyConfigComponents.mock.calls[0][0];
-    expect(request.document.agent_behaviors).toEqual([
+    expect(request.document.agents).toEqual([
       expect.objectContaining({
         display_name: "Reviewer",
         enabled: false,
         context_id: request.document.contexts[0].context_id,
       }),
     ]);
-    expect(api.saveBehaviorConfig).not.toHaveBeenCalled();
+    expect(api.saveAgentConfig).not.toHaveBeenCalled();
   });
 
   it("keeps a new behavior's draft open on a failed save and retries the same context", async () => {
@@ -1358,7 +1359,7 @@ describe("configuration panels", () => {
       app,
       <BehaviorEditor
         deployment={deployment}
-        behavior={newBehaviorView(deployment)}
+        agent={newAgentView(deployment)}
         draft={{ onSaved, onCancel: vi.fn() }}
       />,
     );
@@ -1422,78 +1423,78 @@ describe("configuration panels", () => {
     ).toEqual([expect.objectContaining({ profile_id: profile.profile_id })]);
   });
 
-  it("turns a behavior on or off from its row with a patch of enabled alone", async () => {
+  it("turns an agent on or off from its row with a patch of enabled alone", async () => {
     const { api, app } = harness();
-    renderIn(app, <BehaviorsPanel deployment={deployment} />);
-    const ops = deployment.behaviors.find((b) => b.behaviorId === "ops")!;
+    renderIn(app, <AgentsPanel deployment={deployment} />);
+    const ops = deployment.agents.find((b) => b.agentId === "ops")!;
     const toggle = screen.getAllByRole("switch", {
       name: `${ops.displayName} is ${ops.enabled ? "enabled" : "disabled"}`,
     })[0]!;
     await userEvent.setup().click(toggle);
     await waitFor(() =>
       expect(api.patchConfigComponents).toHaveBeenCalledWith({
-        agentDid: deployment.agentDid,
+        nodeDid: deployment.nodeDid,
         patches: [
           {
-            collection: "AgentBehavior",
+            collection: "Agent",
             id: "ops",
             changes: { enabled: !ops.enabled },
           },
         ],
       }),
     );
-    expect(api.saveBehaviorConfig).not.toHaveBeenCalled();
+    expect(api.saveAgentConfig).not.toHaveBeenCalled();
   });
 
-  it("makes a behavior the agent's default from its row menu", async () => {
+  it("makes an agent the node's default from its row menu", async () => {
     const { api, app } = harness();
-    renderIn(app, <BehaviorsPanel deployment={deployment} />);
+    renderIn(app, <AgentsPanel deployment={deployment} />);
     const user = userEvent.setup();
-    const ops = deployment.behaviors.find((b) => b.behaviorId === "ops")!;
+    const ops = deployment.agents.find((b) => b.agentId === "ops")!;
     await user.click(
       screen.getAllByRole("button", { name: `More for ${ops.displayName}` })[0]!,
     );
     await user.click(await screen.findByRole("menuitem", { name: "Make default" }));
     await waitFor(() =>
-      expect(api.setDefaultBehavior).toHaveBeenCalledWith({
-        agentDid: deployment.agentDid,
-        behaviorId: "ops",
+      expect(api.setDefaultAgent).toHaveBeenCalledWith({
+        nodeDid: deployment.nodeDid,
+        agentId: "ops",
       }),
     );
-    expect(api.saveAgentConfig).not.toHaveBeenCalled();
+    expect(api.saveNodeConfig).not.toHaveBeenCalled();
   });
 
-  describe("a default behavior is enabled", () => {
-    const withOps = (changes: Partial<(typeof deployment.behaviors)[number]>) => ({
+  describe("a default agent is enabled", () => {
+    const withOps = (changes: Partial<(typeof deployment.agents)[number]>) => ({
       ...deployment,
-      behaviors: deployment.behaviors.map((b) =>
-        b.behaviorId === "ops" ? { ...b, ...changes } : b,
+      agents: deployment.agents.map((b) =>
+        b.agentId === "ops" ? { ...b, ...changes } : b,
       ),
     });
 
-    it("makes a disabled behavior the default and enables it in one call", async () => {
+    it("makes a disabled agent the default and enables it in one call", async () => {
       const { api, app } = harness();
-      renderIn(app, <BehaviorsPanel deployment={withOps({ enabled: false })} />);
+      renderIn(app, <AgentsPanel deployment={withOps({ enabled: false })} />);
       const user = userEvent.setup();
       await user.click(screen.getAllByRole("button", { name: "More for Ops" })[0]!);
       const item = await screen.findByRole("menuitem", { name: /^Make default/ });
       expect(item).toHaveTextContent("Also enables it");
       await user.click(item);
       await waitFor(() =>
-        expect(api.setDefaultBehavior).toHaveBeenCalledWith({
-          agentDid: deployment.agentDid,
-          behaviorId: "ops",
+        expect(api.setDefaultAgent).toHaveBeenCalledWith({
+          nodeDid: deployment.nodeDid,
+          agentId: "ops",
         }),
       );
       expect(api.patchConfigComponents).not.toHaveBeenCalled();
-      expect(api.saveAgentConfig).not.toHaveBeenCalled();
+      expect(api.saveNodeConfig).not.toHaveBeenCalled();
     });
 
-    it("offers Default to a disabled behavior with no instructions", async () => {
+    it("offers Default to a disabled agent with no instructions", async () => {
       const { api, app } = harness();
       renderIn(
         app,
-        <BehaviorsPanel deployment={withOps({ enabled: false, contextId: null })} />,
+        <AgentsPanel deployment={withOps({ enabled: false, contextId: null })} />,
       );
       const user = userEvent.setup();
       await user.click(screen.getAllByRole("button", { name: "More for Ops" })[0]!);
@@ -1501,21 +1502,21 @@ describe("configuration panels", () => {
       expect(item).not.toHaveAttribute("aria-disabled");
       await user.click(item);
       await waitFor(() =>
-        expect(api.setDefaultBehavior).toHaveBeenCalledWith({
-          agentDid: deployment.agentDid,
-          behaviorId: "ops",
+        expect(api.setDefaultAgent).toHaveBeenCalledWith({
+          nodeDid: deployment.nodeDid,
+          agentId: "ops",
         }),
       );
     });
 
     it("refuses to turn off the current default and explains why", async () => {
       const { api, app } = harness();
-      renderIn(app, <BehaviorsPanel deployment={deployment} />);
+      renderIn(app, <AgentsPanel deployment={deployment} />);
       const toggle = screen.getAllByRole("switch", { name: "Default is enabled" })[0]!;
       expect(toggle).toHaveAttribute("aria-disabled", "true");
       expect(toggle).toHaveAttribute(
         "aria-description",
-        "The default behavior stays enabled. Choose another default before turning it off.",
+        "The default agent stays enabled. Choose another default before turning it off.",
       );
       await userEvent.setup().click(toggle);
       expect(api.patchConfigComponents).not.toHaveBeenCalled();
@@ -1525,46 +1526,46 @@ describe("configuration panels", () => {
       ).toBeEnabled();
     });
 
-    it("sets a new agent default in one call before saving the other fields", async () => {
+    it("sets a new node default in one call before saving the other fields", async () => {
       const { api, app } = harness();
       renderIn(app, <AgentPanel deployment={withOps({ enabled: false })} />);
       const user = userEvent.setup();
-      await user.click(screen.getByRole("combobox", { name: "Default behavior" }));
+      await user.click(screen.getByRole("combobox", { name: "Default agent" }));
       await user.click(await screen.findByRole("option", { name: /^Ops/ }));
       await user.click(screen.getByRole("button", { name: "Save" }));
-      await waitFor(() => expect(api.saveAgentConfig).toHaveBeenCalled());
-      expect(api.setDefaultBehavior).toHaveBeenCalledWith({
-        agentDid: deployment.agentDid,
-        behaviorId: "ops",
+      await waitFor(() => expect(api.saveNodeConfig).toHaveBeenCalled());
+      expect(api.setDefaultAgent).toHaveBeenCalledWith({
+        nodeDid: deployment.nodeDid,
+        agentId: "ops",
       });
-      expect(api.setDefaultBehavior.mock.invocationCallOrder[0]).toBeLessThan(
-        api.saveAgentConfig.mock.invocationCallOrder[0]!,
+      expect(api.setDefaultAgent.mock.invocationCallOrder[0]).toBeLessThan(
+        api.saveNodeConfig.mock.invocationCallOrder[0]!,
       );
       expect(api.patchConfigComponents).not.toHaveBeenCalled();
     });
 
     it("shows the publication refusal when a default cannot be set", async () => {
       const { api, app } = harness();
-      api.setDefaultBehavior.mockRejectedValue(
+      api.setDefaultAgent.mockRejectedValue(
         new Error(
-          'AgentBehavior ops field context_id references missing AgentContext "gone"',
+          'Agent ops field context_id references missing AgentContext "gone" within node_did did:key:z6MkAgent',
         ),
       );
       renderIn(app, <AgentPanel deployment={withOps({ enabled: false })} />);
       const user = userEvent.setup();
-      await user.click(screen.getByRole("combobox", { name: "Default behavior" }));
+      await user.click(screen.getByRole("combobox", { name: "Default agent" }));
       await user.click(await screen.findByRole("option", { name: /^Ops/ }));
       await user.click(screen.getByRole("button", { name: "Save" }));
       expect(await screen.findByRole("alert")).toHaveTextContent(
         "references missing AgentContext",
       );
-      expect(api.saveAgentConfig).not.toHaveBeenCalled();
+      expect(api.saveNodeConfig).not.toHaveBeenCalled();
     });
   });
 
-  it("patches only the changed context field and the behavior in one call", async () => {
+  it("patches only the changed context field and the agent in one call", async () => {
     const { api, app } = harness();
-    renderIn(app, <BehaviorsPanel deployment={deployment} behaviorId="ops" />);
+    renderIn(app, <AgentsPanel deployment={deployment} agentId="ops" />);
     const user = userEvent.setup();
     const prompt = screen.getByLabelText("System prompt");
     await user.clear(prompt);
@@ -1578,10 +1579,10 @@ describe("configuration panels", () => {
       changes: { system_prompt: "Watch the fleet" },
     });
     expect(patches[1]).toEqual(
-      expect.objectContaining({ collection: "AgentBehavior", id: "ops" }),
+      expect.objectContaining({ collection: "Agent", id: "ops" }),
     );
     expect(api.applyConfigComponents).not.toHaveBeenCalled();
-    expect(api.saveBehaviorConfig).not.toHaveBeenCalled();
+    expect(api.saveAgentConfig).not.toHaveBeenCalled();
   });
 
   it("says when the runtime's execution defaults cannot be read", async () => {
@@ -1599,15 +1600,15 @@ describe("configuration panels", () => {
     const { app } = harness();
     const blocked = {
       ...deployment,
-      behaviorReadiness: {
-        ...deployment.behaviorReadiness,
-        behaviors: [
+      nodeReadiness: {
+        ...deployment.nodeReadiness,
+        agents: [
           {
             state: "unavailable",
-            behaviorId: "default",
+            agentId: "default",
             reason: "credentials_required",
           },
-          { state: "ready", behaviorId: "ops" },
+          { state: "ready", agentId: "ops" },
         ],
       },
     } as typeof deployment;
@@ -1648,6 +1649,15 @@ describe("configuration panels", () => {
   it("uses the real context delete command and never a replacement-list apply", async () => {
     const { api, app } = harness();
     renderIn(app, <ContextsPanel deployment={deployment} item="context-b" />);
+    expect(screen.getByRole("link", { name: "Ops" })).toHaveAttribute(
+      "href",
+      href({
+        name: "agent",
+        nodeDid: deployment.nodeDid,
+        section: "agents",
+        item: "ops",
+      }),
+    );
     expectFields([
       "Display name",
       "Description",
@@ -1673,17 +1683,17 @@ describe("configuration panels", () => {
     await user.click(screen.getByRole("button", { name: "Delete context" }));
     expect(api.deleteContextConfig).toHaveBeenCalledWith({
       contextId: "context-b",
-      agentDid: deployment.agentDid,
+      nodeDid: deployment.nodeDid,
     });
     expect(api.applyConfigComponents).not.toHaveBeenCalled();
   });
 
   it("creates only the new behavior's context and represents empty lists as null", async () => {
     const { api, app } = harness();
-    renderIn(app, <BehaviorsPanel deployment={deployment} />);
+    renderIn(app, <AgentsPanel deployment={deployment} />);
     const user = userEvent.setup();
 
-    await user.click(screen.getByRole("button", { name: "New behavior" }));
+    await user.click(screen.getByRole("button", { name: "New agent" }));
     await user.type(screen.getByLabelText("Display name"), "Reviewer");
     await user.click(screen.getByRole("button", { name: "Create" }));
 
@@ -1730,7 +1740,7 @@ describe("configuration panels", () => {
     api.listProviderAccounts.mockResolvedValue([
       {
         credentialId: "credential-a",
-        agentDid: deployment.agentDid,
+        nodeDid: deployment.nodeDid,
         provider: "xai-oauth",
         accountId: "account-a",
         planType: "supergrok",
@@ -1761,7 +1771,7 @@ describe("configuration panels", () => {
     await user.click(screen.getByRole("button", { name: "Disconnect" }));
     await user.click(screen.getByRole("button", { name: "Disconnect now" }));
     expect(api.disconnectProviderAccount).toHaveBeenCalledWith(
-      deployment.agentDid,
+      deployment.nodeDid,
       "credential-a",
     );
   });
@@ -1831,7 +1841,7 @@ describe("configuration panels", () => {
       "LAN IP",
       "MCP port",
       "MCP path",
-      "Send agent DID",
+      "Send node DID",
       "Enabled",
       "Tags",
     ]);
@@ -1875,7 +1885,7 @@ describe("configuration panels", () => {
     renderIn(app, <TasksPanel deployment={deployment} item="task-a" />);
     expectFields([
       "Name",
-      "Behavior",
+      "Agent",
       "Enabled",
       "Description",
       "Prompt template",
@@ -1979,7 +1989,7 @@ describe("configuration panels", () => {
     });
     expect(api.runTask).toHaveBeenCalledWith({
       taskId: "task-a",
-      agentDid: deployment.agentDid,
+      nodeDid: deployment.nodeDid,
       args: {},
     });
     /* the person navigates while the run is in flight */
@@ -2043,7 +2053,7 @@ describe("configuration panels", () => {
 
     expect(api.runSchedule).toHaveBeenCalledWith({
       scheduleId: "timer-a",
-      agentDid: deployment.agentDid,
+      nodeDid: deployment.nodeDid,
     });
     expect(await screen.findByText("request-schedule")).toBeInTheDocument();
     /* the accepted run is observed with one fresh read */
@@ -2097,10 +2107,10 @@ describe("configuration panels", () => {
       method: string;
     }> = [
       {
-        renderPanel: () => <BehaviorsPanel deployment={deployment} behaviorId="ops" />,
+        renderPanel: () => <AgentsPanel deployment={deployment} agentId="ops" />,
         field: "Display name",
         value: "Ops edited",
-        method: "saveBehaviorConfig",
+        method: "saveAgentConfig",
       },
       {
         renderPanel: () => <ContextsPanel deployment={deployment} item="context-b" />,
@@ -2192,7 +2202,7 @@ describe("configuration panels", () => {
     const cases: Array<[React.ReactElement, RegExp]> = [
       [
         <ProfilesPanel deployment={deployment} item="profile-a" />,
-        /Used by \d+ behaviors?; they lose this reference\./,
+        /Used by \d+ agents?; they lose this reference\./,
       ],
       [
         <SchedulesPanel deployment={deployment} item="timer-a" />,
@@ -2227,73 +2237,73 @@ describe("configuration panels", () => {
     await user.click(button);
     expect(api.deleteTaskConfig).toHaveBeenCalledWith({
       taskId: deployment.tasks[0]!.taskId,
-      agentDid: deployment.agentDid,
+      nodeDid: deployment.nodeDid,
     });
   });
 
-  it("routes every destructive panel action through its typed delete command", async () => {
+  describe("routes every destructive panel action through its typed delete command", () => {
     const cases: Array<{
       renderPanel: () => React.ReactElement;
       method: string;
       request: Record<string, string>;
     }> = [
       {
-        renderPanel: () => <BehaviorsPanel deployment={deployment} behaviorId="ops" />,
-        method: "deleteBehaviorConfig",
-        request: { behaviorId: "ops", agentDid: deployment.agentDid },
+        renderPanel: () => <AgentsPanel deployment={deployment} agentId="ops" />,
+        method: "deleteAgentConfig",
+        request: { agentId: "ops", nodeDid: deployment.nodeDid },
       },
       {
         renderPanel: () => <InferencePanel deployment={deployment} item="backend-a" />,
         method: "deleteBackendConfig",
-        request: { backendId: "backend-a", agentDid: deployment.agentDid },
+        request: { backendId: "backend-a", nodeDid: deployment.nodeDid },
       },
       {
         renderPanel: () => <ProfilesPanel deployment={deployment} item="profile-a" />,
         method: "deleteInferenceProfileConfig",
-        request: { profileId: "profile-a", agentDid: deployment.agentDid },
+        request: { profileId: "profile-a", nodeDid: deployment.nodeDid },
       },
       {
         renderPanel: () => <ToolsPanel deployment={deployment} item="tools-b" />,
         method: "deleteToolsConfig",
-        request: { toolsId: "tools-b", agentDid: deployment.agentDid },
+        request: { toolsId: "tools-b", nodeDid: deployment.nodeDid },
       },
       {
         renderPanel: () => (
           <ToolServicesPanel deployment={deployment} item="service-a" />
         ),
         method: "deleteToolServiceConfig",
-        request: { serviceId: "service-a", agentDid: deployment.agentDid },
+        request: { serviceId: "service-a", nodeDid: deployment.nodeDid },
       },
       {
         renderPanel: () => <SkillsPanel deployment={deployment} item="skill-a" />,
         method: "deleteSkillConfig",
-        request: { skillId: "skill-a", agentDid: deployment.agentDid },
+        request: { skillId: "skill-a", nodeDid: deployment.nodeDid },
       },
       {
         renderPanel: () => <TasksPanel deployment={deployment} item="task-b" />,
         method: "deleteTaskConfig",
-        request: { taskId: "task-b", agentDid: deployment.agentDid },
+        request: { taskId: "task-b", nodeDid: deployment.nodeDid },
       },
       {
         renderPanel: () => <SchedulesPanel deployment={deployment} item="timer-a" />,
         method: "deleteScheduleConfig",
-        request: { scheduleId: "timer-a", agentDid: deployment.agentDid },
+        request: { scheduleId: "timer-a", nodeDid: deployment.nodeDid },
       },
       {
         renderPanel: () => (
           <EventSourcesPanel deployment={deployment} item="source-a" />
         ),
         method: "deleteEventSourceConfig",
-        request: { eventSourceId: "source-a", agentDid: deployment.agentDid },
+        request: { eventSourceId: "source-a", nodeDid: deployment.nodeDid },
       },
       {
         renderPanel: () => <TriggersPanel deployment={deployment} item="trigger-a" />,
         method: "deleteTriggerConfig",
-        request: { triggerId: "trigger-a", agentDid: deployment.agentDid },
+        request: { triggerId: "trigger-a", nodeDid: deployment.nodeDid },
       },
     ];
 
-    for (const testCase of cases) {
+    it.each(cases)("confirms and dispatches $method", async (testCase) => {
       const { api, app } = harness();
       const view = renderIn(app, testCase.renderPanel());
       const user = userEvent.setup();
@@ -2325,6 +2335,6 @@ describe("configuration panels", () => {
         testCase.request,
       );
       view.unmount();
-    }
+    });
   });
 });

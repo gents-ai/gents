@@ -1,11 +1,11 @@
-export function displayAgentIdentity(value?: string | null) {
+export function displayNodeIdentity(value?: string | null) {
   if (!value) {
     return null;
   }
   return value;
 }
 
-export function displayBehaviorLabel(value?: string | null) {
+export function displayAgentLabel(value?: string | null) {
   if (!value || value === "default") {
     return null;
   }

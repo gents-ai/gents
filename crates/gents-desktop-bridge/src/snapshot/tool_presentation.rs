@@ -29,7 +29,7 @@ pub(super) fn project_tool_presentation(tool: &ToolCallView) -> ToolPresentation
         return project_file_edit(tool, name);
     }
     if AGENT_TOOL_NAMES.contains(&name) {
-        return project_subagent(tool, name);
+        return project_agent(tool, name);
     }
     if PROCESS_TOOLS.contains(&name) {
         return project_process(tool, name);
@@ -427,7 +427,7 @@ fn action_label(name: &str, suffix: &str) -> String {
     }
 }
 
-fn project_subagent(tool: &ToolCallView, name: &str) -> ToolPresentationView {
+fn project_agent(tool: &ToolCallView, name: &str) -> ToolPresentationView {
     let args = json_object(tool.args.as_deref());
     let result = json_object(tool.result.as_deref());
     let session_id = string_field(args.as_ref(), "session_id")
@@ -446,7 +446,7 @@ fn project_subagent(tool: &ToolCallView, name: &str) -> ToolPresentationView {
             .and_then(Value::as_str)
             .map(|task_id| format!("task {task_id}"))
     });
-    ToolPresentationView::Subagent {
+    ToolPresentationView::Agent {
         action: match name {
             AGENT_NEW_TOOL_NAME => "start",
             AGENT_MESSAGE_TOOL_NAME => "message",
@@ -775,18 +775,18 @@ write_file: wrote 4 bytes to file.txt"#,
     }
 
     #[test]
-    fn agents_tools_present_as_subagent_rows_by_action() {
+    fn agents_tools_present_as_agent_rows_by_action() {
         let presented = |name: &str, args: &str, result: &str| match project_tool_presentation(
             &tool(name, args, result, "completed"),
         ) {
-            ToolPresentationView::Subagent {
+            ToolPresentationView::Agent {
                 action,
                 name,
                 session_id,
                 description,
                 ..
             } => (action, name, session_id, description),
-            other => panic!("{name} must present as a subagent row: {other:?}"),
+            other => panic!("{name} must present as an agent row: {other:?}"),
         };
         assert_eq!(
             presented(

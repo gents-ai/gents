@@ -182,13 +182,13 @@ impl ClientSyncStateOwner {
         &self,
         label: &str,
         addr: &str,
-        agent_did: &str,
+        node_did: &str,
         graphql: &str,
-        agent_home: &str,
+        node_home: &str,
     ) -> anyhow::Result<PeerRecord> {
         let mut directory = self.directory.write().await;
         let record = directory
-            .upsert_local_standard_peer(label, addr, agent_did, graphql, agent_home)
+            .upsert_local_standard_peer(label, addr, node_did, graphql, node_home)
             .await?;
         let records = directory.records().to_vec();
         self.publish_persisted_directory(records);
@@ -200,7 +200,7 @@ impl ClientSyncStateOwner {
         peer_id: &str,
         label: &str,
         addr: &str,
-        agent_did: &str,
+        node_did: &str,
         network_id: &str,
         request_id: &str,
         request_digest: &str,
@@ -214,7 +214,7 @@ impl ClientSyncStateOwner {
                 peer_id,
                 label,
                 addr,
-                agent_did,
+                node_did,
                 network_id,
                 request_id,
                 request_digest,
@@ -361,8 +361,7 @@ impl ClientSyncStateOwner {
             .records()
             .into_iter()
             .filter(|record| {
-                record.agent_did == runtime_did
-                    && same_endpoint(record.graphql.as_deref(), endpoint)
+                record.node_did == runtime_did && same_endpoint(record.graphql.as_deref(), endpoint)
             })
             .collect::<Vec<_>>();
         let bound_endpoint = expected.first()?.graphql.clone();
@@ -542,7 +541,7 @@ impl ClientSyncStateOwner {
                         .map(|(_, status)| {
                             let mut status = status.clone();
                             status.label.clone_from(&record.label);
-                            status.agent_did.clone_from(&record.agent_did);
+                            status.node_did.clone_from(&record.node_did);
                             status.addr.clone_from(&record.addr);
                             status
                         })
@@ -634,7 +633,7 @@ fn compare_runtime_status(
     runtime_did: &str,
     status: &Value,
 ) -> anyhow::Result<()> {
-    let status_did = status.get("agent_did").and_then(Value::as_str);
+    let status_did = status.get("node_did").and_then(Value::as_str);
     anyhow::ensure!(
         status_did == Some(runtime_did),
         "runtime status belongs to {}, not {runtime_did}",
@@ -653,7 +652,7 @@ fn compare_runtime_status(
 fn observation_generation_matches(previous: &PeerRecord, current: &PeerRecord) -> bool {
     previous.peer_id == current.peer_id
         && previous.addr == current.addr
-        && previous.agent_did == current.agent_did
+        && previous.node_did == current.node_did
         && previous.source == current.source
         && previous.pairing_network_id == current.pairing_network_id
         && previous.pairing_template == current.pairing_template
@@ -684,7 +683,7 @@ pub(super) fn conservative_status(record: &PeerRecord) -> ClientPeerStatus {
     ClientPeerStatus {
         peer_id: record.peer_id.clone(),
         label: record.label.clone(),
-        agent_did: record.agent_did.clone(),
+        node_did: record.node_did.clone(),
         addr: record.addr.clone(),
         dial_succeeded: false,
         last_error: None,
@@ -701,7 +700,7 @@ mod tests {
         ClientPeerStatus {
             peer_id: peer_id.to_string(),
             label: peer_id.to_string(),
-            agent_did: format!("did:key:{peer_id}"),
+            node_did: format!("did:key:{peer_id}"),
             addr: format!("endpoint:{peer_id}"),
             dial_succeeded: false,
             last_error: None,
@@ -782,8 +781,8 @@ mod tests {
             .collect()
     }
 
-    fn status(agent_did: &str, schema: &ReplicatedSchema) -> Value {
-        serde_json::json!({ "agent_did": agent_did, STATUS_REPLICATED_SCHEMA_FIELD: schema })
+    fn status(node_did: &str, schema: &ReplicatedSchema) -> Value {
+        serde_json::json!({ "node_did": node_did, STATUS_REPLICATED_SCHEMA_FIELD: schema })
     }
 
     #[tokio::test]
@@ -793,10 +792,10 @@ mod tests {
             ClientSyncStateOwner::for_test(vec![runtime.clone()], vec![peer("a")]).await;
         let local = replicated_schema("bafy-session");
         let mut updates = owner.subscribe();
-        let next_release = status(&runtime.agent_did, &replicated_schema("bafy-next-release"));
+        let next_release = status(&runtime.node_did, &replicated_schema("bafy-next-release"));
 
         let observation = owner
-            .begin_runtime_schema_observation(&runtime.agent_did, None)
+            .begin_runtime_schema_observation(&runtime.node_did, None)
             .expect("configured route");
         let error = owner
             .record_runtime_schema(&observation, &local, &next_release)
@@ -814,7 +813,7 @@ mod tests {
         );
 
         let observation = owner
-            .begin_runtime_schema_observation(&runtime.agent_did, None)
+            .begin_runtime_schema_observation(&runtime.node_did, None)
             .expect("configured route");
         owner
             .record_runtime_schema(&observation, &local, &next_release)
@@ -825,10 +824,10 @@ mod tests {
         );
 
         let observation = owner
-            .begin_runtime_schema_observation(&runtime.agent_did, None)
+            .begin_runtime_schema_observation(&runtime.node_did, None)
             .expect("configured route");
         owner
-            .record_runtime_schema(&observation, &local, &status(&runtime.agent_did, &local))
+            .record_runtime_schema(&observation, &local, &status(&runtime.node_did, &local))
             .unwrap();
         assert!(owner.snapshot().peer_schema_skew.is_empty());
     }
@@ -860,7 +859,7 @@ mod tests {
             ClientSyncStateOwner::for_test(vec![runtime.clone()], vec![peer("a")]).await;
         assert!(owner
             .begin_runtime_schema_observation(
-                &runtime.agent_did,
+                &runtime.node_did,
                 Some("http://other/api/v0/graphql")
             )
             .is_none());
@@ -877,19 +876,19 @@ mod tests {
         let local = replicated_schema("bafy-session");
 
         let older = owner
-            .begin_runtime_schema_observation(&runtime.agent_did, None)
+            .begin_runtime_schema_observation(&runtime.node_did, None)
             .expect("configured route");
         let newer = owner
-            .begin_runtime_schema_observation(&runtime.agent_did, None)
+            .begin_runtime_schema_observation(&runtime.node_did, None)
             .expect("configured route");
         owner
-            .record_runtime_schema(&newer, &local, &status(&runtime.agent_did, &local))
+            .record_runtime_schema(&newer, &local, &status(&runtime.node_did, &local))
             .unwrap();
         owner
             .record_runtime_schema(
                 &older,
                 &local,
-                &status(&runtime.agent_did, &replicated_schema("bafy-old-runtime")),
+                &status(&runtime.node_did, &replicated_schema("bafy-old-runtime")),
             )
             .unwrap_err();
         assert!(owner.snapshot().peer_schema_skew.is_empty());
@@ -902,7 +901,7 @@ mod tests {
             ClientSyncStateOwner::for_test(vec![runtime.clone()], vec![peer("a")]).await;
         let local = replicated_schema("bafy-session");
         let observation = owner
-            .begin_runtime_schema_observation(&runtime.agent_did, None)
+            .begin_runtime_schema_observation(&runtime.node_did, None)
             .expect("configured route");
 
         let error = owner
@@ -916,7 +915,7 @@ mod tests {
         assert!(owner.snapshot().peer_schema_skew.is_empty());
 
         let unpublished = serde_json::json!({
-            "agent_did": runtime.agent_did,
+            "node_did": runtime.node_did,
             STATUS_REPLICATED_SCHEMA_FIELD: null,
         });
         owner
@@ -924,7 +923,7 @@ mod tests {
             .unwrap_err();
         assert!(owner.snapshot().peer_schema_skew.is_empty());
 
-        let old_build = serde_json::json!({ "agent_did": runtime.agent_did });
+        let old_build = serde_json::json!({ "node_did": runtime.node_did });
         owner
             .record_runtime_schema(&observation, &local, &old_build)
             .unwrap_err();
@@ -937,13 +936,13 @@ mod tests {
         let (_tempdir, owner) =
             ClientSyncStateOwner::for_test(vec![runtime.clone()], vec![peer("a")]).await;
         let local = replicated_schema("bafy-session");
-        let skewed = status(&runtime.agent_did, &replicated_schema("bafy-other"));
+        let skewed = status(&runtime.node_did, &replicated_schema("bafy-other"));
 
         let first = owner
-            .begin_runtime_schema_observation(&runtime.agent_did, None)
+            .begin_runtime_schema_observation(&runtime.node_did, None)
             .expect("configured route");
         let in_flight = owner
-            .begin_runtime_schema_observation(&runtime.agent_did, None)
+            .begin_runtime_schema_observation(&runtime.node_did, None)
             .expect("configured route");
         owner
             .record_runtime_schema(&first, &local, &skewed)
@@ -965,7 +964,7 @@ mod tests {
         );
 
         let current = owner
-            .begin_runtime_schema_observation(&runtime.agent_did, None)
+            .begin_runtime_schema_observation(&runtime.node_did, None)
             .expect("configured route");
         owner
             .record_runtime_schema(&current, &local, &skewed)
@@ -1099,7 +1098,7 @@ mod tests {
             "endpoint:other",
             "did:key:other",
             "http://127.0.0.1:1/api/v0/graphql",
-            "/tmp/test-agent-home",
+            "/tmp/test-node-home",
         )
         .await
         .expect_err("live owner lease must reject an offline writer");
@@ -1113,11 +1112,11 @@ mod tests {
             "endpoint:other",
             "did:key:other",
             "http://127.0.0.1:1/api/v0/graphql",
-            "/tmp/test-agent-home",
+            "/tmp/test-node-home",
         )
         .await
         .expect("offline initializer may write after live owner exits");
-        assert_eq!(initialized.agent_did, "did:key:other");
+        assert_eq!(initialized.node_did, "did:key:other");
     }
 
     #[tokio::test]

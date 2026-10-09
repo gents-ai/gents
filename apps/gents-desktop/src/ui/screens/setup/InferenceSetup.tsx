@@ -1,6 +1,6 @@
 /* The inference step: choose a provider, connect or sign in, pick a model
    and its defaults, and save them in one operator transaction. Shared by
-   first run, setup re-entry and adding a backend from the agent screen.
+   first run, setup re-entry and adding a backend from the Node screen.
    Provider/model guidance comes from the versioned Rust contract. */
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { KeyRound, Orbit, Server, Sparkles } from "lucide-react";
@@ -16,7 +16,7 @@ import {
   type OauthProvider,
 } from "@/lib/providerLogin";
 import { bridgeErrorCode, setupErrorMessage } from "../../../lib/setupErrors";
-import { isLocalAgent } from "@/lib/firstRun";
+import { isLocalNode } from "@/lib/firstRun";
 import {
   currentInferenceDiscovery,
   inferenceDiscoveryKey,
@@ -41,7 +41,7 @@ import {
 } from "./inferenceSetupForm";
 
 /* The runtime confirms a save only after it reconciles the new documents,
-   starts the rebound behavior and replicates its readiness back. */
+   starts the rebound Node and replicates its readiness back. */
 const SAVE_CONFIRMATION_TIMEOUT_MS = 15_000;
 
 export const PROVIDER_VISUALS: Record<
@@ -61,7 +61,7 @@ const notAdded = (label: string) =>
 export function InferenceSetup({
   onDone,
   purpose,
-  agentDid,
+  nodeDid,
   onCancel,
   onBack,
   checkRuntime,
@@ -69,11 +69,11 @@ export function InferenceSetup({
 }: {
   onDone: (snapshot: DesktopClientSnapshot) => void;
   purpose: "onboarding" | "add-backend";
-  agentDid?: string;
+  nodeDid?: string;
   onCancel?: () => void;
   /** back to the step before, when there is one */
   onBack?: () => void;
-  /** opened without this session's provisioning, so a local agent's managed
+  /** opened without this session's provisioning, so a local node's managed
       runtime may not be serving */
   checkRuntime: boolean;
   /* a catalog row was chosen, so the form is that provider's inputs only */
@@ -107,33 +107,33 @@ export function InferenceSetup({
     () => edited ?? (providerOption ? connectionDefaults(providerOption) : undefined),
     [edited, providerOption],
   );
-  /* reads that answer for another agent, or before a sign-in that changed
+  /* reads that answer for another Node, or before a sign-in that changed
      what they would say, are dropped */
   const [accountReads] = useState(newestWins);
-  const setupAgentDid = agentDid ?? selectedNode?.agentDid;
-  const setupAgentDidRef = useRef(setupAgentDid);
-  setupAgentDidRef.current = setupAgentDid;
+  const setupNodeDid = nodeDid ?? selectedNode?.nodeDid;
+  const setupNodeDidRef = useRef(setupNodeDid);
+  setupNodeDidRef.current = setupNodeDid;
   const discoveryRevision = useRef(0);
   const currentDiscoveryKey = useRef("");
   /* Setup re-entry opens at the provider step without first run's
-     provisioning, so a local agent's managed runtime may not be serving.
+     provisioning, so a local node's managed runtime may not be serving.
      Provider sign-in and the final save both write through it. */
-  const setupDeployment = useFleet((s) => nodeOf(s, setupAgentDid));
+  const setupDeployment = useFleet((s) => nodeOf(s, setupNodeDid));
   const requiresManagedRuntime = Boolean(
     checkRuntime &&
     allowLocal &&
     actions.localServerOffers.status &&
     setupDeployment &&
-    isLocalAgent(setupDeployment, bootstrap?.initAgentDid),
+    isLocalNode(setupDeployment, bootstrap?.initNodeDid),
   );
-  const runtimeFallbackName = bootstrap?.initAgentName?.trim() || "Local Agent";
+  const runtimeFallbackName = bootstrap?.initNodeName?.trim() || "Local Node";
   const checkManagedRuntime = async () => {
     dispatch({ type: "runtimeGate", gate: "checking" });
     try {
       await actions.ensureLocalServerServing(runtimeFallbackName);
       dispatch({ type: "runtimeGate", gate: "ready" });
       /* Account lookup goes through the runtime, so repeat it once it serves. */
-      if (setupAgentDidRef.current) void observeAccounts(setupAgentDidRef.current);
+      if (setupNodeDidRef.current) void observeAccounts(setupNodeDidRef.current);
     } catch (cause) {
       dispatch({
         type: "runtimeGate",
@@ -147,26 +147,26 @@ export function InferenceSetup({
     void checkManagedRuntime();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [requiresManagedRuntime, runtimeGate]);
-  const observeAccounts = (agentDid: string) => {
+  const observeAccounts = (nodeDid: string) => {
     const current = accountReads.begin();
     const seedSignedIn = purpose !== "add-backend";
-    return actions.loadProviderAccounts(agentDid).then((accounts) => {
+    return actions.loadProviderAccounts(nodeDid).then((accounts) => {
       /* Sign-in remains available if account lookup fails, but only a
          click starts it: an unknown account may already be connected. */
       if (!accounts) return;
-      if (!current() || setupAgentDidRef.current !== agentDid) return;
+      if (!current() || setupNodeDidRef.current !== nodeDid) return;
       dispatch({ type: "accountsRead", accounts, seedSignedIn });
     });
   };
   useEffect(() => {
     dispatch({ type: "accountsCleared" });
-    if (!setupAgentDid) {
+    if (!setupNodeDid) {
       accountReads.supersede();
       return;
     }
-    void observeAccounts(setupAgentDid);
+    void observeAccounts(setupNodeDid);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [setupAgentDid]);
+  }, [setupNodeDid]);
 
   const accountsOf = (oauthProvider: OauthProvider) =>
     storedAccounts.filter(
@@ -189,16 +189,16 @@ export function InferenceSetup({
       return;
     }
     dispatch({ type: "opStarted", op: "signIn" });
-    let agentDid: string | undefined;
+    let nodeDid: string | undefined;
     try {
       const snapshot = await actions.readSnapshot();
-      agentDid = setupAgentDid ?? snapshot.client?.deployments[0]?.agentDid;
-      if (!agentDid) throw new Error("No agent to sign in");
-      const result = await actions.signInToProvider(agentDid, oauthProvider, {
+      nodeDid = setupNodeDid ?? snapshot.client?.deployments[0]?.nodeDid;
+      if (!nodeDid) throw new Error("No node to sign in");
+      const result = await actions.signInToProvider(nodeDid, oauthProvider, {
         label: label || null,
         onUrl: (url) => dispatch({ type: "authUrl", url }),
       });
-      if (setupAgentDidRef.current !== agentDid) return;
+      if (setupNodeDidRef.current !== nodeDid) return;
       accountReads.supersede();
       dispatch({ type: "pendingSaveCleared", provider });
       dispatch({ type: "authUrl", url: null });
@@ -218,9 +218,9 @@ export function InferenceSetup({
       dispatch({ type: "connected", provider, credentialId: result.credentialId });
       invalidateDiscovery();
     } catch (cause) {
-      if (agentDid && bridgeErrorCode(cause) === CREDENTIAL_NOT_SAVED) {
+      if (nodeDid && bridgeErrorCode(cause) === CREDENTIAL_NOT_SAVED) {
         dispatch({ type: "authUrl", url: null });
-        void observeAccounts(agentDid);
+        void observeAccounts(nodeDid);
       }
       dispatch({ type: "failed", error: setupErrorMessage(cause) });
     } finally {
@@ -229,9 +229,9 @@ export function InferenceSetup({
   };
 
   const retrySaveSignIn = async () => {
-    const agentDid = setupAgentDid;
+    const nodeDid = setupNodeDid;
     const oauthProvider = connection ? oauthProviderFor(connection.authMethod) : null;
-    if (!agentDid || !oauthProvider || !actions.canRetryProviderSave) return;
+    if (!nodeDid || !oauthProvider || !actions.canRetryProviderSave) return;
     const pendingProvider = provider;
     /* with a stored account, a store adds only under a new reference, so a
        retry returning no reference refreshed the original account */
@@ -243,10 +243,10 @@ export function InferenceSetup({
         dispatch({ type: "runtimeGate", gate: "ready" });
       }
       const account = await actions.retrySaveProviderAccount(
-        agentDid,
+        nodeDid,
         PROVIDER_CREDENTIAL_KIND[oauthProvider],
       );
-      if (setupAgentDidRef.current !== agentDid) return;
+      if (setupNodeDidRef.current !== nodeDid) return;
       accountReads.supersede();
       if (purpose === "add-backend" && account.accountRef !== null) {
         onDone(await actions.readSnapshot());
@@ -264,7 +264,7 @@ export function InferenceSetup({
       });
       invalidateDiscovery();
     } catch (cause) {
-      if (bridgeErrorCode(cause) === "notFound") void observeAccounts(agentDid);
+      if (bridgeErrorCode(cause) === "notFound") void observeAccounts(nodeDid);
       dispatch({ type: "failed", error: setupErrorMessage(cause) });
     } finally {
       dispatch({ type: "opEnded" });
@@ -308,14 +308,14 @@ export function InferenceSetup({
     currentDiscoveryKey.current = requestKey;
     try {
       const snapshot = await actions.readSnapshot();
-      const agentDid = setupAgentDid ?? snapshot.client?.deployments[0]?.agentDid;
-      if (!agentDid) {
-        dispatch({ type: "failed", error: "No agent to configure" });
+      const nodeDid = setupNodeDid ?? snapshot.client?.deployments[0]?.nodeDid;
+      if (!nodeDid) {
+        dispatch({ type: "failed", error: "No node to configure" });
         return;
       }
       const result = await actions.discoverInferenceModels({
         requestKey,
-        agentDid,
+        nodeDid,
         provider,
         authMethod: connection.authMethod,
         endpoint: connection.endpoint,
@@ -360,9 +360,9 @@ export function InferenceSetup({
     if (settingsError) throw new Error(settingsError);
     const snapshot = await actions.readSnapshot();
     const deployment = snapshot.client?.deployments.find(
-      (candidate) => candidate.agentDid === setupAgentDid,
+      (candidate) => candidate.nodeDid === setupNodeDid,
     );
-    if (!deployment) throw new Error("No agent to configure");
+    if (!deployment) throw new Error("No node to configure");
 
     const plan = buildInferenceSetupPlan({
       purpose,
@@ -384,7 +384,7 @@ export function InferenceSetup({
       .then(() =>
         actions.discoverInferenceModels({
           requestKey: publishKey,
-          agentDid: deployment.agentDid,
+          nodeDid: deployment.nodeDid,
           provider,
           authMethod: connection.authMethod,
           endpoint: connection.endpoint,
@@ -395,23 +395,22 @@ export function InferenceSetup({
     return plan;
   };
 
-  const waitForSelectedBehavior = async (
+  const waitForSelectedAgent = async (
     profileId: string,
-    defaultBehaviorId: string | null,
+    defaultAgentId: string | null,
   ) => {
     const deadline = Date.now() + SAVE_CONFIRMATION_TIMEOUT_MS;
     while (Date.now() < deadline) {
       const snapshot = await actions.readSnapshot();
       const deployment = snapshot.client?.deployments.find(
-        (candidate) => candidate.agentDid === setupAgentDid,
+        (candidate) => candidate.nodeDid === setupNodeDid,
       );
-      const bound = deployment?.behaviorConfigs.find(
-        (behavior) =>
-          behavior.behavior_id === defaultBehaviorId &&
-          behavior.inference_profile_id === profileId,
+      const bound = deployment?.agentConfigs.find(
+        (agent) =>
+          agent.agent_id === defaultAgentId && agent.inference_profile_id === profileId,
       );
-      const ready = deployment?.behaviorReadiness.behaviors.some(
-        (status) => status.state === "ready" && status.behaviorId === defaultBehaviorId,
+      const ready = deployment?.nodeReadiness.agents.some(
+        (status) => status.state === "ready" && status.agentId === defaultAgentId,
       );
       const savedProfile = deployment?.inferenceProfiles.find(
         (profile) => profile.profile_id === profileId,
@@ -437,8 +436,8 @@ export function InferenceSetup({
   const saveInference = async () => {
     dispatch({ type: "opStarted", op: "save" });
     try {
-      const { profileId, defaultBehaviorId } = await persistInference();
-      const snapshot = await waitForSelectedBehavior(profileId, defaultBehaviorId);
+      const { profileId, defaultAgentId } = await persistInference();
+      const snapshot = await waitForSelectedAgent(profileId, defaultAgentId);
       onDone(snapshot);
     } catch (cause) {
       dispatch({ type: "failed", error: setupErrorMessage(cause) });
@@ -488,7 +487,7 @@ export function InferenceSetup({
   ) {
     return (
       <Frame embedded={purpose === "add-backend"}>
-        <Title note="Provider sign-in and the saved configuration are stored by your local agent.">
+        <Title note="Provider sign-in and the saved configuration are stored by your local node.">
           {purpose === "add-backend"
             ? "Add an inference backend"
             : "Choose an inference provider"}
@@ -497,7 +496,7 @@ export function InferenceSetup({
           <div className="grid gap-3">
             <p role="alert" className="text-sm text-destructive">
               {error ??
-                "The local agent is not running, so provider sign-in is unavailable."}
+                "The local node is not running, so provider sign-in is unavailable."}
             </p>
             <Button
               variant="brand"
@@ -510,7 +509,7 @@ export function InferenceSetup({
         ) : (
           <div className="grid gap-3">
             <p className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Spinner /> Starting your local agent…
+              <Spinner /> Starting your local node…
             </p>
             {managedWait ? (
               <ManagedServerWaitNotice

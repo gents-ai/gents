@@ -66,7 +66,7 @@ fn newest_accounted_call_survives_a_newer_unaccounted_request() {
 #[tokio::test]
 async fn shared_snapshot_keeps_previous_accounting_until_new_request_dispatches() {
     let (core, _tempdir) = crate::tests::support::boot_core().await;
-    let agent_did = "did:test:context-agent";
+    let node_did = "did:test:context-node";
     let session_id = "session-context-side-channel";
     for (request_id, created_at) in [
         ("request-accounted", "2026-08-24T12:00:00Z"),
@@ -76,8 +76,8 @@ async fn shared_snapshot_keeps_previous_accounting_until_new_request_dispatches(
             r#"mutation {{
                 create_AgentRequest(input: {{ purpose: "normal",
                     request_id: "{request_id}",
-                    agent_did: "{agent_did}",
-                    behavior_id: "default",
+                    node_did: "{node_did}",
+                    agent_id: "default",
                     session_id: "{session_id}",
                     content: "test",
                     lifecycle_state: "pending",
@@ -93,7 +93,7 @@ async fn shared_snapshot_keeps_previous_accounting_until_new_request_dispatches(
             "seed request failed: {:?}",
             response.errors
         );
-        core.refresh_local_request(agent_did, request_id)
+        core.refresh_local_request(node_did, request_id)
             .await
             .expect("refresh request");
         assert!(
@@ -114,7 +114,7 @@ async fn shared_snapshot_keeps_previous_accounting_until_new_request_dispatches(
                 call_id: "call-accounted",
                 request_id: "request-accounted",
                 call_seq: 1,
-                agent_did: "{agent_did}",
+                node_did: "{node_did}",
                 call_kind: "inference",
                 queued_at: "2026-08-24T12:01:00Z",
                 context_accounting_json: "{accounted_json}"
@@ -123,7 +123,7 @@ async fn shared_snapshot_keeps_previous_accounting_until_new_request_dispatches(
                 call_id: "call-pending",
                 request_id: "request-pending",
                 call_seq: 2,
-                agent_did: "{agent_did}",
+                node_did: "{node_did}",
                 call_kind: "inference",
                 queued_at: "2026-08-24T12:03:00Z"
             }}) {{ _docID }}
@@ -145,9 +145,9 @@ async fn shared_snapshot_keeps_previous_accounting_until_new_request_dispatches(
         "pending request lost before snapshot: {:?}",
         core.store().snapshot().requests
     );
-    let snapshot = build_session_snapshot_for_agent(
+    let snapshot = build_session_snapshot_for_node(
         core.as_ref(),
-        Some(agent_did),
+        Some(node_did),
         session_id,
         Some("request-pending"),
     )

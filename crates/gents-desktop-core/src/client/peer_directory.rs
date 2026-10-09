@@ -20,7 +20,7 @@ pub struct PeerRecord {
     pub peer_id: String,
     pub label: String,
     pub addr: String,
-    pub agent_did: String,
+    pub node_did: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -42,7 +42,7 @@ pub struct PeerRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub graphql: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub local_agent_home: Option<String>,
+    pub local_node_home: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -56,7 +56,7 @@ impl PeerRecord {
     /// enrollment route. Enrollment owns data-plane authority; these fields
     /// only identify the co-hosted configuration control plane.
     pub fn is_managed_runtime(&self) -> bool {
-        self.local_agent_home
+        self.local_node_home
             .as_deref()
             .is_some_and(|value| !value.trim().is_empty())
             && self.graphql.as_deref().is_some_and(|value| {
@@ -66,7 +66,7 @@ impl PeerRecord {
     }
 
     /// HTTP GraphQL the desktop uses as the operator control plane for a
-    /// hosted local runtime. Client P2P routes do not carry `AgentPrincipal`
+    /// hosted local runtime. Client P2P routes do not carry `Node`
     /// or `InferenceBackend`, so first-run config has to be read and written
     /// here. Test fixtures that pass a dummy `/graphql` URL are ignored.
     pub fn operator_graphql(&self) -> Option<&str> {
@@ -115,22 +115,22 @@ impl PeerRecord {
     pub(crate) fn new(
         label: impl Into<String>,
         addr: impl Into<String>,
-        agent_did: impl Into<String>,
+        node_did: impl Into<String>,
     ) -> Self {
-        Self::base(label, addr, agent_did)
+        Self::base(label, addr, node_did)
     }
 
     fn base(
         label: impl Into<String>,
         addr: impl Into<String>,
-        agent_did: impl Into<String>,
+        node_did: impl Into<String>,
     ) -> Self {
         let now = Utc::now().to_rfc3339();
         Self {
             peer_id: Uuid::new_v4().to_string(),
             label: label.into(),
             addr: addr.into(),
-            agent_did: agent_did.into(),
+            node_did: node_did.into(),
             source: None,
             pairing_network_id: None,
             pairing_template: None,
@@ -141,7 +141,7 @@ impl PeerRecord {
             enrollment_authorization_expires_at: None,
             pairing_ready: false,
             graphql: None,
-            local_agent_home: None,
+            local_node_home: None,
             created_at: now.clone(),
             updated_at: now,
         }
@@ -150,10 +150,10 @@ impl PeerRecord {
     pub fn local_standard(
         label: impl Into<String>,
         addr: impl Into<String>,
-        agent_did: impl Into<String>,
+        node_did: impl Into<String>,
         graphql: impl Into<String>,
     ) -> Self {
-        let mut record = Self::base(label, addr, agent_did);
+        let mut record = Self::base(label, addr, node_did);
         record.source = Some("local-standard".to_string());
         record.graphql = Some(graphql.into());
         record
@@ -341,13 +341,13 @@ impl PeerDirectory {
         &mut self,
         label: &str,
         addr: &str,
-        agent_did: &str,
+        node_did: &str,
         graphql: &str,
         agent_home: &str,
     ) -> Result<PeerRecord> {
         let label = normalize_non_empty("label", label)?;
         let addr = normalize_non_empty("addr", addr)?;
-        let agent_did = normalize_non_empty("agent_did", agent_did)?;
+        let node_did = normalize_non_empty("node_did", node_did)?;
         let graphql = normalize_non_empty("graphql", graphql)?;
         let agent_home = normalize_non_empty("agent_home", agent_home)?;
 
@@ -358,15 +358,15 @@ impl PeerDirectory {
             .find(|existing| {
                 existing.source.as_deref() == Some("local-standard")
                     || (existing.is_enrollment()
-                        && existing.agent_did == agent_did
-                        && existing.local_agent_home.as_deref() == Some(agent_home))
+                        && existing.node_did == node_did
+                        && existing.local_node_home.as_deref() == Some(agent_home))
             })
             .cloned()
-            .unwrap_or_else(|| PeerRecord::local_standard(label, addr, agent_did, graphql));
+            .unwrap_or_else(|| PeerRecord::local_standard(label, addr, node_did, graphql));
         record.label = label.to_string();
-        record.agent_did = agent_did.to_string();
+        record.node_did = node_did.to_string();
         record.graphql = Some(graphql.to_string());
-        record.local_agent_home = Some(agent_home.to_string());
+        record.local_node_home = Some(agent_home.to_string());
         if !record.is_enrollment() {
             record.addr = addr.to_string();
             record.source = Some("local-standard".to_string());
@@ -382,7 +382,7 @@ impl PeerDirectory {
         peer_id: &str,
         label: &str,
         addr: &str,
-        agent_did: &str,
+        node_did: &str,
         network_id: &str,
         request_id: &str,
         request_digest: &str,
@@ -393,7 +393,7 @@ impl PeerDirectory {
         let peer_id = normalize_non_empty("peer_id", peer_id)?;
         let label = normalize_non_empty("label", label)?;
         let addr = normalize_non_empty("addr", addr)?;
-        let agent_did = normalize_non_empty("agent_did", agent_did)?;
+        let node_did = normalize_non_empty("node_did", node_did)?;
         let network_id = normalize_non_empty("network_id", network_id)?;
         let request_id = normalize_non_empty("request_id", request_id)?;
         let request_digest = normalize_non_empty("request_digest", request_digest)?;
@@ -418,12 +418,12 @@ impl PeerDirectory {
             .iter()
             .find(|record| {
                 record.source.as_deref() == Some("local-standard")
-                    && record.agent_did == agent_did
+                    && record.node_did == node_did
                     && record.is_managed_runtime()
             })
             .cloned();
         if let Some(conflict) = candidate.peers.iter().find(|record| {
-            (record.peer_id == peer_id || record.agent_did == agent_did)
+            (record.peer_id == peer_id || record.node_did == node_did)
                 && record.source.as_deref() != Some("enrollment")
                 && managed
                     .as_ref()
@@ -441,7 +441,7 @@ impl PeerDirectory {
             .iter()
             .find(|record| {
                 record.source.as_deref() == Some("enrollment")
-                    && (record.peer_id == peer_id || record.agent_did == agent_did)
+                    && (record.peer_id == peer_id || record.node_did == node_did)
             })
             .cloned()
             .or_else(|| managed.clone());
@@ -449,7 +449,7 @@ impl PeerDirectory {
             peer_id: peer_id.to_string(),
             label: label.to_string(),
             addr: addr.to_string(),
-            agent_did: agent_did.to_string(),
+            node_did: node_did.to_string(),
             source: Some("enrollment".to_string()),
             pairing_network_id: Some(network_id.to_string()),
             pairing_template: Some("client".to_string()),
@@ -460,13 +460,13 @@ impl PeerDirectory {
             enrollment_authorization_expires_at: Some(authorization_expires_at.to_string()),
             pairing_ready: false,
             graphql: None,
-            local_agent_home: None,
+            local_node_home: None,
             created_at: now.clone(),
             updated_at: now,
         });
         if record.peer_id != peer_id
             || record.addr != addr
-            || record.agent_did != agent_did
+            || record.node_did != node_did
             || record.pairing_network_id.as_deref() != Some(network_id)
             || record.enrollment_request_id.as_deref() != Some(request_id)
             || record.enrollment_request_digest.as_deref() != Some(request_digest)
@@ -483,7 +483,7 @@ impl PeerDirectory {
         // Reapplying the enrollment label here made every successful status
         // sweep undo a manual rename.
         record.addr = addr.to_string();
-        record.agent_did = agent_did.to_string();
+        record.node_did = node_did.to_string();
         record.source = Some("enrollment".to_string());
         record.pairing_network_id = Some(network_id.to_string());
         record.pairing_template = Some("client".to_string());
@@ -498,13 +498,11 @@ impl PeerDirectory {
             // the route authority, while the co-hosted bootstrap row remains
             // the authority for local operator access.
             record.graphql.clone_from(&managed.graphql);
-            record
-                .local_agent_home
-                .clone_from(&managed.local_agent_home);
+            record.local_node_home.clone_from(&managed.local_node_home);
         }
         if managed.is_none() && !record.is_managed_runtime() {
             record.graphql = None;
-            record.local_agent_home = None;
+            record.local_node_home = None;
         }
 
         if let Some(managed) = managed {
@@ -738,13 +736,13 @@ pub async fn initialize_local_standard_peer(
     path: &Path,
     label: &str,
     addr: &str,
-    agent_did: &str,
+    node_did: &str,
     graphql: &str,
     agent_home: &str,
 ) -> Result<PeerRecord> {
     let mut directory = PeerDirectory::open_writer(path).await?;
     directory
-        .upsert_local_standard_peer(label, addr, agent_did, graphql, agent_home)
+        .upsert_local_standard_peer(label, addr, node_did, graphql, agent_home)
         .await
 }
 
@@ -1178,7 +1176,7 @@ mod tests {
             Some("http://127.0.0.1:9291/api/v0/graphql")
         );
         assert_eq!(
-            enrolled.local_agent_home.as_deref(),
+            enrolled.local_node_home.as_deref(),
             Some("/tmp/managed-agent")
         );
         assert!(!enrolled.pairing_ready);
@@ -1217,7 +1215,7 @@ mod tests {
             .peers
             .last_mut()
             .expect("managed bootstrap row was inserted");
-        managed.local_agent_home = Some("/tmp/managed-agent".to_string());
+        managed.local_node_home = Some("/tmp/managed-agent".to_string());
 
         let rotated = directory
             .upsert_enrollment_peer(
@@ -1244,7 +1242,7 @@ mod tests {
             Some("http://127.0.0.1:9291/api/v0/graphql")
         );
         assert_eq!(
-            rotated.local_agent_home.as_deref(),
+            rotated.local_node_home.as_deref(),
             Some("/tmp/managed-agent")
         );
         assert_eq!(load_peer_records(&path).await.unwrap(), vec![rotated]);

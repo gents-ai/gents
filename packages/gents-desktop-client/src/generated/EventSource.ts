@@ -7,7 +7,7 @@ import type { WorkspaceAuthority } from "./WorkspaceAuthority.js";
  * state, concurrency, and delivery observations. The existing event engine owns
  * group state independently for each typed trigger/callback consumer.
  */
-export type EventSource = { agent_did: string, event_source_id: string, display_name?: string | null, source_collection: string,
+export type EventSource = { node_did: string, event_source_id: string, display_name?: string | null, source_collection: string,
 /**
  * Absent/null means created, never all events. Explicit values use the
  * existing event engine vocabulary and are validated before installation.

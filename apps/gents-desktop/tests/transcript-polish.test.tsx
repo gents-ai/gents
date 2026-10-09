@@ -55,8 +55,8 @@ const edit = tool({
 function session(overrides: Partial<DesktopSessionSnapshot>): DesktopSessionSnapshot {
   return {
     sessionId: "session-1",
-    agentDid: "did:test:agent",
-    behaviorId: "behavior-default",
+    nodeDid: "did:test:node",
+    agentId: "agent-default",
     title: "Session",
     previewText: null,
     status: "processing",

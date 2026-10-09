@@ -55,12 +55,12 @@ describe("sending with a chat folder", () => {
     const sendChatMessage = vi.fn(async () => ({
       sessionId: "s9",
       requestId: "r1",
-      agentDid: "agent",
-      behaviorId: "coding",
+      nodeDid: "agent",
+      agentId: "coding",
     }));
     const stores = shellStores({
-      deployments: [{ agentDid: "agent", sessions: [], mailboxItems: [] }],
-      selection: { agentDid: "agent" },
+      deployments: [{ nodeDid: "agent", sessions: [], mailboxItems: [] }],
+      selection: { nodeDid: "agent" },
     });
     const actions = createChatActions({
       api: { sendChatMessage } as unknown as DesktopApiAdapter,

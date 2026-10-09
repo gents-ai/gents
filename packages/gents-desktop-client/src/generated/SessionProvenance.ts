@@ -8,7 +8,7 @@ import type { SessionFork } from "./SessionFork.js";
  */
 export type SessionProvenance = {
 /**
- * Task invoked to create this session, scoped to the session's agent_did.
+ * Task invoked to create this session, scoped to the session's node_did.
  */
 task_id?: string | null,
 /**

@@ -53,7 +53,7 @@ pub async fn desktop_peer_enroll_status(
         .await
         .map_err(BridgeError::classify_transport_error)?;
     let server_label = status
-        .get("agent_name")
+        .get("node_name")
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
         .filter(|label| !label.is_empty())
@@ -164,7 +164,7 @@ pub async fn desktop_network_status(
                 peer_id: record.peer_id,
                 label: record.label,
                 addr: record.addr,
-                agent_did: record.agent_did,
+                node_did: record.node_did,
                 source: record.source,
             })
             .collect(),

@@ -19,8 +19,8 @@ vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => view }));
 const status = {
   state: "running",
   autoStart: true,
-  agentName: "Workshop Agent",
-  agentDid: null,
+  nodeName: "Workshop Node",
+  nodeDid: null,
   graphql: "http://127.0.0.1:9191/api",
   effectiveToolCeiling: "readwrite",
   effectiveToolRoot: "/Users/test",
@@ -102,7 +102,7 @@ describe("managed server tray control ownership", () => {
     await vi.waitFor(() => expect(view.show).toHaveBeenCalledOnce());
     expect(view.setFocus).toHaveBeenCalledOnce();
     expect(toastMocks.error).toHaveBeenCalledExactlyOnceWith(
-      "Agent menu command failed: service busy",
+      "Node menu command failed: service busy",
     );
   });
 

@@ -53,7 +53,7 @@ const NO_FACTS: SessionFacts = {
 export const IDLE_LOAD: SessionLoadState = {
   phase: "idle",
   sessionId: null,
-  agentDid: null,
+  nodeDid: null,
   found: null,
   error: null,
 };
@@ -70,13 +70,13 @@ export function createSessionStore(session: DesktopSessionSnapshot | null = null
 
 /** The held read when it is the selected session's: a read for the previous
     selection can still be held while the next one loads. */
-export function heldFor<S extends { sessionId: string; agentDid?: string | null }>(
+export function heldFor<S extends { sessionId: string; nodeDid?: string | null }>(
   held: S | null,
   sessionId: string | null,
-  agentDid: string | null,
+  nodeDid: string | null,
 ): S | null {
   return held?.sessionId === sessionId &&
-    (!agentDid || !held.agentDid || held.agentDid === agentDid)
+    (!nodeDid || !held.nodeDid || held.nodeDid === nodeDid)
     ? held
     : null;
 }
@@ -186,8 +186,8 @@ export function holdsRequest(
 export type SessionHeader = Pick<
   DesktopSessionSnapshot,
   | "sessionId"
-  | "agentDid"
-  | "behaviorId"
+  | "nodeDid"
+  | "agentId"
   | "turnState"
   | "latestRequestId"
   | "pendingTurn"
@@ -200,8 +200,8 @@ export function headerOf(session: DesktopSessionSnapshot | null): SessionHeader 
   if (!session) return null;
   return {
     sessionId: session.sessionId,
-    agentDid: session.agentDid,
-    behaviorId: session.behaviorId,
+    nodeDid: session.nodeDid,
+    agentId: session.agentId,
     turnState: session.turnState,
     latestRequestId: session.latestRequestId,
     pendingTurn: session.pendingTurn,

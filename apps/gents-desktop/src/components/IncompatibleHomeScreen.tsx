@@ -9,7 +9,7 @@ type IncompatibleHomeScreenProps = {
 };
 
 const SCOPE_LABEL = {
-  runtime: "Local agent data",
+  runtime: "Local node data",
   client: "Desktop app data",
 } as const;
 
@@ -140,7 +140,7 @@ export function IncompatibleHomeScreen({ home, error }: IncompatibleHomeScreenPr
                 className="text-sm text-muted-foreground"
                 data-testid="incompatible-home-retained"
               >
-                Other agent homes inside it stay where they are:{" "}
+                Other node homes inside it stay where they are:{" "}
                 {report.retainedPaths.map((path) => (
                   <code className="block break-all" key={path}>
                     {path}
@@ -169,13 +169,12 @@ export function IncompatibleHomeScreen({ home, error }: IncompatibleHomeScreenPr
                 {clientStateOnlyWithRuntime ? (
                   <p data-testid="incompatible-home-delete-client-note">
                     This also deletes this app&apos;s own identity key and its pairings
-                    with remote agents. Back up instead to keep them.
+                    with remote nodes. Back up instead to keep them.
                   </p>
                 ) : null}
                 {removesInstalledContent ? (
                   <p data-testid="incompatible-home-delete-installed-note">
-                    This also deletes the packs and plugins you installed for this
-                    agent.
+                    This also deletes the packs and plugins you installed for this node.
                   </p>
                 ) : null}
                 {pathList(report.deletePaths, "incompatible-home-delete-paths")}

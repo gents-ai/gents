@@ -1,6 +1,6 @@
 import type {
-  BehaviorReadinessUnknownReasonView,
-  BehaviorUnavailableReasonView,
+  AgentReadinessUnknownReasonView,
+  AgentUnavailableReasonView,
   DeploymentView,
   SyncHealthView,
 } from "./types.js";
@@ -32,31 +32,31 @@ export type OperationalStatus = {
   animated: boolean;
 };
 
-export type BehaviorReadinessDecision =
-  | { kind: "ready"; behaviorId: string; behaviorLabel: string }
+export type NodeReadinessDecision =
+  | { kind: "ready"; agentId: string; agentLabel: string }
   | {
       kind: "unavailable";
-      behaviorId: string;
-      behaviorLabel: string;
-      reason: BehaviorUnavailableReasonView;
+      agentId: string;
+      agentLabel: string;
+      reason: AgentUnavailableReasonView;
     }
   | {
       kind: "unknown";
-      behaviorId: string | null;
-      reason: BehaviorReadinessUnknownReasonView;
+      agentId: string | null;
+      reason: AgentReadinessUnknownReasonView;
     };
 
 export type DeploymentOperationalState = {
   transport: OperationalStatus;
   route: OperationalStatus;
   sync: OperationalStatus;
-  behavior: OperationalStatus;
+  agent: OperationalStatus;
   reconcile: OperationalStatus;
   /** First status that prevents a chat request from being admitted. */
   admissionBlocker: OperationalStatus | null;
   /** Highest-priority fleet/header summary, including non-blocking reconcile. */
   summary: OperationalStatus;
-  behaviorReadiness: BehaviorReadinessDecision;
+  nodeReadiness: NodeReadinessDecision;
 };
 
 /* Readiness reads a deployment's own settings, not the sessions and mailbox
@@ -78,113 +78,96 @@ export function isLocalRuntimeSource(source?: string | null): boolean {
   return source === "local-standard";
 }
 
-function behaviorLabel(deployment: DeploymentSettings, behaviorId: string): string {
+function agentLabel(deployment: DeploymentSettings, agentId: string): string {
   return (
-    deployment.behaviors
-      .find((behavior) => behavior.behaviorId === behaviorId)
-      ?.displayName?.trim() || behaviorId
+    deployment.agents
+      .find((agent) => agent.agentId === agentId)
+      ?.displayName?.trim() || agentId
   );
 }
 
-function fallbackBehaviorId(deployment: DeploymentSettings): string | null {
-  const principalDefault = deployment.agentPrincipal.defaultBehaviorId?.trim();
+function fallbackAgentId(deployment: DeploymentSettings): string | null {
+  const nodeDefault = deployment.node.defaultAgentId?.trim();
   if (
-    principalDefault &&
-    deployment.behaviors.some(
-      (behavior) => behavior.behaviorId === principalDefault,
-    )
+    nodeDefault &&
+    deployment.agents.some((agent) => agent.agentId === nodeDefault)
   ) {
-    return principalDefault;
+    return nodeDefault;
   }
-  const markedDefault = deployment.behaviors.find(
-    (behavior) => behavior.isDefault,
-  );
+  const markedDefault = deployment.agents.find((agent) => agent.isDefault);
   if (markedDefault) {
-    return markedDefault.behaviorId;
+    return markedDefault.agentId;
   }
-  const conventional = `${deployment.agentDid}:default`;
-  if (
-    deployment.behaviors.some(
-      (behavior) => behavior.behaviorId === conventional,
-    )
-  ) {
+  const conventional = `${deployment.nodeDid}:default`;
+  if (deployment.agents.some((agent) => agent.agentId === conventional)) {
     return conventional;
   }
-  return (
-    deployment.behaviors.find((behavior) => behavior.enabled)?.behaviorId ??
-    null
-  );
+  return deployment.agents.find((agent) => agent.enabled)?.agentId ?? null;
 }
 
-/** Keep an explicit selection only while its database behavior row exists. */
-export function selectedBehaviorIdForDeployment(
+/** Keep an explicit selection only while its database agent row exists. */
+export function selectedAgentIdForDeployment(
   deployment: DeploymentSettings | null,
-  selectedBehaviorId: string | null,
+  selectedAgentId: string | null,
 ): string | null {
   if (!deployment) return null;
   if (
-    selectedBehaviorId !== null &&
-    deployment.behaviors.some(
-      (behavior) => behavior.behaviorId === selectedBehaviorId,
-    )
+    selectedAgentId !== null &&
+    deployment.agents.some((agent) => agent.agentId === selectedAgentId)
   ) {
-    return selectedBehaviorId;
+    return selectedAgentId;
   }
-  return fallbackBehaviorId(deployment);
+  return fallbackAgentId(deployment);
 }
 
 /** Select one runtime-authored readiness verdict for admission and display. */
-export function selectedBehaviorReadinessDecision(
+export function selectedNodeReadinessDecision(
   deployment: DeploymentSettings | null,
-  selectedBehaviorId: string | null,
-): BehaviorReadinessDecision {
+  selectedAgentId: string | null,
+): NodeReadinessDecision {
   if (!deployment) {
-    return { kind: "unknown", behaviorId: null, reason: "readiness_missing" };
+    return { kind: "unknown", agentId: null, reason: "readiness_missing" };
   }
 
-  const readiness = deployment.behaviorReadiness;
-  const behaviorId = selectedBehaviorId ?? fallbackBehaviorId(deployment);
-  const replicaLag =
-    readiness.source.state === "unknown" &&
-    readiness.source.reason === "readiness_stale" &&
-    !isLocalRuntimeSource(deployment.source);
-  if (readiness.source.state === "unknown" && !replicaLag) {
-    return { kind: "unknown", behaviorId, reason: readiness.source.reason };
+  const readiness = deployment.nodeReadiness;
+  const agentId = selectedAgentId ?? fallbackAgentId(deployment);
+  if (readiness.source.state === "unknown") {
+    return { kind: "unknown", agentId, reason: readiness.source.reason };
   }
-  if (!behaviorId) {
+  if (!agentId) {
     return {
       kind: "unknown",
-      behaviorId: null,
-      reason: "behavior_not_assigned",
+      agentId: null,
+      reason: "agent_not_assigned",
     };
   }
 
-  const readinessStatus = readiness.behaviors.find(
-    (candidate) => candidate.behaviorId === behaviorId,
+  const readinessStatus = readiness.agents.find(
+    (candidate) => candidate.agentId === agentId,
   );
   if (!readinessStatus) {
-    return { kind: "unknown", behaviorId, reason: "behavior_not_assigned" };
+    return { kind: "unknown", agentId, reason: "agent_not_assigned" };
   }
   if (readinessStatus.state === "ready") {
     return {
       kind: "ready",
-      behaviorId,
-      behaviorLabel: behaviorLabel(deployment, behaviorId),
+      agentId,
+      agentLabel: agentLabel(deployment, agentId),
     };
   }
   if (readinessStatus.state === "unknown") {
-    return { kind: "unknown", behaviorId, reason: readinessStatus.reason };
+    return { kind: "unknown", agentId, reason: readinessStatus.reason };
   }
   return {
     kind: "unavailable",
-    behaviorId,
-    behaviorLabel: behaviorLabel(deployment, behaviorId),
+    agentId,
+    agentLabel: agentLabel(deployment, agentId),
     reason: readinessStatus.reason,
   };
 }
 
-export function behaviorReadinessIsInferenceFailure(
-  decision: BehaviorReadinessDecision,
+export function nodeReadinessIsInferenceFailure(
+  decision: NodeReadinessDecision,
 ): boolean {
   if (decision.kind !== "unavailable") return false;
   return (
@@ -196,14 +179,14 @@ export function behaviorReadinessIsInferenceFailure(
   );
 }
 
-export function behaviorReadinessCanConfigureInference(
-  decision: BehaviorReadinessDecision,
+export function nodeReadinessCanConfigureInference(
+  decision: NodeReadinessDecision,
 ): boolean {
-  return behaviorReadinessIsInferenceFailure(decision);
+  return nodeReadinessIsInferenceFailure(decision);
 }
 
-export function behaviorReadinessDetail(
-  decision: Exclude<BehaviorReadinessDecision, { kind: "ready" }>,
+export function nodeReadinessDetail(
+  decision: Exclude<NodeReadinessDecision, { kind: "ready" }>,
 ): string {
   if (decision.kind === "unknown") {
     switch (decision.reason) {
@@ -213,63 +196,59 @@ export function behaviorReadinessDetail(
         return "The agent reported invalid readiness data";
       case "readiness_version_unsupported":
         return "The agent uses an incompatible readiness format";
-      case "readiness_stale":
-        return "The latest runtime readiness observation is older than expected";
       case "process_not_ready":
-        return "The agent runtime is still starting";
+        return "The node runtime is still starting";
       case "router_generation_stale":
         return "The agent is still applying its latest configuration";
-      case "behavior_not_assigned":
-        return "Behavior is not assigned to this runtime";
+      case "agent_not_assigned":
+        return "Agent is not assigned to this runtime";
     }
   }
 
   switch (decision.reason) {
-    case "behavior_disabled":
-      return `Behavior “${decision.behaviorLabel}” is disabled`;
+    case "agent_disabled":
+      return `Agent “${decision.agentLabel}” is disabled`;
     case "runtime_configuration_invalid":
-      return `Behavior “${decision.behaviorLabel}” has an invalid runtime configuration`;
+      return `Agent “${decision.agentLabel}” has an invalid runtime configuration`;
     case "backend_not_configured":
-      return `Behavior “${decision.behaviorLabel}” has no inference backend configured`;
+      return `Agent “${decision.agentLabel}” has no inference backend configured`;
     case "backend_disabled":
-      return `Behavior “${decision.behaviorLabel}” has a disabled inference backend`;
+      return `Agent “${decision.agentLabel}” has a disabled inference backend`;
     case "backend_temporarily_unavailable":
-      return `Inference backend for “${decision.behaviorLabel}” is temporarily unavailable`;
+      return `Inference backend for “${decision.agentLabel}” is temporarily unavailable`;
     case "credentials_required":
-      return `Behavior “${decision.behaviorLabel}” requires inference credentials`;
+      return `Agent “${decision.agentLabel}” requires inference credentials`;
     case "inference_profile_invalid":
-      return `Behavior “${decision.behaviorLabel}” has an invalid inference profile`;
+      return `Agent “${decision.agentLabel}” has an invalid inference profile`;
     case "tool_configuration_invalid":
-      return `Behavior “${decision.behaviorLabel}” has an invalid tool configuration`;
+      return `Agent “${decision.agentLabel}” has an invalid tool configuration`;
     case "tool_surface_unavailable":
-      return `Behavior “${decision.behaviorLabel}” cannot start its tool surface`;
+      return `Agent “${decision.agentLabel}” cannot start its tool surface`;
     case "executor_start_failed":
-      return `Behavior “${decision.behaviorLabel}” could not start`;
+      return `Agent “${decision.agentLabel}” could not start`;
   }
 }
 
-export function projectBehaviorOperationalStatus(
-  decision: BehaviorReadinessDecision,
+export function projectAgentOperationalStatus(
+  decision: NodeReadinessDecision,
   localRuntime: boolean,
 ): OperationalStatus {
   if (decision.kind === "ready") {
     return status({
       kind: "ready",
       layer: "runtime",
-      reason: "behavior_ready",
+      reason: "agent_ready",
       label: "Agent is ready",
       shortLabel: "Online",
-      detail: `Behavior “${decision.behaviorLabel}” is ready to accept work.`,
+      detail: `Agent “${decision.agentLabel}” is ready to accept work.`,
     });
   }
 
-  const inferenceFailure = behaviorReadinessIsInferenceFailure(decision);
+  const inferenceFailure = nodeReadinessIsInferenceFailure(decision);
   const incompatible =
     decision.kind === "unknown" &&
     (decision.reason === "readiness_malformed" ||
       decision.reason === "readiness_version_unsupported");
-  const stale =
-    decision.kind === "unknown" && decision.reason === "readiness_stale";
   return status({
     kind: decision.kind === "unknown" && !incompatible ? "waiting" : "blocked",
     layer: inferenceFailure ? "inference" : "runtime",
@@ -279,20 +258,16 @@ export function projectBehaviorOperationalStatus(
       : incompatible
         ? "Runtime is incompatible"
         : decision.kind === "unavailable"
-          ? "This behavior is unavailable"
-          : stale
-            ? "Runtime is not reporting readiness"
-            : "Waiting for the agent runtime",
+          ? "This agent is unavailable"
+          : "Waiting for the node runtime",
     shortLabel: inferenceFailure
       ? "Inference unavailable"
       : incompatible
         ? "Runtime incompatible"
         : decision.kind === "unavailable"
           ? "Unavailable"
-          : stale
-            ? "Runtime unavailable"
-            : "Waiting for runtime",
-    detail: behaviorReadinessDetail(decision),
+          : "Waiting for runtime",
+    detail: nodeReadinessDetail(decision),
     action: inferenceFailure && localRuntime ? "configureInference" : null,
   });
 }
@@ -357,7 +332,7 @@ export function projectRouteOperationalStatus(
 
 export function projectDeploymentOperationalState(
   deployment: DeploymentSettings,
-  selectedBehaviorId: string | null = null,
+  selectedAgentId: string | null = null,
   syncHealth: SyncHealthView | null = null,
 ): DeploymentOperationalState {
   const transport = projectDeploymentTransportStatus(deployment.dialSucceeded);
@@ -371,14 +346,11 @@ export function projectDeploymentOperationalState(
   const localRuntime = isLocalRuntimeSource(deployment.source);
   const sync = projectSyncOperationalStatus(syncHealth);
 
-  const behaviorReadiness = selectedBehaviorReadinessDecision(
+  const nodeReadiness = selectedNodeReadinessDecision(
     deployment,
-    selectedBehaviorId,
+    selectedAgentId,
   );
-  const behavior = projectBehaviorOperationalStatus(
-    behaviorReadiness,
-    localRuntime,
-  );
+  const agent = projectAgentOperationalStatus(nodeReadiness, localRuntime);
   const reconcilePhase = deployment.runtime?.reconcilePhase ?? "unknown";
   const reconcile =
     reconcilePhase !== "idle" && reconcilePhase !== "unknown"
@@ -399,13 +371,13 @@ export function projectDeploymentOperationalState(
           detail: "No runtime configuration reconciliation is pending.",
         });
 
-  const behaviorBlocker = behavior.kind === "ready" ? null : behavior;
+  const agentBlocker = agent.kind === "ready" ? null : agent;
   const admissionBlocker =
     transport.kind !== "ready"
       ? transport
       : route.kind !== "ready"
         ? route
-        : behaviorBlocker;
+        : agentBlocker;
 
   const error =
     deployment.lastError ?? deployment.runtime?.lastReconcileError ?? null;
@@ -436,11 +408,11 @@ export function projectDeploymentOperationalState(
     transport,
     route,
     sync,
-    behavior,
+    agent,
     reconcile,
     admissionBlocker,
     summary,
-    behaviorReadiness,
+    nodeReadiness,
   };
 }
 

@@ -3,8 +3,8 @@ import { Inbox, Plus, ScrollText, Waypoints } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@gents/ui/components/tooltip";
 import { cn } from "@gents/ui/lib/utils";
 import { href, type Route } from "@/lib/router";
-import { AgentAvatar } from "@/screens/AgentAvatar";
-import { AgentHoverCard } from "@/screens/HoverCards";
+import { NodeAvatar } from "@/screens/AgentAvatar";
+import { NodeHoverCard } from "@/screens/HoverCards";
 import { FlyoutOpenContext } from "./RailFlyout";
 import { SyncHealth } from "./SyncHealth";
 import {
@@ -60,7 +60,7 @@ function RailItem({
 function RailNode({ route }: { route: Route }) {
   const node = useSelectedNode();
   const online = useOnline();
-  const agentName = node?.agentPrincipal.displayName ?? null;
+  const nodeName = node?.node.displayName ?? null;
   if (!node)
     return (
       <a
@@ -73,17 +73,17 @@ function RailNode({ route }: { route: Route }) {
       </a>
     );
   return (
-    <AgentHoverCard deployment={node}>
+    <NodeHoverCard deployment={node}>
       <a
-        href={href({ name: "agent", agentDid: node.agentDid, section: "agent" })}
-        aria-label={`${agentName ?? "Agent"} configuration`}
+        href={href({ name: "agent", nodeDid: node.nodeDid, section: "agent" })}
+        aria-label={`${nodeName ?? "Node"} configuration`}
         aria-current={route.name === "agent" ? "page" : undefined}
         className={cn(
           "relative mb-2 block size-7 rounded-full ring-1 ring-border ring-offset-2 ring-offset-background transition-shadow hover:ring-muted-foreground",
           route.name === "agent" && "ring-2 ring-ink",
         )}
       >
-        <AgentAvatar name={agentName ?? "Agent"} className="size-7" />
+        <NodeAvatar name={nodeName ?? "Node"} className="size-7" />
         <span
           className={cn(
             "absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full border-2 border-background",
@@ -92,7 +92,7 @@ function RailNode({ route }: { route: Route }) {
           aria-hidden="true"
         />
       </a>
-    </AgentHoverCard>
+    </NodeHoverCard>
   );
 }
 
@@ -160,7 +160,7 @@ export function Rail({ route, settings }: { route: Route; settings: ReactNode })
         <RailSyncDot />
         <div className="h-px w-8 bg-border" />
         <RailItem
-          label="Agents"
+          label="Nodes"
           to={{ name: "nodes" }}
           active={route.name === "nodes" || route.name === "agents"}
         >

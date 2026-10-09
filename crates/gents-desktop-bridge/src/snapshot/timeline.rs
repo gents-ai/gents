@@ -380,7 +380,7 @@ mod tests {
         assert_eq!(rendered.await_mode.as_deref(), Some("background"));
         assert_eq!(rendered.status_kind, "running");
         match &rendered.presentation {
-            crate::types::ToolPresentationView::Subagent {
+            crate::types::ToolPresentationView::Agent {
                 action,
                 name,
                 session_id,
@@ -392,7 +392,7 @@ mod tests {
                 assert_eq!(session_id.as_deref(), Some("session-child"));
                 assert_eq!(description.as_deref(), Some("trace the request flow"));
             }
-            other => panic!("agent_new must present as a subagent row: {other:?}"),
+            other => panic!("agent_new must present as an agent row: {other:?}"),
         }
 
         let unresolved = render_tool_call(ToolCallView {
@@ -427,9 +427,9 @@ mod tests {
                 ..user_message(
                     "notification",
                     2,
-                    r#"<subagent-notification child_request_id="child-1">
-<summary>classification complete</summary>
-</subagent-notification>"#,
+                    r#"<tool-completion tool_call_id="child-1" tool_name="agent_message" status="completed">
+  <result>classification complete</result>
+</tool-completion>"#,
                 )
             },
             MessageView {

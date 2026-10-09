@@ -1,10 +1,10 @@
-/* Behaviors: the node's list, each row's controls, and the default it
-   runs; a behavior opens in its editor. */
+/* Agents: the node's list, each row's controls, and the default it
+   runs; a agent opens in its editor. */
 import type { NodeView } from "../../../hooks/fleetStore";
 import { setEnabled } from "./enabled";
 import { useState } from "react";
 import { ArrowLeft, MoreHorizontal } from "lucide-react";
-import type { BehaviorView } from "@source-inc/gents-desktop-client";
+import type { AgentView } from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
 import { Switch } from "@gents/ui/components/switch";
 import {
@@ -16,61 +16,55 @@ import {
 } from "@gents/ui/components/dropdown-menu";
 import { toast } from "sonner";
 import { href, navigate } from "@/lib/router";
-import { behaviorReadiness } from "@/lib/behavior-readiness";
+import { agentReadiness } from "@/lib/agent-readiness";
 import { shortAccess } from "../behavior";
-import { BehaviorAvatar } from "../parts";
+import { AgentInitials } from "../parts";
 import { ListDetail } from "./ListDetail";
 import { toastFailure } from "@/lib/failure";
 import { agentOf } from "@/lib/agents";
 import { useApp } from "@/app/AppContext";
 import type { ShellActions } from "@/../hooks/shellActions";
-import { listNames, newBehaviorView } from "./behaviorDraft";
+import { listNames, newAgentView } from "./behaviorDraft";
 import { BehaviorEditor } from "./BehaviorEditor";
 
-/* one-click changes that a behavior's row and its header share */
+/* one-click changes that a agent's row and its header share */
 
-/* One apply enables the behavior and names it the default: publication
-   rejects a disabled default, and it decides whether the behavior can run. */
+/* One apply enables the agent and names it the default: publication
+   rejects a disabled default, and it decides whether the agent can run. */
 export async function saveDefault(
   changeConfig: ShellActions["changeConfig"],
   deployment: NodeView,
-  behaviorId: string,
+  agentId: string,
 ) {
-  await changeConfig("setDefaultBehavior", {
-    agentDid: deployment.agentDid,
-    behaviorId,
+  await changeConfig("setDefaultAgent", {
+    nodeDid: deployment.nodeDid,
+    agentId,
   });
 }
 
 export const DEFAULT_STAYS_ENABLED =
-  "The default behavior stays enabled. Choose another default before turning it off.";
+  "The default agent stays enabled. Choose another default before turning it off.";
 
-/* the end of a behavior's row: its enable switch and a menu */
+/* the end of a agent's row: its enable switch and a menu */
 function RowControls({
   deployment,
-  behavior,
+  agent,
   inEditor = false,
 }: {
   deployment: NodeView;
-  behavior: BehaviorView;
-  /* at the top of the behavior's page: the switch says its state, and there is no Edit */
+  agent: AgentView;
+  /* at the top of the agent's page: the switch says its state, and there is no Edit */
   inEditor?: boolean;
 }) {
   const { changeConfig } = useApp().actions;
   const [busy, setBusy] = useState(false);
   /* the current default is never turned off in place */
-  const keptOn = behavior.enabled && behavior.isDefault;
+  const keptOn = agent.enabled && agent.isDefault;
   const toggle = async (next: boolean) => {
     setBusy(true);
     try {
-      await setEnabled(
-        changeConfig,
-        deployment.agentDid,
-        "AgentBehavior",
-        behavior.behaviorId,
-        next,
-      );
-      toast(`${behavior.displayName} is ${next ? "enabled" : "disabled"}`);
+      await setEnabled(changeConfig, deployment.nodeDid, "Agent", agent.agentId, next);
+      toast(`${agent.displayName} is ${next ? "enabled" : "disabled"}`);
     } catch (e) {
       toastFailure(`turn it ${next ? "on" : "off"}`, e);
     } finally {
@@ -79,30 +73,30 @@ function RowControls({
   };
   const makeDefault = async () => {
     try {
-      await saveDefault(changeConfig, deployment, behavior.behaviorId);
+      await saveDefault(changeConfig, deployment, agent.agentId);
       toast(
-        behavior.enabled
-          ? "Default behavior set"
-          : `${behavior.displayName} is enabled and is now the default`,
+        agent.enabled
+          ? "Default agent set"
+          : `${agent.displayName} is enabled and is now the default`,
       );
     } catch (e) {
-      toastFailure("set the default behavior", e);
+      toastFailure("set the default agent", e);
     }
   };
   return (
     <div
       className="flex items-center gap-1"
-      data-testid={inEditor ? "behavior-status" : "behavior-row-controls"}
+      data-testid={inEditor ? "agent-status" : "agent-row-controls"}
     >
       <span
         className="flex items-center gap-2.5 px-1 text-sm"
         title={keptOn ? DEFAULT_STAYS_ENABLED : undefined}
       >
-        {inEditor && (behavior.enabled ? "Enabled" : "Disabled")}
+        {inEditor && (agent.enabled ? "Enabled" : "Disabled")}
         <Switch
-          aria-label={`${behavior.displayName} is ${behavior.enabled ? "enabled" : "disabled"}`}
+          aria-label={`${agent.displayName} is ${agent.enabled ? "enabled" : "disabled"}`}
           aria-description={keptOn ? DEFAULT_STAYS_ENABLED : undefined}
-          checked={behavior.enabled}
+          checked={agent.enabled}
           disabled={busy || keptOn}
           onCheckedChange={(v) => void toggle(v)}
         />
@@ -113,7 +107,7 @@ function RowControls({
             <Button
               variant="quiet"
               size="icon-sm"
-              aria-label={`More for ${behavior.displayName}`}
+              aria-label={`More for ${agent.displayName}`}
             />
           }
         >
@@ -123,15 +117,15 @@ function RowControls({
           <DropdownMenuGroup>
             <DropdownMenuItem
               className="whitespace-nowrap"
-              disabled={behavior.isDefault}
+              disabled={agent.isDefault}
               onClick={() => void makeDefault()}
             >
-              {behavior.isDefault ? (
-                "The default behavior"
+              {agent.isDefault ? (
+                "The default agent"
               ) : (
                 <span className="flex flex-col">
                   <span>Make default</span>
-                  {!behavior.enabled && (
+                  {!agent.enabled && (
                     <span className="text-xs text-muted-foreground">
                       Also enables it
                     </span>
@@ -146,9 +140,9 @@ function RowControls({
                   <a
                     href={href({
                       name: "agent",
-                      agentDid: deployment.agentDid,
-                      section: "behaviors",
-                      item: behavior.behaviorId,
+                      nodeDid: deployment.nodeDid,
+                      section: "agents",
+                      item: agent.agentId,
                     })}
                   />
                 }
@@ -163,41 +157,39 @@ function RowControls({
   );
 }
 
-export function BehaviorsPanel({
+export function AgentsPanel({
   deployment,
-  behaviorId,
+  agentId,
 }: {
   deployment: NodeView;
-  behaviorId?: string;
+  agentId?: string;
 }) {
   const base = {
     name: "agent" as const,
-    agentDid: deployment.agentDid,
-    section: "behaviors",
+    nodeDid: deployment.nodeDid,
+    section: "agents",
   };
-  /* New behavior: a draft page, nothing saved until Save */
-  const [draft, setDraft] = useState<BehaviorView | null>(null);
-  const inUse = new Set(deployment.behaviors.map((b) => b.contextId));
+  /* New agent: a draft page, nothing saved until Save */
+  const [draft, setDraft] = useState<AgentView | null>(null);
+  const inUse = new Set(deployment.agents.map((b) => b.contextId));
   const unusedContexts = deployment.contexts.filter(
     (c) => !inUse.has(c.context_id),
   ).length;
   /* who uses each context, so a row can say when its instructions are shared */
-  const byContext = new Map<string, BehaviorView[]>();
-  for (const b of deployment.behaviors) {
+  const byContext = new Map<string, AgentView[]>();
+  for (const b of deployment.agents) {
     if (!b.contextId) continue;
     const list = byContext.get(b.contextId);
     if (list) list.push(b);
     else byContext.set(b.contextId, [b]);
   }
   const contextIds = new Set(deployment.contexts.map((c) => c.context_id));
-  const line = (b: BehaviorView) => {
-    const readiness = behaviorReadiness(deployment, b.behaviorId);
+  const line = (b: AgentView) => {
+    const readiness = agentReadiness(deployment, b.agentId);
     if (!readiness.ready) return `unavailable: ${readiness.reason}`;
-    const e = deployment.behaviorEnvironments.find(
-      (x) => x.behaviorId === b.behaviorId,
-    );
+    const e = deployment.agentEnvironments.find((x) => x.agentId === b.agentId);
     const sharing = (b.contextId ? (byContext.get(b.contextId) ?? []) : []).filter(
-      (x) => x.behaviorId !== b.behaviorId,
+      (x) => x.agentId !== b.agentId,
     );
     return [
       e?.modelName ?? "no backend",
@@ -218,13 +210,13 @@ export function BehaviorsPanel({
             onClick={() => setDraft(null)}
             className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
           >
-            <ArrowLeft className="size-3.5" /> Behaviors
+            <ArrowLeft className="size-3.5" /> Agents
           </button>
         </div>
         <BehaviorEditor
-          key={draft.behaviorId}
+          key={draft.agentId}
           deployment={deployment}
-          behavior={draft}
+          agent={draft}
           draft={{
             onSaved: (id) => {
               setDraft(null);
@@ -239,50 +231,44 @@ export function BehaviorsPanel({
     <>
       <ListDetail
         base={base}
-        item={behaviorId}
+        item={agentId}
         toolbar={(id) => {
           const b = agentOf(deployment, id);
-          return b ? (
-            <RowControls deployment={deployment} behavior={b} inEditor />
-          ) : null;
+          return b ? <RowControls deployment={deployment} agent={b} inEditor /> : null;
         }}
         /* the default is pinned first and named beside its title */
-        rows={[...deployment.behaviors]
+        rows={[...deployment.agents]
           .sort((a, b) => Number(b.isDefault) - Number(a.isDefault))
           .map((b) => ({
             tags: b.tags,
-            id: b.behaviorId,
+            id: b.agentId,
             title: b.displayName,
             titleNote: b.isDefault ? "Default" : undefined,
             meta: line(b),
             metaMono: true,
-            trailing: <RowControls deployment={deployment} behavior={b} />,
+            trailing: <RowControls deployment={deployment} agent={b} />,
             icon: (
-              <BehaviorAvatar
+              <AgentInitials
                 name={b.displayName}
                 className="size-6 border-0 bg-transparent text-[10px]"
               />
             ),
           }))}
-        createLabel="New behavior"
-        empty="No behaviors yet. A behavior is what an agent is told, what it may use, and what runs it."
-        onCreate={() => setDraft(newBehaviorView(deployment))}
+        createLabel="New agent"
+        empty="No agents yet. A agent is what an agent is told, what it may use, and what runs it."
+        onCreate={() => setDraft(newAgentView(deployment))}
         detail={(id) => {
-          const behavior = agentOf(deployment, id)!;
+          const agent = agentOf(deployment, id)!;
           return (
-            <BehaviorEditor
-              key={behavior.behaviorId}
-              deployment={deployment}
-              behavior={behavior}
-            />
+            <BehaviorEditor key={agent.agentId} deployment={deployment} agent={agent} />
           );
         }}
       />
-      {!behaviorId && unusedContexts > 0 && (
+      {!agentId && unusedContexts > 0 && (
         <p data-testid="unused-contexts" className="mt-3 text-sm text-muted-foreground">
           {unusedContexts === 1
-            ? "1 context isn’t used by any behavior"
-            : `${unusedContexts} contexts aren’t used by any behavior`}{" "}
+            ? "1 context isn’t used by any agent"
+            : `${unusedContexts} contexts aren’t used by any agent`}{" "}
           ·{" "}
           <a
             href={href({ ...base, section: "contexts" })}

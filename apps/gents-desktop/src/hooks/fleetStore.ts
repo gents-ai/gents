@@ -7,18 +7,15 @@ import type {
   SessionSummary,
 } from "@source-inc/gents-desktop-client";
 
-/* Identity in the bridge's current words. The node and agent rename (gents
-   #1799) changes these field names; the keys built here are what the rest
-   of the store and its selectors use. */
 export type NodeKey = string;
 export type SessionKey = string;
-export const nodeKeyOf = (node: { agentDid: string }): NodeKey => node.agentDid;
+export const nodeKeyOf = (node: { nodeDid: string }): NodeKey => node.nodeDid;
 export const sessionKeyOf = (session: {
-  agentDid: string;
+  nodeDid: string;
   sessionId: string;
   requesterDid: string | null;
 }): SessionKey =>
-  `${session.agentDid}\u0000${session.sessionId}\u0000${session.requesterDid ?? ""}`;
+  `${session.nodeDid}\u0000${session.sessionId}\u0000${session.requesterDid ?? ""}`;
 
 /** A node as screens draw it: what a deployment says about itself, without
     the sessions and mailbox items it lists. */
@@ -44,8 +41,8 @@ export type FleetState = {
 export type FleetStore = StoreApi<FleetState>;
 
 /** The node with this DID; null when the client cannot see it. */
-export const nodeOf = (fleet: FleetState, agentDid: string | null | undefined) =>
-  agentDid ? (fleet.nodes[nodeKeyOf({ agentDid })] ?? null) : null;
+export const nodeOf = (fleet: FleetState, nodeDid: string | null | undefined) =>
+  nodeDid ? (fleet.nodes[nodeKeyOf({ nodeDid })] ?? null) : null;
 
 /** The first node in the snapshot's order; null before there is one. */
 export const firstNode = (fleet: FleetState) => {
@@ -54,18 +51,18 @@ export const firstNode = (fleet: FleetState) => {
 };
 
 /** The node with this DID, or the first node while it is not listed. */
-export const nodeOrFirst = (fleet: FleetState, agentDid: string | null | undefined) =>
-  nodeOf(fleet, agentDid) ?? firstNode(fleet);
+export const nodeOrFirst = (fleet: FleetState, nodeDid: string | null | undefined) =>
+  nodeOf(fleet, nodeDid) ?? firstNode(fleet);
 
 /** A session as the node with this DID lists it. */
 export function listedSession(
   fleet: FleetState,
-  agentDid: string | null | undefined,
+  nodeDid: string | null | undefined,
   sessionId: string | null | undefined,
 ): SessionSummary | null {
-  if (!agentDid || !sessionId) return null;
+  if (!nodeDid || !sessionId) return null;
   return (
-    fleet.sessionsOf[nodeKeyOf({ agentDid })]?.find((s) => s.sessionId === sessionId) ??
+    fleet.sessionsOf[nodeKeyOf({ nodeDid })]?.find((s) => s.sessionId === sessionId) ??
     null
   );
 }

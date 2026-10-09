@@ -46,7 +46,7 @@ deletePaths: Array<string>,
  */
 retiredPaths: Array<string>,
 /**
- * Entries of the managed home left untouched: other agents' homes,
+ * Entries of the managed home left untouched: other nodes' homes,
  * backups, user files and anything outside the runtime's inventory.
  */
 retainedPaths: Array<string>, };

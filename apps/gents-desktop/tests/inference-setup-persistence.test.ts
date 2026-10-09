@@ -34,7 +34,7 @@ const discovery: InferenceDiscoveryResult = {
 };
 
 describe("inference setup persistence", () => {
-  it("adds a separate backend/profile without replacing existing config or binding behaviors", () => {
+  it("adds a separate backend/profile without replacing existing config or binding agents", () => {
     const deployment = structuredClone(fixtureDeployment);
     const before = structuredClone(deployment);
     const existing = deployment.inferenceBackends[0]!;
@@ -60,7 +60,7 @@ describe("inference setup persistence", () => {
         maxConcurrent: "8",
       },
     });
-    expect(plan.document.agent_behaviors).toBeUndefined();
+    expect(plan.document.agents).toBeUndefined();
     expect(deployment.inferenceBackends.map((b) => b.backendId)).not.toContain(
       plan.document.inference_backends![0]!.backend_id,
     );
@@ -114,7 +114,7 @@ describe("inference setup persistence", () => {
       const profile = plan.document.inference_profiles![0]!;
       expect(backend).toMatchObject({
         provider_kind: "ChatGptCodex",
-        auth: { kind: "principal_oauth" },
+        auth: { kind: "node_oauth" },
         enabled: true,
       });
       expect(profile).toMatchObject({
@@ -125,9 +125,8 @@ describe("inference setup persistence", () => {
         sampling_id: null,
       });
       expect(
-        plan.document.agent_behaviors?.find(
-          (row) => row.behavior_id === plan.defaultBehaviorId,
-        )?.inference_profile_id,
+        plan.document.agents?.find((row) => row.agent_id === plan.defaultAgentId)
+          ?.inference_profile_id,
       ).toBe(profile.profile_id);
       expect(plan.document.inference_sampling).toBeUndefined();
     },
@@ -174,7 +173,7 @@ describe("inference setup persistence", () => {
         backendId: "claude-2",
         providerKind: "ClaudeCliSubscription",
         endpoint: "claude-cli://subscription",
-        authKind: "principal_oauth",
+        authKind: "node_oauth",
         accountRef: "acct-2",
       },
     ];
@@ -203,12 +202,12 @@ describe("inference setup persistence", () => {
     expect(plan.document.inference_backends?.[0]?.backend_id).not.toBe("claude-2");
   });
 
-  it("plans backend, exact model defaults, and Setup behavior in one document", () => {
+  it("plans backend, exact model defaults, and Setup agent in one document", () => {
     const deployment = structuredClone(fixtureDeployment);
     deployment.inferenceBackends = [
       {
         ...deployment.inferenceBackends[0]!,
-        backendId: `${deployment.agentDid}:backend`,
+        backendId: `${deployment.nodeDid}:backend`,
         apiKeyConfigured: false,
         authKind: null,
         probeStatus: null,
@@ -217,10 +216,10 @@ describe("inference setup persistence", () => {
     deployment.inferenceProfiles = [
       {
         ...deployment.inferenceProfiles[0]!,
-        backend_id: `${deployment.agentDid}:backend`,
+        backend_id: `${deployment.nodeDid}:backend`,
       },
     ];
-    deployment.behaviorConfigs = [deployment.behaviorConfigs[0]!];
+    deployment.agentConfigs = [deployment.agentConfigs[0]!];
 
     const plan = buildInferenceSetupPlan({
       deployment,
@@ -252,9 +251,9 @@ describe("inference setup persistence", () => {
     expect(plan.document.inference_sampling).toEqual([
       expect.objectContaining({ temperature: 1, top_p: 0.95 }),
     ]);
-    expect(plan.document.agent_behaviors).toEqual([
+    expect(plan.document.agents).toEqual([
       expect.objectContaining({
-        behavior_id: "default",
+        agent_id: "default",
         context_id: "context-a",
         inference_profile_id: plan.profileId,
       }),

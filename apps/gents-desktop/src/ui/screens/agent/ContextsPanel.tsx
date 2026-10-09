@@ -26,7 +26,7 @@ import { RowMenu } from "./RowMenu";
 import { agentOf } from "@/lib/agents";
 import { useApp } from "@/app/AppContext";
 
-/* a context's detail names this many of its behaviors, then counts the rest */
+/* a context's detail names this many of its agents, then counts the rest */
 const USERS_SHOWN = 8;
 
 function Editor({
@@ -41,7 +41,7 @@ function Editor({
   const { changeConfig } = useApp().actions;
   const base = {
     name: "agent" as const,
-    agentDid: deployment.agentDid,
+    nodeDid: deployment.nodeDid,
     section: "contexts",
   };
   const saved = {
@@ -58,7 +58,7 @@ function Editor({
     async (next) => {
       const skillIds = next.skillIds;
       await changeConfig("patchConfigComponents", {
-        agentDid: deployment.agentDid,
+        nodeDid: deployment.nodeDid,
         patches: [
           {
             collection: "AgentContext",
@@ -101,7 +101,7 @@ function Editor({
     },
   );
   const id = (f: string) => `${context.context_id}-${f}`;
-  const users = deployment.behaviors.filter((b) => b.contextId === context.context_id);
+  const users = deployment.agents.filter((b) => b.contextId === context.context_id);
   /* New tools… from the field, and the chosen document's editor beside the page */
   const [newTools, setNewTools] = useState<((id: string | null) => void) | null>(null);
   const [besideTools, setBesideTools] = useState<string | null>(null);
@@ -146,15 +146,15 @@ function Editor({
           description={
             users.length
               ? "Edits here apply to every one of them."
-              : "No behavior runs with it."
+              : "No agent runs with it."
           }
         >
           {users.length ? (
             <span className="flex flex-wrap justify-end gap-x-3 gap-y-1">
               {users.slice(0, USERS_SHOWN).map((b) => (
                 <a
-                  key={b.behaviorId}
-                  href={href({ ...base, section: "behaviors", item: b.behaviorId })}
+                  key={b.agentId}
+                  href={href({ ...base, section: "agents", item: b.agentId })}
                   className="underline-offset-2 hover:text-foreground hover:underline"
                 >
                   {b.displayName}
@@ -192,7 +192,7 @@ function Editor({
         <RefRow
           id={id("tools")}
           label="Tools"
-          description="What every behavior on this context may touch."
+          description="What every agent on this context may touch."
           value={d.draft.toolsId}
           error={d.problems.toolsId}
           onChange={(v) => d.set("toolsId", v)}
@@ -226,7 +226,7 @@ function Editor({
         <ChipsRow
           id={id("skills")}
           label="Skills"
-          description="None means the behavior runs without skills."
+          description="None means the agent runs without skills."
           value={d.draft.skillIds}
           error={d.problems.skillIds}
           onChange={(v) => d.set("skillIds", v)}
@@ -261,12 +261,12 @@ function Editor({
             ? undefined
             : users.length === 1
               ? `${users[0]!.displayName} uses it and will be left without a context.`
-              : `${users.length} behaviors use it and will be left without a context.`
+              : `${users.length} agents use it and will be left without a context.`
         }
         onDelete={() =>
           changeConfig("deleteContextConfig", {
             contextId: context.context_id,
-            agentDid: deployment.agentDid,
+            nodeDid: deployment.nodeDid,
           })
         }
       />
@@ -284,23 +284,23 @@ export function ContextsPanel({
   const { changeConfig } = useApp().actions;
   const base = {
     name: "agent" as const,
-    agentDid: deployment.agentDid,
+    nodeDid: deployment.nodeDid,
     section: "contexts",
   };
-  /* a context opened from its behavior goes back to that behavior */
+  /* a context opened from its agent goes back to that agent */
   const originId = item ? contextOrigin(item) : null;
   const origin = agentOf(deployment, originId);
   const back = origin
     ? {
-        route: { ...base, section: "behaviors", item: origin.behaviorId },
+        route: { ...base, section: "agents", item: origin.agentId },
         label: `Back to ${origin.displayName}`,
       }
     : undefined;
   useEffect(() => {
     if (!item) forgetContextOrigins();
   }, [item]);
-  /* reached from the Behaviors list to clear out unused ones, so they come first */
-  const inUse = new Set(deployment.behaviors.map((b) => b.contextId));
+  /* reached from the Agents list to clear out unused ones, so they come first */
+  const inUse = new Set(deployment.agents.map((b) => b.contextId));
   const unusedFirst = (a: AgentContext, b: AgentContext) =>
     Number(inUse.has(a.context_id)) - Number(inUse.has(b.context_id));
   return (
@@ -308,14 +308,14 @@ export function ContextsPanel({
       {!item && (
         <div className="mb-6">
           <a
-            href={href({ ...base, section: "behaviors" })}
+            href={href({ ...base, section: "agents" })}
             className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
           >
-            <ArrowLeft className="size-3.5" /> Behaviors
+            <ArrowLeft className="size-3.5" /> Agents
           </a>
           <p className="mt-3 max-w-prose text-sm text-muted-foreground">
-            Each behavior keeps its instructions and tools in a context. Contexts no
-            behavior uses can be deleted.
+            Each agent keeps its instructions and tools in a context. Contexts no agent
+            uses can be deleted.
           </p>
         </div>
       )}
@@ -328,14 +328,14 @@ export function ContextsPanel({
           title: c.display_name ?? c.context_id,
           tags: c.tags,
           meta: (() => {
-            const names = deployment.behaviors
+            const names = deployment.agents
               .filter((b) => b.contextId === c.context_id)
               .map((b) => b.displayName);
             return names.length
               ? `Used by ${names.length <= 3 ? names.join(", ") : `${names.slice(0, 2).join(", ")} and ${names.length - 2} more`}`
-              : "Not used by any behavior";
+              : "Not used by any agent";
           })(),
-          badge: deployment.behaviors.some((b) => b.contextId === c.context_id)
+          badge: deployment.agents.some((b) => b.contextId === c.context_id)
             ? undefined
             : "unused",
           trailing: (
@@ -346,7 +346,7 @@ export function ContextsPanel({
               onDelete={() =>
                 changeConfig("deleteContextConfig", {
                   contextId: c.context_id,
-                  agentDid: deployment.agentDid,
+                  nodeDid: deployment.nodeDid,
                 })
               }
               warning={dependentsWarning(deployment, "context", c.context_id)}
@@ -354,7 +354,7 @@ export function ContextsPanel({
           ),
         }))}
         createLabel="New context"
-        empty="No contexts. Behaviors keep their instructions and tools in one."
+        empty="No contexts. Agents keep their instructions and tools in one."
         detail={(id) => {
           const context = deployment.contexts.find((c) => c.context_id === id)!;
           return (

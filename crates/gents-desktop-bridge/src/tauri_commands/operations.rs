@@ -34,14 +34,14 @@ pub async fn desktop_operations_snapshot(
 ) -> Result<DesktopOperationsSnapshot, BridgeError> {
     let core = current_core(&state)
         .ok_or_else(|| BridgeError::untyped("desktop bridge not initialized"))?;
-    let agent_did = request
-        .agent_did
+    let node_did = request
+        .node_did
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
-        .or_else(|| core.selected_agent_did())
-        .ok_or_else(|| BridgeError::untyped("no agent selected; pass agentDid explicitly"))?;
+        .or_else(|| core.selected_node_did())
+        .ok_or_else(|| BridgeError::untyped("no node selected; pass nodeDid explicitly"))?;
 
     let native_executors: Vec<NativeExecutorStatusView> =
         gents::native_executor_status::active_native_executors()
@@ -56,7 +56,7 @@ pub async fn desktop_operations_snapshot(
             })
             .collect();
 
-    let tool_call_rows = fetch_background_tool_calls(&core, &agent_did)
+    let tool_call_rows = fetch_background_tool_calls(&core, &node_did)
         .await
         .map_err(|e| format!("failed to query AgentToolCall: {e}"))?;
 
@@ -73,7 +73,7 @@ pub async fn desktop_operations_snapshot(
 
     Ok(DesktopOperationsSnapshot {
         fetched_at: Utc::now().to_rfc3339(),
-        agent_did: Some(agent_did),
+        node_did: Some(node_did),
         liveness: Some(liveness),
         liveness_unavailable_reason: None,
         backgrounded_tools,
@@ -83,9 +83,9 @@ pub async fn desktop_operations_snapshot(
 
 async fn fetch_background_tool_calls(
     core: &Arc<ClientCore>,
-    agent_did: &str,
+    node_did: &str,
 ) -> Result<Vec<ToolCallRow>, BridgeError> {
-    let query = background_tool_calls_query(agent_did);
+    let query = background_tool_calls_query(node_did);
 
     let response = graphql_with_transaction_retry(&core.node(), &query, "background tool calls")
         .await
@@ -146,8 +146,8 @@ async fn fetch_background_tool_calls(
         .collect())
 }
 
-fn background_tool_calls_query(agent_did: &str) -> String {
-    let escaped_agent_did = escape_graphql_string(agent_did);
+fn background_tool_calls_query(node_did: &str) -> String {
+    let escaped_node_did = escape_graphql_string(node_did);
 
     format!(
         r#"
@@ -156,7 +156,7 @@ fn background_tool_calls_query(agent_did: &str) -> String {
                 filter: {{
                     await_mode: {{ _eq: "background" }},
                     lifecycle_state: {{ _in: ["pending", "running"] }},
-                    agent_did: {{ _eq: "{escaped_agent_did}" }}
+                    node_did: {{ _eq: "{escaped_node_did}" }}
                 }},
                 limit: {BACKGROUND_TOOL_CALL_LIMIT}
             ) {{
@@ -180,12 +180,12 @@ mod background_tool_query_tests {
     use super::*;
 
     #[test]
-    fn scopes_live_rows_to_the_selected_agent_and_caps_the_scan() {
+    fn scopes_live_rows_to_the_selected_node_and_caps_the_scan() {
         let query = background_tool_calls_query("did:key:z6Mk\"selected");
 
         assert!(query.contains(r#"await_mode: { _eq: "background" }"#));
         assert!(query.contains(r#"lifecycle_state: { _in: ["pending", "running"] }"#));
-        assert!(query.contains(r#"agent_did: { _eq: "did:key:z6Mk\"selected" }"#));
+        assert!(query.contains(r#"node_did: { _eq: "did:key:z6Mk\"selected" }"#));
         assert!(query.contains(&format!("limit: {BACKGROUND_TOOL_CALL_LIMIT}")));
     }
 }
@@ -212,7 +212,7 @@ pub async fn desktop_interrupt_request(
     tracing::info!(
         target: "gents_desktop::interrupt",
         request_id = %request.request_id,
-        agent_did = %request.agent_did.as_deref().unwrap_or(""),
+        node_did = %request.node_did.as_deref().unwrap_or(""),
         "desktop interrupt action received"
     );
     let result = crate::interrupt::interrupt_request(&core, &request).await;
@@ -228,7 +228,7 @@ pub async fn desktop_interrupt_request(
         Err(error) => tracing::warn!(
             target: "gents_desktop::interrupt",
             request_id = %request.request_id,
-            agent_did = %request.agent_did.as_deref().unwrap_or(""),
+            node_did = %request.node_did.as_deref().unwrap_or(""),
             error,
             "desktop interrupt action failed"
         ),
@@ -256,7 +256,7 @@ pub async fn list_backends_with_health_for_core(
 
     let mut views = Vec::with_capacity(backends.len());
     for backend in backends {
-        let observation = lookup_backend_observation(node, &backend.agent_did, &backend.backend_id)
+        let observation = lookup_backend_observation(node, &backend.node_did, &backend.backend_id)
             .await
             .map_err(|err| err.to_string())?;
         let recent_calls = fetch_recent_calls(node, &backend.backend_id)
@@ -279,9 +279,9 @@ pub async fn list_backends_with_health_for_core(
             .to_string();
         let catalog_scope = matches!(
             backend.auth,
-            gents::document_config::BackendAuth::PrincipalOAuth { .. }
+            gents::document_config::BackendAuth::NodeOAuth { .. }
         )
-        .then_some(backend.agent_did.as_str());
+        .then_some(backend.node_did.as_str());
         let models = observation
             .as_ref()
             .map(|row| row.catalog_for(catalog_scope))
@@ -428,7 +428,7 @@ pub(crate) async fn probe_mcp_service_for_core(
     core: Arc<ClientCore>,
     request: DesktopProbeMcpServiceRequest,
 ) -> Result<McpServiceProbeResult, BridgeError> {
-    probe_mcp_service(core.as_ref(), &request.service_id)
+    probe_mcp_service(core.as_ref(), &request.node_did, &request.service_id)
         .await
         .map_err(|error| BridgeError::untyped(error.to_string()))
 }

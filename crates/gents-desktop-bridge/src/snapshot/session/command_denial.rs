@@ -30,7 +30,7 @@ fn command_denial_presentation(rule_id: &str) -> (&'static str, &'static str, &'
         "forbiddenPrefix" => (
             "forbidden-prefix",
             "Forbidden prefix",
-            "argv begins with a forbidden prefix configured on this behavior.",
+            "argv begins with a forbidden prefix configured on this agent.",
         ),
         "allowedPrefixRequired" => (
             "allowed-prefix-required",
@@ -45,7 +45,7 @@ fn command_denial_presentation(rule_id: &str) -> (&'static str, &'static str, &'
         "disabledNetworkCommand" => (
             "network-denied",
             "Network access denied",
-            "This command is denied because the behavior has network mode disabled.",
+            "This command is denied because the agent has network mode disabled.",
         ),
         "workspaceWriteSandboxUnavailable" => (
             "sandbox-violation",

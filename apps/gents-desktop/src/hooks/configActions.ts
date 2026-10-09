@@ -9,10 +9,10 @@ import { actionFailure, shownFailure } from "./actionFailure";
 
 /** Each configuration change the bridge takes, as a failure names it. */
 const CHANGES = {
+  saveNodeConfig: "save the node",
+  setDefaultAgent: "set the default agent",
   saveAgentConfig: "save the agent",
-  setDefaultBehavior: "set the default behavior",
-  saveBehaviorConfig: "save the behavior",
-  deleteBehaviorConfig: "delete the behavior",
+  deleteAgentConfig: "delete the agent",
   saveSkillConfig: "save the skill",
   deleteSkillConfig: "delete the skill",
   deleteContextConfig: "delete the context",

@@ -21,7 +21,7 @@ export function setupErrorMessage(
   if (INTERNAL_DETAIL.test(message)) {
     console.warn("setup error detail", cause);
     return bridgeErrorCode(cause) === "endpointUnreachable"
-      ? "The agent is not reachable. Make sure it is running, then try again."
+      ? "The node is not reachable. Make sure it is running, then try again."
       : fallback;
   }
   return message;

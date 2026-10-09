@@ -5,9 +5,9 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 fn session() -> AgentSession {
     AgentSession {
         session_id: "sess-1".into(),
-        agent_did: "did:test:amy".into(),
+        node_did: "did:test:amy".into(),
         requester_did: None,
-        behavior_id: "default".into(),
+        agent_id: "default".into(),
         created_at: "2026-04-21T12:00:00Z".into(),
         closed_at: None,
         title: None,
@@ -22,8 +22,8 @@ fn request(id: &str, session_id: &str, second: u32) -> AgentRequestRow {
         purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
         doc_id: Some(format!("doc-{id}")),
         request_id: id.into(),
-        agent_did: Some("did:test:amy".into()),
-        behavior_id: Some("default".into()),
+        node_did: Some("did:test:amy".into()),
+        agent_id: Some("default".into()),
         session_id: Some(session_id.into()),
         content: Some(format!("{id} text")),
         lifecycle_state: Some(RequestLifecycleState::Completed),
@@ -212,7 +212,7 @@ fn automated_inputs_render_in_stream_order_with_their_sender_and_full_content() 
         automated[0],
         (
             RequestOriginView::SessionMessage {
-                sender_agent_did: Some("did:test:amy".into()),
+                sender_node_did: Some("did:test:amy".into()),
                 sender_session_id: Some("sess-other".into()),
                 sender_request_id: Some("sender".into()),
             },
@@ -250,12 +250,12 @@ fn a_session_message_from_an_unreplicated_session_names_its_sending_agent() {
         item,
         RenderedTimelineItem::AutomatedInput {
             origin: RequestOriginView::SessionMessage {
-                sender_agent_did,
+                sender_node_did,
                 sender_session_id: None,
                 sender_request_id,
             },
             ..
-        } if sender_agent_did.as_deref() == Some("did:test:bob")
+        } if sender_node_did.as_deref() == Some("did:test:bob")
             && sender_request_id.as_deref() == Some("sender")
     )));
 }

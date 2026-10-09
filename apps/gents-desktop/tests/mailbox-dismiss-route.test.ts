@@ -5,13 +5,13 @@ import { testApp } from "./app-fixture";
 
 /* a compose route opened on an item, with the selection it set up */
 const routed = (itemId: string) => ({
-  agentDid: "did:key:a",
-  behaviorId: "engineer",
+  nodeDid: "did:key:a",
+  agentId: "engineer",
   sessionId: null,
   mailboxRoute: {
     itemId,
-    agentDid: "did:key:a",
-    behaviorId: "engineer",
+    nodeDid: "did:key:a",
+    agentId: "engineer",
     sessionId: null,
   },
 });

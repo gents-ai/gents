@@ -14,12 +14,11 @@ const NATIVE_BACKGROUND_PROMPT =
 describeLive("Tauri app live operations snapshot", () => {
   it("projects a live native background process through the bridge", async () => {
     await withLiveDesktop(async ({ runner, driver, deployment }) => {
-      const defaultBehavior = deployment.behaviors.find(
-        (behavior) =>
-          behavior.behaviorId === deployment.agentPrincipal.defaultBehaviorId,
+      const defaultAgent = deployment.agents.find(
+        (agent) => agent.agentId === deployment.node.defaultAgentId,
       );
       const context = deployment.contexts.find(
-        (candidate) => candidate.context_id === defaultBehavior?.contextId,
+        (candidate) => candidate.context_id === defaultAgent?.contextId,
       );
       const defaultTools = deployment.tools.find(
         (tools) => tools.tools_id === context?.tools_id,
@@ -40,7 +39,7 @@ describeLive("Tauri app live operations snapshot", () => {
       const nativeTool = await waitFor(
         async () => {
           const snapshot = await runner.adapter.fetchOperationsSnapshot({
-            agentDid: runner.agentDid,
+            nodeDid: runner.nodeDid,
             rootRequestId: submitted.requestId,
           });
           const row = snapshot.backgroundedTools.find(

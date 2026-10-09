@@ -4,4 +4,4 @@ export type TaskRunRequest = { taskId: string,
 /**
  * Explicit action scope; independent of the shared observation filter.
  */
-agentDid?: string, args?: unknown, };
+nodeDid?: string, args?: unknown, };

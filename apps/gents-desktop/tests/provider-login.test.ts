@@ -55,7 +55,7 @@ it("replaces stale provider sign-ins from the latest account snapshot", () => {
     provider,
     credentialId,
     enabled,
-    agentDid: "did:test:agent",
+    nodeDid: "did:test:agent",
     accountId: null,
     planType: null,
     accessTokenExpiresAt: "2026-09-15T00:00:00Z",

@@ -18,10 +18,9 @@ use gents_desktop_bridge::commands::mcp_health::{
 use gents_desktop_bridge::commands::{
     delete_event_source_config, delete_schedule_config, delete_tools_config, delete_trigger_config,
     rename_session, repair_p2p, run_schedule_config, run_task_config, save_agent_config,
-    save_backend_config, save_behavior_config, save_event_source_config,
-    save_inference_profile_config, save_schedule_config, save_task_config,
-    save_tool_service_config, save_tools_config, save_trigger_config, send_chat_message,
-    set_default_behavior, test_tool_service_config,
+    save_backend_config, save_event_source_config, save_inference_profile_config, save_node_config,
+    save_schedule_config, save_task_config, save_tool_service_config, save_tools_config,
+    save_trigger_config, send_chat_message, set_default_agent, test_tool_service_config,
 };
 use gents_desktop_bridge::interrupt::interrupt_request;
 use gents_desktop_bridge::provenance::session_provenance_request;
@@ -36,13 +35,13 @@ use gents_desktop_bridge::tauri_commands::inference_setup::{
 };
 use gents_desktop_bridge::tauri_commands::operations::list_backends_with_health_for_core;
 use gents_desktop_bridge::types::{
-    AgentConfigSaveRequest, BackendSaveRequest, BehaviorSaveRequest, ChatSendRequest,
-    DefaultBehaviorSetRequest, DesktopInterruptRequest, DesktopOperationsSnapshot,
-    DesktopOperationsSnapshotRequest, DesktopProbeMcpServiceRequest,
-    DesktopSessionProvenanceRequest, EnrollmentRequestView, EnrollmentStatusRequest,
-    EventSourceDeleteRequest, EventSourceSaveRequest, InferenceProfileSaveRequest,
-    NativeExecutorStatusView, PeerStatusFetchRequest, RuntimeLivenessView, ScheduleDeleteRequest,
-    ScheduleRunRequest, ScheduleSaveRequest, SessionRenameRequest, TaskRunRequest, TaskSaveRequest,
+    AgentSaveRequest, BackendSaveRequest, ChatSendRequest, DefaultAgentSetRequest,
+    DesktopInterruptRequest, DesktopOperationsSnapshot, DesktopOperationsSnapshotRequest,
+    DesktopProbeMcpServiceRequest, DesktopSessionProvenanceRequest, EnrollmentRequestView,
+    EnrollmentStatusRequest, EventSourceDeleteRequest, EventSourceSaveRequest,
+    InferenceProfileSaveRequest, NativeExecutorStatusView, NodeConfigSaveRequest,
+    PeerStatusFetchRequest, RuntimeLivenessView, ScheduleDeleteRequest, ScheduleRunRequest,
+    ScheduleSaveRequest, SessionRenameRequest, TaskRunRequest, TaskSaveRequest,
     ToolServiceSaveRequest, ToolServiceTestRequest, ToolsDeleteRequest, ToolsSaveRequest,
     TriggerDeleteRequest, TriggerSaveRequest,
 };
@@ -51,7 +50,7 @@ use gents_desktop_bridge::types::{
 #[serde(rename_all = "camelCase")]
 struct SessionSnapshotRequest {
     #[serde(default)]
-    agent_did: Option<String>,
+    node_did: Option<String>,
     session_id: String,
     request_id: Option<String>,
     timeline_limit: Option<usize>,
@@ -62,7 +61,7 @@ struct SessionSnapshotRequest {
 #[serde(rename_all = "camelCase")]
 struct SessionLiveDeltaRequest {
     #[serde(default)]
-    agent_did: Option<String>,
+    node_did: Option<String>,
     session_id: String,
     request_id: String,
     base_live_cursor: String,
@@ -74,9 +73,9 @@ struct SessionLiveDeltaRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct SelectedAgentRequest {
+struct SelectedNodeRequest {
     #[serde(default)]
-    agent_did: Option<String>,
+    node_did: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -126,10 +125,31 @@ pub(super) fn handle_request(
                 .as_ref()
                 .and_then(|client| client.deployments.first())
                 .ok_or_else(|| anyhow!("live bridge runner has no deployment"))?;
+            let server = fixture.remote_core();
+            let identity: Arc<dyn gents::NodeIdentity> = Arc::new(server.node_identity().clone());
+            let network =
+                runtime.block_on(gents_desktop_bridge::enrollment::ensure_enrollment_network(
+                    server.node(),
+                    identity.as_ref(),
+                    fixture.deployment_label(),
+                ))?;
+            let issuer = gents_desktop_bridge::enrollment::EnrollmentOfferIssuer::new(
+                identity,
+                Arc::clone(server.p2p()),
+                network.network_id,
+                fixture.node_did().to_string(),
+                "client".to_string(),
+            );
+            let enrollment = runtime.block_on(issuer.mint())?;
+            let schema = runtime.block_on(
+                gents::agent::p2p_reconcile::read_client_replicated_schema(server.node_arc()),
+            )?;
             Ok(HttpResponse::json_ok(
                 serde_json::json!({
-                    "agent_name": deployment.label.clone(),
-                    "agent_did": deployment.agent_did.clone(),
+                    "enrollment": enrollment,
+                    (gents_protocol::peer_schema::STATUS_REPLICATED_SCHEMA_FIELD): schema,
+                    "node_name": deployment.label.clone(),
+                    "node_did": deployment.node_did.clone(),
                     "p2p_shareable_address": deployment.addr.clone(),
                     "p2p_listen_addresses": [deployment.addr.clone()],
                     "desktop_graphql": deployment.graphql.clone(),
@@ -198,30 +218,30 @@ pub(super) fn handle_request(
             })
             .to_string(),
         )),
-        ("POST", "/desktop/selected-agent") => {
-            let request = serde_json::from_str::<SelectedAgentRequest>(&request.body)
-                .context("decoding selected agent request")?;
+        ("POST", "/desktop/selected-node") => {
+            let request = serde_json::from_str::<SelectedNodeRequest>(&request.body)
+                .context("decoding selected node request")?;
             let did = request
-                .agent_did
+                .node_did
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty());
             let core = fixture.desktop_core();
-            core.set_selected_agent_did(did.clone());
+            core.set_selected_node_did(did.clone());
             if let Some(did) = did {
-                let refreshed = match runtime.block_on(core.refresh_agent(&did)) {
+                let refreshed = match runtime.block_on(core.refresh_node(&did)) {
                     Ok(Some(_version)) => true,
                     Ok(None) => false,
                     Err(error) => {
                         tracing::warn!(
                             error = %error,
-                            agent_did = %did,
+                            node_did = %did,
                             "local replica selection refresh failed"
                         );
                         false
                     }
                 };
                 if !refreshed {
-                    runtime.block_on(core.ensure_agent_loaded(&did))?;
+                    runtime.block_on(core.ensure_node_loaded(&did))?;
                 }
             }
             Ok(HttpResponse::json_ok(serde_json::json!({}).to_string()))
@@ -248,7 +268,7 @@ pub(super) fn handle_request(
                 .block_on(fixture.desktop_core().p2p().shareable_address())?
                 .context("desktop has no shareable address for route drift")?;
             runtime.block_on(fixture.remote_core().p2p().add_replicator(
-                vec!["AgentNetwork".to_string()],
+                vec!["Network".to_string()],
                 Some(&desktop_address),
                 Default::default(),
                 Vec::new(),
@@ -301,7 +321,7 @@ pub(super) fn handle_request(
                 .context("decoding session snapshot request")?;
             let snapshot = runtime.block_on(build_desktop_session_snapshot(
                 fixture,
-                request.agent_did.as_deref(),
+                request.node_did.as_deref(),
                 &request.session_id,
                 request.request_id.as_deref(),
                 request.timeline_limit,
@@ -315,7 +335,7 @@ pub(super) fn handle_request(
             let delta = runtime.block_on(build_session_live_delta(
                 fixture.desktop_core().as_ref(),
                 &request.session_id,
-                request.agent_did.as_deref(),
+                request.node_did.as_deref(),
                 &request.request_id,
                 &request.base_live_cursor,
                 request.base_content_byte_len,
@@ -328,7 +348,7 @@ pub(super) fn handle_request(
         ("POST", "/desktop/session/hydration/retry") => {
             let request = serde_json::from_str::<SessionSnapshotRequest>(&request.body)
                 .context("decoding session hydration retry request")?;
-            let agent_did = request.agent_did.or_else(|| {
+            let node_did = request.node_did.or_else(|| {
                 fixture
                     .desktop_core()
                     .store()
@@ -336,15 +356,15 @@ pub(super) fn handle_request(
                     .sessions
                     .iter()
                     .find(|session| session.session_id == request.session_id)
-                    .map(|session| session.agent_did.clone())
+                    .map(|session| session.node_did.clone())
             });
-            let agent_did = agent_did
+            let node_did = node_did
                 .as_deref()
-                .ok_or_else(|| anyhow!("session hydration retry requires an agent"))?;
+                .ok_or_else(|| anyhow!("session hydration retry requires a node"))?;
             runtime.block_on(
                 fixture
                     .desktop_core()
-                    .retry_session_hydration(&request.session_id, agent_did),
+                    .retry_session_hydration(&request.session_id, node_did),
             )?;
             Ok(HttpResponse::json_ok("null".to_string()))
         }
@@ -373,7 +393,7 @@ pub(super) fn handle_request(
                 .ok_or_else(|| anyhow!("requestId is required"))?;
             let result = runtime.block_on(retained_provider_reasoning(
                 fixture.remote_core().as_ref(),
-                fixture.agent_did(),
+                fixture.node_did(),
                 &request.session_id,
                 request_id,
             ))?;
@@ -419,6 +439,7 @@ pub(super) fn handle_request(
             )?;
             let result = runtime.block_on(probe_mcp_service(
                 fixture.desktop_core().as_ref(),
+                &request.node_did,
                 &request.service_id,
             ))?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&result)?))
@@ -436,51 +457,40 @@ pub(super) fn handle_request(
                 serde_json::json!({ "status": "ok" }).to_string(),
             ))
         }
-        ("POST", "/desktop/agent/save") => {
-            let request = decode::<AgentConfigSaveRequest>(
+        ("POST", "/desktop/node/save") => {
+            let request = decode::<NodeConfigSaveRequest>(
                 &request.body,
-                "decoding agent config save request",
+                "decoding node config save request",
             )?;
+            runtime.block_on(save_node_config(fixture.desktop_core().as_ref(), request))?;
+            Ok(snapshot_response(runtime, fixture)?)
+        }
+        ("POST", "/desktop/node/default-agent") => {
+            let request =
+                decode::<DefaultAgentSetRequest>(&request.body, "decoding default agent request")?;
+            runtime.block_on(set_default_agent(fixture.desktop_core().as_ref(), request))?;
+            Ok(snapshot_response(runtime, fixture)?)
+        }
+        ("POST", "/desktop/agent/save") => {
+            let request = decode::<AgentSaveRequest>(&request.body, "decoding agent save request")?;
             runtime.block_on(save_agent_config(fixture.desktop_core().as_ref(), request))?;
             Ok(snapshot_response(runtime, fixture)?)
         }
-        ("POST", "/desktop/agent/default-behavior") => {
-            let request = decode::<DefaultBehaviorSetRequest>(
-                &request.body,
-                "decoding default behavior request",
-            )?;
-            runtime.block_on(set_default_behavior(
-                fixture.desktop_core().as_ref(),
-                request,
-            ))?;
-            Ok(snapshot_response(runtime, fixture)?)
-        }
-        ("POST", "/desktop/behavior/save") => {
-            let request =
-                decode::<BehaviorSaveRequest>(&request.body, "decoding behavior save request")?;
-            runtime.block_on(save_behavior_config(
-                fixture.desktop_core().as_ref(),
-                request,
-            ))?;
-            Ok(snapshot_response(runtime, fixture)?)
-        }
-        // Test-only escape hatch: write a behavior document on the *remote* node so the
+        // Test-only escape hatch: write an agent document on the *remote* node so the
         // subsequent desktop-snapshot read exercises the real P2P propagation path (write
         // on remote core → visible on desktop core).  This is the D1/D2 cross-node
         // witness.  Only available when GENTS_TAURI_LIVE=1 (set by run-live-test.mjs).
-        ("POST", "/desktop/test-fixture/remote-save-behavior") => {
+        ("POST", "/desktop/test-fixture/remote-save-agent") => {
             if std::env::var("GENTS_TAURI_LIVE").as_deref() != Ok("1") {
                 return Ok(HttpResponse::json_error(
                     "403 Forbidden",
-                    "remote-save-behavior is only available in live test mode (GENTS_TAURI_LIVE=1)",
+                    "remote-save-agent is only available in live test mode (GENTS_TAURI_LIVE=1)",
                 ));
             }
-            let req = decode::<BehaviorSaveRequest>(
-                &request.body,
-                "decoding remote behavior save request",
-            )?;
-            tracing::info!(behavior_id = %req.document.behavior_id, "remote-save-behavior: writing to remote core");
-            runtime.block_on(save_behavior_config(fixture.remote_core().as_ref(), req))?;
+            let req =
+                decode::<AgentSaveRequest>(&request.body, "decoding remote agent save request")?;
+            tracing::info!(agent_id = %req.document.agent_id, "remote-save-agent: writing to remote core");
+            runtime.block_on(save_agent_config(fixture.remote_core().as_ref(), req))?;
             Ok(HttpResponse::json_ok(
                 serde_json::json!({ "ok": true }).to_string(),
             ))
@@ -750,7 +760,7 @@ struct RetainedProviderReasoning {
 
 async fn retained_provider_reasoning(
     core: &ClientCore,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     request_id: &str,
 ) -> Result<RetainedProviderReasoning> {
@@ -760,11 +770,11 @@ async fn retained_provider_reasoning(
         OutputSource, PayloadRef, SourceClose, StreamPayload,
     };
 
-    let agent = gents::graphql::escape_graphql_string(agent_did);
+    let node = gents::graphql::escape_graphql_string(node_did);
     let session = gents::graphql::escape_graphql_string(session_id);
     let logical = gents::graphql::escape_graphql_string(request_id);
     let request_query = format!(
-        r#"{{ AgentRequest(filter: {{ agent_did: {{ _eq: "{agent}" }}, session_id: {{ _eq: "{session}" }}, request_id: {{ _eq: "{logical}" }} }}, limit: 2) {{ _docID }} }}"#
+        r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{node}" }}, session_id: {{ _eq: "{session}" }}, request_id: {{ _eq: "{logical}" }} }}, limit: 2) {{ _docID }} }}"#
     );
     let response = gents::graphql::graphql_with_transaction_retry(
         &core.node(),
@@ -786,7 +796,7 @@ async fn retained_provider_reasoning(
         .to_owned();
     let physical = gents::graphql::escape_graphql_string(&request_doc_id);
     let segment_query = format!(
-        r#"{{ AgentOutputSegment(filter: {{ agent_did: {{ _eq: "{agent}" }}, session_id: {{ _eq: "{session}" }}, request_doc_id: {{ _eq: "{physical}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#
+        r#"{{ AgentOutputSegment(filter: {{ node_did: {{ _eq: "{node}" }}, session_id: {{ _eq: "{session}" }}, request_doc_id: {{ _eq: "{physical}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#
     );
     let response = gents::graphql::graphql_with_transaction_retry(
         &core.node(),
@@ -891,7 +901,7 @@ async fn operations_snapshot_response(
 
     Ok(DesktopOperationsSnapshot {
         fetched_at: Utc::now().to_rfc3339(),
-        agent_did: request.agent_did,
+        node_did: request.node_did,
         liveness: Some(liveness),
         liveness_unavailable_reason: None,
         backgrounded_tools,

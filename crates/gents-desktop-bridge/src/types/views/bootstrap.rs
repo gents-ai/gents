@@ -8,7 +8,7 @@ use crate::types::ManagedServerToolCeiling;
 pub struct SavedPeerView {
     pub peer_id: String,
     pub label: String,
-    pub agent_did: String,
+    pub node_did: String,
     pub addr: String,
     pub source: Option<String>,
     pub graphql: Option<String>,
@@ -17,16 +17,16 @@ pub struct SavedPeerView {
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopBootstrapSummary {
-    pub default_agent_home: String,
-    pub init_agent_name: Option<String>,
-    pub init_agent_did: Option<String>,
+    pub default_node_home: String,
+    pub init_node_name: Option<String>,
+    pub init_node_did: Option<String>,
     pub init_tool_ceiling: Option<String>,
     pub init_tool_root: Option<String>,
     pub desktop_home: String,
     pub peer_directory_path: String,
     pub node_data_dir: String,
     pub diagnostics_hint: String,
-    pub agent_home_exists: bool,
+    pub node_home_exists: bool,
     pub desktop_home_exists: bool,
     pub peer_directory_exists: bool,
     pub client_state_exists: bool,
@@ -50,8 +50,8 @@ pub enum ManagedServerState {
 pub struct ManagedServerStatus {
     pub state: ManagedServerState,
     pub auto_start: bool,
-    pub agent_name: Option<String>,
-    pub agent_did: Option<String>,
+    pub node_name: Option<String>,
+    pub node_did: Option<String>,
     pub graphql: Option<String>,
     pub effective_tool_ceiling: Option<ManagedServerToolCeiling>,
     pub effective_tool_root: Option<String>,
@@ -102,7 +102,7 @@ pub struct ManagedServerResetResult {
     pub delete_paths: Vec<String>,
     /// Entries a completed reset archived or deleted.
     pub retired_paths: Vec<String>,
-    /// Entries of the managed home left untouched: other agents' homes,
+    /// Entries of the managed home left untouched: other nodes' homes,
     /// backups, user files and anything outside the runtime's inventory.
     pub retained_paths: Vec<String>,
 }

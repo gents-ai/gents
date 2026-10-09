@@ -38,18 +38,18 @@ vi.stubGlobal(
 );
 
 vi.mock("../src/ui/screens/BehaviorPicker", () => ({
-  BehaviorPicker: () => null,
+  AgentPicker: () => null,
 }));
 
-const AGENT = deployment.agentDid;
+const NODE = deployment.nodeDid;
 
 /* a session held for the screen: interrupted (so a message may follow)
    unless a test says otherwise */
 function heldSession(over: Partial<DesktopSessionSnapshot> = {}) {
   return {
     sessionId: "session",
-    agentDid: AGENT,
-    behaviorId: "default",
+    nodeDid: NODE,
+    agentId: "default",
     title: "Session",
     turnState: "interrupted",
     timelineItems: [],
@@ -89,7 +89,7 @@ function screenApp({
     },
     deployments: [node(nodeOverrides)],
     session,
-    selection: { agentDid: AGENT, sessionId: session?.sessionId ?? null },
+    selection: { nodeDid: NODE, sessionId: session?.sessionId ?? null },
   });
   return { app, sendChatMessage };
 }
@@ -182,45 +182,45 @@ describe("SessionScreen canonical composer admission", () => {
     hold(app, second);
     expect(screen.getByLabelText("Message")).toHaveValue("second draft");
   });
-  it("uses the selected non-default behavior decision, never the default or retry path", () => {
+  it("uses the selected non-default agent decision, never the default or retry path", () => {
     const selected = (defaultReady: boolean, selectedReady: boolean) => {
       const deployment = {
-        agentDid: "did:key:agent",
+        nodeDid: "did:key:agent",
         dialSucceeded: true,
         chatSafe: true,
-        agentPrincipal: { agentDid: "did:key:agent", defaultBehaviorId: "default" },
-        behaviors: [
+        node: { nodeDid: "did:key:agent", defaultAgentId: "default" },
+        agents: [
           {
-            behaviorId: "default",
+            agentId: "default",
             displayName: "Default",
             enabled: true,
             isDefault: true,
           },
           {
-            behaviorId: "selected",
+            agentId: "selected",
             displayName: "Selected",
             enabled: true,
             isDefault: false,
           },
         ],
-        behaviorReadiness: {
+        nodeReadiness: {
           source: { state: "current" },
           activeGeneration: 1,
           routerGeneration: 1,
           updatedAt: "2026-09-15T00:00:00Z",
-          behaviors: [
+          agents: [
             defaultReady
-              ? { state: "ready", behaviorId: "default" }
+              ? { state: "ready", agentId: "default" }
               : {
                   state: "unavailable",
-                  behaviorId: "default",
+                  agentId: "default",
                   reason: "backend_disabled",
                 },
             selectedReady
-              ? { state: "ready", behaviorId: "selected" }
+              ? { state: "ready", agentId: "selected" }
               : {
                   state: "unavailable",
-                  behaviorId: "selected",
+                  agentId: "selected",
                   reason: "backend_disabled",
                 },
           ],
@@ -229,7 +229,7 @@ describe("SessionScreen canonical composer admission", () => {
       } as unknown as DeploymentView;
       return projectChatShell({
         clientAvailable: true,
-        selectedAgentDid: deployment.agentDid,
+        selectedNodeDid: deployment.nodeDid,
         selectedSessionId: null,
         sending: false,
         session: null,
@@ -246,7 +246,7 @@ describe("SessionScreen canonical composer admission", () => {
     expect(selected(false, true)).toEqual({ kind: "ready" });
     expect(selected(true, false)).toMatchObject({
       kind: "disabled",
-      reason: "behaviorUnavailable",
+      reason: "agentUnavailable",
     });
   });
 
@@ -265,7 +265,7 @@ describe("SessionScreen canonical composer admission", () => {
     expect(sendChatMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         content: "hello",
-        behaviorId: "default",
+        agentId: "default",
         sessionId: null,
       }),
     );
@@ -287,7 +287,7 @@ describe("SessionScreen canonical composer admission", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
     /* the person moves to another node while the send is in flight */
-    act(() => app.actions.selectAgent("did:key:other-agent"));
+    act(() => app.actions.selectNode("did:key:other-agent"));
     fireEvent.change(screen.getByLabelText("Message"), {
       target: { value: "unrelated draft" },
     });
@@ -299,7 +299,7 @@ describe("SessionScreen canonical composer admission", () => {
     expect(sendChatMessage).toHaveBeenCalledOnce();
     expect(screen.getByLabelText("Message")).toHaveValue("unrelated draft");
     expect(navigate).not.toHaveBeenCalled();
-    act(() => app.actions.selectAgent(AGENT));
+    act(() => app.actions.selectNode(NODE));
     expect(screen.getByLabelText("Message")).toHaveValue("");
   });
 
@@ -490,7 +490,7 @@ describe("SessionScreen automated inputs", () => {
             kind: "automatedInput",
             origin: {
               kind: "sessionMessage",
-              senderAgentDid: AGENT,
+              senderNodeDid: NODE,
               senderSessionId: "sender-session",
               senderRequestId: "sender-request",
             },
@@ -618,7 +618,7 @@ describe("renaming a session", () => {
     });
     await app.actions.renameSession("session", "Renamed");
     expect(renameSession).toHaveBeenCalledWith({
-      agentDid: AGENT,
+      nodeDid: NODE,
       sessionId: "session",
       title: "Renamed",
     });
@@ -654,7 +654,7 @@ describe("renaming a session", () => {
     await user.type(input, "Renamed session{Enter}");
     await vi.waitFor(() =>
       expect(renameSession).toHaveBeenCalledWith({
-        agentDid: AGENT,
+        nodeDid: NODE,
         sessionId: "session",
         title: "Renamed session",
       }),
@@ -663,7 +663,7 @@ describe("renaming a session", () => {
     await vi.waitFor(() =>
       expect(fetchSessionSnapshot).toHaveBeenCalledWith(
         "session",
-        AGENT,
+        NODE,
         null,
         expect.objectContaining({ limit: expect.any(Number) }),
       ),

@@ -16,7 +16,7 @@ function renderWizard(
       ...deployment,
       inferenceProfiles: [
         {
-          agent_did: deployment.agentDid,
+          node_did: deployment.nodeDid,
           profile_id: "profile-a",
           backend_id: "backend-a",
           model_name: "initial",
@@ -29,7 +29,7 @@ function renderWizard(
     onCodexLogin: vi.fn(async () => ({
       docId: "doc-1",
       credentialId: "chatgpt-codex:did:key:z6MkAgent",
-      agentDid: "did:key:z6MkAgent",
+      nodeDid: "did:key:z6MkAgent",
       provider: "chatgpt-codex",
       accountId: "acct-1",
       chatgptPlanType: "plus",
@@ -68,7 +68,7 @@ describe("InferenceSetupWizard", () => {
 
     await waitFor(() => {
       expect(props.onPatchConfigComponents).toHaveBeenCalledWith({
-        agentDid: deployment.agentDid,
+        nodeDid: deployment.nodeDid,
         patches: [
           {
             collection: "InferenceBackend",
@@ -106,7 +106,7 @@ describe("InferenceSetupWizard", () => {
 
     await waitFor(() => {
       expect(props.onPatchConfigComponents).toHaveBeenCalledWith({
-        agentDid: deployment.agentDid,
+        nodeDid: deployment.nodeDid,
         patches: [
           {
             collection: "InferenceBackend",
@@ -136,7 +136,7 @@ describe("InferenceSetupWizard", () => {
 
     await waitFor(() => {
       expect(props.onPatchConfigComponents).toHaveBeenCalledWith({
-        agentDid: deployment.agentDid,
+        nodeDid: deployment.nodeDid,
         patches: [
           {
             collection: "InferenceBackend",
@@ -144,7 +144,7 @@ describe("InferenceSetupWizard", () => {
             changes: expect.objectContaining({
               provider_kind: "ChatGptCodex",
               endpoint: "https://chatgpt.com/backend-api/codex",
-              auth: { kind: "principal_oauth" },
+              auth: { kind: "node_oauth" },
             }),
           },
           {

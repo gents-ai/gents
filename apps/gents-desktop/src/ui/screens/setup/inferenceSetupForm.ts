@@ -25,7 +25,7 @@ export type ConnectionDraft = {
 /** What the form is waiting on; it is busy while there is one. */
 export type SetupOp = "signIn" | "retrySave" | "discover" | "describe" | "save";
 
-/** Whether a local agent's managed runtime, which sign-in and the save
+/** Whether a local node's managed runtime, which sign-in and the save
     write through, is known to be serving. */
 export type RuntimeGate = "idle" | "checking" | "ready" | "unavailable";
 

@@ -16,7 +16,7 @@ export type ChatComposerProps = {
   activeRequestId: string | null;
   activityStatus: ChatActivityStatus | null;
   approxSerializedBytes: number;
-  behaviorLabel: string | null;
+  agentLabel: string | null;
   canSend: boolean;
   draft: string;
   interruptVisible: boolean;

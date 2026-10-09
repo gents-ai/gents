@@ -58,7 +58,7 @@ export function createSessionReads({
 
   async function refreshSession(
     nextSessionId: string | null,
-    agentDidOverride?: string | null,
+    nodeDidOverride?: string | null,
   ): Promise<DesktopSessionSnapshot | null> {
     const currentRefresh = refreshSeq + 1;
     refreshSeq = currentRefresh;
@@ -67,31 +67,31 @@ export function createSessionReads({
       setSessionLoad(IDLE_LOAD);
       return null;
     }
-    const agentDid =
-      agentDidOverride === undefined ? store.getState().agentDid : agentDidOverride;
+    const nodeDid =
+      nodeDidOverride === undefined ? store.getState().nodeDid : nodeDidOverride;
     /* a failed read stays said while the same session is read again */
     const previous = sessionStore.getState().load;
     setSessionLoad({
       phase: "loading",
       sessionId: nextSessionId,
-      agentDid,
+      nodeDid,
       found: null,
       error:
-        previous.sessionId === nextSessionId && previous.agentDid === agentDid
+        previous.sessionId === nextSessionId && previous.nodeDid === nodeDid
           ? previous.error
           : null,
     });
     try {
       const next = await api.fetchSessionSnapshot(
         nextSessionId,
-        agentDid,
+        nodeDid,
         trackedRequestId(),
         { limit: SESSION_TIMELINE_PAGE_SIZE },
       );
       const stillCurrent =
         acceptsAsyncResult(refreshSeq, currentRefresh) &&
         store.getState().sessionId === nextSessionId &&
-        (!agentDid || store.getState().agentDid === agentDid) &&
+        (!nodeDid || store.getState().nodeDid === nodeDid) &&
         (!next || next.sessionId === nextSessionId);
       if (!stillCurrent) return null;
       setSession((current) => (next ? mergeSessionTipSnapshot(current, next) : null));
@@ -99,7 +99,7 @@ export function createSessionReads({
       setSessionLoad({
         phase: "loaded",
         sessionId: nextSessionId,
-        agentDid,
+        nodeDid,
         found: next !== null,
         error: null,
       });
@@ -110,7 +110,7 @@ export function createSessionReads({
         setSessionLoad({
           phase: "failed",
           sessionId: nextSessionId,
-          agentDid,
+          nodeDid,
           found: null,
           error: message,
         });
@@ -127,18 +127,18 @@ export function createSessionReads({
     const selected = store.getState();
     const stillCurrent = () =>
       capturedRun === runEpoch &&
-      store.getState().agentDid === selected.agentDid &&
+      store.getState().nodeDid === selected.nodeDid &&
       store.getState().sessionId === selected.sessionId;
     const projected = readSession(sessionStore);
-    const agentDid =
+    const nodeDid =
       projected?.sessionId === nextSessionId
-        ? (projected.agentDid ?? store.getState().agentDid)
+        ? (projected.nodeDid ?? store.getState().nodeDid)
         : null;
     try {
       setError(null);
-      await api.retrySessionHydration(nextSessionId, agentDid);
+      await api.retrySessionHydration(nextSessionId, nodeDid);
       if (!stillCurrent()) return null;
-      return await refreshSession(nextSessionId, agentDid);
+      return await refreshSession(nextSessionId, nodeDid);
     } catch (error) {
       if (!stillCurrent()) return null;
       setError(String(error));
@@ -160,11 +160,11 @@ export function createSessionReads({
     if (!request) return false;
     const capturedRefresh = refreshSeq;
     const capturedLive = ++liveSeq;
-    const capturedAgent = store.getState().agentDid;
+    const capturedNodeDid = store.getState().nodeDid;
     const stillCurrent = () =>
       capturedRefresh === refreshSeq &&
       capturedLive === liveSeq &&
-      store.getState().agentDid === capturedAgent &&
+      store.getState().nodeDid === capturedNodeDid &&
       store.getState().sessionId === current.sessionId &&
       trackedRequestId() === requestId;
     try {
@@ -187,7 +187,7 @@ export function createSessionReads({
 
   async function loadOlderSessionTimeline(): Promise<boolean> {
     const capturedRun = runEpoch;
-    const capturedAgent = store.getState().agentDid;
+    const capturedNodeDid = store.getState().nodeDid;
     try {
       for (let hop = 0; hop < MAX_HIDDEN_PAGE_HOPS; hop += 1) {
         const current = readSession(sessionStore);
@@ -195,13 +195,13 @@ export function createSessionReads({
         if (!current || !current.timelinePage?.hasOlder || !cursor) return false;
         const older = await api.fetchSessionSnapshot(
           current.sessionId,
-          current.agentDid ?? store.getState().agentDid,
+          current.nodeDid ?? store.getState().nodeDid,
           trackedRequestId(),
           { limit: SESSION_TIMELINE_PAGE_SIZE, beforeItemKey: cursor },
         );
         if (
           capturedRun !== runEpoch ||
-          capturedAgent !== store.getState().agentDid ||
+          capturedNodeDid !== store.getState().nodeDid ||
           !older ||
           store.getState().sessionId !== current.sessionId
         )

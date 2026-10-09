@@ -12,8 +12,8 @@ import { testApp } from "./app-fixture";
 const stopped = {
   state: "stopped",
   autoStart: true,
-  agentName: "Workshop Agent",
-  agentDid: null,
+  nodeName: "Workshop Node",
+  nodeDid: null,
   graphql: null,
   effectiveToolCeiling: null,
   effectiveToolRoot: null,
@@ -94,7 +94,7 @@ describe("managed server tray listeners", () => {
     await vi.waitFor(() => expect(showSetup).toHaveBeenCalledOnce());
     expect(api.startManagedServer).not.toHaveBeenCalled();
     expect(reportError).toHaveBeenCalledWith(
-      expect.stringContaining("Complete local agent setup"),
+      expect.stringContaining("Complete local node setup"),
     );
   });
 

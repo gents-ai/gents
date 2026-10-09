@@ -8,9 +8,9 @@ pub async fn send_chat_message(
     core: &ClientCore,
     request: ChatSendRequest,
 ) -> Result<ChatSendResult> {
-    let agent_did = request.agent_did.trim().to_string();
-    if agent_did.is_empty() {
-        bail!("agent_did is required");
+    let node_did = request.node_did.trim().to_string();
+    if node_did.is_empty() {
+        bail!("node_did is required");
     }
 
     let content = match &request.answer {
@@ -22,7 +22,7 @@ pub async fn send_chat_message(
                 core,
                 request.caused_by_source_doc_id.as_deref(),
                 request.session_id.as_deref(),
-                &agent_did,
+                &node_did,
                 answer,
             )?
         }
@@ -32,8 +32,8 @@ pub async fn send_chat_message(
         bail!("content is required");
     }
 
-    let behavior_id = request
-        .behavior_id
+    let agent_id = request
+        .agent_id
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -54,11 +54,10 @@ pub async fn send_chat_message(
         ..Default::default()
     };
     let busy = store
-        .derive_turn_for_agent(&session_id, &agent_did)
+        .derive_turn_for_node(&session_id, &node_did)
         .is_some_and(|turn_state| !turn_state.is_terminal());
     if busy {
-        if let Some(newest) = store.latest_request_id_for_session_for_agent(&session_id, &agent_did)
-        {
+        if let Some(newest) = store.latest_request_id_for_session_for_node(&session_id, &node_did) {
             input.queue = Some(queued_user_turn(newest));
         }
     }
@@ -66,9 +65,9 @@ pub async fn send_chat_message(
     let submitted = core
         .submit_request_with_options(
             &session_id,
-            &agent_did,
+            &node_did,
             &content,
-            behavior_id.as_deref(),
+            agent_id.as_deref(),
             SubmitRequestOptions {
                 caused_by_source_doc_id: request.caused_by_source_doc_id,
                 input,
@@ -80,8 +79,8 @@ pub async fn send_chat_message(
     Ok(ChatSendResult {
         session_id,
         request_id: submitted.request_id,
-        agent_did: submitted.agent_did,
-        behavior_id: submitted.behavior_id,
+        node_did: submitted.node_did,
+        agent_id: submitted.agent_id,
     })
 }
 
@@ -112,9 +111,9 @@ fn queued_user_turn(active_request_id: String) -> gents_protocol::request_input:
 }
 
 pub async fn rename_session(core: &ClientCore, request: SessionRenameRequest) -> Result<()> {
-    let agent_did = request.agent_did.trim().to_string();
-    if agent_did.is_empty() {
-        bail!("agent_did is required");
+    let node_did = request.node_did.trim().to_string();
+    if node_did.is_empty() {
+        bail!("node_did is required");
     }
     let session_id = request.session_id.trim().to_string();
     if session_id.is_empty() {
@@ -124,7 +123,7 @@ pub async fn rename_session(core: &ClientCore, request: SessionRenameRequest) ->
     if title.is_empty() {
         bail!("title is required");
     }
-    core.rename_session(&agent_did, &session_id, &title).await?;
+    core.rename_session(&node_did, &session_id, &title).await?;
     Ok(())
 }
 

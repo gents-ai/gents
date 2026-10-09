@@ -1,8 +1,8 @@
-/* The behavior choice for a new session: a chip, the name and a chevron
+/* The agent choice for a new session: a chip, the name and a chevron
    in the composer's leading slot, opening a small picker. Each row is the
-   behavior's chip and name, its description, and one mono line of what
+   agent's chip and name, its description, and one mono line of what
    it runs on and may touch, resolved by the bridge; a search field
-   filters by name and description. Disabled behaviors are left out. */
+   filters by name and description. Disabled agents are left out. */
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown, Plus, Search, X } from "lucide-react";
 import type { NodeView } from "../../hooks/fleetStore";
@@ -10,45 +10,45 @@ import { Button } from "@gents/ui/components/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@gents/ui/components/popover";
 import { cn } from "@gents/ui/lib/utils";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
-import { BehaviorSheet } from "./agent/BehaviorSheet";
+import { AgentSheet } from "./agent/BehaviorSheet";
 import { shortAccess } from "./behavior";
-import { BehaviorAvatar } from "./parts";
-import { behaviorReadiness } from "@/lib/behavior-readiness";
+import { AgentInitials } from "./parts";
+import { agentReadiness } from "@/lib/agent-readiness";
 import { useExclusivePopover } from "@/hooks/useExclusivePopover";
 
-export function BehaviorPicker({
+export function AgentPicker({
   deployment,
-  behaviorId,
+  agentId,
   onChange,
 }: {
   deployment: NodeView | null;
-  behaviorId: string | null;
-  onChange: (behaviorId: string) => void;
+  agentId: string | null;
+  onChange: (agentId: string) => void;
 }) {
   if (!deployment) return null;
-  const behaviors = deployment.behaviors.filter((b) => b.enabled);
-  const chosen = behaviors.find((b) => b.behaviorId === behaviorId) ?? behaviors[0];
+  const agents = deployment.agents.filter((b) => b.enabled);
+  const chosen = agents.find((b) => b.agentId === agentId) ?? agents[0];
   if (!chosen) return null;
   return (
-    <MountedBehaviorPicker
+    <MountedAgentPicker
       deployment={deployment}
-      behaviors={behaviors}
+      agents={agents}
       chosen={chosen}
       onChange={onChange}
     />
   );
 }
 
-function MountedBehaviorPicker({
+function MountedAgentPicker({
   deployment,
-  behaviors,
+  agents,
   chosen,
   onChange,
 }: {
   deployment: NodeView;
-  behaviors: NodeView["behaviors"];
-  chosen: NodeView["behaviors"][number];
-  onChange: (behaviorId: string) => void;
+  agents: NodeView["agents"];
+  chosen: NodeView["agents"][number];
+  onChange: (agentId: string) => void;
 }) {
   const [query, setQuery] = useState("");
   /* search is hidden until asked for: the icon in the footer, or typing */
@@ -64,18 +64,18 @@ function MountedBehaviorPicker({
   useEffect(() => {
     if (searching) input.current?.focus();
   }, [searching]);
-  /* described by the node whose behaviors are listed */
+  /* described by the node whose agents are listed */
   const describe = (id: string) =>
-    deployment.behaviors.find((b) => b.behaviorId === id)?.description ?? "";
-  const readiness = (id: string) => behaviorReadiness(deployment, id);
+    deployment.agents.find((b) => b.agentId === id)?.description ?? "";
+  const readiness = (id: string) => agentReadiness(deployment, id);
   const env = (id: string) =>
-    deployment.behaviorEnvironments.find((e) => e.behaviorId === id);
+    deployment.agentEnvironments.find((e) => e.agentId === id);
   const q = query.trim().toLowerCase();
-  const shown = behaviors.filter(
+  const shown = agents.filter(
     (b) =>
       !q ||
       b.displayName.toLowerCase().includes(q) ||
-      describe(b.behaviorId).toLowerCase().includes(q),
+      describe(b.agentId).toLowerCase().includes(q),
   );
   return (
     <>
@@ -98,15 +98,15 @@ function MountedBehaviorPicker({
           render={
             <Button variant="ghost" size="sm" className="gap-2 px-1.5 font-normal" />
           }
-          aria-label="Behavior"
+          aria-label="Agent"
         >
-          <BehaviorAvatar name={chosen.displayName} className="size-6 text-[10px]" />
+          <AgentInitials name={chosen.displayName} className="size-6 text-[10px]" />
           <span>{chosen.displayName}</span>
           <ChevronDown className="ml-6 size-3.5 text-muted-foreground" />
         </PopoverTrigger>
         <PopoverContent
           ref={popover.popupRef}
-          aria-label="Choose behavior"
+          aria-label="Choose agent"
           align="start"
           className="w-[min(40rem,calc(100vw-4rem))] p-0"
           onKeyDown={(e) => {
@@ -138,8 +138,8 @@ function MountedBehaviorPicker({
                     setSearching(false);
                   }
                 }}
-                placeholder="Search behaviors"
-                aria-label="Search behaviors"
+                placeholder="Search agents"
+                aria-label="Search agents"
                 className="h-9 w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
               />
               <button
@@ -156,18 +156,18 @@ function MountedBehaviorPicker({
             </div>
           )}
           <ScrollArea className="max-h-[min(20rem,calc(var(--available-height)-8rem))] [&_[data-slot=scroll-area-viewport]]:max-h-[inherit]">
-            <ul role="listbox" aria-label="Behavior" className="p-1">
+            <ul role="listbox" aria-label="Agent" className="p-1">
               {shown.map((b) => {
-                const e = env(b.behaviorId);
-                const selected = b.behaviorId === chosen.behaviorId;
+                const e = env(b.agentId);
+                const selected = b.agentId === chosen.agentId;
                 return (
-                  <li key={b.behaviorId}>
+                  <li key={b.agentId}>
                     <button
                       type="button"
                       role="option"
                       aria-selected={selected}
                       onClick={() => {
-                        onChange(b.behaviorId);
+                        onChange(b.agentId);
                         popover.onOpenChange(false);
                       }}
                       className={cn(
@@ -175,7 +175,7 @@ function MountedBehaviorPicker({
                         selected && "bg-muted",
                       )}
                     >
-                      <BehaviorAvatar
+                      <AgentInitials
                         name={b.displayName}
                         className="row-span-3 mt-0.5"
                       />
@@ -187,12 +187,12 @@ function MountedBehaviorPicker({
                           </span>
                         )}
                       </span>
-                      {describe(b.behaviorId) && (
+                      {describe(b.agentId) && (
                         <span className="line-clamp-1 text-xs text-muted-foreground">
-                          {describe(b.behaviorId)}
+                          {describe(b.agentId)}
                         </span>
                       )}
-                      {readiness(b.behaviorId).ready ? (
+                      {readiness(b.agentId).ready ? (
                         <span className="truncate font-mono text-[11px] text-muted-foreground">
                           {e?.modelName ?? "no backend"} · files{" "}
                           {shortAccess(e?.fileAccess)} · bash{" "}
@@ -201,7 +201,7 @@ function MountedBehaviorPicker({
                         </span>
                       ) : (
                         <span className="truncate text-[11px] text-destructive">
-                          Unavailable: {readiness(b.behaviorId).reason}
+                          Unavailable: {readiness(b.agentId).reason}
                         </span>
                       )}
                     </button>
@@ -210,7 +210,7 @@ function MountedBehaviorPicker({
               })}
               {shown.length === 0 && (
                 <li className="px-2 py-4 text-center text-sm text-muted-foreground">
-                  No behavior matches.
+                  No agent matches.
                 </li>
               )}
             </ul>
@@ -219,7 +219,7 @@ function MountedBehaviorPicker({
             <button
               type="button"
               onClick={() => {
-                /* a draft behavior beside the session; saved enabled and chosen */
+                /* a draft agent beside the session; saved enabled and chosen */
                 createAfterClose.current = true;
                 popover.onOpenChange(false);
               }}
@@ -228,13 +228,13 @@ function MountedBehaviorPicker({
               <span className="grid size-7 place-items-center rounded-full border border-dashed border-border text-muted-foreground">
                 <Plus className="size-3.5" />
               </span>
-              Create new behavior
+              Create new agent
             </button>
             {!searching && (
               <Button
                 variant="ghost"
                 size="icon-sm"
-                aria-label="Search behaviors"
+                aria-label="Search agents"
                 onClick={() => setSearching(true)}
               >
                 <Search />
@@ -244,13 +244,13 @@ function MountedBehaviorPicker({
         </PopoverContent>
       </Popover>
       {deployment && (
-        <BehaviorSheet
+        <AgentSheet
           deployment={deployment}
           open={creating}
           enabled
-          onClose={(behaviorId) => {
+          onClose={(agentId) => {
             setCreating(false);
-            if (behaviorId) onChange(behaviorId);
+            if (agentId) onChange(agentId);
           }}
         />
       )}

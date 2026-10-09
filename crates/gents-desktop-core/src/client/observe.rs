@@ -11,9 +11,8 @@ use tokio::sync::watch;
 use super::collection_resolver::CollectionResolver;
 use super::core::sync_state::ClientSyncStateOwner;
 use super::query::{
-    fetch_doc_patch, is_transcript_content_collection,
-    load_agent_scoped_snapshot_with_peer_records, load_full_snapshot_with_peer_records,
-    supports_doc_patch_collection,
+    fetch_doc_patch, is_transcript_content_collection, load_full_snapshot_with_peer_records,
+    load_node_scoped_snapshot_with_peer_records, supports_doc_patch_collection,
 };
 
 mod projection_store;
@@ -55,7 +54,7 @@ pub fn spawn_observer_with_selection(
     configured_peers: ClientSyncStateOwner,
     requester_did: String,
     subscription: DocumentChangeSubscription,
-    selected_agent_did_rx: watch::Receiver<Option<String>>,
+    selected_node_did_rx: watch::Receiver<Option<String>>,
 ) -> ObserverHandle {
     let (stop_tx, mut stop_rx) = watch::channel(false);
     let metrics = Arc::new(ObserverMetrics::default());
@@ -132,11 +131,11 @@ pub fn spawn_observer_with_selection(
                 redundant_fetches_pending.clear();
 
                 let captured = store.projection_revision();
-                let scope = selected_agent_did_rx.borrow().clone();
+                let scope = selected_node_did_rx.borrow().clone();
                 let peers = configured_peers.records();
                 let result = match scope {
                     Some(ref did) => {
-                        load_agent_scoped_snapshot_with_peer_records(
+                        load_node_scoped_snapshot_with_peer_records(
                             node.as_ref(),
                             did,
                             &peers,
@@ -160,7 +159,7 @@ pub fn spawn_observer_with_selection(
                             .scope_reloads
                             .fetch_add(1, Ordering::Relaxed);
                         tracing::debug!(
-                            agent_did = ?scope,
+                            node_did = ?scope,
                             "drop-recovery snapshot merged"
                         );
                     }
@@ -221,7 +220,7 @@ pub fn spawn_observer_with_selection(
                     Ok(patch) => {
                         let row_count = patch.observed_documents;
                         // A scoped deletion reload cannot recover surviving rows
-                        // for other agents in this same update batch.
+                        // for other nodes in this same update batch.
                         if patch.store.row_count() > 0 {
                             store.merge_observer_patch_with_outcome(patch.store);
                         }
@@ -229,11 +228,11 @@ pub fn spawn_observer_with_selection(
                             // Missing documents require replacement, including
                             // batches that also contain surviving rows.
                             let captured = store.projection_revision();
-                            let scope = selected_agent_did_rx.borrow().clone();
+                            let scope = selected_node_did_rx.borrow().clone();
                             let peers = configured_peers.records();
                             let reload = match scope.as_deref() {
                                 Some(did) => {
-                                    load_agent_scoped_snapshot_with_peer_records(
+                                    load_node_scoped_snapshot_with_peer_records(
                                         node.as_ref(),
                                         did,
                                         &peers,

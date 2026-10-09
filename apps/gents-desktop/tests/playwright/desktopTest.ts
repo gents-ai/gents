@@ -114,7 +114,7 @@ export async function openConfigSection(page: Page, name: RegExp) {
     return;
   }
   await page.mouse.move(page.viewportSize()!.width - 30, 100);
-  await page.getByRole("link", { name }).click();
+  await page.getByTestId("agent-screen").getByRole("link", { name }).click();
 }
 
 export async function primarySurfaceCount(page: Page) {

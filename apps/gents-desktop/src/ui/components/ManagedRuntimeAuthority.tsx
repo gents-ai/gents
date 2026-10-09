@@ -164,7 +164,7 @@ export function ManagedRuntimeAuthorityPicker({
           : toolCeiling === "readonly"
             ? "Read files and run restricted read-only commands."
             : "No host files or commands. Configuration and separately enabled remote tools remain available."}{" "}
-        Individual behaviors can use less access, never more.
+        Individual agents can use less access, never more.
       </p>
       {validating && toolCeiling !== "meta-only" ? (
         <p className="text-xs text-muted-foreground">Checking…</p>
@@ -196,8 +196,8 @@ export function ManagedRuntimeAuthorityReview({
         <p className="text-sm">{authoritySummary(authority)}</p>
       </div>
       <p className="text-xs text-muted-foreground">
-        Setup remains a narrow configurator. A behavior can reduce this ceiling but
-        cannot expand it.
+        Setup remains a narrow configurator. An agent can reduce this ceiling but cannot
+        expand it.
       </p>
     </div>
   );

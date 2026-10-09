@@ -13,11 +13,7 @@ import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 import type { DesktopApp } from "../src/hooks/desktopApp";
 import { node, publish, testApp, withApp } from "./app-fixture";
 
-import {
-  subagentsOf,
-  useSessionProvenance,
-  useWorkers,
-} from "../src/ui/screens/workers";
+import { workersOf, useSessionProvenance, useWorkers } from "../src/ui/screens/workers";
 import { workerNow } from "../src/ui/screens/WorkerStep";
 import { writeSession } from "../src/hooks/sessionStore";
 
@@ -38,7 +34,7 @@ const call = (
     requestId,
     awaitMode: "background",
     presentation: {
-      kind: "subagent",
+      kind: "agent",
       action,
       name: "crew-explorer",
       sessionId: null,
@@ -62,13 +58,13 @@ const caused = (
   lifecycleState: string,
   byRequest: string,
   byToolCall: string,
-  agentDid = AGENT,
+  nodeDid = AGENT,
 ): CausedCallView => ({
   requestId: byRequest,
   toolCallId: byToolCall,
   caused: {
     requestId,
-    agentDid,
+    nodeDid,
     sessionId,
     requesterDid: null,
     lifecycleState,
@@ -77,7 +73,7 @@ const caused = (
 });
 
 const link = (sessionId: string): LinkedSessionView => ({
-  agentDid: AGENT,
+  nodeDid: AGENT,
   sessionId,
   requesterDid: null,
   causeRequestDocId: "doc-req-1",
@@ -98,7 +94,7 @@ const view = (
 });
 
 /* the agent's node, listing `sessions` */
-const nodeListing = (sessions: unknown[]) => [node({ agentDid: AGENT, sessions })];
+const nodeListing = (sessions: unknown[]) => [node({ nodeDid: AGENT, sessions })];
 
 /* An app selecting `sessionId` on the agent's node, which lists
    `sessions`; one per transcript and session a test passes, as the
@@ -115,7 +111,7 @@ function appFor(
   const bySession = apps.get(timelineItems) ?? new Map<string, DesktopApp>();
   apps.set(timelineItems, bySession);
   const deployments = nodeListing(
-    sessions ?? [{ agentDid: AGENT, sessionId, requesterDid: PERSON }],
+    sessions ?? [{ nodeDid: AGENT, sessionId, requesterDid: PERSON }],
   );
   const known = bySession.get(sessionId);
   if (known) {
@@ -126,7 +122,7 @@ function appFor(
     api,
     deployments,
     session: { sessionId, timelineItems } as unknown as DesktopSessionSnapshot,
-    selection: { agentDid: AGENT, sessionId },
+    selection: { nodeDid: AGENT, sessionId },
   });
   bySession.set(sessionId, app);
   return app;
@@ -155,23 +151,23 @@ function renderWorkers(app: DesktopApp) {
   return renderHook(() => useBoth(), { wrapper: withApp(app) });
 }
 
-describe("subagents of a session", () => {
+describe("agents of a session", () => {
   it("are the lineage owner's started sessions, matched to summaries by full scope", () => {
-    const all = subagentsOf(view([], ["session-a"]), [
+    const all = workersOf(view([], ["session-a"]), [
       {
-        agentDid: AGENT,
+        nodeDid: AGENT,
         sessionId: "session-a",
         requesterDid: null,
         title: "Explorer",
       },
       /* the same label under another requester is another session */
-      { agentDid: AGENT, sessionId: "session-a", requesterDid: PERSON, title: "Other" },
+      { nodeDid: AGENT, sessionId: "session-a", requesterDid: PERSON, title: "Other" },
     ] as never);
     expect(all.map((s) => s.sessionId)).toEqual(["session-a"]);
     expect(all[0]!.summary?.title).toBe("Explorer");
   });
 
-  it("joins each call to the request it caused, subagent or not", async () => {
+  it("joins each call to the request it caused, worker or not", async () => {
     const started = caused("r-done", "session-done", "completed", "req-1", "call-done");
     const messaged = caused("r-m", "session-old", "processing", "req-1", "call-m");
     const api = apiWith(async () => view([started, messaged], ["session-done"]));
@@ -182,7 +178,7 @@ describe("subagents of a session", () => {
     await waitFor(() => expect(result.current.byToolCall(start)).toBeTruthy());
     const reachedStart = result.current.byToolCall(start)!;
     expect(reachedStart.request.requestId).toBe("r-done");
-    expect(reachedStart.subagent?.sessionId).toBe("session-done");
+    expect(reachedStart.worker?.sessionId).toBe("session-done");
     expect(workerNow(start, reachedStart, Date.now())).toEqual({
       tone: "done",
       text: "finished",
@@ -190,7 +186,10 @@ describe("subagents of a session", () => {
 
     const reachedMessage = result.current.byToolCall(message)!;
     expect(reachedMessage.request.sessionId).toBe("session-old");
-    expect(reachedMessage.subagent, "a messaged session is not a subagent").toBeNull();
+    expect(
+      reachedMessage.worker,
+      "a messaged session is not a started session",
+    ).toBeNull();
     expect(result.current.all.map((s) => s.sessionId)).toEqual(["session-done"]);
   });
 
@@ -200,7 +199,7 @@ describe("subagents of a session", () => {
     await waitFor(() =>
       expect(api.sessionProvenance).toHaveBeenCalledWith({
         sessionId: "parent-session",
-        agentDid: AGENT,
+        nodeDid: AGENT,
         requesterDid: PERSON,
       }),
     );
@@ -218,8 +217,8 @@ describe("subagents of a session", () => {
     renderWorkers(
       appFor(api, [group(call("req-1", "call-1"))], {
         sessions: [
-          { agentDid: AGENT, sessionId: "parent-session", requesterDid: PERSON },
-          { agentDid: AGENT, sessionId: "parent-session", requesterDid: null },
+          { nodeDid: AGENT, sessionId: "parent-session", requesterDid: PERSON },
+          { nodeDid: AGENT, sessionId: "parent-session", requesterDid: null },
         ],
       }),
     );
@@ -234,10 +233,10 @@ describe("subagents of a session", () => {
     const message = call("req-2", "call-steer", "running", "message");
     const { result } = renderWorkers(appFor(api, [group(message)]));
     await waitFor(() => expect(result.current.byToolCall(message)).toBeTruthy());
-    expect(result.current.byToolCall(message)!.subagent?.sessionId).toBe("session-a");
-    expect(
-      message.presentation.kind === "subagent" && message.presentation.action,
-    ).toBe("message");
+    expect(result.current.byToolCall(message)!.worker?.sessionId).toBe("session-a");
+    expect(message.presentation.kind === "agent" && message.presentation.action).toBe(
+      "message",
+    );
   });
 
   it("joins a call only through the lineage, never through a summary's latest request", async () => {
@@ -245,9 +244,9 @@ describe("subagents of a session", () => {
     const unknown = call("req-1", "call-unknown", "running");
     const app = appFor(api, [group(unknown)], {
       sessions: [
-        { agentDid: AGENT, sessionId: "parent-session", requesterDid: PERSON },
+        { nodeDid: AGENT, sessionId: "parent-session", requesterDid: PERSON },
         {
-          agentDid: AGENT,
+          nodeDid: AGENT,
           sessionId: "unrelated-session",
           latestRequestId: "call-unknown",
         },
@@ -280,9 +279,7 @@ describe("subagents of a session", () => {
     act(() => {
       publish(
         app,
-        nodeListing([
-          { agentDid: AGENT, sessionId: "session-y", requesterDid: PERSON },
-        ]),
+        nodeListing([{ nodeDid: AGENT, sessionId: "session-y", requesterDid: PERSON }]),
       );
       app.stores.selection.setState({ sessionId: "session-y" });
       writeSession(app.stores.session, {
@@ -313,7 +310,7 @@ describe("the provenance owner", () => {
   });
 });
 
-describe("subagent lineage freshness", () => {
+describe("agent lineage freshness", () => {
   it("asks again on a session-list change and keeps the last view on a failed ask", async () => {
     let state = "processing";
     const api = apiWith(async () =>
@@ -321,7 +318,7 @@ describe("subagent lineage freshness", () => {
     );
     const tool = call("req-1", "call-1", "success");
     const items = [group(tool)];
-    const own = { agentDid: AGENT, sessionId: "parent-session", requesterDid: PERSON };
+    const own = { nodeDid: AGENT, sessionId: "parent-session", requesterDid: PERSON };
     const app = appFor(api, items, { sessions: [own] });
     const { result } = renderWorkers(app);
     await waitFor(() =>

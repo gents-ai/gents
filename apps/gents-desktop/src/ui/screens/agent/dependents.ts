@@ -5,7 +5,7 @@ import type { NodeView } from "../../../hooks/fleetStore";
    wording, so the editor's Danger zone and a list row's menu agree. */
 
 export type DependentKind =
-  | "behavior"
+  | "agent"
   | "context"
   | "backend"
   | "profile"
@@ -30,21 +30,20 @@ export function dependents(
     if (n > 0) parts.push(count(n, one, many));
   };
   switch (kind) {
-    case "behavior":
-      if (deployment.agentPrincipal.defaultBehaviorId === id)
-        parts.push("the agent's default behavior");
-      add(deployment.tasks.filter((t) => t.behaviorId === id).length, "task", "tasks");
+    case "agent":
+      if (deployment.node.defaultAgentId === id) parts.push("the node's default agent");
+      add(deployment.tasks.filter((t) => t.agentId === id).length, "task", "tasks");
       add(
-        deployment.subagentTargets.filter((t) => t.behavior_id === id).length,
-        "subagent target",
-        "subagent targets",
+        deployment.agentTargets.filter((t) => t.agent_id === id).length,
+        "agent target",
+        "agent targets",
       );
       break;
     case "context":
       add(
-        deployment.behaviors.filter((b) => b.contextId === id).length,
-        "behavior",
-        "behaviors",
+        deployment.agents.filter((b) => b.contextId === id).length,
+        "agent",
+        "agents",
       );
       break;
     case "backend":
@@ -56,9 +55,9 @@ export function dependents(
       break;
     case "profile":
       add(
-        deployment.behaviors.filter((b) => b.inferenceProfileId === id).length,
-        "behavior",
-        "behaviors",
+        deployment.agents.filter((b) => b.inferenceProfileId === id).length,
+        "agent",
+        "agents",
       );
       break;
     case "tools":

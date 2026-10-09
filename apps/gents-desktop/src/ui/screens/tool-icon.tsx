@@ -36,7 +36,7 @@ const BY_KIND: Record<string, Glyph> = {
   command: Terminal,
   fileRead: FileText,
   fileEdit: PenLine,
-  subagent: Bot,
+  agent: Bot,
   process: SquareTerminal,
   mcp: Plug,
   generic: Wrench,

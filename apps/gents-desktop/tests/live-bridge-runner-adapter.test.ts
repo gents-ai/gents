@@ -60,10 +60,10 @@ describe("live bridge runner startup/config adapter", () => {
     });
     const request = {
       document: {
-        agent_principal: { agent_did: "did:test:agent" },
+        node: { node_did: "did:test:agent" },
         contexts: [
           {
-            agent_did: "did:test:agent",
+            node_did: "did:test:agent",
             context_id: "context-a",
             name: "Context A",
           },
@@ -79,7 +79,7 @@ describe("live bridge runner startup/config adapter", () => {
     const postJson = vi.fn().mockResolvedValue({ bootstrap: {}, client: null });
     const adapter = createBridgeHttpAdapter({ getJson: vi.fn(), postJson });
     const request = {
-      agentDid: "did:test:agent",
+      nodeDid: "did:test:agent",
       patches: [{ collection: "AgentContext" as const, id: "context-a", changes: {} }],
     };
     await adapter.patchConfigComponents(request);
@@ -91,7 +91,7 @@ describe("live bridge runner startup/config adapter", () => {
     const adapter = createBridgeHttpAdapter({ getJson: vi.fn(), postJson });
     const request = {
       document: {
-        agent_did: "did:test:agent",
+        node_did: "did:test:agent",
         event_source_id: "event-a",
         source_collection: "AgentRequest",
       },

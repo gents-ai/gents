@@ -3,7 +3,7 @@
 /**
  * References existing DefraDB ACP policies; this is not a second ACL system.
  */
-export type ProjectionAcpBinding = { binding_id: string, agent_did: string, behavior_id?: string | null, projection_id?: string | null, policy_id: string, staged_policy_id?: string | null, previous_policy_id?: string | null, resource_map_json?: string | null, enabled?: boolean | null,
+export type ProjectionAcpBinding = { binding_id: string, node_did: string, agent_id?: string | null, projection_id?: string | null, policy_id: string, staged_policy_id?: string | null, previous_policy_id?: string | null, resource_map_json?: string | null, enabled?: boolean | null,
 /**
  * Optional UI/discovery labels. References, never tags, determine execution.
  */

@@ -6,7 +6,7 @@ import type {
 export const deployment: DeploymentView = {
   peerId: "peer-1",
   label: "Local Agent",
-  agentDid: "did:key:z6MkAgent",
+  nodeDid: "did:key:z6MkAgent",
   addr: "iroh://local",
   source: "local",
   graphql: null,
@@ -15,19 +15,19 @@ export const deployment: DeploymentView = {
   routes: [],
   pairing: [],
   lastError: null,
-  agentPrincipal: {
-    agentDid: "did:key:z6MkAgent",
+  node: {
+    nodeDid: "did:key:z6MkAgent",
     displayName: "Local Agent",
-    defaultBehaviorId: "default",
+    defaultAgentId: "default",
     enabled: true,
     createdAt: null,
     createdBy: null,
   },
-  principalConfig: null,
-  behaviorConfigs: [
+  nodeConfig: null,
+  agentConfigs: [
     {
-      behavior_id: "default",
-      agent_did: "did:key:z6MkAgent",
+      agent_id: "default",
+      node_did: "did:key:z6MkAgent",
       display_name: "Default",
       description: null,
       context_id: "context-a",
@@ -37,8 +37,8 @@ export const deployment: DeploymentView = {
       created_at: null,
     },
     {
-      behavior_id: "ops",
-      agent_did: "did:key:z6MkAgent",
+      agent_id: "ops",
+      node_did: "did:key:z6MkAgent",
       display_name: "Ops",
       description: null,
       context_id: "context-b",
@@ -49,20 +49,20 @@ export const deployment: DeploymentView = {
     },
   ],
   runtime: null,
-  behaviorReadiness: {
+  nodeReadiness: {
     source: { state: "current" },
     activeGeneration: 1,
     routerGeneration: 1,
     updatedAt: "2026-08-28T00:00:00Z",
-    behaviors: [
-      { state: "ready", behaviorId: "default" },
-      { state: "ready", behaviorId: "ops" },
+    agents: [
+      { state: "ready", agentId: "default" },
+      { state: "ready", agentId: "ops" },
     ],
   },
-  behaviors: [
+  agents: [
     {
-      behaviorId: "default",
-      agentDid: "did:key:z6MkAgent",
+      agentId: "default",
+      nodeDid: "did:key:z6MkAgent",
       displayName: "Default",
       description: null,
       contextId: "context-a",
@@ -73,8 +73,8 @@ export const deployment: DeploymentView = {
       createdAt: null,
     },
     {
-      behaviorId: "ops",
-      agentDid: "did:key:z6MkAgent",
+      agentId: "ops",
+      nodeDid: "did:key:z6MkAgent",
       displayName: "Ops",
       description: null,
       contextId: "context-b",
@@ -85,9 +85,9 @@ export const deployment: DeploymentView = {
       createdAt: null,
     },
   ],
-  behaviorEnvironments: [
+  agentEnvironments: [
     {
-      behaviorId: "default",
+      agentId: "default",
       displayName: "Default",
       enabled: true,
       isDefault: true,
@@ -102,7 +102,7 @@ export const deployment: DeploymentView = {
       activeSessionCount: 0,
     },
     {
-      behaviorId: "ops",
+      agentId: "ops",
       displayName: "Ops",
       enabled: true,
       isDefault: false,
@@ -161,7 +161,7 @@ export const deployment: DeploymentView = {
   ],
   inferenceProfiles: [
     {
-      agent_did: "did:key:z6MkAgent",
+      node_did: "did:key:z6MkAgent",
       profile_id: "profile-a",
       display_name: "Profile A",
       description: null,
@@ -175,7 +175,7 @@ export const deployment: DeploymentView = {
       tags: [],
     },
     {
-      agent_did: "did:key:z6MkAgent",
+      node_did: "did:key:z6MkAgent",
       profile_id: "profile-b",
       display_name: "Profile B",
       description: null,
@@ -194,10 +194,10 @@ export const deployment: DeploymentView = {
   contexts: [
     {
       context_id: "context-a",
-      agent_did: "did:key:z6MkAgent",
+      node_did: "did:key:z6MkAgent",
       display_name: "Default context",
       description: null,
-      system_prompt: "You are the default behavior.",
+      system_prompt: "You are the default agent.",
       tools_id: "tools-a",
       compaction_id: null,
       skill_ids: null,
@@ -205,10 +205,10 @@ export const deployment: DeploymentView = {
     },
     {
       context_id: "context-b",
-      agent_did: "did:key:z6MkAgent",
+      node_did: "did:key:z6MkAgent",
       display_name: "Ops context",
       description: null,
-      system_prompt: "You are the ops behavior.",
+      system_prompt: "You are the ops agent.",
       tools_id: "tools-b",
       compaction_id: null,
       skill_ids: null,
@@ -219,7 +219,7 @@ export const deployment: DeploymentView = {
   tools: [
     {
       tools_id: "tools-a",
-      agent_did: "did:key:z6MkAgent",
+      node_did: "did:key:z6MkAgent",
       display_name: "Tools A",
       host: {
         files: { mode: "ReadOnly" },
@@ -228,7 +228,7 @@ export const deployment: DeploymentView = {
     },
     {
       tools_id: "tools-b",
-      agent_did: "did:key:z6MkAgent",
+      node_did: "did:key:z6MkAgent",
       display_name: "Tools B",
       host: {
         files: { mode: "ReadOnly" },
@@ -239,7 +239,7 @@ export const deployment: DeploymentView = {
   toolServiceRegistries: [
     {
       service_id: "service-a",
-      agent_did: "did:key:z6MkAgent",
+      node_did: "did:key:z6MkAgent",
       display_name: "Service A",
       description: null,
       hostname: "localhost",
@@ -247,18 +247,18 @@ export const deployment: DeploymentView = {
       lan_ip: null,
       mcp_port: 7331,
       mcp_path: "/mcp",
-      send_agent_did: null,
+      send_node_did: null,
       enabled: true,
       tags: [],
     },
   ],
-  subagentTargets: [],
+  agentTargets: [],
   datastoreToolSurfaces: [],
   chainKeyBindings: [],
   skills: [
     {
       skillId: "skill-a",
-      agentDid: "did:key:z6MkAgent",
+      nodeDid: "did:key:z6MkAgent",
       name: "Skill A",
       description: "Skill A description",
       instructions: "Do skill A things",
@@ -276,7 +276,7 @@ export const deployment: DeploymentView = {
       taskId: "task-a",
       name: "Task A",
       description: null,
-      behaviorId: "default",
+      agentId: "default",
       emitOutcome: false,
       promptTemplate: "Run task A",
       goalObjectiveTemplate: null,
@@ -299,7 +299,7 @@ export const deployment: DeploymentView = {
       taskId: "task-b",
       name: "Task B",
       description: null,
-      behaviorId: "ops",
+      agentId: "ops",
       emitOutcome: false,
       promptTemplate: "Run task B",
       goalObjectiveTemplate: null,
@@ -321,7 +321,7 @@ export const deployment: DeploymentView = {
   ],
   schedules: [
     {
-      agent_did: "did:key:z6MkAgent",
+      node_did: "did:key:z6MkAgent",
       schedule_id: "timer-a",
       display_name: "Timer A",
       cadence: { kind: "interval", interval_secs: 60 },
@@ -330,7 +330,7 @@ export const deployment: DeploymentView = {
   ],
   eventSources: [
     {
-      agent_did: "did:key:z6MkAgent",
+      node_did: "did:key:z6MkAgent",
       event_source_id: "source-a",
       display_name: "Source A",
       source_collection: "AgentRequest",
@@ -345,7 +345,7 @@ export const deployment: DeploymentView = {
   triggers: [
     {
       config: {
-        agent_did: "did:key:z6MkAgent",
+        node_did: "did:key:z6MkAgent",
         trigger_id: "trigger-a",
         display_name: "Trigger A",
         description: null,
@@ -368,16 +368,16 @@ export const deployment: DeploymentView = {
 };
 
 export const bootstrap: BootstrapSummary = {
-  defaultAgentHome: "/tmp/agent",
-  initAgentName: "Local Agent",
-  initAgentDid: "did:key:z6MkAgent",
+  defaultNodeHome: "/tmp/agent",
+  initNodeName: "Local Agent",
+  initNodeDid: "did:key:z6MkAgent",
   initToolCeiling: "Readwrite",
   initToolRoot: "/tmp/work",
   desktopHome: "/tmp/gents",
   peerDirectoryPath: "/tmp/gents/peers.json",
   nodeDataDir: "/tmp/gents/node",
   diagnosticsHint: "native logging",
-  agentHomeExists: true,
+  nodeHomeExists: true,
   desktopHomeExists: true,
   peerDirectoryExists: true,
   clientStateExists: false,

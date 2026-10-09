@@ -4,7 +4,7 @@ import type { SurfaceToolDecl } from "./SurfaceToolDecl.js";
 /**
  * Document-layer view of a `DatastoreToolSurface` row.
  */
-export type DatastoreToolSurfaceDocument = { surface_id: string, agent_did: string, display_name?: string | null, enabled?: boolean | null,
+export type DatastoreToolSurfaceDocument = { surface_id: string, node_did: string, display_name?: string | null, enabled?: boolean | null,
 /**
  * Canonical create/query tool declarations selected through Tools.datastore.
  */

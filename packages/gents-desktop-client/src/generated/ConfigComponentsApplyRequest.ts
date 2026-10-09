@@ -2,9 +2,9 @@
 import type { PackConfig } from "./PackConfig.js";
 
 /**
- * Atomic component edits for an existing principal, not pack installation.
- * Supply agent_principal with only agent_did/default-valued fields. Principal
- * settings use AgentConfigSaveRequest. Omitted documents remain untouched;
+ * Atomic component edits for an existing node, not pack installation.
+ * Supply node with only node_did/default-valued fields. Node settings use
+ * NodeConfigSaveRequest. Omitted documents remain untouched;
  * graph_intents/graph_capabilities are rejected, not compiled or ignored.
  */
 export type ConfigComponentsApplyRequest = { document: PackConfig, };

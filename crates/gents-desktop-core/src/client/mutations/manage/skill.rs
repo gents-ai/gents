@@ -30,23 +30,23 @@ pub async fn upsert_skill_on(access: &ConfigAccess, document: &SkillDocument) ->
 }
 
 #[cfg(test)]
-pub async fn delete_skill(node: &EmbeddedNode, agent_did: &str, id: &str) -> Result<usize> {
+pub async fn delete_skill(node: &EmbeddedNode, node_did: &str, id: &str) -> Result<usize> {
     super::delete_scoped_document_local(
         node,
         "desktop.skill.delete",
         Collection::Skill,
-        agent_did,
+        node_did,
         id,
     )
     .await
 }
 
-pub async fn delete_skill_on(access: &ConfigAccess, agent_did: &str, id: &str) -> Result<usize> {
+pub async fn delete_skill_on(access: &ConfigAccess, node_did: &str, id: &str) -> Result<usize> {
     super::delete_scoped_document(
         access,
         "desktop.skill.delete",
         Collection::Skill,
-        agent_did,
+        node_did,
         id,
     )
     .await
@@ -62,9 +62,9 @@ mod tests {
     async fn skill_save_roundtrip_preserves_source_directory() -> Result<()> {
         let node = EmbeddedNode::builder().build().await?;
         gents::ensure_runtime_schemas(&node).await?;
-        gents::ensure_agent_principal(&node, "did:test:skill-source").await?;
+        gents::ensure_node(&node, "did:test:skill-source").await?;
         let mut skill: SkillDocument = serde_json::from_value(json!({
-            "agent_did":"did:test:skill-source", "skill_id":"review",
+            "node_did":"did:test:skill-source", "skill_id":"review",
             "instructions":"Read references/checklist.md.", "source_directory":"/skills/review"
         }))?;
         upsert_skill(&node, &skill).await?;
@@ -95,14 +95,14 @@ mod tests {
         let node = EmbeddedNode::builder().build().await?;
         gents::ensure_runtime_schemas(&node).await?;
         for owner in ["did:test:skill-a", "did:test:skill-b"] {
-            gents::ensure_agent_principal(&node, owner).await?;
+            gents::ensure_node(&node, owner).await?;
             let document: SkillDocument = serde_json::from_value(
-                json!({"agent_did":owner,"skill_id":"skill","instructions":"Literal {{ instruction }}","created_at":"2026-01-01T00:00:00Z","tags":["review"]}),
+                json!({"node_did":owner,"skill_id":"skill","instructions":"Literal {{ instruction }}","created_at":"2026-01-01T00:00:00Z","tags":["review"]}),
             )?;
             upsert_skill(&node, &document).await?;
         }
         let value =
-            json!({"agent_did":"did:test:skill-a","context_id":"context","skill_ids":["skill"]});
+            json!({"node_did":"did:test:skill-a","context_id":"context","skill_ids":["skill"]});
         let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
             collection: Collection::AgentContext,
             add: value.clone(),

@@ -3,15 +3,15 @@
 /**
  * Session-message targets: the allowlist agent_new/agent_message address.
  */
-export type SubagentTools = {
+export type AgentTools = {
 /**
- * References to same-owner SubagentTarget documents. Empty selects no targets.
+ * References to same-owner AgentTarget documents. Empty selects no targets.
  */
 target_ids?: Array<string> | null,
 /**
  * Exposes agent_new/agent_message over the allowlisted targets. Every
  * started session is a background tool row; there is no foreground wait,
- * workspace inheritance, cascade or cross-principal switch. A target on
- * another principal is admitted there as a Peer request under its ACP.
+ * workspace inheritance, cascade or cross-node switch. A target on
+ * another node is admitted there as a Peer request under its ACP.
  */
 enabled?: boolean | null, };

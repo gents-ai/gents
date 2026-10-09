@@ -25,7 +25,7 @@ export function ToolsSheet({
       open={open}
       onClose={() => close(null)}
       title="New tools"
-      description="What a behavior may touch: files, commands, network, remote tools and more."
+      description="What an agent may touch: files, commands, network, remote tools and more."
     >
       {open && (
         <ToolsEditor

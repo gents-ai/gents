@@ -21,10 +21,10 @@ export const MANAGED_SERVER_TRAY_RESTART_EVENT =
 export type TrayServer = {
   /** the status now, or a rejection saying why it could not be read */
   readStatus: () => Promise<ManagedServerStatus>;
-  start: (agentName: string) => Promise<ManagedServerStatus>;
+  start: (nodeName: string) => Promise<ManagedServerStatus>;
   stop: () => Promise<ManagedServerStatus>;
   restart: (
-    agentName: string,
+    nodeName: string,
     authority: ManagedServerAuthorityInput,
   ) => Promise<ManagedServerStatus>;
   /** waits while the service boots, updates or awaits approval */
@@ -63,7 +63,7 @@ export function installManagedServerTrayListeners(
       })
       .catch((cause) => {
         reportError(
-          `Could not register the agent menu command: ${cause instanceof Error ? cause.message : String(cause)}`,
+          `Could not register the node menu command: ${cause instanceof Error ? cause.message : String(cause)}`,
         );
       });
   };
@@ -73,29 +73,29 @@ export function installManagedServerTrayListeners(
     if (!current.effectiveToolCeiling) {
       await showSetup();
       throw new Error(
-        "Complete local agent setup to review host access before starting the agent.",
+        "Complete local node setup to review host access before starting the node.",
       );
     }
     if (!server.offers.start)
-      throw new Error("Start Agent is unavailable in this build.");
-    await server.start(current.agentName?.trim() || "Local Agent");
+      throw new Error("Start Node is unavailable in this build.");
+    await server.start(current.nodeName?.trim() || "Local Node");
   });
   register(MANAGED_SERVER_TRAY_STOP_EVENT, async () => {
     const current = await server.readStatus();
     if (current.state === "external") {
       throw new Error(
-        "This agent was started outside the managed service. Stop that gents server process directly.",
+        "This node was started outside the managed service. Stop that gents server process directly.",
       );
     }
     if (!server.offers.stop)
-      throw new Error("Stop Agent is unavailable in this build.");
+      throw new Error("Stop Node is unavailable in this build.");
     await server.stop();
   });
   register(MANAGED_SERVER_TRAY_RESTART_EVENT, async () => {
     const current = await server.readStatus();
     if (current.state === "external") {
       throw new Error(
-        "This agent was started outside the managed service. Stop that gents server process directly before restarting the managed agent.",
+        "This node was started outside the managed service. Stop that gents server process directly before restarting the managed node.",
       );
     }
     // Restarting a runtime that is migrating its data would interrupt the
@@ -108,13 +108,13 @@ export function installManagedServerTrayListeners(
     }
     if (!current.effectiveToolCeiling) {
       throw new Error(
-        "Restart is unavailable until the agent reports its confirmed host access. Open Gents and check the local agent status.",
+        "Restart is unavailable until the node reports its confirmed host access. Open Gents and check the local node status.",
       );
     }
     if (!server.offers.restart) {
-      throw new Error("Restart Agent is unavailable in this build.");
+      throw new Error("Restart Node is unavailable in this build.");
     }
-    await server.restart(current.agentName?.trim() || "Local Agent", {
+    await server.restart(current.nodeName?.trim() || "Local Node", {
       toolCeiling: current.effectiveToolCeiling,
       toolRoot: current.effectiveToolRoot,
     });

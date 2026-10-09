@@ -5,7 +5,7 @@ import type { GraphLimits } from "./GraphLimits.js";
 import type { GraphNode } from "./GraphNode.js";
 import type { ResultContract } from "./ResultContract.js";
 
-export type GraphIntent = { agent_did: string, graph_id: string, nodes: Array<GraphNode>, edges?: Array<GraphEdge> | null, entries: Array<EntryBinding>, results?: Array<ResultContract> | null, limits: GraphLimits,
+export type GraphIntent = { node_did: string, graph_id: string, nodes: Array<GraphNode>, edges?: Array<GraphEdge> | null, entries: Array<EntryBinding>, results?: Array<ResultContract> | null, limits: GraphLimits,
 /**
  * UI/discovery metadata; explicit task/capability references define topology.
  */

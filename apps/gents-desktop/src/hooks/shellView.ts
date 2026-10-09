@@ -23,7 +23,7 @@ export type ShellView = ShellProjection & {
   /** the sent message, shown until the transcript holds a row for it */
   pendingTurn: OptimisticPendingTurn | null;
   /** the composer's draft, by session or by the new-session screen's node
-      and behavior */
+      and agent */
   draftKey: string;
 };
 
@@ -58,7 +58,7 @@ function viewOf(inputs: ViewInputs): ShellView {
     ...projection,
     loadingStatus: projectSessionLoadingStatus({
       selectedSessionId: selection.sessionId,
-      selectedAgentDid: selection.agentDid,
+      selectedNodeDid: selection.nodeDid,
       session,
       sessionLoad: inputs.load,
       operationalState: projection.operationalState,
@@ -66,8 +66,8 @@ function viewOf(inputs: ViewInputs): ShellView {
     pendingTurn: turn,
     draftKey: JSON.stringify(
       selection.sessionId
-        ? ["session", selection.agentDid, selection.sessionId]
-        : ["new", selection.agentDid, projection.behaviorReadiness.behaviorId],
+        ? ["session", selection.nodeDid, selection.sessionId]
+        : ["new", selection.nodeDid, projection.agentReadiness.agentId],
     ),
   };
 }

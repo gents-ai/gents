@@ -4,7 +4,7 @@
  * Interrupts exactly `request_id`. Other requests, including those it caused
  * in other sessions, keep running.
  */
-export type DesktopInterruptRequest = { requestId: string, agentDid: string | null,
+export type DesktopInterruptRequest = { requestId: string, nodeDid: string | null,
 /**
  * Only `"userCancelled"` is operator-authentic; the runtime derives every
  * other cause.

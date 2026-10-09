@@ -7,7 +7,7 @@ import type { ReasoningEffort } from "./ReasoningEffort.js";
  * Sampling and execution settings live in their owning subobjects, referenced
  * by `sampling_id`/`execution_id`; unset references use canonical defaults.
  */
-export type InferenceProfile = { agent_did: string, profile_id: string, display_name?: string | null, description?: string | null,
+export type InferenceProfile = { node_did: string, profile_id: string, display_name?: string | null, description?: string | null,
 /**
  * Shared connectivity, authentication, discovery, and admission capacity.
  */

@@ -5,7 +5,7 @@
  * Uses the same EventSource configuration as task triggers. Event grouping
  * support must follow the shared delivery contract rather than be ignored.
  */
-export type CallbackBinding = { binding_id: string, agent_did: string, event_source_id: string, callback_id: string,
+export type CallbackBinding = { binding_id: string, node_did: string, event_source_id: string, callback_id: string,
 /**
  * Exact source field names projected for this invocation. Empty passes no
  * source data. Apply the existing schema-safe field validation. For grouped

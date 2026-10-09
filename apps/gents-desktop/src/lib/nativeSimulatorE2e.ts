@@ -107,7 +107,7 @@ async function runNativeSimulatorE2e() {
     await reportStatus({ stage: "starting" });
     await waitFor(
       () =>
-        /Sessions|Let’s get set up|Agents/.test(document.body.textContent ?? "")
+        /Sessions|Let’s get set up|Nodes/.test(document.body.textContent ?? "")
           ? document.body
           : null,
       30_000,
@@ -124,7 +124,7 @@ async function runNativeSimulatorE2e() {
     );
     if (!deploymentControl) {
       await reportStatus({ stage: "enrollment" });
-      await enrollAgent(config);
+      await enrollNode(config);
       await waitFor(
         () => findAgentDeploymentControl(config.agentLabel),
         300_000,
@@ -170,7 +170,7 @@ async function runNativeSimulatorE2e() {
     const newChatButton = await waitFor(
       () => findNewChatButton(config.agentLabel),
       remainingMs(environmentReadinessDeadline),
-      `${config.agentLabel} unique enabled behavior readiness`,
+      `${config.agentLabel} unique enabled agent readiness`,
     );
     newChatButton.click();
 
@@ -239,14 +239,14 @@ async function runNativeSimulatorE2e() {
   }
 }
 
-async function enrollAgent(config: NativeE2eConfig) {
+async function enrollNode(config: NativeE2eConfig) {
   const disclosure = await waitFor(
     () =>
       document.querySelector<HTMLElement>(
         '[data-testid="fleet-remote-disclosure"] summary',
       ),
     30_000,
-    "remote-agent disclosure",
+    "remote-node disclosure",
   );
   disclosure.click();
 

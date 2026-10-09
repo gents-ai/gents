@@ -295,16 +295,28 @@
       "type": "string",
       "oneOf": [
         {
-          "description": "Enables the desktop_agent_config_save command without any pre-configured scope.",
+          "description": "Enables the desktop_agent_delete command without any pre-configured scope.",
           "type": "string",
-          "const": "allow-desktop-agent-config-save",
-          "markdownDescription": "Enables the desktop_agent_config_save command without any pre-configured scope."
+          "const": "allow-desktop-agent-delete",
+          "markdownDescription": "Enables the desktop_agent_delete command without any pre-configured scope."
         },
         {
-          "description": "Denies the desktop_agent_config_save command without any pre-configured scope.",
+          "description": "Denies the desktop_agent_delete command without any pre-configured scope.",
           "type": "string",
-          "const": "deny-desktop-agent-config-save",
-          "markdownDescription": "Denies the desktop_agent_config_save command without any pre-configured scope."
+          "const": "deny-desktop-agent-delete",
+          "markdownDescription": "Denies the desktop_agent_delete command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_agent_save command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-agent-save",
+          "markdownDescription": "Enables the desktop_agent_save command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_agent_save command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-agent-save",
+          "markdownDescription": "Denies the desktop_agent_save command without any pre-configured scope."
         },
         {
           "description": "Enables the desktop_allowed_dirs_add command without any pre-configured scope.",
@@ -377,30 +389,6 @@
           "type": "string",
           "const": "deny-desktop-backend-save",
           "markdownDescription": "Denies the desktop_backend_save command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the desktop_behavior_delete command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-desktop-behavior-delete",
-          "markdownDescription": "Enables the desktop_behavior_delete command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the desktop_behavior_delete command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-desktop-behavior-delete",
-          "markdownDescription": "Denies the desktop_behavior_delete command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the desktop_behavior_save command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-desktop-behavior-save",
-          "markdownDescription": "Enables the desktop_behavior_save command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the desktop_behavior_save command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-desktop-behavior-save",
-          "markdownDescription": "Denies the desktop_behavior_save command without any pre-configured scope."
         },
         {
           "description": "Enables the desktop_bootstrap_summary command without any pre-configured scope.",
@@ -547,16 +535,16 @@
           "markdownDescription": "Denies the desktop_context_delete command without any pre-configured scope."
         },
         {
-          "description": "Enables the desktop_default_behavior_set command without any pre-configured scope.",
+          "description": "Enables the desktop_default_agent_set command without any pre-configured scope.",
           "type": "string",
-          "const": "allow-desktop-default-behavior-set",
-          "markdownDescription": "Enables the desktop_default_behavior_set command without any pre-configured scope."
+          "const": "allow-desktop-default-agent-set",
+          "markdownDescription": "Enables the desktop_default_agent_set command without any pre-configured scope."
         },
         {
-          "description": "Denies the desktop_default_behavior_set command without any pre-configured scope.",
+          "description": "Denies the desktop_default_agent_set command without any pre-configured scope.",
           "type": "string",
-          "const": "deny-desktop-default-behavior-set",
-          "markdownDescription": "Denies the desktop_default_behavior_set command without any pre-configured scope."
+          "const": "deny-desktop-default-agent-set",
+          "markdownDescription": "Denies the desktop_default_agent_set command without any pre-configured scope."
         },
         {
           "description": "Enables the desktop_event_source_delete command without any pre-configured scope.",
@@ -893,6 +881,18 @@
           "type": "string",
           "const": "deny-desktop-network-status",
           "markdownDescription": "Denies the desktop_network_status command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_node_config_save command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-node-config-save",
+          "markdownDescription": "Enables the desktop_node_config_save command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_node_config_save command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-node-config-save",
+          "markdownDescription": "Denies the desktop_node_config_save command without any pre-configured scope."
         },
         {
           "description": "Enables the desktop_observer_metrics command without any pre-configured scope.",
@@ -1387,16 +1387,16 @@
           "markdownDescription": "Denies the desktop_session_snapshot command without any pre-configured scope."
         },
         {
-          "description": "Enables the desktop_set_selected_agent command without any pre-configured scope.",
+          "description": "Enables the desktop_set_selected_node command without any pre-configured scope.",
           "type": "string",
-          "const": "allow-desktop-set-selected-agent",
-          "markdownDescription": "Enables the desktop_set_selected_agent command without any pre-configured scope."
+          "const": "allow-desktop-set-selected-node",
+          "markdownDescription": "Enables the desktop_set_selected_node command without any pre-configured scope."
         },
         {
-          "description": "Denies the desktop_set_selected_agent command without any pre-configured scope.",
+          "description": "Denies the desktop_set_selected_node command without any pre-configured scope.",
           "type": "string",
-          "const": "deny-desktop-set-selected-agent",
-          "markdownDescription": "Denies the desktop_set_selected_agent command without any pre-configured scope."
+          "const": "deny-desktop-set-selected-node",
+          "markdownDescription": "Denies the desktop_set_selected_node command without any pre-configured scope."
         },
         {
           "description": "Enables the desktop_skill_delete command without any pre-configured scope.",
@@ -1567,10 +1567,10 @@
           "markdownDescription": "Denies the desktop_workspace_list command without any pre-configured scope."
         },
         {
-          "description": "Minimal default: core + client-lifecycle (no runtime-admin, no config mutation)\n#### This default permission set includes:\n\n- `allow-desktop-bootstrap-summary`\n- `allow-desktop-client-snapshot`\n- `allow-desktop-observer-metrics`\n- `allow-desktop-client-start`\n- `allow-desktop-client-shutdown`\n- `allow-desktop-set-selected-agent`\n- `allow-desktop-app-quit`",
+          "description": "Minimal default: core + client-lifecycle (no runtime-admin, no config mutation)\n#### This default permission set includes:\n\n- `allow-desktop-bootstrap-summary`\n- `allow-desktop-client-snapshot`\n- `allow-desktop-observer-metrics`\n- `allow-desktop-client-start`\n- `allow-desktop-client-shutdown`\n- `allow-desktop-set-selected-node`\n- `allow-desktop-app-quit`",
           "type": "string",
           "const": "default",
-          "markdownDescription": "Minimal default: core + client-lifecycle (no runtime-admin, no config mutation)\n#### This default permission set includes:\n\n- `allow-desktop-bootstrap-summary`\n- `allow-desktop-client-snapshot`\n- `allow-desktop-observer-metrics`\n- `allow-desktop-client-start`\n- `allow-desktop-client-shutdown`\n- `allow-desktop-set-selected-agent`\n- `allow-desktop-app-quit`"
+          "markdownDescription": "Minimal default: core + client-lifecycle (no runtime-admin, no config mutation)\n#### This default permission set includes:\n\n- `allow-desktop-bootstrap-summary`\n- `allow-desktop-client-snapshot`\n- `allow-desktop-observer-metrics`\n- `allow-desktop-client-start`\n- `allow-desktop-client-shutdown`\n- `allow-desktop-set-selected-node`\n- `allow-desktop-app-quit`"
         },
         {
           "description": "Bootstrap summary, aggregate snapshot, observer metrics\n#### This permission set includes:\n\n- `allow-desktop-bootstrap-summary`\n- `allow-desktop-client-snapshot`\n- `allow-desktop-observer-metrics`",
@@ -1579,10 +1579,10 @@
           "markdownDescription": "Bootstrap summary, aggregate snapshot, observer metrics\n#### This permission set includes:\n\n- `allow-desktop-bootstrap-summary`\n- `allow-desktop-client-snapshot`\n- `allow-desktop-observer-metrics`"
         },
         {
-          "description": "Client start/shutdown, selected-agent, and application quit\n#### This permission set includes:\n\n- `allow-desktop-client-start`\n- `allow-desktop-client-shutdown`\n- `allow-desktop-set-selected-agent`\n- `allow-desktop-app-quit`",
+          "description": "Client start/shutdown, selected-agent, and application quit\n#### This permission set includes:\n\n- `allow-desktop-client-start`\n- `allow-desktop-client-shutdown`\n- `allow-desktop-set-selected-node`\n- `allow-desktop-app-quit`",
           "type": "string",
           "const": "client-lifecycle",
-          "markdownDescription": "Client start/shutdown, selected-agent, and application quit\n#### This permission set includes:\n\n- `allow-desktop-client-start`\n- `allow-desktop-client-shutdown`\n- `allow-desktop-set-selected-agent`\n- `allow-desktop-app-quit`"
+          "markdownDescription": "Client start/shutdown, selected-agent, and application quit\n#### This permission set includes:\n\n- `allow-desktop-client-start`\n- `allow-desktop-client-shutdown`\n- `allow-desktop-set-selected-node`\n- `allow-desktop-app-quit`"
         },
         {
           "description": "Session/conversation snapshot and live-delta reads\n#### This permission set includes:\n\n- `allow-desktop-session-snapshot`\n- `allow-desktop-session-live-delta`",
@@ -1699,10 +1699,10 @@
           "markdownDescription": "Local runtime provisioning and managed server lifecycle\n#### This permission set includes:\n\n- `allow-desktop-init-local-standard`\n- `allow-desktop-managed-server-status`\n- `allow-desktop-managed-server-start`\n- `allow-desktop-managed-server-stop`\n- `allow-desktop-managed-server-set-auto-start`\n- `allow-desktop-managed-server-restart`\n- `allow-desktop-managed-server-reset`\n- `allow-desktop-managed-server-validate-root`\n- `allow-desktop-managed-server-open-login-items`\n- `allow-desktop-open-db-explorer`"
         },
         {
-          "description": "Config save/delete/test mutations\n#### This permission set includes:\n\n- `allow-desktop-agent-config-save`\n- `allow-desktop-default-behavior-set`\n- `allow-desktop-config-components-apply`\n- `allow-desktop-config-components-patch`\n- `allow-desktop-behavior-save`\n- `allow-desktop-skill-save`\n- `allow-desktop-skill-delete`\n- `allow-desktop-task-delete`\n- `allow-desktop-schedule-delete`\n- `allow-desktop-trigger-delete`\n- `allow-desktop-event-source-delete`\n- `allow-desktop-backend-delete`\n- `allow-desktop-inference-profile-delete`\n- `allow-desktop-tools-delete`\n- `allow-desktop-tool-service-delete`\n- `allow-desktop-behavior-delete`\n- `allow-desktop-context-delete`\n- `allow-desktop-backend-save`\n- `allow-desktop-inference-profile-save`\n- `allow-desktop-tools-save`\n- `allow-desktop-tool-service-save`\n- `allow-desktop-tool-service-test`\n- `allow-desktop-probe-inference-endpoint`\n- `allow-desktop-inference-setup-catalog`\n- `allow-desktop-inference-models-discover`\n- `allow-desktop-inference-model-recommendation`\n- `allow-desktop-inference-backend-recommendation`\n- `allow-desktop-codex-login`\n- `allow-desktop-codex-login-cancel`\n- `allow-desktop-grok-login`\n- `allow-desktop-grok-login-cancel`\n- `allow-desktop-claude-login`\n- `allow-desktop-claude-login-cancel`\n- `allow-desktop-provider-account-disconnect`\n- `allow-desktop-provider-account-retry-save`\n- `allow-desktop-provider-account-rename`\n- `allow-desktop-provider-account-remove`\n- `allow-desktop-provider-usage-read`",
+          "description": "Config save/delete/test mutations\n#### This permission set includes:\n\n- `allow-desktop-node-config-save`\n- `allow-desktop-default-agent-set`\n- `allow-desktop-config-components-apply`\n- `allow-desktop-config-components-patch`\n- `allow-desktop-agent-save`\n- `allow-desktop-skill-save`\n- `allow-desktop-skill-delete`\n- `allow-desktop-task-delete`\n- `allow-desktop-schedule-delete`\n- `allow-desktop-trigger-delete`\n- `allow-desktop-event-source-delete`\n- `allow-desktop-backend-delete`\n- `allow-desktop-inference-profile-delete`\n- `allow-desktop-tools-delete`\n- `allow-desktop-tool-service-delete`\n- `allow-desktop-agent-delete`\n- `allow-desktop-context-delete`\n- `allow-desktop-backend-save`\n- `allow-desktop-inference-profile-save`\n- `allow-desktop-tools-save`\n- `allow-desktop-tool-service-save`\n- `allow-desktop-tool-service-test`\n- `allow-desktop-probe-inference-endpoint`\n- `allow-desktop-inference-setup-catalog`\n- `allow-desktop-inference-models-discover`\n- `allow-desktop-inference-model-recommendation`\n- `allow-desktop-inference-backend-recommendation`\n- `allow-desktop-codex-login`\n- `allow-desktop-codex-login-cancel`\n- `allow-desktop-grok-login`\n- `allow-desktop-grok-login-cancel`\n- `allow-desktop-claude-login`\n- `allow-desktop-claude-login-cancel`\n- `allow-desktop-provider-account-disconnect`\n- `allow-desktop-provider-account-retry-save`\n- `allow-desktop-provider-account-rename`\n- `allow-desktop-provider-account-remove`\n- `allow-desktop-provider-usage-read`",
           "type": "string",
           "const": "config-write",
-          "markdownDescription": "Config save/delete/test mutations\n#### This permission set includes:\n\n- `allow-desktop-agent-config-save`\n- `allow-desktop-default-behavior-set`\n- `allow-desktop-config-components-apply`\n- `allow-desktop-config-components-patch`\n- `allow-desktop-behavior-save`\n- `allow-desktop-skill-save`\n- `allow-desktop-skill-delete`\n- `allow-desktop-task-delete`\n- `allow-desktop-schedule-delete`\n- `allow-desktop-trigger-delete`\n- `allow-desktop-event-source-delete`\n- `allow-desktop-backend-delete`\n- `allow-desktop-inference-profile-delete`\n- `allow-desktop-tools-delete`\n- `allow-desktop-tool-service-delete`\n- `allow-desktop-behavior-delete`\n- `allow-desktop-context-delete`\n- `allow-desktop-backend-save`\n- `allow-desktop-inference-profile-save`\n- `allow-desktop-tools-save`\n- `allow-desktop-tool-service-save`\n- `allow-desktop-tool-service-test`\n- `allow-desktop-probe-inference-endpoint`\n- `allow-desktop-inference-setup-catalog`\n- `allow-desktop-inference-models-discover`\n- `allow-desktop-inference-model-recommendation`\n- `allow-desktop-inference-backend-recommendation`\n- `allow-desktop-codex-login`\n- `allow-desktop-codex-login-cancel`\n- `allow-desktop-grok-login`\n- `allow-desktop-grok-login-cancel`\n- `allow-desktop-claude-login`\n- `allow-desktop-claude-login-cancel`\n- `allow-desktop-provider-account-disconnect`\n- `allow-desktop-provider-account-retry-save`\n- `allow-desktop-provider-account-rename`\n- `allow-desktop-provider-account-remove`\n- `allow-desktop-provider-usage-read`"
+          "markdownDescription": "Config save/delete/test mutations\n#### This permission set includes:\n\n- `allow-desktop-node-config-save`\n- `allow-desktop-default-agent-set`\n- `allow-desktop-config-components-apply`\n- `allow-desktop-config-components-patch`\n- `allow-desktop-agent-save`\n- `allow-desktop-skill-save`\n- `allow-desktop-skill-delete`\n- `allow-desktop-task-delete`\n- `allow-desktop-schedule-delete`\n- `allow-desktop-trigger-delete`\n- `allow-desktop-event-source-delete`\n- `allow-desktop-backend-delete`\n- `allow-desktop-inference-profile-delete`\n- `allow-desktop-tools-delete`\n- `allow-desktop-tool-service-delete`\n- `allow-desktop-agent-delete`\n- `allow-desktop-context-delete`\n- `allow-desktop-backend-save`\n- `allow-desktop-inference-profile-save`\n- `allow-desktop-tools-save`\n- `allow-desktop-tool-service-save`\n- `allow-desktop-tool-service-test`\n- `allow-desktop-probe-inference-endpoint`\n- `allow-desktop-inference-setup-catalog`\n- `allow-desktop-inference-models-discover`\n- `allow-desktop-inference-model-recommendation`\n- `allow-desktop-inference-backend-recommendation`\n- `allow-desktop-codex-login`\n- `allow-desktop-codex-login-cancel`\n- `allow-desktop-grok-login`\n- `allow-desktop-grok-login-cancel`\n- `allow-desktop-claude-login`\n- `allow-desktop-claude-login-cancel`\n- `allow-desktop-provider-account-disconnect`\n- `allow-desktop-provider-account-retry-save`\n- `allow-desktop-provider-account-rename`\n- `allow-desktop-provider-account-remove`\n- `allow-desktop-provider-usage-read`"
         },
         {
           "description": "Read redacted provider account metadata\n#### This permission set includes:\n\n- `allow-desktop-provider-accounts-list`",

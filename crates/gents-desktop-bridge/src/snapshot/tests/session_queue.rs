@@ -5,9 +5,9 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 fn session_observing(newest: &str, state: RequestLifecycleState) -> AgentSession {
     AgentSession {
         session_id: "sess-1".into(),
-        agent_did: "did:test:amy".into(),
+        node_did: "did:test:amy".into(),
         requester_did: None,
-        behavior_id: "default".into(),
+        agent_id: "default".into(),
         created_at: "2026-04-21T12:00:00Z".into(),
         closed_at: None,
         title: None,
@@ -30,8 +30,8 @@ fn request(id: &str, state: RequestLifecycleState, second: u32) -> AgentRequestR
         purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
         doc_id: Some(format!("doc-{id}")),
         request_id: id.into(),
-        agent_did: Some("did:test:amy".into()),
-        behavior_id: Some("default".into()),
+        node_did: Some("did:test:amy".into()),
+        agent_id: Some("default".into()),
         session_id: Some("sess-1".into()),
         content: Some(format!("{id} text")),
         lifecycle_state: Some(state),

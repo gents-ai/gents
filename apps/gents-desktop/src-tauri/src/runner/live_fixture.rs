@@ -23,34 +23,34 @@ use tracing_subscriber::prelude::*;
 
 use gents_desktop_bridge::types::{DesktopBootstrapSummary, SavedPeerView};
 
-use self::agent::{spawn_live_agent, RunningAgent};
-use self::backend::AgentBackendConfig;
+use self::agent::{spawn_live_node, RunningNode};
+use self::backend::LiveBackendConfig;
 pub(crate) use self::backend::LiveBackendOverride;
-pub(crate) use self::backend::LiveSubagentBackendOverride;
+pub(crate) use self::backend::LiveTargetBackendOverride;
 use self::replication::{
     configure_live_replicators, wait_for_connectable_iroh_addr, wait_for_connected_peer,
     wait_for_live_documents, wait_for_ready_peer_status, write_peer_directory_records,
 };
-use self::workspace::seed_runner_agent_home;
+use self::workspace::seed_runner_node_home;
 
 const DEFAULT_DEPLOYMENT_LABEL: &str = "Fleet E2E Agent";
-const DEFAULT_AGENT_NAME: &str = "fleet-e2e-agent";
+const DEFAULT_NODE_NAME: &str = "fleet-e2e-agent";
 
 pub(crate) struct LiveBridgeFixture {
     runtime: Arc<Runtime>,
     tempdir: Mutex<Option<tempfile::TempDir>>,
     desktop_paths: DesktopPaths,
-    agent_home: PathBuf,
+    node_home: PathBuf,
     desktop_core: Arc<ClientCore>,
     remote_core: Arc<ClientCore>,
     deployment_label: String,
-    agent_did: String,
+    node_did: String,
     tool_root: PathBuf,
     init_summary: DesktopInitSummary,
     bootstrap_saved_peers: Vec<SavedPeerView>,
     update_version: Arc<AtomicU64>,
     update_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
-    running_agent: Mutex<Option<RunningAgent>>,
+    running_node: Mutex<Option<RunningNode>>,
     shutdown_started: AtomicBool,
 }
 
@@ -71,8 +71,8 @@ impl LiveBridgeFixture {
         &self.remote_core
     }
 
-    pub(crate) fn agent_did(&self) -> &str {
-        &self.agent_did
+    pub(crate) fn node_did(&self) -> &str {
+        &self.node_did
     }
 
     pub(crate) fn deployment_label(&self) -> &str {
@@ -85,17 +85,17 @@ impl LiveBridgeFixture {
 
     pub(crate) fn requester_scope(
         &self,
-        agent_did: Option<&str>,
+        node_did: Option<&str>,
         session_id: &str,
         request_id: Option<&str>,
     ) -> Option<String> {
-        let agent_did = agent_did?;
+        let node_did = node_did?;
         let store = self.desktop_core.store().snapshot();
         request_id
             .and_then(|request_id| {
                 store.requests.iter().find(|request| {
                     request.request_id == request_id
-                        && request.agent_did.as_deref() == Some(agent_did)
+                        && request.node_did.as_deref() == Some(node_did)
                         && request.session_id.as_deref() == Some(session_id)
                 })
             })
@@ -105,16 +105,16 @@ impl LiveBridgeFixture {
                     .sessions
                     .iter()
                     .find(|session| {
-                        session.session_id == session_id && session.agent_did == agent_did
+                        session.session_id == session_id && session.node_did == node_did
                     })
                     .and_then(|session| session.requester_did.clone())
             })
     }
 
     pub(crate) fn data_root(&self) -> &Path {
-        self.agent_home
+        self.node_home
             .parent()
-            .expect("live fixture agent home has a parent")
+            .expect("live fixture node home has a parent")
     }
 
     pub(crate) fn update_version(&self) -> u64 {
@@ -131,7 +131,7 @@ impl LiveBridgeFixture {
             let _ = task.await;
         }
 
-        if let Some(agent) = self.running_agent.lock().await.take() {
+        if let Some(agent) = self.running_node.lock().await.take() {
             agent.shutdown().await?;
         }
 
@@ -148,18 +148,18 @@ impl LiveBridgeFixture {
 
     pub(crate) fn start(
         backend_override: Option<LiveBackendOverride>,
-        subagent_backend_override: Option<LiveSubagentBackendOverride>,
+        agent_target_backend_override: Option<LiveTargetBackendOverride>,
     ) -> Result<Arc<Self>> {
         init_live_runner_tracing();
 
-        let backend = AgentBackendConfig::resolve(backend_override.as_ref())?;
-        let subagent_backend =
-            AgentBackendConfig::resolve_subagent(subagent_backend_override.as_ref(), &backend)?;
+        let backend = LiveBackendConfig::resolve(backend_override.as_ref())?;
+        let agent_target_backend =
+            LiveBackendConfig::resolve_target(agent_target_backend_override.as_ref(), &backend)?;
         let runtime = live_runtime()?;
         let tempdir = tempfile::tempdir()?;
         let remote_paths = DesktopPaths::from_root(tempdir.path().join("remote"));
         let desktop_paths = DesktopPaths::from_root(tempdir.path().join("desktop"));
-        let agent_home = tempdir.path().join("agent-home");
+        let node_home = tempdir.path().join("agent-home");
 
         let port_probe = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
         let operator_addr = port_probe.local_addr()?;
@@ -173,16 +173,16 @@ impl LiveBridgeFixture {
         ))?);
 
         let agent_key = tempdir.path().join("agent").join("fleet-e2e-agent.key");
-        let (running_agent, docs, tool_root) = runtime.block_on(spawn_live_agent(
+        let (running_node, docs, tool_root) = runtime.block_on(spawn_live_node(
             Arc::clone(&remote_core),
             agent_key,
-            DEFAULT_AGENT_NAME,
+            DEFAULT_NODE_NAME,
             &backend,
-            subagent_backend.as_ref(),
+            agent_target_backend.as_ref(),
         ))?;
         runtime.block_on(wait_for_operator_graphql(
             &operator_graphql,
-            &running_agent.did,
+            &running_node.node_did,
         ))?;
 
         let remote_addr = runtime.block_on(wait_for_connectable_iroh_addr(
@@ -192,7 +192,7 @@ impl LiveBridgeFixture {
         let mut peer_record = PeerRecord::local_standard(
             DEFAULT_DEPLOYMENT_LABEL,
             &remote_addr,
-            &running_agent.did,
+            &running_node.node_did,
             &operator_graphql,
         );
         // This fixture owns both nodes and installs both directional
@@ -225,9 +225,9 @@ impl LiveBridgeFixture {
         runtime.block_on(desktop_core.add_local_standard_peer_route_for_test(
             &peer_record.label,
             &peer_record.addr,
-            &peer_record.agent_did,
+            &peer_record.node_did,
             peer_record.graphql.as_deref().unwrap_or_default(),
-            &agent_home.display().to_string(),
+            &node_home.display().to_string(),
         ))?;
         runtime.block_on(wait_for_ready_peer_status(
             desktop_core.as_ref(),
@@ -236,14 +236,14 @@ impl LiveBridgeFixture {
         ))?;
         runtime.block_on(wait_for_live_documents(
             desktop_core.as_ref(),
-            &running_agent.did,
+            &running_node.node_did,
             &docs,
         ))?;
 
-        seed_runner_agent_home(
-            &agent_home,
-            DEFAULT_AGENT_NAME,
-            &running_agent.did,
+        seed_runner_node_home(
+            &node_home,
+            DEFAULT_NODE_NAME,
+            &running_node.node_did,
             remote_core.local_peer_id(),
             &remote_addr,
         )?;
@@ -252,12 +252,12 @@ impl LiveBridgeFixture {
         let init_summary = DesktopInitSummary {
             status: "initialized",
             source: "bridge-runner",
-            agent_home: agent_home.display().to_string(),
+            node_home: node_home.display().to_string(),
             desktop_home: desktop_paths.root().display().to_string(),
             peer_directory: desktop_paths.peer_directory_path().display().to_string(),
             label: DEFAULT_DEPLOYMENT_LABEL.to_string(),
-            agent_name: DEFAULT_AGENT_NAME.to_string(),
-            agent_did: running_agent.did.clone(),
+            node_name: DEFAULT_NODE_NAME.to_string(),
+            node_did: running_node.node_did.clone(),
             graphql: String::new(),
             p2p_transport: "iroh".to_string(),
             p2p_peer_id: remote_peer_id.clone(),
@@ -269,14 +269,14 @@ impl LiveBridgeFixture {
         let bootstrap_saved_peers = vec![SavedPeerView {
             peer_id: peer_record.peer_id.clone(),
             label: peer_record.label.clone(),
-            agent_did: peer_record.agent_did.clone(),
+            node_did: peer_record.node_did.clone(),
             addr: peer_record.addr.clone(),
             source: peer_record.source.clone(),
             graphql: peer_record.graphql.clone(),
         }];
 
         tracing::info!(
-            agent_did = %running_agent.did,
+            node_did = %running_node.node_did,
             tool_root = %tool_root.display(),
             "live bridge fixture ready"
         );
@@ -319,17 +319,17 @@ impl LiveBridgeFixture {
             runtime,
             tempdir: Mutex::new(Some(tempdir)),
             desktop_paths,
-            agent_home,
+            node_home,
             desktop_core,
             remote_core,
             deployment_label: DEFAULT_DEPLOYMENT_LABEL.to_string(),
-            agent_did: running_agent.did.clone(),
+            node_did: running_node.node_did.clone(),
             tool_root,
             init_summary,
             bootstrap_saved_peers,
             update_version,
             update_task: Mutex::new(Some(update_task)),
-            running_agent: Mutex::new(Some(running_agent)),
+            running_node: Mutex::new(Some(running_node)),
             shutdown_started: AtomicBool::new(false),
         }))
     }
@@ -341,8 +341,8 @@ impl LiveBridgeFixture {
         let tempdir = tempfile::tempdir()?;
         let remote_paths = DesktopPaths::from_root(tempdir.path().join("remote-empty"));
         let desktop_paths = DesktopPaths::from_root(tempdir.path().join("desktop"));
-        let agent_home = tempdir.path().join("agent-home");
-        std::fs::create_dir_all(&agent_home)?;
+        let node_home = tempdir.path().join("agent-home");
+        std::fs::create_dir_all(&node_home)?;
 
         let remote_core = Arc::new(runtime.block_on(ClientCore::start_with_paths_and_options(
             remote_paths,
@@ -361,12 +361,12 @@ impl LiveBridgeFixture {
         let init_summary = DesktopInitSummary {
             status: "initialized",
             source: "bridge-runner-desktop-only",
-            agent_home: agent_home.display().to_string(),
+            node_home: node_home.display().to_string(),
             desktop_home: desktop_paths.root().display().to_string(),
             peer_directory: desktop_paths.peer_directory_path().display().to_string(),
             label: "Desktop Only".to_string(),
-            agent_name: String::new(),
-            agent_did: String::new(),
+            node_name: String::new(),
+            node_did: String::new(),
             graphql: String::new(),
             p2p_transport: "iroh".to_string(),
             p2p_peer_id: desktop_core.local_peer_id().to_string(),
@@ -407,26 +407,26 @@ impl LiveBridgeFixture {
             runtime,
             tempdir: Mutex::new(Some(tempdir)),
             desktop_paths,
-            agent_home,
+            node_home,
             desktop_core,
             remote_core,
             deployment_label: "Desktop Only".to_string(),
-            agent_did: String::new(),
+            node_did: String::new(),
             tool_root: PathBuf::new(),
             init_summary,
             bootstrap_saved_peers: Vec::new(),
             update_version,
             update_task: Mutex::new(Some(update_task)),
-            running_agent: Mutex::new(None),
+            running_node: Mutex::new(None),
             shutdown_started: AtomicBool::new(false),
         }))
     }
 
     pub(crate) async fn build_bootstrap_summary(&self) -> DesktopBootstrapSummary {
         DesktopBootstrapSummary {
-            default_agent_home: self.agent_home.display().to_string(),
-            init_agent_name: non_empty_clone(&self.init_summary.agent_name),
-            init_agent_did: non_empty_clone(&self.init_summary.agent_did),
+            default_node_home: self.node_home.display().to_string(),
+            init_node_name: non_empty_clone(&self.init_summary.node_name),
+            init_node_did: non_empty_clone(&self.init_summary.node_did),
             init_tool_ceiling: Some("Readwrite".to_string()),
             init_tool_root: self
                 .tool_root
@@ -441,7 +441,7 @@ impl LiveBridgeFixture {
                 .to_string(),
             node_data_dir: self.desktop_paths.node_data_dir().display().to_string(),
             diagnostics_hint: gents::native_logging::diagnostics_hint().to_string(),
-            agent_home_exists: self.agent_home.exists(),
+            node_home_exists: self.node_home.exists(),
             desktop_home_exists: self.desktop_paths.root().exists(),
             peer_directory_exists: self.desktop_paths.peer_directory_path().exists(),
             client_state_exists: self.desktop_paths.client_state_exists(),
@@ -465,20 +465,19 @@ fn live_runtime() -> Result<Arc<Runtime>> {
     ))
 }
 
-async fn wait_for_operator_graphql(endpoint: &str, agent_did: &str) -> Result<()> {
+async fn wait_for_operator_graphql(endpoint: &str, node_did: &str) -> Result<()> {
     let access = ConfigAccess::graphql(endpoint);
-    let escaped_did = escape_graphql_string(agent_did);
-    let query = format!(
-        r#"{{ AgentPrincipal(filter: {{ agent_did: {{ _eq: "{escaped_did}" }} }}) {{ agent_did }} }}"#
-    );
+    let escaped_did = escape_graphql_string(node_did);
+    let query =
+        format!(r#"{{ Node(filter: {{ node_did: {{ _eq: "{escaped_did}" }} }}) {{ node_did }} }}"#);
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
     loop {
         match access.execute(&query).await {
             Ok(response)
                 if response
-                    .pointer("/data/AgentPrincipal")
+                    .pointer("/data/Node")
                     .and_then(serde_json::Value::as_array)
-                    .is_some_and(|rows| rows.iter().any(|row| row["agent_did"] == agent_did)) =>
+                    .is_some_and(|rows| rows.iter().any(|row| row["node_did"] == node_did)) =>
             {
                 return Ok(());
             }
@@ -487,7 +486,7 @@ async fn wait_for_operator_graphql(endpoint: &str, agent_did: &str) -> Result<()
             }
             Ok(response) => {
                 anyhow::bail!(
-                    "live operator GraphQL {endpoint} did not expose agent {agent_did}: {response}"
+                    "live operator GraphQL {endpoint} did not expose node {node_did}: {response}"
                 );
             }
             Err(error) => {
@@ -538,9 +537,9 @@ mod tests {
     use axum::response::{IntoResponse, Response};
     use axum::routing::{get, post};
     use axum::Router;
-    use gents::default_behavior_id_for_agent;
+    use gents::default_agent_id_for_node;
     use gents_desktop_core::client::ClientCore;
-    use gents_protocol::row::{decode_behavior_readiness_snapshot, AgentRequestRow};
+    use gents_protocol::row::{decode_node_readiness_snapshot, AgentRequestRow};
     use serde_json::Value;
     use tokio::sync::oneshot;
 
@@ -548,13 +547,13 @@ mod tests {
     use gents_desktop_bridge::commands::{
         delete_skill_config, save_skill_config, send_chat_message,
     };
-    use gents_desktop_bridge::snapshot::build_session_snapshot_for_agent_with_transcript;
+    use gents_desktop_bridge::snapshot::build_session_snapshot_for_node_with_transcript;
     use gents_desktop_bridge::types::{ChatSendRequest, SkillDeleteRequest, SkillSaveRequest};
 
     const MODEL_NAME: &str = "desktop-live-skill-mock";
 
     #[test]
-    fn live_fixture_replicates_skill_create_delete_to_agent_node() -> Result<()> {
+    fn live_fixture_replicates_skill_create_delete_to_node() -> Result<()> {
         let _guard = live_fixture_test_lock();
         let mock = MockChatEndpoint::start(MODEL_NAME, "ok")?;
         let fixture = LiveBridgeFixture::start(Some(mock.backend_override(MODEL_NAME)), None)?;
@@ -568,7 +567,7 @@ mod tests {
     }
 
     #[test]
-    fn live_fixture_desktop_chat_slash_skill_loads_on_agent_node() -> Result<()> {
+    fn live_fixture_desktop_chat_slash_skill_loads_on_node() -> Result<()> {
         let _guard = live_fixture_test_lock();
         let mock = MockChatEndpoint::start(MODEL_NAME, "skill loaded")?;
         let fixture = LiveBridgeFixture::start(Some(mock.backend_override(MODEL_NAME)), None)?;
@@ -582,30 +581,30 @@ mod tests {
     }
 
     async fn skill_create_delete_case(fixture: &LiveBridgeFixture) -> Result<()> {
-        let agent_did = fixture.agent_did().to_string();
+        let node_did = fixture.node_did().to_string();
         let skill_id = "desktop-crud-skill";
-        let skill_body = "CRUD skill body should replicate to the agent node.";
+        let skill_body = "CRUD skill body should replicate to the node.";
 
         save_skill_config(
             fixture.desktop_core().as_ref(),
-            skill_save_request(&agent_did, skill_id, skill_body),
+            skill_save_request(&node_did, skill_id, skill_body),
         )
         .await?;
         wait_for_remote_skill(fixture.remote_core().as_ref(), skill_id)
             .await
-            .context("skill did not replicate to the agent node after create")?;
+            .context("skill did not replicate to the node after create")?;
 
         delete_skill_config(
             fixture.desktop_core().as_ref(),
             SkillDeleteRequest {
                 skill_id: skill_id.to_string(),
-                agent_did: agent_did.clone(),
+                node_did: node_did.clone(),
             },
         )
         .await?;
         wait_for_remote_skill_absent(fixture.remote_core().as_ref(), skill_id)
             .await
-            .context("skill remained queryable on the agent node after delete")?;
+            .context("skill remained queryable on the node after delete")?;
         Ok(())
     }
 
@@ -613,42 +612,38 @@ mod tests {
         fixture: &LiveBridgeFixture,
         mock: &MockChatEndpoint,
     ) -> Result<()> {
-        let agent_did = fixture.agent_did().to_string();
-        let behavior_id = default_behavior_id_for_agent(&agent_did);
+        let node_did = fixture.node_did().to_string();
+        let agent_id = default_agent_id_for_node(&node_did);
         let skill_id = "desktop-review";
         let skill_body = "UNIQUE_DESKTOP_SKILL_BODY_USE_THIS_REVIEW_PROTOCOL";
         let task = "summarize the current workspace state";
 
         save_skill_config(
             fixture.desktop_core().as_ref(),
-            skill_save_request(&agent_did, skill_id, skill_body),
+            skill_save_request(&node_did, skill_id, skill_body),
         )
         .await?;
         wait_for_remote_skill(fixture.remote_core().as_ref(), skill_id).await?;
         let generation_before_bind =
-            wait_for_remote_runtime_generation(fixture.remote_core().as_ref(), &agent_did)
+            wait_for_remote_runtime_generation(fixture.remote_core().as_ref(), &node_did)
                 .await
                 .context("runtime status missing before skill binding")?;
-        bind_skill_to_behavior_context(fixture, &agent_did, &behavior_id, skill_id).await?;
-        wait_for_remote_context_skill_ids(
-            fixture.remote_core().as_ref(),
-            &behavior_id,
-            &[skill_id],
-        )
-        .await?;
+        bind_skill_to_agent_context(fixture, &node_did, &agent_id, skill_id).await?;
+        wait_for_remote_context_skill_ids(fixture.remote_core().as_ref(), &agent_id, &[skill_id])
+            .await?;
         wait_for_remote_runtime_generation_after(
             fixture.remote_core().as_ref(),
-            &agent_did,
+            &node_did,
             generation_before_bind,
         )
         .await
-        .context("agent runtime did not reconcile the skill binding before chat submit")?;
+        .context("node runtime did not reconcile the skill binding before chat submit")?;
 
         let submitted = send_chat_message(
             fixture.desktop_core().as_ref(),
             ChatSendRequest {
-                agent_did: agent_did.clone(),
-                behavior_id: Some(behavior_id.clone()),
+                node_did: node_did.clone(),
+                agent_id: Some(agent_id.clone()),
                 session_id: None,
                 content: format!("/{skill_id}\n{task}"),
                 caused_by_source_doc_id: None,
@@ -660,7 +655,7 @@ mod tests {
 
         let requester_scope = fixture
             .requester_scope(
-                Some(&agent_did),
+                Some(&node_did),
                 &submitted.session_id,
                 Some(&submitted.request_id),
             )
@@ -668,7 +663,7 @@ mod tests {
         let transcript_page = gents_desktop_core::client::load_session_transcript_page(
             fixture.desktop_core().node(),
             &submitted.session_id,
-            Some(&agent_did),
+            Some(&node_did),
             Some(&requester_scope),
             None,
             None,
@@ -677,13 +672,13 @@ mod tests {
         let context_store = gents_desktop_core::client::load_session_context_store(
             fixture.desktop_core().node(),
             &submitted.session_id,
-            Some(&agent_did),
+            Some(&node_did),
             Some(&requester_scope),
         )
         .await?;
-        let session = build_session_snapshot_for_agent_with_transcript(
+        let session = build_session_snapshot_for_node_with_transcript(
             fixture.desktop_core().as_ref(),
-            Some(&agent_did),
+            Some(&node_did),
             &submitted.session_id,
             Some(&submitted.request_id),
             Some(&transcript_page.store),
@@ -730,10 +725,10 @@ mod tests {
             .expect("live fixture test lock poisoned")
     }
 
-    async fn bind_skill_to_behavior_context(
+    async fn bind_skill_to_agent_context(
         fixture: &LiveBridgeFixture,
-        agent_did: &str,
-        behavior_id: &str,
+        node_did: &str,
+        agent_id: &str,
         skill_id: &str,
     ) -> Result<()> {
         use gents::collection::Collection;
@@ -743,25 +738,23 @@ mod tests {
         };
         fixture
             .desktop_core()
-            .operator_access(agent_did)?
+            .operator_access(node_did)?
             .transact("desktop.fixture.skill", |txn| {
                 Box::pin(async move {
-                    let (_, behavior) = read_desired_state_record_in_txn(
+                    let (_, agent) = read_desired_state_record_in_txn(
                         txn,
-                        Collection::AgentBehavior,
-                        agent_did,
-                        behavior_id,
+                        Collection::Agent,
+                        node_did,
+                        agent_id,
                     )
                     .await?
-                    .with_context(|| format!("behavior {behavior_id} is missing"))?;
-                    let behavior: gents::AgentBehaviorDocument = serde_json::from_value(behavior)?;
-                    let context_id = behavior
-                        .context_id
-                        .context("fixture behavior has no context")?;
+                    .with_context(|| format!("agent {agent_id} is missing"))?;
+                    let agent: gents::AgentDocument = serde_json::from_value(agent)?;
+                    let context_id = agent.context_id.context("fixture agent has no context")?;
                     let (_, context) = read_desired_state_record_in_txn(
                         txn,
                         Collection::AgentContext,
-                        agent_did,
+                        node_did,
                         &context_id,
                     )
                     .await?
@@ -786,7 +779,7 @@ mod tests {
 
     async fn wait_for_remote_context_skill_ids(
         core: &ClientCore,
-        behavior_id: &str,
+        agent_id: &str,
         expected_skill_ids: &[&str],
     ) -> Result<()> {
         let deadline = Instant::now() + Duration::from_secs(15);
@@ -794,10 +787,10 @@ mod tests {
             core.refresh_store().await?;
             let store = core.store().snapshot();
             let observed = store
-                .behaviors
+                .agents
                 .iter()
-                .find(|behavior| behavior.behavior_id == behavior_id)
-                .and_then(|behavior| behavior.context_id.as_deref())
+                .find(|agent| agent.agent_id == agent_id)
+                .and_then(|agent| agent.context_id.as_deref())
                 .and_then(|context_id| {
                     store
                         .contexts
@@ -816,7 +809,7 @@ mod tests {
             }
             if Instant::now() >= deadline {
                 bail!(
-                    "remote context for behavior {behavior_id} has skill IDs {observed:?}, expected {expected_skill_ids:?}"
+                    "remote context for agent {agent_id} has skill IDs {observed:?}, expected {expected_skill_ids:?}"
                 );
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
@@ -875,16 +868,16 @@ mod tests {
 
     async fn query_runtime_observation(
         core: &ClientCore,
-        agent_did: &str,
+        node_did: &str,
     ) -> Result<Option<RemoteRuntimeObservation>> {
         core.refresh_store().await?;
         let store = core.store().snapshot();
-        let Some(readiness_row) = store.behavior_readiness(agent_did) else {
+        let Some(readiness_row) = store.node_readiness(node_did) else {
             return Ok(None);
         };
-        let readiness = decode_behavior_readiness_snapshot(readiness_row, agent_did)
-            .map_err(|reason| anyhow::anyhow!("invalid behavior readiness: {reason:?}"))?;
-        let Some(runtime) = store.latest_runtime(agent_did) else {
+        let readiness = decode_node_readiness_snapshot(readiness_row, node_did)
+            .map_err(|reason| anyhow::anyhow!("invalid node readiness: {reason:?}"))?;
+        let Some(runtime) = store.latest_runtime(node_did) else {
             return Ok(None);
         };
         Ok(Some(RemoteRuntimeObservation {
@@ -895,11 +888,11 @@ mod tests {
         }))
     }
 
-    async fn wait_for_remote_runtime_generation(core: &ClientCore, agent_did: &str) -> Result<u64> {
+    async fn wait_for_remote_runtime_generation(core: &ClientCore, node_did: &str) -> Result<u64> {
         wait_for_row(
             "remote authoritative runtime generation",
             Duration::from_secs(60),
-            || async { query_runtime_observation(core, agent_did).await },
+            || async { query_runtime_observation(core, node_did).await },
         )
         .await
         .map(|observation| observation.active_generation)
@@ -907,14 +900,14 @@ mod tests {
 
     async fn wait_for_remote_runtime_generation_after(
         core: &ClientCore,
-        agent_did: &str,
+        node_did: &str,
         previous_generation: u64,
     ) -> Result<()> {
         wait_for_condition(
             "remote authoritative runtime generation advance",
             Duration::from_secs(90),
             || async {
-                let Some(observation) = query_runtime_observation(core, agent_did).await? else {
+                let Some(observation) = query_runtime_observation(core, node_did).await? else {
                     return Ok(false);
                 };
                 if observation.last_reconcile_result.as_deref() == Some("error") {
@@ -997,10 +990,10 @@ mod tests {
         }
     }
 
-    fn skill_save_request(agent_did: &str, skill_id: &str, instructions: &str) -> SkillSaveRequest {
+    fn skill_save_request(node_did: &str, skill_id: &str, instructions: &str) -> SkillSaveRequest {
         SkillSaveRequest {
             document: serde_json::from_value(serde_json::json!({
-                "skill_id": skill_id, "agent_did": agent_did, "name": skill_id,
+                "skill_id": skill_id, "node_did": node_did, "name": skill_id,
                 "description": format!("Test skill {skill_id}"),
                 "instructions": instructions, "display_name": skill_id,
             }))

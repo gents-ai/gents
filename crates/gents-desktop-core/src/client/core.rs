@@ -29,7 +29,7 @@ use super::paths::DesktopPaths;
 use super::peer_directory::PeerRecord;
 use super::principal_identity::PrincipalIdentity;
 use super::query::{
-    load_agent_scoped_snapshot_with_peer_records, load_full_snapshot_with_peer_records,
+    load_full_snapshot_with_peer_records, load_node_scoped_snapshot_with_peer_records,
 };
 use crate::remote_admin::PairingErrorClass;
 
@@ -116,7 +116,7 @@ impl ClientCoreOptions {
 pub struct ClientPeerStatus {
     pub peer_id: String,
     pub label: String,
-    pub agent_did: String,
+    pub node_did: String,
     pub addr: String,
     pub dial_succeeded: bool,
     pub last_error: Option<String>,
@@ -221,7 +221,7 @@ mod pairing_status_tests {
         let peer_status = ClientPeerStatus {
             peer_id: "p1".into(),
             label: "l".into(),
-            agent_did: "did:test:p1".into(),
+            node_did: "did:test:p1".into(),
             addr: "/ip4/1/p2p/p1".into(),
             dial_succeeded: true,
             last_error: None,
@@ -354,7 +354,7 @@ pub struct ClientCore {
     store_lock: Mutex<Option<gents::home::StoreLock>>,
     paths: DesktopPaths,
     options: ClientCoreOptions,
-    principal: PrincipalIdentity,
+    node_identity: PrincipalIdentity,
     node: Arc<EmbeddedNode>,
     p2p: Arc<dyn P2POps>,
     route_manager: Arc<route_manager::ClientRouteManager>,
@@ -363,7 +363,7 @@ pub struct ClientCore {
     sync_state: sync_state::ClientSyncStateOwner,
     p2p_supervisor: Mutex<Option<JoinHandle<()>>>,
     hydration_transition: Mutex<()>,
-    selected_agent_did: watch::Sender<Option<String>>,
+    selected_node_did: watch::Sender<Option<String>>,
     last_loaded_for: tokio::sync::Mutex<HashMap<String, std::time::Instant>>,
     request_patch_signatures: tokio::sync::Mutex<HashMap<String, (usize, usize, u64)>>,
     p2p_control: Mutex<Option<mpsc::Sender<P2PSupervisorCommand>>>,
@@ -382,8 +382,8 @@ impl ClientCore {
         &self.options
     }
 
-    pub fn principal(&self) -> &PrincipalIdentity {
-        &self.principal
+    pub fn node_identity(&self) -> &PrincipalIdentity {
+        &self.node_identity
     }
 
     pub fn node(&self) -> &EmbeddedNode {
@@ -402,7 +402,7 @@ impl ClientCore {
     /// of the enrollment integration suite. Product callers must establish
     /// readiness through the signed route owner.
     #[doc(hidden)]
-    pub async fn add_local_standard_peer_for_test(&self, agent_did: &str) -> Result<()> {
+    pub async fn add_local_standard_peer_for_test(&self, node_did: &str) -> Result<()> {
         anyhow::ensure!(
             !self.options.install_replicators_on_bootstrap,
             "a simulated peer route requires ClientCoreOptions::local_simulated_route()"
@@ -410,7 +410,7 @@ impl ClientCore {
         self.add_local_standard_peer_route_for_test(
             "Test Local Runtime",
             "127.0.0.1:56000/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb",
-            agent_did,
+            node_did,
             "http://127.0.0.1:56001/graphql",
             "/tmp/test-agent-home",
         )
@@ -424,13 +424,13 @@ impl ClientCore {
         &self,
         label: &str,
         addr: &str,
-        agent_did: &str,
+        node_did: &str,
         graphql: &str,
         agent_home: &str,
     ) -> Result<()> {
         let record = self
             .sync_state
-            .upsert_local_standard_peer(label, addr, agent_did, graphql, agent_home)
+            .upsert_local_standard_peer(label, addr, node_did, graphql, agent_home)
             .await?;
         self.sync_state.set_pairing_ready(&record, true).await?;
         Ok(())
@@ -442,7 +442,7 @@ impl ClientCore {
     #[doc(hidden)]
     pub async fn add_managed_enrollment_peer_for_test(
         &self,
-        agent_did: &str,
+        node_did: &str,
         graphql: &str,
         agent_home: &str,
         authorization_sequence: u64,
@@ -450,7 +450,7 @@ impl ClientCore {
         let addr =
             "127.0.0.1:56000/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb";
         self.sync_state
-            .upsert_local_standard_peer("Managed Runtime", addr, agent_did, graphql, agent_home)
+            .upsert_local_standard_peer("Managed Runtime", addr, node_did, graphql, agent_home)
             .await?;
         let record = self
             .sync_state
@@ -458,11 +458,11 @@ impl ClientCore {
                 "managed-runtime-peer",
                 "Managed Runtime",
                 addr,
-                agent_did,
+                node_did,
                 "network",
                 "request",
                 "digest",
-                agent_did,
+                node_did,
                 authorization_sequence,
                 "2999-01-01T00:00:00Z",
             )
@@ -491,10 +491,10 @@ impl ClientCore {
     /// is deliberately restarted. The signed enrollment remains durable, but
     /// the replacement process must re-establish both route legs before chat
     /// writes reopen.
-    pub async fn mark_managed_runtime_restarting(&self, agent_did: &str) -> Result<()> {
+    pub async fn mark_managed_runtime_restarting(&self, node_did: &str) -> Result<()> {
         let records = self.peer_records().await;
         for record in records.into_iter().filter(|record| {
-            record.agent_did == agent_did
+            record.node_did == node_did
                 && record.is_enrollment()
                 && record.is_managed_runtime()
                 && record.pairing_ready
@@ -518,16 +518,16 @@ impl ClientCore {
             .context("queueing desktop P2P supervisor command")
     }
 
-    pub fn set_selected_agent_did(&self, agent_did: Option<String>) {
-        self.selected_agent_did.send_replace(agent_did);
+    pub fn set_selected_node_did(&self, node_did: Option<String>) {
+        self.selected_node_did.send_replace(node_did);
     }
 
-    pub fn selected_agent_did(&self) -> Option<String> {
-        self.selected_agent_did.borrow().clone()
+    pub fn selected_node_did(&self) -> Option<String> {
+        self.selected_node_did.borrow().clone()
     }
 
-    pub fn selected_agent_did_rx(&self) -> watch::Receiver<Option<String>> {
-        self.selected_agent_did.subscribe()
+    pub fn selected_node_did_rx(&self) -> watch::Receiver<Option<String>> {
+        self.selected_node_did.subscribe()
     }
 
     pub async fn peer_records(&self) -> Vec<PeerRecord> {
@@ -562,15 +562,15 @@ impl ClientCore {
     }
 
     pub async fn refresh_store(&self) -> Result<u64> {
-        let scoped = self.selected_agent_did();
+        let scoped = self.selected_node_did();
         let records = self.sync_state.records();
         let snapshot = match scoped.as_deref() {
             Some(did) => {
-                load_agent_scoped_snapshot_with_peer_records(
+                load_node_scoped_snapshot_with_peer_records(
                     self.node.as_ref(),
                     did,
                     &records,
-                    self.principal.did(),
+                    self.node_identity.did(),
                 )
                 .await?
             }
@@ -578,14 +578,14 @@ impl ClientCore {
                 load_full_snapshot_with_peer_records(
                     self.node.as_ref(),
                     &records,
-                    self.principal.did(),
+                    self.node_identity.did(),
                 )
                 .await?
             }
         };
         let rows = snapshot.row_count();
         let version = match scoped.as_deref() {
-            Some(did) => self.store.replace_agent_snapshot(did, snapshot),
+            Some(did) => self.store.replace_node_snapshot(did, snapshot),
             None => self.store.replace_snapshot(snapshot),
         };
         tracing::debug!(
@@ -598,24 +598,24 @@ impl ClientCore {
         Ok(version)
     }
 
-    pub async fn refresh_agent(&self, agent_did: &str) -> Result<Option<u64>> {
-        let agent_did = agent_did.trim();
-        if agent_did.is_empty() {
+    pub async fn refresh_node(&self, node_did: &str) -> Result<Option<u64>> {
+        let node_did = node_did.trim();
+        if node_did.is_empty() {
             return Ok(None);
         }
         let records = self.sync_state.records();
-        let snapshot = load_agent_scoped_snapshot_with_peer_records(
+        let snapshot = load_node_scoped_snapshot_with_peer_records(
             self.node.as_ref(),
-            agent_did,
+            node_did,
             &records,
-            self.principal.did(),
+            self.node_identity.did(),
         )
         .await?;
         let rows = snapshot.row_count();
-        let version = self.store.replace_agent_snapshot(agent_did, snapshot);
+        let version = self.store.replace_node_snapshot(node_did, snapshot);
         tracing::debug!(
             target: "gents_desktop_core::replication",
-            agent_did,
+            node_did,
             version,
             rows,
             "desktop refreshed agent projection from local replica"
@@ -625,31 +625,31 @@ impl ClientCore {
 
     const SELECTION_RELOAD_DEBOUNCE: std::time::Duration = std::time::Duration::from_secs(2);
 
-    pub async fn ensure_agent_loaded(&self, agent_did: &str) -> Result<bool> {
+    pub async fn ensure_node_loaded(&self, node_did: &str) -> Result<bool> {
         let now = std::time::Instant::now();
         let mut map = self.last_loaded_for.lock().await;
-        if let Some(last) = map.get(agent_did) {
+        if let Some(last) = map.get(node_did) {
             if now.duration_since(*last) < Self::SELECTION_RELOAD_DEBOUNCE {
                 return Ok(false);
             }
         }
         let records = self.sync_state.records();
-        let snapshot = load_agent_scoped_snapshot_with_peer_records(
+        let snapshot = load_node_scoped_snapshot_with_peer_records(
             self.node.as_ref(),
-            agent_did,
+            node_did,
             &records,
-            self.principal.did(),
+            self.node_identity.did(),
         )
         .await?;
         let rows = snapshot.row_count();
-        let version = self.store.replace_agent_snapshot(agent_did, snapshot);
-        map.insert(agent_did.to_string(), now);
+        let version = self.store.replace_node_snapshot(node_did, snapshot);
+        map.insert(node_did.to_string(), now);
         tracing::info!(
             target: "gents_desktop_core::replication",
-            agent_did,
+            node_did,
             rows,
             version,
-            "ensure_agent_loaded merged scoped snapshot"
+            "ensure_node_loaded merged scoped snapshot"
         );
         Ok(true)
     }

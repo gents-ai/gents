@@ -1,4 +1,4 @@
-/* Who this agent is, at the top of its settings: avatar, name, the facts
+/* Who this Node is, at the top of its settings: avatar, name, the facts
    that do not change (the DID stays in the Identity group below, where it
    can be copied), and one live line for what it is doing right now,
    read from the operations snapshot. The line links to the sessions list;
@@ -12,7 +12,7 @@ import type {
 import { nodeKeyOf, type NodeView } from "../../../hooks/fleetStore";
 import { Badge } from "@gents/ui/components/badge";
 import { href } from "@/lib/router";
-import { AgentAvatar } from "../AgentAvatar";
+import { NodeAvatar } from "../AgentAvatar";
 import { isLive } from "@/lib/live";
 import { useApp } from "@/app/AppContext";
 import { useToolAuthority } from "@/hooks/useClient";
@@ -25,14 +25,14 @@ function pulse(
   const live = sessions.filter((s) => isLive(s.turnState)).length;
   const tools = ops?.backgroundedTools ?? [];
   /* a started session is a background row of a session-message call */
-  const subagent = (t: (typeof tools)[number]) =>
+  const worker = (t: (typeof tools)[number]) =>
     t.toolName === "agent_new" || t.toolName === "agent_message";
-  const workers = tools.filter(subagent).length;
+  const workers = tools.filter(worker).length;
   const jobs = tools.length - workers;
   const overdue = tools.filter((t) => t.deadlineExpired).length;
   const parts = [
     live ? `${live} ${live === 1 ? "session" : "sessions"} live` : null,
-    workers ? `${workers} ${workers === 1 ? "subagent" : "subagents"}` : null,
+    workers ? `${workers} ${workers === 1 ? "worker" : "workers"}` : null,
     jobs ? `${jobs} background ${jobs === 1 ? "job" : "jobs"}` : null,
     overdue ? `${overdue} past ${overdue === 1 ? "its" : "their"} deadline` : null,
   ].filter(Boolean) as string[];
@@ -48,21 +48,21 @@ export function AgentCard({ deployment }: { deployment: NodeView }) {
     actions: { fetchOperationsSnapshot },
   } = useApp();
   const authority = useToolAuthority();
-  const agent = deployment.agentPrincipal;
-  const name = agent.displayName ?? deployment.label;
+  const node = deployment.node;
+  const name = node.displayName ?? deployment.label;
   const [ops, setOps] = useState<DesktopOperationsSnapshot | null>(null);
   /* the snapshot changes with every store ping; the session list is the cue */
   const sessions = useFleet((s) => s.sessionsOf[nodeKeyOf(deployment)] ?? NO_SESSIONS);
   useEffect(() => {
     let alive = true;
-    void fetchOperationsSnapshot({ agentDid: deployment.agentDid }).then(
+    void fetchOperationsSnapshot({ nodeDid: deployment.nodeDid }).then(
       (o) => alive && setOps(o),
       () => alive && setOps(null),
     );
     return () => {
       alive = false;
     };
-  }, [fetchOperationsSnapshot, deployment.agentDid, sessions]);
+  }, [fetchOperationsSnapshot, deployment.nodeDid, sessions]);
   const now = pulse(sessions, ops);
   const facts = [
     authority.ceiling ?? null,
@@ -71,13 +71,13 @@ export function AgentCard({ deployment }: { deployment: NodeView }) {
   ].filter(Boolean) as string[];
   return (
     <div className="mb-8 flex items-start gap-4">
-      <AgentAvatar name={name} className="size-14" />
+      <NodeAvatar name={name} className="size-14" />
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">
           <h2 className="truncate font-heading text-lg font-medium text-heading">
             {name}
           </h2>
-          {agent.enabled === false && <Badge variant="outline">Disabled</Badge>}
+          {node.enabled === false && <Badge variant="outline">Disabled</Badge>}
         </div>
         {facts.length > 0 && (
           <p className="mt-1 truncate text-xs text-muted-foreground">

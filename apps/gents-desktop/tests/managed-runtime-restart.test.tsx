@@ -24,8 +24,8 @@ const running = (
 ): ManagedServerStatus => ({
   state: "running",
   autoStart: true,
-  agentName: "Workshop Agent",
-  agentDid: "did:key:agent",
+  nodeName: "Workshop Node",
+  nodeDid: "did:key:node",
   graphql: "http://127.0.0.1:9191/graphql",
   effectiveToolCeiling: ceiling,
   effectiveToolRoot: root,
@@ -63,7 +63,7 @@ describe("managed runtime restart settings", () => {
     } as unknown as DesktopApiAdapter;
     renderIn(testApp({ api }), <LocalServer />);
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Could not check the background agent",
+      "Could not check the background node",
     );
     expect(screen.getByRole("alert")).toHaveTextContent(
       "user service manager unavailable",
@@ -90,7 +90,7 @@ describe("managed runtime restart settings", () => {
       screen.getByText(/Quit Desktop closes only this frontend/),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/operating system—not the desktop app—start the agent/),
+      screen.getByText(/operating system—not the desktop app—start the node/),
     ).toBeInTheDocument();
     expect(screen.queryByText(/Start with the app/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Supervised by the desktop/i)).not.toBeInTheDocument();
@@ -103,7 +103,7 @@ describe("managed runtime restart settings", () => {
     // Authority is published before pairing finishes. Wait for that second
     // phase too, so its timer cannot outlive the test's DOM environment.
     expect(await screen.findByText("pairing probe failed")).toBeInTheDocument();
-    expect(api.restartManagedServer).toHaveBeenCalledWith("Workshop Agent", {
+    expect(api.restartManagedServer).toHaveBeenCalledWith("Workshop Node", {
       toolCeiling: "meta-only",
       toolRoot: null,
     });

@@ -1,5 +1,5 @@
 import {
-  selectedBehaviorReadinessDecision,
+  selectedNodeReadinessDecision,
   type ChatSendResult,
   type DesktopApiAdapter,
   type DesktopInterruptRequestRequest,
@@ -51,11 +51,11 @@ export function createChatActions({
   let submissionInFlight = false;
 
   /** the selected node; a send with none selected goes to the first */
-  const selectedNode = () => nodeOf(stores.fleet.getState(), store.getState().agentDid);
+  const selectedNode = () => nodeOf(stores.fleet.getState(), store.getState().nodeDid);
 
   async function sendMessage(
     content: string,
-    behaviorId?: string | null,
+    agentId?: string | null,
   ): Promise<ChatSendResult | null> {
     if (submissionInFlight) return null;
     const node = selectedNode() ?? firstNode(stores.fleet.getState());
@@ -68,11 +68,11 @@ export function createChatActions({
       return null;
     }
     const admission =
-      behaviorId === undefined
-        ? projection.behaviorReadiness
-        : selectedBehaviorReadinessDecision(node, behaviorId);
+      agentId === undefined
+        ? projection.agentReadiness
+        : selectedNodeReadinessDecision(node, agentId);
     if (admission.kind !== "ready") {
-      reportFailure("The selected behavior is unavailable");
+      reportFailure("The selected agent is unavailable");
       return null;
     }
 
@@ -81,14 +81,14 @@ export function createChatActions({
     const { sessionId: selectedSessionId, mailboxRoute } = store.getState();
     const ownedWorkflow: ChatWorkflowState = {
       kind: "submittingRequest",
-      agentDid: node.agentDid,
+      nodeDid: node.nodeDid,
       sessionId: selectedSessionId,
     };
     chat.beginSubmission(stores.chat, ownedWorkflow);
     try {
       const result = await api.sendChatMessage({
-        agentDid: node.agentDid,
-        behaviorId: admission.behaviorId,
+        nodeDid: node.nodeDid,
+        agentId: admission.agentId,
         sessionId: selectedSessionId,
         content,
         causedBySourceDocId: mailboxRoute?.itemId ?? null,
@@ -111,7 +111,7 @@ export function createChatActions({
         createdAt: new Date().toISOString(),
       });
       chat.awaitObservation(stores.chat, {
-        agentDid: node.agentDid,
+        nodeDid: node.nodeDid,
         sessionId: result.sessionId,
         requestId: result.requestId,
       });
@@ -140,16 +140,16 @@ export function createChatActions({
     const intentGeneration = selection.captureIntent(store);
     const ownedWorkflow: ChatWorkflowState = {
       kind: "submittingRequest",
-      agentDid: node.agentDid,
+      nodeDid: node.nodeDid,
       sessionId: store.getState().sessionId,
     };
     chat.beginSubmission(stores.chat, ownedWorkflow);
     try {
-      const result = await api.retryRequest(requestId, node.agentDid);
+      const result = await api.retryRequest(requestId, node.nodeDid);
       if (!selection.acceptsIntent(store, intentGeneration)) return;
       selection.settleSession(store, result.sessionId);
       chat.awaitObservation(stores.chat, {
-        agentDid: node.agentDid,
+        nodeDid: node.nodeDid,
         sessionId: result.sessionId,
         requestId: result.requestId,
       });
@@ -166,12 +166,12 @@ export function createChatActions({
   async function renameSession(sessionId: string, title: string) {
     /* the selection, not the fleet read: a read can briefly not list the
        node while the session it holds is still shown */
-    const agentDid =
-      heldFor(readSession(stores.session), sessionId, null)?.agentDid ??
-      store.getState().agentDid;
+    const nodeDid =
+      heldFor(readSession(stores.session), sessionId, null)?.nodeDid ??
+      store.getState().nodeDid;
     try {
-      if (!agentDid) throw new Error("no node holds this session");
-      await api.renameSession({ agentDid, sessionId, title });
+      if (!nodeDid) throw new Error("no node holds this session");
+      await api.renameSession({ nodeDid, sessionId, title });
       await refreshSnapshot();
       await refreshSession(sessionId);
     } catch (err) {
@@ -199,7 +199,7 @@ export function createChatActions({
   return {
     /**
      * Sends a message to the selected node (the first node while none is
-     * selected), under the selected behavior or the one given, admitted by
+     * selected), under the selected agent or the one given, admitted by
      * the shell projection as the stores hold it now. Returns null without
      * sending for empty content or no node, while another send or retry is
      * in flight, or when admission refuses (whose reason is reported).
@@ -210,7 +210,7 @@ export function createChatActions({
     sendMessage,
     /**
      * Retries a failed request through the bridge's fenced retry, admitted
-     * under the session's own behavior rather than the composer's. Shares
+     * under the session's own agent rather than the composer's. Shares
      * sendMessage's single submission in flight and drops its result if the
      * person has moved on. A failure is reported once.
      */
