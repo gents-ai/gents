@@ -2,7 +2,7 @@ use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 
 use crate::cli::args::CodexAuthProbeArgs;
-use crate::{resolve_agent_did, resolve_config_access};
+use crate::{resolve_config_access, resolve_node_did};
 
 #[derive(Deserialize)]
 struct ModelsResponse {
@@ -27,26 +27,26 @@ struct OpenAiModelSummary {
 pub(crate) async fn codex_auth_probe(args: CodexAuthProbeArgs) -> Result<()> {
     let (access, home_dir) =
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
-    let agent_did = resolve_agent_did(Some(&home_dir), args.agent_did.as_deref())?;
+    let node_did = resolve_node_did(Some(&home_dir), args.node_did.as_deref())?;
     let provider = gents::chatgpt_codex::normalize_provider(&args.provider);
     let blocks = crate::commands::accounts::probe_each_account(
         &access,
-        &agent_did,
+        &node_did,
         &provider,
-        |credential| probe_account(credential, &agent_did, &provider, args.max_models),
+        |credential| probe_account(credential, &node_did, &provider, args.max_models),
     )
     .await?;
     if blocks.is_empty() {
         bail!(
             "{}",
             gents::oauth_credential::classify_chatgpt_auth_error(
-                &agent_did,
+                &node_did,
                 &provider,
                 &gents::oauth_credential::OAuthAuthProblem::Missing,
             )
         );
     }
-    println!("Agent DID: {agent_did}");
+    println!("Node DID: {node_did}");
     for block in blocks {
         println!("\n{block}");
     }
@@ -56,7 +56,7 @@ pub(crate) async fn codex_auth_probe(args: CodexAuthProbeArgs) -> Result<()> {
 /// Probe one account and render its block (after the label).
 async fn probe_account(
     credential: gents::oauth_credential::OAuthCredential,
-    agent_did: &str,
+    node_did: &str,
     provider: &str,
     max_models: usize,
 ) -> Result<String> {
@@ -98,7 +98,7 @@ async fn probe_account(
         let body = String::from_utf8_lossy(&body);
         if status.as_u16() == 401 || status.as_u16() == 403 {
             let guidance = gents::oauth_credential::classify_chatgpt_auth_error(
-                &agent_did,
+                &node_did,
                 &provider,
                 &gents::oauth_credential::OAuthAuthProblem::Expired,
             );

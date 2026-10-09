@@ -15,10 +15,10 @@ pub(super) async fn create_agent_request_with_retry(
     let request_id = uuid::Uuid::new_v4().to_string();
     let prepared = prepare_agent_request(
         &state.graphql,
-        state.agent_did.as_ref(),
+        state.node_did.as_ref(),
         content,
         session_id,
-        Some(state.behavior_id.as_ref()),
+        Some(state.agent_id.as_ref()),
         Some(request_id.clone()),
         options,
     )
@@ -32,7 +32,7 @@ pub(super) async fn create_agent_request_with_retry(
                 if let Err(error) = gents::interrupt_request_by_doc_id(
                     state.node.as_ref(),
                     physical,
-                    &prepared.create.agent_did,
+                    &prepared.create.node_did,
                     row.requester_did.as_deref(),
                 )
                 .await

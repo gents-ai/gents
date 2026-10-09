@@ -43,8 +43,8 @@ async fn config_backend_set_accepts_canonical_document_and_supports_discovery() 
     let endpoint = MockModelEndpoint::start(&model)?;
     let port = allocate_port()?;
     let graphql = graphql_url(port);
-    let init = run_init_json(&home, &["--agent-name", "backend-agent"])?;
-    let owner = agent_did_from_init(&init)?;
+    let init = run_init_json(&home, &["--node-name", "backend-agent"])?;
+    let owner = node_did_from_init(&init)?;
     let mut server = spawn_server(&home, port)?;
     wait_for_port(port, &mut server)?;
     wait_for_runtime_ready(&graphql, &owner, Duration::from_secs(30)).await?;
@@ -52,7 +52,7 @@ async fn config_backend_set_accepts_canonical_document_and_supports_discovery() 
     write_json_file(
         &file,
         &json!({
-            "agent_did":owner,
+            "node_did":owner,
             "backend_id":"extra-backend",
             "name":"Extra backend",
             "provider_kind":"OpenAiCompatible",

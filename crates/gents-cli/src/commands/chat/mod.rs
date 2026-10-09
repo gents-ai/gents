@@ -25,22 +25,22 @@ pub(crate) async fn chat(args: ChatArgs) -> Result<()> {
     let runtime_state = crate::read_runtime_state(&home_dir)?;
     let init_config = crate::read_init_config(&home_dir)?;
     let graphql = crate::resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
-    let agent_did = match args
-        .agent_did
+    let node_did = match args
+        .node_did
         .clone()
-        .or_else(|| runtime_state.as_ref().map(|state| state.agent_did.clone()))
-        .or_else(|| init_config.as_ref().map(|config| config.agent_did.clone()))
+        .or_else(|| runtime_state.as_ref().map(|state| state.node_did.clone()))
+        .or_else(|| init_config.as_ref().map(|config| config.node_did.clone()))
     {
-        Some(agent_did) => agent_did,
+        Some(node_did) => node_did,
         None => bail!(
-            "agent DID is required; run `gents init`, start `gents server`, then retry `gents chat`, or pass --agent-did explicitly"
+            "node DID is required; run `gents init`, start `gents server`, then retry `gents chat`, or pass --node-did explicitly"
         ),
     };
     let session_id = args
         .session_id
         .clone()
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    ensure_local_request_signer(args.home.as_deref(), &agent_did)?;
+    ensure_local_request_signer(args.home.as_deref(), &node_did)?;
     let goal = args
         .goal_objective
         .as_deref()
@@ -58,9 +58,9 @@ pub(crate) async fn chat(args: ChatArgs) -> Result<()> {
                 let envelope = submit_chat_turn_with_goal(
                     &home_dir,
                     &graphql,
-                    &agent_did,
+                    &node_did,
                     &session_id,
-                    args.behavior_id.as_deref(),
+                    args.agent_id.as_deref(),
                     &message,
                     goal,
                     args.timeout_secs,
@@ -75,9 +75,9 @@ pub(crate) async fn chat(args: ChatArgs) -> Result<()> {
             OutputFormat::Json => {
                 let output = submit_chat_turn_json(
                     &graphql,
-                    &agent_did,
+                    &node_did,
                     &session_id,
-                    args.behavior_id.as_deref(),
+                    args.agent_id.as_deref(),
                     &message,
                     goal,
                     args.timeout_secs,
@@ -128,9 +128,9 @@ pub(crate) async fn chat(args: ChatArgs) -> Result<()> {
         submit_chat_turn_with_goal(
             &home_dir,
             &graphql,
-            &agent_did,
+            &node_did,
             &session_id,
-            args.behavior_id.as_deref(),
+            args.agent_id.as_deref(),
             trimmed,
             pending_goal.take(),
             args.timeout_secs,
@@ -143,7 +143,7 @@ pub(crate) async fn chat(args: ChatArgs) -> Result<()> {
     Ok(())
 }
 
-/// Minimal, one-line context for the interactive prompt: which agent is
+/// Minimal, one-line context for the interactive prompt: which node is
 /// listening. Falls back through the sources that can name it, and finally
 /// to a generic label rather than a bare `>` with no context (#1622).
 fn chat_prompt_label(
@@ -151,15 +151,15 @@ fn chat_prompt_label(
     runtime_state: Option<&crate::shared::StoredRuntimeState>,
 ) -> String {
     sanitize_prompt_label(
-        args.agent_name
+        args.node_name
             .clone()
-            .or_else(|| runtime_state.map(|state| state.agent_name.clone())),
+            .or_else(|| runtime_state.map(|state| state.node_name.clone())),
     )
 }
 
-/// Routes a candidate agent-name label through the same control/newline
-/// stripping and bounding used for tool summaries: `agent_name` can come
-/// from `--agent-name` or stored runtime state, neither of which is trusted
+/// Routes a candidate node-name label through the same control/newline
+/// stripping and bounding used for tool summaries: `node_name` can come
+/// from `--node-name` or stored runtime state, neither of which is trusted
 /// terminal input, and this prompt is printed on every turn.
 fn sanitize_prompt_label(name: Option<String>) -> String {
     name.and_then(|name| sanitize_summary_text(&name, SUMMARY_ARGUMENT_MAX_CHARS))
@@ -176,9 +176,9 @@ struct GoalBackedSubmission<'a> {
 async fn submit_chat_turn_with_goal(
     home_dir: &Path,
     graphql: &GraphqlEndpoint,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
-    behavior_id: Option<&str>,
+    agent_id: Option<&str>,
     content: &str,
     goal: Option<GoalBackedSubmission<'_>>,
     timeout_secs: u64,
@@ -190,10 +190,10 @@ async fn submit_chat_turn_with_goal(
         Some(goal) => {
             create_goal_backed_agent_request(
                 graphql,
-                agent_did,
+                node_did,
                 content,
                 session_id,
-                behavior_id,
+                agent_id,
                 goal.objective,
                 goal.token_budget,
             )
@@ -202,10 +202,10 @@ async fn submit_chat_turn_with_goal(
         None => {
             create_agent_request(
                 graphql,
-                agent_did,
+                node_did,
                 content,
                 Some(session_id),
-                behavior_id,
+                agent_id,
                 RequestSubmitOptions::default(),
             )
             .await?
@@ -225,9 +225,9 @@ async fn submit_chat_turn_with_goal(
 
 async fn submit_chat_turn_json(
     graphql: &GraphqlEndpoint,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
-    behavior_id: Option<&str>,
+    agent_id: Option<&str>,
     content: &str,
     goal: Option<GoalBackedSubmission<'_>>,
     timeout_secs: u64,
@@ -237,10 +237,10 @@ async fn submit_chat_turn_json(
         Some(goal) => {
             create_goal_backed_agent_request(
                 graphql,
-                agent_did,
+                node_did,
                 content,
                 session_id,
-                behavior_id,
+                agent_id,
                 goal.objective,
                 goal.token_budget,
             )
@@ -249,10 +249,10 @@ async fn submit_chat_turn_json(
         None => {
             create_agent_request(
                 graphql,
-                agent_did,
+                node_did,
                 content,
                 Some(session_id),
-                behavior_id,
+                agent_id,
                 RequestSubmitOptions::default(),
             )
             .await?
@@ -323,8 +323,8 @@ fn chat_turn_output(submitted: &SubmittedRequest, envelope: RequestOutputEnvelop
     json!({
         "request_id": submitted.request_id,
         "session_id": submitted.session_id,
-        "agent_did": submitted.agent_did,
-        "behavior_id": submitted.behavior_id,
+        "node_did": submitted.node_did,
+        "agent_id": submitted.agent_id,
         "request": request,
         "output": output,
     })
@@ -335,7 +335,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn prompt_label_strips_control_characters_and_bounds_a_hostile_agent_name() {
+    fn prompt_label_strips_control_characters_and_bounds_a_hostile_node_name() {
         let hostile = format!("gents\x1b[31mHACKED\x1b[0m\r\n{}", "x".repeat(200));
         let label = sanitize_prompt_label(Some(hostile));
         assert!(!label.contains('\u{1b}'), "ESC leaked: {label:?}");

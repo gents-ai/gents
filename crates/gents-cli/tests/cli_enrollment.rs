@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::Utc;
-use gents::default_behavior_id_for_agent;
+use gents::default_agent_id_for_node;
 use gents::session::canonical_rows::{OutputSegmentRow, TranscriptMessageRow};
 use gents_desktop_core::client::canonical_output::{
     project_canonical_message, CanonicalMessageProjection,
@@ -36,8 +36,7 @@ fn enrollment_e2e_lock() -> &'static Mutex<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn status_enrollment_from_fresh_desktop_replicates_chat_without_agent_principal() -> Result<()>
-{
+async fn status_enrollment_from_fresh_desktop_replicates_chat_without_node() -> Result<()> {
     let _guard = enrollment_e2e_lock().lock().await;
 
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -65,7 +64,7 @@ async fn status_enrollment_from_fresh_desktop_replicates_chat_without_agent_prin
         &[
             "--home",
             home_arg,
-            "--agent-name",
+            "--node-name",
             &agent_name,
             "--model-name",
             &model_name,
@@ -77,8 +76,8 @@ async fn status_enrollment_from_fresh_desktop_replicates_chat_without_agent_prin
             &model_endpoint,
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
-    let default_behavior_id = default_behavior_id_for_agent(&agent_did);
+    let node_did = node_did_from_init(&init)?;
+    let default_agent_id = default_agent_id_for_node(&node_did);
 
     let (mut serve, _readiness) =
         spawn_server_with_ready_json(&home_dir, port, &["--home", home_arg], &[])?;
@@ -86,17 +85,17 @@ async fn status_enrollment_from_fresh_desktop_replicates_chat_without_agent_prin
 
     serve
         .capturing(async {
-            wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+            wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
             let status_url = format!("http://127.0.0.1:{port}");
             let (status, _) = wait_for_enrollment_token(&status_url).await?;
             assert_eq!(
-                status.get("agent_name").and_then(Value::as_str),
+                status.get("node_name").and_then(Value::as_str),
                 Some(agent_name.as_str())
             );
             assert_eq!(
-                status.get("agent_did").and_then(Value::as_str),
-                Some(agent_did.as_str())
+                status.get("node_did").and_then(Value::as_str),
+                Some(node_did.as_str())
             );
 
             let core = ClientCore::start_with_paths_and_options(
@@ -111,7 +110,7 @@ async fn status_enrollment_from_fresh_desktop_replicates_chat_without_agent_prin
                 .await
                 .context("requesting status enrollment from /status offer")?;
             assert_eq!(pending.state, "pending_approval");
-            assert_eq!(pending.owner_agent, agent_did);
+            assert_eq!(pending.owner_node, node_did);
 
             let active = core
                 .active_status_enrollment_requests()
@@ -134,7 +133,7 @@ async fn status_enrollment_from_fresh_desktop_replicates_chat_without_agent_prin
                 core.active_status_enrollment_requests()
                     .await?
                     .iter()
-                    .filter(|request| request.owner_agent == agent_did)
+                    .filter(|request| request.owner_node == node_did)
                     .count(),
                 1,
                 "a resend never authors another request"
@@ -153,39 +152,39 @@ async fn status_enrollment_from_fresh_desktop_replicates_chat_without_agent_prin
             )
             .context("approving enrollment request")?;
 
-            let enrolled = wait_for_chat_ready_enrollment(&core, &agent_did).await?;
+            let enrolled = wait_for_chat_ready_enrollment(&core, &node_did).await?;
             assert_ne!(
                 enrolled.label.as_str(),
                 "Enrolled Agent",
                 "enrollment should seed the advertised agent name, not a placeholder"
             );
             assert_eq!(enrolled.label, agent_name);
-            assert_eq!(enrolled.agent_did, agent_did);
+            assert_eq!(enrolled.node_did, node_did);
 
-            let principals = query_collection_dids(core.node(), "AgentPrincipal").await?;
+            let principals = query_collection_dids(core.node(), "Node").await?;
             assert!(
                 principals.is_empty(),
-                "AgentPrincipal must stay on the runtime node; client gossiped {principals:?}"
+                "Node must stay on the runtime node; client gossiped {principals:?}"
             );
             assert!(
-                core.store().snapshot().agent_principals.is_empty(),
-                "client store must not materialize a gossiped AgentPrincipal"
+                core.store().snapshot().nodes.is_empty(),
+                "client store must not materialize a gossiped Node"
             );
 
-            wait_for_client_behavior_readiness(&core, &agent_did).await?;
+            wait_for_client_node_readiness(&core, &node_did).await?;
 
             let session_id = Uuid::new_v4().to_string();
             core.submit_request(
                 &session_id,
-                &agent_did,
+                &node_did,
                 &prompt,
-                Some(&default_behavior_id),
+                Some(&default_agent_id),
             )
             .await
             .context("submitting chat request from the enrolled desktop")?;
 
             let (request_id, runtime_session, _) =
-                wait_for_runtime_agent_request(&graphql, core.node(), &agent_did, &prompt).await?;
+                wait_for_runtime_agent_request(&graphql, core.node(), &node_did, &prompt).await?;
             let runtime_reply = wait_for_complete_agent_response(
                 &graphql,
                 &request_id,
@@ -196,7 +195,7 @@ async fn status_enrollment_from_fresh_desktop_replicates_chat_without_agent_prin
             wait_for_client_complete_response(
                 &core,
                 &session_id,
-                &agent_did,
+                &node_did,
                 &request_id,
                 &runtime_reply,
             )
@@ -204,19 +203,19 @@ async fn status_enrollment_from_fresh_desktop_replicates_chat_without_agent_prin
 
             let runtime_principals = graphql_query(
                 &graphql,
-                r#"{ AgentPrincipal { agent_did display_name } }"#,
+                r#"{ Node { node_did display_name } }"#,
             )
             .await?;
             let runtime_rows = runtime_principals
-                .pointer("/data/AgentPrincipal")
+                .pointer("/data/Node")
                 .and_then(Value::as_array)
                 .cloned()
                 .unwrap_or_default();
             assert!(
                 runtime_rows.iter().any(|row| {
-                    row.get("agent_did").and_then(Value::as_str) == Some(agent_did.as_str())
+                    row.get("node_did").and_then(Value::as_str) == Some(node_did.as_str())
                 }),
-                "runtime must keep AgentPrincipal locally: {runtime_principals}"
+                "runtime must keep Node locally: {runtime_principals}"
             );
 
             let remaining = core
@@ -335,7 +334,7 @@ async fn wait_for_runtime_enrollment_request(graphql: &str, request_id: &str) ->
 async fn wait_for_runtime_agent_request(
     graphql: &str,
     client_node: &gents::defra_node::EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     content: &str,
 ) -> Result<(String, String, String)> {
     let deadline = Instant::now() + Duration::from_secs(60);
@@ -351,13 +350,13 @@ async fn wait_for_runtime_agent_request(
                     ) {{
                         request_id
                         session_id
-                        behavior_id
+                        agent_id
                         content
                     }}
                 }}"#,
                 gents::session::public_request_filter(&format!(
-                    r#"agent_did: {{ _eq: "{}" }}, content: {{ _eq: "{}" }}"#,
-                    escape_graphql_string(agent_did),
+                    r#"node_did: {{ _eq: "{}" }}, content: {{ _eq: "{}" }}"#,
+                    escape_graphql_string(node_did),
                     escape_graphql_string(content),
                 )),
             ),
@@ -375,7 +374,7 @@ async fn wait_for_runtime_agent_request(
                             .and_then(Value::as_str)
                             .unwrap_or_default()
                             .to_string(),
-                        row.get("behavior_id")
+                        row.get("agent_id")
                             .and_then(Value::as_str)
                             .unwrap_or_default()
                             .to_string(),
@@ -390,11 +389,11 @@ async fn wait_for_runtime_agent_request(
         }
         if Instant::now() >= deadline {
             let client_requests = client_node
-                .execute("{ AgentRequest { request_id agent_did content requester_did } }")
+                .execute("{ AgentRequest { request_id node_did content requester_did } }")
                 .await;
             let runtime_all = graphql_query(
                 graphql,
-                "{ AgentRequest { request_id agent_did content requester_did } }",
+                "{ AgentRequest { request_id node_did content requester_did } }",
             )
             .await
             .unwrap_or_else(|error| serde_json::json!({ "error": error.to_string() }));
@@ -435,7 +434,7 @@ async fn wait_for_complete_agent_response(
                         order: {{ created_at: DESC }},
                         limit: 1
                     ) {{
-                        _docID agent_did requester_did session_id request_id
+                        _docID node_did requester_did session_id request_id
                         lifecycle_state failure_reason terminal_output
                     }}
                 }}"#,
@@ -452,7 +451,7 @@ async fn wait_for_complete_agent_response(
             anyhow::ensure!(
                 request.session_id.as_deref() == Some(session)
                     && request
-                        .agent_did
+                        .node_did
                         .as_deref()
                         .is_some_and(|did| !did.is_empty())
                     && request
@@ -577,7 +576,7 @@ fn client_selected_reply(
 async fn wait_for_client_complete_response(
     core: &ClientCore,
     session_id: &str,
-    agent_did: &str,
+    node_did: &str,
     request_id: &str,
     runtime_reply: &RuntimeTerminalReply,
 ) -> Result<()> {
@@ -585,14 +584,14 @@ async fn wait_for_client_complete_response(
     loop {
         // Match desktop_session_snapshot: transcript rows deliberately do not
         // live in the global observer. Read the app's bounded, scoped page.
-        core.ensure_session_hydration_started(session_id, agent_did)
+        core.ensure_session_hydration_started(session_id, node_did)
             .await?;
-        core.refresh_local_request(agent_did, request_id).await?;
+        core.refresh_local_request(node_did, request_id).await?;
         let page = gents_desktop_core::client::load_session_transcript_page(
             core.node(),
             session_id,
-            Some(agent_did),
-            Some(core.principal().did()),
+            Some(node_did),
+            Some(core.node_identity().did()),
             None,
             Some(40),
         )
@@ -632,7 +631,7 @@ async fn wait_for_client_complete_response(
 
 async fn wait_for_chat_ready_enrollment(
     core: &ClientCore,
-    agent_did: &str,
+    node_did: &str,
 ) -> Result<gents_desktop_core::client::PeerRecord> {
     let deadline = Instant::now() + Duration::from_secs(90);
     let mut updates = core.sync_state_updates();
@@ -642,7 +641,7 @@ async fn wait_for_chat_ready_enrollment(
             .peer_records()
             .await
             .into_iter()
-            .find(|record| record.agent_did == agent_did && record.is_chat_ready_at(now))
+            .find(|record| record.node_did == node_did && record.is_chat_ready_at(now))
         {
             return Ok(record);
         }
@@ -666,27 +665,24 @@ async fn wait_for_chat_ready_enrollment(
     }
 }
 
-async fn wait_for_client_behavior_readiness(core: &ClientCore, agent_did: &str) -> Result<()> {
+async fn wait_for_client_node_readiness(core: &ClientCore, node_did: &str) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(60);
     let mut updates = core.store_change_updates();
     loop {
         let snapshot = core.store().snapshot();
-        let has_behavior = snapshot
-            .behaviors
-            .iter()
-            .any(|row| row.agent_did == agent_did);
+        let has_agent = snapshot.agents.iter().any(|row| row.node_did == node_did);
         let has_readiness = snapshot
-            .behavior_readiness
+            .node_readiness
             .iter()
-            .any(|row| row.agent_did == agent_did);
-        if has_behavior && has_readiness {
+            .any(|row| row.node_did == node_did);
+        if has_agent && has_readiness {
             return Ok(());
         }
         if Instant::now() >= deadline {
             bail!(
-                "timed out waiting for gossiped AgentBehavior/AgentBehaviorReadiness; behaviors={} readiness={}",
-                snapshot.behaviors.len(),
-                snapshot.behavior_readiness.len()
+                "timed out waiting for gossiped Agent/NodeReadiness; agents={} readiness={}",
+                snapshot.agents.len(),
+                snapshot.node_readiness.len()
             );
         }
         match tokio::time::timeout(
@@ -699,9 +695,9 @@ async fn wait_for_client_behavior_readiness(core: &ClientCore, agent_did: &str) 
             Ok(Err(_)) => bail!("app projection channel closed"),
             Err(_) => {
                 bail!(
-                    "timed out waiting for gossiped AgentBehavior/AgentBehaviorReadiness; behaviors={} readiness={}",
-                    snapshot.behaviors.len(),
-                    snapshot.behavior_readiness.len()
+                    "timed out waiting for gossiped Agent/NodeReadiness; agents={} readiness={}",
+                    snapshot.agents.len(),
+                    snapshot.node_readiness.len()
                 );
             }
         }
@@ -713,7 +709,7 @@ async fn query_collection_dids(
     collection: &str,
 ) -> Result<Vec<String>> {
     let response = node
-        .execute(&format!("{{ {collection} {{ agent_did }} }}"))
+        .execute(&format!("{{ {collection} {{ node_did }} }}"))
         .await;
     if response.has_errors() {
         bail!("query {collection} failed: {:?}", response.errors);
@@ -726,7 +722,7 @@ async fn query_collection_dids(
         .into_iter()
         .flatten()
         .filter_map(|row| {
-            row.get("agent_did")
+            row.get("node_did")
                 .and_then(Value::as_str)
                 .map(str::to_owned)
         })
@@ -748,7 +744,7 @@ fn client_reply_requires_the_runtime_selected_terminal_header() {
     let segment = |doc_id: &str, key: &str| OutputSegmentRow {
         doc_id: doc_id.into(),
         segment: OutputSegment {
-            agent_did: "did:key:agent".into(),
+            node_did: "did:key:agent".into(),
             requester_did: None,
             session_id: "session".into(),
             request_doc_id: REQUEST_DOC.into(),
@@ -781,7 +777,7 @@ fn client_reply_requires_the_runtime_selected_terminal_header() {
             message: TranscriptMessage {
                 message_key: format!("session:{sequence}"),
                 session_id: "session".into(),
-                agent_did: "did:key:agent".into(),
+                node_did: "did:key:agent".into(),
                 requester_did: None,
                 request_doc_id: Some(REQUEST_DOC.into()),
                 publication: MessagePublication::RequestExecution {

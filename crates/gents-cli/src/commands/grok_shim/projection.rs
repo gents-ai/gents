@@ -50,7 +50,7 @@ pub(crate) const SUBAGENT_NOTIFICATION_METHOD: &str = "x.ai/session_notification
 
 /// Default context window reported when the bound configuration does not
 /// supply one. Mirrors the model catalog's `totalContextTokens` default scale
-/// (`gents::DEFAULT_CONTEXT_WINDOW`) so a bound behavior that never pinned a
+/// (`gents::DEFAULT_CONTEXT_WINDOW`) so a bound agent that never pinned a
 /// window still reports a truthful, bounded value instead of zero.
 pub(crate) const DEFAULT_CONTEXT_WINDOW_TOKENS: u64 = gents::DEFAULT_CONTEXT_WINDOW as u64;
 
@@ -74,7 +74,7 @@ pub(super) fn nonempty(value: &str) -> Option<&str> {
 
 /// Bound model/context configuration the shim was assembled with.
 ///
-/// Model and context-window values come from the bound `AgentBehavior` and its
+/// Model and context-window values come from the bound `Agent` and its
 /// `InferenceProfile`, not from `AgentSession` (which has no model or
 /// context-window fields).
 #[derive(Debug, Clone)]
@@ -648,10 +648,7 @@ impl ProjectionEngine {
             .context("projection request session missing")?;
         anyhow::ensure!(
             request.doc_id.as_deref().is_some_and(|id| !id.is_empty())
-                && request
-                    .agent_did
-                    .as_deref()
-                    .is_some_and(|id| !id.is_empty()),
+                && request.node_did.as_deref().is_some_and(|id| !id.is_empty()),
             "projection requires actual scoped physical request"
         );
         // Each family projects independently (one bounded query set per
@@ -855,7 +852,7 @@ impl ProjectionEngine {
             }
         }
 
-        // 2. Subagents (sessions this request caused).
+        // 2. Sessions this request caused.
         let subagents = caused_sessions::project_caused_sessions(
             &self.node,
             request,
@@ -879,10 +876,10 @@ impl ProjectionEngine {
                     advance,
                 },
                 chronology,
-                family_rank: FAMILY_RANK_SUBAGENT,
+                family_rank: FAMILY_RANK_CAUSED_SESSION,
                 family_ordinal: merged
                     .iter()
-                    .filter(|item| item.family_rank == FAMILY_RANK_SUBAGENT)
+                    .filter(|item| item.family_rank == FAMILY_RANK_CAUSED_SESSION)
                     .count(),
             });
         }
@@ -1126,7 +1123,7 @@ impl ProjectionEngine {
 /// call), then the tool call, then the session that tool call caused.
 const FAMILY_RANK_MESSAGE: u8 = 0;
 const FAMILY_RANK_TOOL: u8 = 1;
-const FAMILY_RANK_SUBAGENT: u8 = 2;
+const FAMILY_RANK_CAUSED_SESSION: u8 = 2;
 
 /// One novel event tagged with its durable chronology key and merge tiebreak
 /// data. Internal to [`ProjectionEngine::project_request_updates`].
@@ -1221,7 +1218,7 @@ pub(crate) enum CursorAdvance {
     /// A distinct visible tool list was observed.
     Commands { fingerprint: u64 },
     /// A distinct subagent payload was observed for its key.
-    Subagent { key: String, fingerprint: u64 },
+    CausedSession { key: String, fingerprint: u64 },
     /// One native background task lifecycle notification was delivered.
     BackgroundTask { key: String },
     BackgroundOutput {
@@ -1703,7 +1700,7 @@ impl RequestCursor {
         if self.subagent_states.get(key) == Some(&fingerprint) {
             return None;
         }
-        Some(CursorAdvance::Subagent {
+        Some(CursorAdvance::CausedSession {
             key: key.to_string(),
             fingerprint,
         })
@@ -1738,7 +1735,7 @@ impl RequestCursor {
             CursorAdvance::Commands { fingerprint } => {
                 self.commands_state = Some(fingerprint);
             }
-            CursorAdvance::Subagent { key, fingerprint } => {
+            CursorAdvance::CausedSession { key, fingerprint } => {
                 self.subagent_states.insert(key, fingerprint);
             }
             CursorAdvance::BackgroundTask { key } => {
@@ -1876,16 +1873,16 @@ fn hash_value<H: Hasher>(hasher: &mut H, value: &Value) {
     }
 }
 
-/// Project the exact principal's behavior → profile → backend selection.
+/// Project the exact node's agent → profile → backend selection.
 /// Model identity is the provider model name; backend identity stays internal.
 pub(crate) async fn resolve_bound_model_context(
     node: &EmbeddedNode,
-    agent_did: &str,
-    behavior_id: &str,
+    node_did: &str,
+    agent_id: &str,
 ) -> Result<BoundModelContext> {
     use crate::commands::inference_binding::{load_bound_context_window, load_bound_profile};
-    let profile = load_bound_profile(node, agent_did, behavior_id).await?;
-    let context_window = load_bound_context_window(node, agent_did, behavior_id).await?;
+    let profile = load_bound_profile(node, node_did, agent_id).await?;
+    let context_window = load_bound_context_window(node, node_did, agent_id).await?;
     Ok(BoundModelContext::new(
         profile.model_name.clone(),
         profile.model_name,
@@ -2475,11 +2472,11 @@ mod tests {
         };
         use gents::Collection;
         let owner = "did:grok-binding-test";
-        gents::ensure_agent_principal(node, owner).await.unwrap();
+        gents::ensure_node(node, owner).await.unwrap();
         let plan = DesiredStateApplyPlan::new([
-            (Collection::AgentBehavior, json!({"agent_did":owner,"behavior_id":"port-live","inference_profile_id":"profile"})),
-            (Collection::InferenceProfile, json!({"agent_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"GLM-5.3-NVFP4","context_window":window})),
-            (Collection::InferenceBackend, json!({"agent_did":owner,"backend_id":"backend","name":"Workstation","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:8000/v1","auth":{"kind":"unauthenticated"}})),
+            (Collection::Agent, json!({"node_did":owner,"agent_id":"port-live","inference_profile_id":"profile"})),
+            (Collection::InferenceProfile, json!({"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"GLM-5.3-NVFP4","context_window":window})),
+            (Collection::InferenceBackend, json!({"node_did":owner,"backend_id":"backend","name":"Workstation","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:8000/v1","auth":{"kind":"unauthenticated"}})),
         ].into_iter().map(|(collection,value)| DesiredStateApplyDocument {collection,add:value.clone(),update:value}).collect()).unwrap();
         ConfigAccess::transact_local(node, None, "grok.binding.fixture", |txn| {
             let plan = &plan;
@@ -2571,7 +2568,7 @@ mod tests {
         let request_id = "req-chunk-retry";
         let request = seed_projection_request(&node, "s-chunk", request_id).await;
         let message_key = gents::session::sequence_message_key(
-            request.agent_did.as_deref().unwrap(),
+            request.node_did.as_deref().unwrap(),
             request.session_id.as_deref().unwrap(),
             request.requester_did.as_deref(),
             1,
@@ -2667,14 +2664,14 @@ mod tests {
         session: &str,
         request_id: &str,
     ) -> gents_protocol::row::AgentRequestRow {
-        let result = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{purpose: "normal", request_id: "{}", session_id: "{}", agent_did: "did:test:grok-shim", requester_did: "did:test:grok-shim", behavior_id: "test", content: "projection fixture", lifecycle_state: "pending"}}) {{_docID}} }}"#, gents::graphql::escape_graphql_string(request_id), gents::graphql::escape_graphql_string(session))).await;
+        let result = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{purpose: "normal", request_id: "{}", session_id: "{}", node_did: "did:test:grok-shim", requester_did: "did:test:grok-shim", agent_id: "test", content: "projection fixture", lifecycle_state: "pending"}}) {{_docID}} }}"#, gents::graphql::escape_graphql_string(request_id), gents::graphql::escape_graphql_string(session))).await;
         ensure_no_errors(&result, "seed projection request").unwrap();
         let doc = gents_protocol::graphql::extract_mutation_doc_id(
             &json!({"data":result.data}),
             "AgentRequest",
         )
         .unwrap();
-        serde_json::from_value(json!({"_docID":doc,"request_id":request_id,"agent_did":"did:test:grok-shim","requester_did":"did:test:grok-shim","session_id":session})).unwrap()
+        serde_json::from_value(json!({"_docID":doc,"request_id":request_id,"node_did":"did:test:grok-shim","requester_did":"did:test:grok-shim","session_id":session})).unwrap()
     }
 
     /// Seed one durable `AgentToolCall` row with an explicit stable id and
@@ -2707,7 +2704,7 @@ mod tests {
                     request_id: "{escaped_request}"
                     {request_doc_field}
                     session_id: "{escaped_session}"
-                    agent_did: "did:test:grok-shim"
+                    node_did: "did:test:grok-shim"
                     requester_did: "did:test:grok-shim"
                     tool_call_id: "{escaped_id}"
                     tool_name: "{escaped_name}"
@@ -2750,7 +2747,7 @@ mod tests {
             StreamPayload, TranscriptMessage,
         };
 
-        let agent_did = request.agent_did.as_deref().unwrap();
+        let node_did = request.node_did.as_deref().unwrap();
         let session_id = request.session_id.as_deref().unwrap();
         let request_doc_id = request.doc_id.as_deref().unwrap();
         let generation = "fixture:tool-admission";
@@ -2763,7 +2760,7 @@ mod tests {
                 r#"{"command":"true"}"#
             };
             let segment = OutputSegment {
-                agent_did: agent_did.into(),
+                node_did: node_did.into(),
                 requester_did: request.requester_did.clone(),
                 session_id: session_id.into(),
                 request_doc_id: request_doc_id.into(),
@@ -2828,13 +2825,13 @@ mod tests {
         }
         let message = TranscriptMessage {
             message_key: gents::session::sequence_message_key(
-                agent_did,
+                node_did,
                 session_id,
                 request.requester_did.as_deref(),
                 sequence,
             ),
             session_id: session_id.into(),
-            agent_did: agent_did.into(),
+            node_did: node_did.into(),
             requester_did: request.requester_did.clone(),
             request_doc_id: Some(request_doc_id.into()),
             publication: MessagePublication::RequestExecution {
@@ -2891,9 +2888,9 @@ mod tests {
             r#"mutation {{
                 create_AgentRequest(input: {{purpose: "normal", 
                     request_id: "{escaped_child}"
-                    agent_did: "did:test:grok-shim"
+                    node_did: "did:test:grok-shim"
                     requester_did: "did:test:grok-shim"
-                    behavior_id: "test-child"
+                    agent_id: "test-child"
                     session_id: "s-chron-child"
                     caused_by_parent_request_id: "{escaped_parent}"
                     caused_by_parent_request_doc_id: "{escaped_parent_doc}"
@@ -2944,7 +2941,7 @@ mod tests {
     async fn persisted_context_hydrates_metadata_without_a_response_token_counter() {
         let (_dir, engine) = embedded_engine().await;
         let response = engine.node.execute(r#"mutation { create_AgentRequest(input: {purpose: "normal", 
-            request_id: "context-owner", session_id: "context-session", agent_did: "did:test:grok-shim",
+            request_id: "context-owner", session_id: "context-session", node_did: "did:test:grok-shim",
             requester_did: "did:test:requester", lifecycle_state: "processing"
         }) {_docID} }"#).await;
         ensure_no_errors(&response, "context fixture owner").unwrap();
@@ -2957,7 +2954,7 @@ mod tests {
             .unwrap();
         let request: gents_protocol::row::AgentRequestRow = serde_json::from_value(json!({
             "_docID": doc, "request_id":"context-owner", "session_id":"context-session",
-            "agent_did":"did:test:grok-shim", "requester_did":"did:test:requester"
+            "node_did":"did:test:grok-shim", "requester_did":"did:test:requester"
         }))
         .unwrap();
         let accounting = gents_protocol::rendered_request::ContextAccounting {
@@ -2987,7 +2984,7 @@ mod tests {
         let doc = gents::graphql::escape_graphql_string(doc);
         let response = engine.node.execute(&format!(r#"mutation {{ create_InferenceCall(input: {{
             call_id: "context-call", request_id: "context-owner", request_doc_id: "{doc}",
-            agent_did: "did:test:grok-shim", call_kind: "inference", call_seq: 1,
+            node_did: "did:test:grok-shim", call_kind: "inference", call_seq: 1,
             queued_at: "2026-09-04T12:00:00Z", completion_tokens: 25, context_accounting_json: "{encoded}"
         }}) {{_docID}} }}"#)).await;
         ensure_no_errors(&response, "context call fixture").unwrap();
@@ -3029,7 +3026,7 @@ mod tests {
         // published through the canonical row owner (closed authored
         // reasoning and text segments plus the RequestExecution header).
         let message_key = gents::session::sequence_message_key(
-            request.agent_did.as_deref().unwrap(),
+            request.node_did.as_deref().unwrap(),
             request.session_id.as_deref().unwrap(),
             request.requester_did.as_deref(),
             3,

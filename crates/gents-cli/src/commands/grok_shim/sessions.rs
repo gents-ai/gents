@@ -1,7 +1,7 @@
 //! Read-only session discovery for the stock history picker and resume.
 //!
 //! A session ID is not an authorization boundary. Every request is scoped
-//! to the bound principal/requester, and every session is checked against
+//! to the bound node/requester, and every session is checked against
 //! its persisted owner before any summary is returned. There is no shim
 //! history cache or second transcript store.
 
@@ -128,7 +128,7 @@ async fn scan_requests(
 ) -> Result<()> {
     ensure!(
         !principal.trim().is_empty(),
-        "session history requires a principal"
+        "session history requires a node DID"
     );
     let agent = escape_graphql_string(principal);
     let session_filter = session
@@ -137,14 +137,14 @@ async fn scan_requests(
     let mut after = String::new();
     loop {
         let scope = gents::session::public_request_filter(&format!(
-            r#"agent_did: {{_eq: "{agent}"}}, requester_did: {{_eq: "{agent}"}}, {session_filter} request_id: {{_gt: "{}"}}"#,
+            r#"node_did: {{_eq: "{agent}"}}, requester_did: {{_eq: "{agent}"}}, {session_filter} request_id: {{_gt: "{}"}}"#,
             escape_graphql_string(&after)
         ));
         let response = graphql_with_transaction_retry(
             node,
             &format!(
                 r#"{{ AgentRequest(filter: {{ {scope} }}, order: {{request_id: ASC}}, limit: {PAGE_SIZE}) {{
-            _docID request_id session_id agent_did requester_did behavior_id
+            _docID request_id session_id node_did requester_did agent_id
             content created_at terminalized_at lifecycle_state runtime_source_kind
         }} }}"#,
             ),
@@ -185,8 +185,8 @@ async fn scan_requests(
 /// Legacy shim sessions omitted requester_did. Only the exact request scope
 /// above can authorize their content; null here never widens that scope.
 fn readable_owner(row: &Value, principal: &str, behavior: &str) -> bool {
-    row.get("agent_did").and_then(Value::as_str) == Some(principal)
-        && row.get("behavior_id").and_then(Value::as_str) == Some(behavior)
+    row.get("node_did").and_then(Value::as_str) == Some(principal)
+        && row.get("agent_id").and_then(Value::as_str) == Some(behavior)
         && row
             .get("requester_did")
             .and_then(Value::as_str)
@@ -204,7 +204,7 @@ pub(super) async fn load(
         node,
         &format!(
             r#"{{ AgentSession(filter: {{session_id: {{_eq: "{}"}}}}, limit: 2) {{
-        session_id agent_did requester_did behavior_id
+        session_id node_did requester_did agent_id
     }} }}"#,
             escape_graphql_string(session)
         ),
@@ -219,7 +219,7 @@ pub(super) async fn load(
         .context("missing session owner rows")?;
     ensure!(
         owners.len() == 1 && readable_owner(&owners[0], principal, behavior),
-        "session is not readable by this bound behavior"
+        "session is not readable by this bound agent"
     );
     let rows = requests(node, principal, Some(session)).await?;
     ensure!(
@@ -299,7 +299,7 @@ async fn list_entries(
             node,
             &format!(
                 r#"{{ AgentSession(filter: {{session_id: {{_in: [{ids}]}}}}) {{
-            session_id agent_did requester_did behavior_id provenance
+            session_id node_did requester_did agent_id provenance
         }} }}"#
             ),
             "Grok history session owners",

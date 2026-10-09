@@ -10,7 +10,7 @@ async fn websocket_handshake_requires_configured_bearer_token() -> Result<()> {
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             "authenticated-shim",
             "--model-name",
             &model_name,
@@ -18,7 +18,7 @@ async fn websocket_handshake_requires_configured_bearer_token() -> Result<()> {
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     let server_port = allocate_port()?;
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
@@ -48,9 +48,9 @@ async fn websocket_handshake_requires_configured_bearer_token() -> Result<()> {
     );
     assert_eq!(
         health
-            .pointer("/checks/codex_shim/bound_agent_did")
+            .pointer("/checks/codex_shim/bound_node_did")
             .and_then(Value::as_str),
-        Some(agent_did.as_str())
+        Some(node_did.as_str())
     );
     assert!(!health.to_string().contains("correct-secret"));
 
@@ -102,19 +102,19 @@ async fn server_keeps_running_when_codex_shim_port_is_taken() -> Result<()> {
     let mock_endpoint = MockChatEndpoint::start(&model_name, "unused")?;
     let server_port = allocate_port()?;
     let graphql = graphql_url(server_port);
-    let agent_name = format!("cli-shim-degrade-{}", Uuid::new_v4().simple());
+    let node_name = format!("cli-shim-degrade-{}", Uuid::new_v4().simple());
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
-            &agent_name,
+            "--node-name",
+            &node_name,
             "--model-name",
             &model_name,
             "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
 
     let occupied = std::net::TcpListener::bind("127.0.0.1:0").context("occupying a port")?;
     let shim_port = occupied.local_addr()?.port();
@@ -129,7 +129,7 @@ async fn server_keeps_running_when_codex_shim_port_is_taken() -> Result<()> {
     serve
         .capturing(wait_for_runtime_ready(
             &graphql,
-            &agent_did,
+            &node_did,
             Duration::from_secs(30),
         ))
         .await?;
@@ -153,7 +153,7 @@ async fn server_keeps_running_when_codex_shim_port_is_taken() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn codex_shim_waits_for_a_missing_bound_behavior_instead_of_disabling() -> Result<()> {
+async fn codex_shim_waits_for_a_missing_bound_agent_instead_of_disabling() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
@@ -162,20 +162,20 @@ async fn codex_shim_waits_for_a_missing_bound_behavior_instead_of_disabling() ->
     let mock_endpoint = MockChatEndpoint::start(&model_name, "irrelevant")?;
     let server_port = allocate_port()?;
     let graphql = graphql_url(server_port);
-    let agent_name = format!("cli-codex-shim-{}", Uuid::new_v4().simple());
+    let node_name = format!("cli-codex-shim-{}", Uuid::new_v4().simple());
 
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
-            &agent_name,
+            "--node-name",
+            &node_name,
             "--model-name",
             &model_name,
             "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
 
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
@@ -185,8 +185,8 @@ async fn codex_shim_waits_for_a_missing_bound_behavior_instead_of_disabling() ->
         &[
             "--codex-shim-port",
             &shim_port_string,
-            "--codex-shim-behavior-id",
-            "behavior-that-does-not-exist",
+            "--codex-shim-agent-id",
+            "agent-that-does-not-exist",
         ],
         &[("RUST_LOG", "gents_server::commands::serve=info")],
     )?;
@@ -194,7 +194,7 @@ async fn codex_shim_waits_for_a_missing_bound_behavior_instead_of_disabling() ->
     serve
         .capturing(wait_for_runtime_ready(
             &graphql,
-            &agent_did,
+            &node_did,
             Duration::from_secs(30),
         ))
         .await?;
@@ -208,25 +208,25 @@ async fn codex_shim_waits_for_a_missing_bound_behavior_instead_of_disabling() ->
     );
     assert_eq!(
         readiness
-            .pointer("/codex_shim/bound_behavior_id")
+            .pointer("/codex_shim/bound_agent_id")
             .and_then(Value::as_str),
-        Some("behavior-that-does-not-exist"),
-        "server readiness must name the missing bound behavior: {readiness}"
+        Some("agent-that-does-not-exist"),
+        "server readiness must name the missing bound agent: {readiness}"
     );
 
     let (_stdout, stderr) = serve.captured_output()?;
     assert!(
         stderr.contains("Codex endpoint pending"),
-        "a missing bound behavior is suppliable, so the shim must wait rather than \
+        "a missing bound agent is suppliable, so the shim must wait rather than \
          disable itself; got:\n{stderr}"
     );
     assert!(
         !stderr.contains("Codex endpoint disabled"),
-        "a missing behavior must not be reported as a terminal disable; got:\n{stderr}"
+        "a missing agent must not be reported as a terminal disable; got:\n{stderr}"
     );
     assert!(
-        stderr.contains("behavior-that-does-not-exist"),
-        "expected stderr to name the behavior it is waiting for; got:\n{stderr}"
+        stderr.contains("agent-that-does-not-exist"),
+        "expected stderr to name the agent it is waiting for; got:\n{stderr}"
     );
     assert!(
         stderr.contains("no restart needed"),
@@ -234,13 +234,13 @@ async fn codex_shim_waits_for_a_missing_bound_behavior_instead_of_disabling() ->
     );
     assert!(
         std::net::TcpStream::connect(("127.0.0.1", shim_port)).is_err(),
-        "the shim port must stay closed while its bound behavior does not exist"
+        "the shim port must stay closed while its bound agent does not exist"
     );
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn codex_shim_binds_when_config_apply_supplies_its_behavior() -> Result<()> {
+async fn codex_shim_binds_when_config_apply_supplies_its_agent() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     let root = tempdir.path().join("infra").join("agents").join("default");
@@ -250,25 +250,25 @@ async fn codex_shim_binds_when_config_apply_supplies_its_behavior() -> Result<()
     let mock_endpoint = MockChatEndpoint::start(&model_name, "irrelevant")?;
     let server_port = allocate_port()?;
     let graphql = graphql_url(server_port);
-    let agent_name = format!("cli-codex-shim-{}", Uuid::new_v4().simple());
+    let node_name = format!("cli-codex-shim-{}", Uuid::new_v4().simple());
 
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
-            &agent_name,
+            "--node-name",
+            &node_name,
             "--model-name",
             &model_name,
             "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
 
     let root_str = root.to_str().expect("utf-8 root");
     run_cli_text(&home_dir, &["config", "export", "--root", root_str])?;
 
-    const LATE_BEHAVIOR: &str = "late-arriving-behavior";
+    const LATE_AGENT: &str = "late-arriving-agent";
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
     let mut serve = spawn_server_with_env(
@@ -277,8 +277,8 @@ async fn codex_shim_binds_when_config_apply_supplies_its_behavior() -> Result<()
         &[
             "--codex-shim-port",
             &shim_port_string,
-            "--codex-shim-behavior-id",
-            LATE_BEHAVIOR,
+            "--codex-shim-agent-id",
+            LATE_AGENT,
         ],
         &[("RUST_LOG", "gents_server::commands::serve=info")],
     )?;
@@ -286,26 +286,26 @@ async fn codex_shim_binds_when_config_apply_supplies_its_behavior() -> Result<()
     serve
         .capturing(wait_for_runtime_ready(
             &graphql,
-            &agent_did,
+            &node_did,
             Duration::from_secs(30),
         ))
         .await?;
     wait_for_runtime_state_graphql(&home_dir, &graphql, Duration::from_secs(30)).await?;
-    wait_for_runtime_quiescence(&graphql, &agent_did, 1, Duration::from_secs(2)).await?;
+    wait_for_runtime_quiescence(&graphql, &node_did, 1, Duration::from_secs(2)).await?;
 
     assert!(
         std::net::TcpStream::connect(("127.0.0.1", shim_port)).is_err(),
-        "the shim must not listen before its bound behavior exists"
+        "the shim must not listen before its bound agent exists"
     );
 
     let config_path = root.join("pack_config.json");
     let mut config = read_json_file(&config_path)?;
-    let mut behavior = config["agent_behaviors"][0].clone();
-    behavior["behavior_id"] = Value::String(LATE_BEHAVIOR.to_string());
-    config["agent_behaviors"]
+    let mut agent = config["agents"][0].clone();
+    agent["agent_id"] = Value::String(LATE_AGENT.to_string());
+    config["agents"]
         .as_array_mut()
-        .context("agent_behaviors is not an array")?
-        .push(behavior);
+        .context("agents is not an array")?
+        .push(agent);
     write_json_file(&config_path, &config)?;
 
     let applied = run_cli_json(&home_dir, &["config", "apply", "--root", root_str])?;
@@ -323,8 +323,8 @@ async fn codex_shim_binds_when_config_apply_supplies_its_behavior() -> Result<()
         if std::time::Instant::now() >= deadline {
             let (_stdout, stderr) = serve.captured_output()?;
             panic!(
-                "the shim never bound after `config apply` supplied behavior \
-                 {LATE_BEHAVIOR:?}; stderr:\n{stderr}"
+                "the shim never bound after `config apply` supplied agent \
+                 {LATE_AGENT:?}; stderr:\n{stderr}"
             );
         }
         tokio::time::sleep(Duration::from_millis(250)).await;

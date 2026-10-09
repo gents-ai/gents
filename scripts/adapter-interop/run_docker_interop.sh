@@ -105,7 +105,7 @@ if [[ "${GENTS_DOCKER_INTEROP_SKIP_RUST:-0}" != "1" ]]; then
     cd "${repo_root}"
     GENTS_ADAPTER_INTEROP_ROUNDTRIP_FIXTURES="${out_dir}" \
       GENTS_ADAPTER_INTEROP_EXPORTS="${export_dir}" \
-      cargo test -p gents-cli --test cli_adapter_interop_roundtrip -- --ignored --nocapture
+      cargo test -p gents-cli --test cli_seeded cli_adapter_interop_roundtrip::external_adapter_native_captures_project_to_export_formats -- --exact --ignored --nocapture
   )
   export_count="$(find "${export_dir}" -type f \( -name '*.gents.json' -o -name '*.gents.jsonl' -o -name '*.gents.eval-jsonl' \) | wc -l | tr -d '[:space:]')"
   expected_export_count="$((${#expected_fixtures[@]} * 3))"

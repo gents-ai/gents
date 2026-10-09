@@ -5,7 +5,7 @@
 //! tokio runtime in a background thread, so it works whether the consuming
 //! test is `#[tokio::test]` or a blocking CLI-subprocess test.
 //!
-//! Behavior is supplied per construction via a chat `Responder` closure, so the
+//! Agent is supplied per construction via a chat `Responder` closure, so the
 //! thin `MockChatEndpoint` / `MockModelEndpoint` / `MockOpenAIEndpoint` /
 //! spawn-mock wrappers keep their exact public APIs while sharing this one
 //! robust server. Whole-response and gated incremental SSE variants let tests
@@ -215,6 +215,11 @@ async fn handle_chat(
                 |(mut first, mut rest, gate, stopped)| async move {
                     let chunk = if let Some((delay, first)) = first.next() {
                         tokio::time::sleep(delay).await;
+                        tracing::info!(
+                            target: "cli_enrollment::streaming_fixture",
+                            bytes = first.len(),
+                            "gated provider content frame emitted before completion gate"
+                        );
                         first
                     } else {
                         let rest = rest.take()?;

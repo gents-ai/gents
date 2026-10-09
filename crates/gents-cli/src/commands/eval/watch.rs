@@ -531,7 +531,7 @@ mod tests {
         let run_dir = fixture.ctx.runs_dir().join("r1");
         let goal = vec![
             GoalEntry {
-                collection: "AgentBehavior".into(),
+                collection: "Agent".into(),
                 capture: None,
                 min: 9,
                 max: None,
@@ -543,7 +543,7 @@ mod tests {
                 max: Some(22),
             },
             GoalEntry {
-                collection: "SubagentTarget".into(),
+                collection: "AgentTarget".into(),
                 capture: None,
                 min: 2,
                 max: None,
@@ -585,13 +585,13 @@ mod tests {
                 result: Some("task create refused: trigger review-shard names no Task".into()),
             }),
             documents: [
-                ("AgentBehavior", 7),
+                ("Agent", 7),
                 ("AgentContext", 7),
                 ("Tools", 7),
                 ("Task", 12),
                 ("Trigger", 9),
                 ("EventSource", 9),
-                ("SubagentTarget", 2),
+                ("AgentTarget", 2),
             ]
             .into_iter()
             .map(|(collection, rows)| (collection.to_owned(), rows))
@@ -660,7 +660,7 @@ mod tests {
             "in flight: 1",
             "    6m40s tokens 812.3k/41.2k requests 3 turns 57 tools 143 ok 6 failed",
             "    top tools config 98 (4 failed)  read_file 20  file_mailbox_item 12 (2 failed)  write_file 8  shell 6  +1 more",
-            "    goal AgentBehavior 7/9  Task 12/20..22  SubagentTarget 2/2 ✓  schemas 3/9",
+            "    goal Agent 7/9  Task 12/20..22  AgentTarget 2/2 ✓  schemas 3/9",
             "    docs AgentContext 7  EventSource 9  Tools 7  Trigger 9",
         ] {
             assert!(lines.contains(&said), "{said:?} in\n{frame}");

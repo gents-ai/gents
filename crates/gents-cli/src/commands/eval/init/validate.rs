@@ -39,9 +39,9 @@ pub(crate) fn assemble(
         })?;
     let mut value = json!({
         "definition_id": definition_id,
-        "agent_did": owner,
+        "node_did": owner,
         "comparability_version": 1,
-        "subject": {"kind": "behavior", "inference_slots": [slot]},
+        "subject": {"kind": "agent", "inference_slots": [slot]},
         "cases": draft.cases,
     });
     if let Some(title) = &draft.title {
@@ -295,7 +295,7 @@ pub(crate) mod tests {
             pack_name: "eval_canary".into(),
             pack_version: "1.0.0".into(),
             pack_digest: "sha256:canary".into(),
-            behavior_id: "canary".into(),
+            agent_id: "canary".into(),
             slot: SLOT.into(),
             collections: BTreeMap::from([(
                 "CanaryItem".to_owned(),
@@ -371,7 +371,7 @@ pub(crate) mod tests {
                     "definition_id": "canary-quality",
                     "title": "Canary quality",
                     "comparability_version": 7,
-                    "subject": {"kind": "behavior", "inference_slots": ["other"]},
+                    "subject": {"kind": "agent", "inference_slots": ["other"]},
                 },
                 "cases": good().cases,
             })
@@ -382,7 +382,7 @@ pub(crate) mod tests {
         let assembled = assemble(&draft, Some("from-flag"), OWNER, SLOT).unwrap();
         let definition = &assembled.definition;
         assert_eq!(definition.definition_id, "from-flag");
-        assert_eq!(definition.agent_did, OWNER);
+        assert_eq!(definition.node_did, OWNER);
         assert_eq!(definition.comparability_version, 1);
         assert_eq!(definition.subject.inference_slots, vec![SLOT.to_owned()]);
         assert_eq!(definition.title.as_deref(), Some("Canary quality"));

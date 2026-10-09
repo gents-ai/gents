@@ -18,12 +18,12 @@ pub(crate) struct SessionHistoryParams {
 
 pub(crate) async fn load_session_history_snapshot(
     graphql: &GraphqlEndpoint,
-    agent_did: &str,
+    node_did: &str,
     limit: Option<usize>,
 ) -> Result<SessionHistorySnapshot> {
     let history = gents::toolset::load_session_history_snapshot_with_access(
         &ConfigAccess::Graphql(graphql.clone()),
-        agent_did,
+        node_did,
         Some(limit.unwrap_or(10).clamp(1, 50)),
     )
     .await?;

@@ -10,20 +10,20 @@ async fn codex_shim_thread_list_reconstructs_turned_threads_from_durable_data() 
     let mock_endpoint = MockChatEndpoint::start(&model_name, "unused")?;
     let server_port = allocate_port()?;
     let graphql = graphql_url(server_port);
-    let agent_name = format!("cli-codex-shim-{}", Uuid::new_v4().simple());
+    let node_name = format!("cli-codex-shim-{}", Uuid::new_v4().simple());
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
-            &agent_name,
+            "--node-name",
+            &node_name,
             "--model-name",
             &model_name,
             "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
-    let behavior_id = format!("{agent_did}:default");
+    let node_did = node_did_from_init(&init)?;
+    let agent_id = format!("{node_did}:default");
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
     let mut serve = spawn_server_with_env(
@@ -44,7 +44,7 @@ async fn codex_shim_thread_list_reconstructs_turned_threads_from_durable_data() 
     serve
         .capturing(wait_for_runtime_ready(
             &graphql,
-            &agent_did,
+            &node_did,
             Duration::from_secs(30),
         ))
         .await?;
@@ -56,15 +56,15 @@ async fn codex_shim_thread_list_reconstructs_turned_threads_from_durable_data() 
             &graphql,
             &format!(
                 r#"mutation {{ create_AgentRequest(input: {{purpose: "normal", 
-                    request_id: "{request}", agent_did: "{agent_did}",
-                    requester_did: "{agent_did}", behavior_id: "{behavior_id}",
+                    request_id: "{request}", node_did: "{node_did}",
+                    requester_did: "{node_did}", agent_id: "{agent_id}",
                     session_id: "{session}", content: "earlier turn",
                     lifecycle_state: "completed", execution_origin: "interactive",
                     created_at: "2026-01-01T00:00:00Z"
                 }}) {{ _docID }} }}"#,
                 request = escape_graphql_string(&turned_request_id),
-                agent_did = escape_graphql_string(&agent_did),
-                behavior_id = escape_graphql_string(&behavior_id),
+                node_did = escape_graphql_string(&node_did),
+                agent_id = escape_graphql_string(&agent_id),
                 session = escape_graphql_string(&turned_session_id),
             ),
         ))
@@ -75,8 +75,8 @@ async fn codex_shim_thread_list_reconstructs_turned_threads_from_durable_data() 
             &graphql,
             &format!(
                 r#"mutation {{ create_AgentSession(input: {{
-                    session_id: "{session}", agent_did: "{agent_did}",
-                    requester_did: "{agent_did}", behavior_id: "{behavior_id}",
+                    session_id: "{session}", node_did: "{node_did}",
+                    requester_did: "{node_did}", agent_id: "{agent_id}",
                     created_at: "2026-01-01T00:00:00Z",
                     title: {{ text: "Earlier Codex thread", source: "user" }},
                     observation: {{ last_activity_at: "2026-01-01T00:00:00Z",
@@ -86,8 +86,8 @@ async fn codex_shim_thread_list_reconstructs_turned_threads_from_durable_data() 
                         }} }}
                 }}) {{ _docID }} }}"#,
                 session = escape_graphql_string(&turned_session_id),
-                agent_did = escape_graphql_string(&agent_did),
-                behavior_id = escape_graphql_string(&behavior_id),
+                node_did = escape_graphql_string(&node_did),
+                agent_id = escape_graphql_string(&agent_id),
                 request_doc = escape_graphql_string(&request_doc_id),
                 request = escape_graphql_string(&turned_request_id),
             ),
@@ -100,16 +100,16 @@ async fn codex_shim_thread_list_reconstructs_turned_threads_from_durable_data() 
             &graphql,
             &format!(
                 r#"mutation {{ create_AgentRequest(input: {{purpose: "normal", 
-                    request_id: "{request}", agent_did: "{agent_did}",
-                    requester_did: "{agent_did}",
-                    behavior_id: "{behavior_id}", session_id: "{session}",
+                    request_id: "{request}", node_did: "{node_did}",
+                    requester_did: "{node_did}",
+                    agent_id: "{agent_id}", session_id: "{session}",
                     content: "pending projection",
                     lifecycle_state: "pending", execution_origin: "interactive",
                     created_at: "2026-01-01T00:00:01Z"
                 }}) {{ _docID }} }}"#,
                 request = escape_graphql_string(&Uuid::new_v4().to_string()),
-                agent_did = escape_graphql_string(&agent_did),
-                behavior_id = escape_graphql_string(&behavior_id),
+                node_did = escape_graphql_string(&node_did),
+                agent_id = escape_graphql_string(&agent_id),
                 session = escape_graphql_string(&pending_session_id),
             ),
         ))
@@ -202,20 +202,20 @@ async fn codex_shim_thread_list_projects_canonical_gents_sessions() -> Result<()
     let mock_endpoint = MockChatEndpoint::start(&model_name, "unused")?;
     let server_port = allocate_port()?;
     let graphql = graphql_url(server_port);
-    let agent_name = format!("cli-codex-shim-{}", Uuid::new_v4().simple());
+    let node_name = format!("cli-codex-shim-{}", Uuid::new_v4().simple());
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
-            &agent_name,
+            "--node-name",
+            &node_name,
             "--model-name",
             &model_name,
             "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
-    let behavior_id = format!("{agent_did}:default");
+    let node_did = node_did_from_init(&init)?;
+    let agent_id = format!("{node_did}:default");
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
     let mut serve = spawn_server_with_env(
@@ -236,7 +236,7 @@ async fn codex_shim_thread_list_projects_canonical_gents_sessions() -> Result<()
     serve
         .capturing(wait_for_runtime_ready(
             &graphql,
-            &agent_did,
+            &node_did,
             Duration::from_secs(30),
         ))
         .await?;
@@ -248,14 +248,14 @@ async fn codex_shim_thread_list_projects_canonical_gents_sessions() -> Result<()
             &graphql,
             &format!(
                 r#"mutation {{ create_AgentRequest(input: {{purpose: "normal", 
-                request_id: "{request}", agent_did: "{agent}", requester_did: "{agent}",
-                behavior_id: "{behavior}",
+                request_id: "{request}", node_did: "{node}", requester_did: "{node}",
+                agent_id: "{agent}",
                 session_id: "{session}", content: "shared", lifecycle_state: "completed",
                 execution_origin: "cli", created_at: "2026-01-01T00:00:00Z"
             }}) {{ _docID }} }}"#,
                 request = escape_graphql_string(&foreign_request_id),
-                agent = escape_graphql_string(&agent_did),
-                behavior = escape_graphql_string(&behavior_id),
+                node = escape_graphql_string(&node_did),
+                agent = escape_graphql_string(&agent_id),
                 session = escape_graphql_string(&foreign_session_id),
             ),
         ))
@@ -264,16 +264,16 @@ async fn codex_shim_thread_list_projects_canonical_gents_sessions() -> Result<()
     serve
         .capturing(graphql_query(&graphql, &format!(
             r#"mutation {{ create_AgentSession(input: {{
-                session_id: "{session}", agent_did: "{agent}", requester_did: "{agent}",
-                behavior_id: "{behavior}",
+                session_id: "{session}", node_did: "{node}", requester_did: "{node}",
+                agent_id: "{agent}",
                 created_at: "2026-01-01T00:00:00Z",
                 title: {{ text: "Shared Gents session", source: "user" }},
                 observation: {{ last_activity_at: "2026-01-01T00:00:00Z", preview: "shared",
                     latest_request: {{ request_doc_id: "{request_doc}", request_id: "{request}", lifecycle_state: "completed" }} }}
             }}) {{ _docID }} }}"#,
             session = escape_graphql_string(&foreign_session_id),
-            agent = escape_graphql_string(&agent_did),
-            behavior = escape_graphql_string(&behavior_id),
+            node = escape_graphql_string(&node_did),
+            agent = escape_graphql_string(&agent_id),
             request_doc = escape_graphql_string(&request_doc_id),
             request = escape_graphql_string(&foreign_request_id),
         )))

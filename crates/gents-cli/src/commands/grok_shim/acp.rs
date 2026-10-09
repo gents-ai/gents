@@ -11,11 +11,11 @@
 //!   client credentials are the transport's concern, not a Gents document.
 //! - `session/new` — honors the preferred `_meta.sessionId`, creates exactly
 //!   one `AgentSession` document for the returned id (create-only on the
-//!   `@immutable` `agent_did`/`requester_did` fields, matching the runtime's
+//!   `@immutable` `node_did`/`requester_did` fields, matching the runtime's
 //!   `request_session_projection`), and returns the audited nested result
 //!   shape `{"sessionId", "models": {"availableModels", "currentModelId"},
-//!   "_meta"}`. Model, context window, and behavior identity all come from
-//!   the bound configuration (`AgentBehavior` + `InferenceProfile`), never
+//!   "_meta"}`. Model, context window, and agent identity all come from
+//!   the bound configuration (`Agent` + `InferenceProfile`), never
 //!   from a per-session override the runtime does not model.
 //! - `session/set_model` — validates against the bound catalog and emits the
 //!   `x.ai/models/update` ext notification. Gents has no per-session model
@@ -143,14 +143,14 @@ pub(crate) const MCP_INITIALIZED_METHOD: &str = "x.ai/mcp_initialized";
 /// Bound model catalog entry derived from the serving configuration.
 ///
 /// `model_id` is the wire-facing model identifier: exactly the bound
-/// behavior's `model_name`, resolved once at bind time (see
+/// agent's `model_name`, resolved once at bind time (see
 /// `resolve_bound_model_context`). The backend id remains internal routing
 /// configuration — it is validated during binding but never projected into
 /// the wire-facing `modelId`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BoundModel {
     /// Wire-facing model identifier (`modelId` on the wire): the bound
-    /// behavior's `model_name` exactly.
+    /// agent's `model_name` exactly.
     pub(crate) model_id: String,
     /// Human-readable display name (`name` on the wire).
     pub(crate) name: String,
@@ -206,18 +206,18 @@ impl BoundModel {
 
 /// Immutable bound configuration for the ACP service.
 ///
-/// Every field is resolved once at bind time from the bound behavior and
+/// Every field is resolved once at bind time from the bound agent and
 /// inference profile (see `grok_shim.rs` assembly); nothing here is
 /// per-session runtime state.
 #[derive(Clone)]
 pub(crate) struct AcpServiceConfig {
     /// In-process embedded node used for every GraphQL query/mutation.
     pub(crate) node: Arc<EmbeddedNode>,
-    /// Serving agent DID (the `@immutable` `AgentSession.agent_did` value).
-    pub(crate) agent_did: Arc<str>,
-    /// Bound behavior id (stamped on `AgentSession.behavior_id`).
-    pub(crate) behavior_id: Arc<str>,
-    /// Bound model the runtime serves for this behavior.
+    /// Serving node DID (the `@immutable` `AgentSession.node_did` value).
+    pub(crate) node_did: Arc<str>,
+    /// Bound agent id (stamped on `AgentSession.agent_id`).
+    pub(crate) agent_id: Arc<str>,
+    /// Bound model the runtime serves for this agent.
     pub(crate) current_model: BoundModel,
     /// Grok home the pager reads its `/resume` records from (`$GROK_HOME`,
     /// else `~/.grok`). `None` disables the record write.
@@ -470,7 +470,7 @@ impl AcpService {
     /// Assemble the service from bound configuration and the sibling
     /// engines. The assembly slice (`grok_shim.rs`) constructs the
     /// [`TurnManager`] and [`ProjectionEngine`] from the same embedded node
-    /// and bound behavior/model/context configuration.
+    /// and bound agent/model/context configuration.
     pub(super) fn new(
         config: AcpServiceConfig,
         turns: Arc<TurnManager>,
@@ -643,8 +643,8 @@ impl AcpService {
                 let session = required_session_id(&request.params)?;
                 let result = super::usage::session_info(
                     &self.config.node,
-                    &self.config.agent_did,
-                    &self.config.behavior_id,
+                    &self.config.node_did,
+                    &self.config.agent_id,
                     &session,
                     &self.config.current_model.model_id,
                     &self.config.current_model.name,
@@ -667,8 +667,8 @@ impl AcpService {
                 let session = required_session_id(&request.params)?;
                 let result = super::usage::session_usage(
                     &self.config.node,
-                    &self.config.agent_did,
-                    &self.config.behavior_id,
+                    &self.config.node_did,
+                    &self.config.agent_id,
                     &session,
                 )
                 .await?;
@@ -681,8 +681,8 @@ impl AcpService {
                 notifications: Vec::new(),
                 result: super::sessions::roster(
                     &self.config.node,
-                    &self.config.agent_did,
-                    &self.config.behavior_id,
+                    &self.config.node_did,
+                    &self.config.agent_id,
                 )
                 .await?,
             }),
@@ -696,8 +696,8 @@ impl AcpService {
                     .map_err(|error| invalid_params(error.to_string()))?;
                 let result = super::sessions::list(
                     &self.config.node,
-                    &self.config.agent_did,
-                    &self.config.behavior_id,
+                    &self.config.node_did,
+                    &self.config.agent_id,
                     params,
                 )
                 .await?;
@@ -751,7 +751,7 @@ impl AcpService {
                 let result = super::task_control::kill(
                     self.config.node.clone(),
                     &self.projections.background_executions,
-                    &self.config.agent_did,
+                    &self.config.node_did,
                     &sessions,
                     params,
                 )
@@ -849,7 +849,7 @@ impl AcpService {
     /// otherwise a fresh uuid is minted. Exactly one `AgentSession` document
     /// exists for the returned id afterwards — create-only when absent,
     /// matching the runtime's `request_session_projection` semantics, and
-    /// never rewriting the `@immutable` `agent_did`/`requester_did` fields on
+    /// never rewriting the `@immutable` `node_did`/`requester_did` fields on
     /// an existing row.
     ///
     /// `cwd` and `mcpServers` are accepted and deliberately not persisted:
@@ -902,7 +902,7 @@ impl AcpService {
             if requested != self.config.current_model.model_id {
                 return Err(invalid_params(&format!(
                     "model {requested:?} is not in the bound catalog; the Grok shim serves \
-                     {:?} from the bound AgentBehavior/InferenceProfile",
+                     {:?} from the bound Agent/InferenceProfile",
                     self.config.current_model.model_id
                 )));
             }
@@ -931,7 +931,7 @@ impl AcpService {
         // `result["models"]["currentModelId"]`. `clientTerminal` tells the
         // agent whether terminal/* commands route to the client; the
         // reference pager registers `terminal: false`, so the shaped
-        // terminal/* not-supported stubs stay the answered behavior.
+        // terminal/* not-supported stubs stay the answered agent.
         Ok(RequestOutcome {
             // The stock pager seeds an MCP-initialization spinner before it
             // sends session/new and clears it only when this extension
@@ -1006,8 +1006,8 @@ impl AcpService {
         let attached_at = chrono::Utc::now().to_rfc3339();
         let rows = super::sessions::load(
             &self.config.node,
-            &self.config.agent_did,
-            &self.config.behavior_id,
+            &self.config.node_did,
+            &self.config.agent_id,
             &session_id,
         )
         .await?;
@@ -1062,7 +1062,7 @@ impl AcpService {
     /// Handle `session/set_model`.
     ///
     /// The runtime has no per-session model field: the bound
-    /// `AgentBehavior` selects the model every request is served with. The
+    /// `Agent` selects the model every request is served with. The
     /// switch therefore validates against the bound catalog and emits
     /// `x.ai/models/update` so the pager refreshes its catalog in place
     /// (leaving current/effort alone, as the reference `update_catalog`
@@ -1086,7 +1086,7 @@ impl AcpService {
         if requested != self.config.current_model.model_id {
             return Err(invalid_params(&format!(
                 "model {requested:?} is not in the bound catalog; the Grok shim serves \
-                 {:?} from the bound AgentBehavior/InferenceProfile",
+                 {:?} from the bound Agent/InferenceProfile",
                 self.config.current_model.model_id
             )));
         }
@@ -1275,17 +1275,13 @@ impl AcpService {
                     // model prompt. Never ask inference to interpret pause.
                     super::sessions::load(
                         &self.config.node,
-                        &self.config.agent_did,
-                        &self.config.behavior_id,
+                        &self.config.node_did,
+                        &self.config.agent_id,
                         &parsed.session_id,
                     )
                     .await?;
                     let reply = command
-                        .execute(
-                            &self.config.node,
-                            &self.config.agent_did,
-                            &parsed.session_id,
-                        )
+                        .execute(&self.config.node, &self.config.node_did, &parsed.session_id)
                         .await?;
                     for (kind, text) in [
                         ("user_message_chunk", block.text.as_str()),
@@ -1378,7 +1374,7 @@ impl AcpService {
         };
         let result = super::projection::caused_sessions::handle(
             self.config.node.clone(),
-            &self.config.agent_did,
+            &self.config.node_did,
             &sessions,
             method,
             &request.params,
@@ -1512,8 +1508,8 @@ fn optional_session_id(params: &Value) -> Option<String> {
 /// Mirrors the runtime's `request_session_projection`: create the canonical
 /// session when it does not exist and reopen it by clearing `closed_at`. The
 /// immutable identity fields are only ever supplied on create, and — matching
-/// the runtime's claim-admission behavior — a row
-/// bound to a different behavior id *or* a different immutable `agent_did`
+/// the runtime's claim-admission agent — a row
+/// bound to a different agent id *or* a different immutable `node_did`
 /// is an explicit error rather than a silent rewrite of session identity.
 async fn ensure_session_document(config: &AcpServiceConfig, session_id: &str) -> Result<()> {
     let escaped_session_id = escape_graphql_string(session_id);
@@ -1521,9 +1517,9 @@ async fn ensure_session_document(config: &AcpServiceConfig, session_id: &str) ->
         r#"{{
             AgentSession(filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }}) {{
                 session_id
-                agent_did
+                node_did
                 requester_did
-                behavior_id
+                agent_id
             }}
         }}"#
     );
@@ -1539,33 +1535,33 @@ async fn ensure_session_document(config: &AcpServiceConfig, session_id: &str) ->
         .unwrap_or_default();
     if let Some(existing) = rows
         .iter()
-        .filter_map(|row| row.get("behavior_id").and_then(Value::as_str))
+        .filter_map(|row| row.get("agent_id").and_then(Value::as_str))
         .map(str::trim)
         .find(|value| !value.is_empty())
     {
-        if existing != config.behavior_id.as_ref() {
+        if existing != config.agent_id.as_ref() {
             anyhow::bail!(
-                "session {session_id:?} already exists with behavior {existing:?}; the \
+                "session {session_id:?} already exists with agent {existing:?}; the \
                  Grok shim is bound to {:?} and will not rewrite session identity",
-                config.behavior_id
+                config.agent_id
             );
         }
     }
-    // The serving agent DID is `@immutable` on `AgentSession`: an existing
-    // row stamped for a different principal is a hard identity mismatch and
+    // The serving node DID is `@immutable` on `AgentSession`: an existing
+    // row stamped for a different node is a hard identity mismatch and
     // must never be reactivated under this shim's identity.
     if let Some(existing) = rows
         .iter()
-        .filter_map(|row| row.get("agent_did").and_then(Value::as_str))
+        .filter_map(|row| row.get("node_did").and_then(Value::as_str))
         .map(str::trim)
         .find(|value| !value.is_empty())
     {
-        if existing != config.agent_did.as_ref() {
+        if existing != config.node_did.as_ref() {
             anyhow::bail!(
                 "session {session_id:?} already exists with agent {existing:?}; the \
                  Grok shim serves as {:?} and will not reactivate a session bound to \
-                 a different immutable agent_did",
-                config.agent_did
+                 a different immutable node_did",
+                config.node_did
             );
         }
     }
@@ -1573,11 +1569,11 @@ async fn ensure_session_document(config: &AcpServiceConfig, session_id: &str) ->
     anyhow::ensure!(
         rows.iter()
             .all(|row| row.get("requester_did").and_then(Value::as_str)
-                == Some(config.agent_did.as_ref())),
+                == Some(config.node_did.as_ref())),
         "session belongs to a different immutable requester_did"
     );
-    let escaped_agent_did = escape_graphql_string(&config.agent_did);
-    let escaped_behavior_id = escape_graphql_string(&config.behavior_id);
+    let escaped_node_did = escape_graphql_string(&config.node_did);
+    let escaped_agent_id = escape_graphql_string(&config.agent_id);
     // DateTime fields round-trip through the "....Z" form the runtime's own
     // fixtures use; to_rfc3339() emits "+00:00" instead.
     let created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
@@ -1587,9 +1583,9 @@ async fn ensure_session_document(config: &AcpServiceConfig, session_id: &str) ->
             r#"mutation {{
                 create_AgentSession(input: {{
                     session_id: "{escaped_session_id}",
-                    agent_did: "{escaped_agent_did}",
-                    requester_did: "{escaped_agent_did}",
-                    behavior_id: "{escaped_behavior_id}",
+                    node_did: "{escaped_node_did}",
+                    requester_did: "{escaped_node_did}",
+                    agent_id: "{escaped_agent_id}",
                     created_at: "{escaped_created_at}"
                 }}) {{ _docID }}
             }}"#
@@ -1729,7 +1725,7 @@ mod tests {
     use crate::commands::grok_shim::projection::tools::PAGER_WAIT_FOR_EXIT_MESSAGE;
     use crate::commands::grok_shim::test_fixtures::seed_canonical_assistant_message;
     use crate::commands::grok_shim::test_fixtures::{
-        configure_runtime_behavior,
+        configure_runtime_agent,
         streaming_backend::{MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse},
     };
     use crate::commands::grok_shim::turn::PromptBlock;
@@ -1767,8 +1763,8 @@ mod tests {
             tempdir,
             AcpServiceConfig {
                 node,
-                agent_did: Arc::from("did:test:grok-shim"),
-                behavior_id: Arc::from("did:test:grok-shim:default"),
+                node_did: Arc::from("did:test:grok-shim"),
+                agent_id: Arc::from("did:test:grok-shim:default"),
                 current_model: bound_model(),
                 grok_home: None,
             },
@@ -1791,7 +1787,7 @@ mod tests {
         let (staging, config) = config().await;
         let identity = gents::KeyIdentity::load_or_create(staging.path().join("actor.key"), None)
             .expect("test signing identity");
-        let actor = ::identity::Did::new(gents::AgentIdentity::did(&identity).to_owned())
+        let actor = ::identity::Did::new(gents::NodeIdentity::did(&identity).to_owned())
             .expect("fixture creator DID");
         gents::schema::ensure_runtime_schemas(config.node.as_ref())
             .await
@@ -1800,8 +1796,8 @@ mod tests {
             config.node.clone(),
             super::super::turn::TurnManagerConfig {
                 actor,
-                agent_did: config.agent_did.to_string(),
-                behavior_id: config.behavior_id.to_string(),
+                node_did: config.node_did.to_string(),
+                agent_id: config.agent_id.to_string(),
                 graphql: "http://127.0.0.1:8000/api/v0/graphql".to_string(),
             },
         ));
@@ -1831,7 +1827,7 @@ mod tests {
         let node = &service.config.node;
         gents::goal::set_goal(
             node,
-            &service.config.agent_did,
+            &service.config.node_did,
             "goal-controls",
             Some("Finish the feature"),
             None,
@@ -1868,7 +1864,7 @@ mod tests {
                 }));
             }
             let goal =
-                gents::goal::load_canonical_goal(node, &service.config.agent_did, "goal-controls")
+                gents::goal::load_canonical_goal(node, &service.config.node_did, "goal-controls")
                     .await
                     .unwrap();
             assert_eq!(goal.as_ref().map(|goal| goal.status.as_str()), expected);
@@ -1901,7 +1897,7 @@ mod tests {
             .await
             .unwrap();
         let seeded = service.config.node.execute(r#"mutation {create_AgentRequest(input:{purpose: "normal", 
-            request_id:"stalled-request", session_id:"stalled-history", agent_did:"did:test:grok-shim",
+            request_id:"stalled-request", session_id:"stalled-history", node_did:"did:test:grok-shim",
             requester_did:"did:test:grok-shim", content:"Original prompt", lifecycle_state:"completed",
             created_at:"2026-09-01T12:00:00Z"
         }) {_docID}}"#).await;
@@ -1980,13 +1976,13 @@ mod tests {
             .unwrap();
         let node = &service.config.node;
         let result = node.execute(r#"mutation { create_AgentRequest(input: {purpose: "normal", 
-            request_id: "resume-request", session_id: "resume-history", agent_did: "did:test:grok-shim",
+            request_id: "resume-request", session_id: "resume-history", node_did: "did:test:grok-shim",
             requester_did: "did:test:grok-shim", content: "Original human prompt",
             lifecycle_state: "completed", created_at: "2026-09-01T12:00:00Z"
         }) { _docID } }"#).await;
         ensure_no_errors(&result, "seed resume request").unwrap();
         let request = node
-            .execute(r#"{ AgentRequest(filter: {request_id: {_eq: "resume-request"}}, limit: 2) {_docID request_id agent_did requester_did session_id} }"#)
+            .execute(r#"{ AgentRequest(filter: {request_id: {_eq: "resume-request"}}, limit: 2) {_docID request_id node_did requester_did session_id} }"#)
             .await;
         ensure_no_errors(&request, "lookup resume request").unwrap();
         let rows = request.data.as_ref().unwrap()["AgentRequest"]
@@ -2102,8 +2098,8 @@ mod tests {
                 .node
                 .execute(&format!(
                     r#"mutation {{ create_AgentSession(input: {{
-                session_id: "{id}", agent_did: "did:test:grok-shim", requester_did: {requester},
-                {provenance} behavior_id: "did:test:grok-shim:default", created_at: "2026-09-01T00:00:00Z"
+                session_id: "{id}", node_did: "did:test:grok-shim", requester_did: {requester},
+                {provenance} agent_id: "did:test:grok-shim:default", created_at: "2026-09-01T00:00:00Z"
             }}) {{ _docID }} }}"#
                 ))
                 .await;
@@ -2164,7 +2160,7 @@ mod tests {
                 .node
                 .execute(&format!(
                     r#"mutation {{ create_AgentRequest(input: {{purpose: "normal", 
-                request_id: "{id}", session_id: "{session}", agent_did: "did:test:grok-shim",
+                request_id: "{id}", session_id: "{session}", node_did: "did:test:grok-shim",
                 requester_did: "{requester}", content: "{content}", lifecycle_state: "completed",
                 caused_by_parent_request_id: {parent}, created_at: "2026-09-0{day}T12:00:00Z"
             }}) {{ _docID }} }}"#
@@ -2210,8 +2206,8 @@ mod tests {
         }
         let rows = super::super::sessions::load(
             &service.config.node,
-            &service.config.agent_did,
-            &service.config.behavior_id,
+            &service.config.node_did,
+            &service.config.agent_id,
             "older",
         )
         .await
@@ -2224,8 +2220,8 @@ mod tests {
         );
         assert!(super::super::sessions::load(
             &service.config.node,
-            &service.config.agent_did,
-            &service.config.behavior_id,
+            &service.config.node_did,
+            &service.config.agent_id,
             "foreign-session"
         )
         .await
@@ -2321,7 +2317,7 @@ mod tests {
             "agent": "__BEHAVIOR__",
             "prompt": child_prompt
         });
-        let mut fixture = runtime_control_fixture_with_plan_builder("child-controls", |behavior_id| {
+        let mut fixture = runtime_control_fixture_with_plan_builder("child-controls", |agent_id| {
             vec![
                 StreamPlan::current_authored_user(
                     parent_prompt,
@@ -2331,7 +2327,7 @@ mod tests {
                             vec![StreamChunk::tool_call(
                                 "spawn-child-meta",
                                 "agent_new",
-                                child_args.to_string().replace("__BEHAVIOR__", behavior_id),
+                                child_args.to_string().replace("__BEHAVIOR__", agent_id),
                             )],
                         ),
                         StreamResponse::completes(parent_prompt, ["child started"]),
@@ -2392,7 +2388,7 @@ mod tests {
             );
         }
         let node = &service.config.node;
-        let did = gents::graphql::escape_graphql_string(&service.config.agent_did);
+        let did = gents::graphql::escape_graphql_string(&service.config.node_did);
         let child = wait_for_child_request(node).await;
         let child_session = child.session_id.as_deref().unwrap();
         let child_process = wait_for_running_bash_handle(node.as_ref(), child_session).await;
@@ -2440,7 +2436,7 @@ mod tests {
         let baseline_cached = baseline["cachedReadTokens"].as_u64().unwrap();
         let baseline_calls = baseline["modelCalls"].as_u64().unwrap();
         let foreign = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{purpose: "normal", 
-            request_id: "foreign-usage", session_id: "{}", agent_did: "{did}", requester_did: "did:test:foreign", lifecycle_state: "completed"
+            request_id: "foreign-usage", session_id: "{}", node_did: "{did}", requester_did: "did:test:foreign", lifecycle_state: "completed"
         }}) {{_docID}} }}"#, escape_graphql_string(child_session))).await;
         ensure_no_errors(&foreign, "foreign usage fixture").unwrap();
         for (request, input, output, cached) in [
@@ -2458,7 +2454,7 @@ mod tests {
                 .as_str()
                 .unwrap();
             let call = node.execute(&format!(r#"mutation {{ create_InferenceCall(input: {{
-                call_id: "usage-{request}", request_id: "parent", request_doc_id: "{}", agent_did: "{did}",
+                call_id: "usage-{request}", request_id: "parent", request_doc_id: "{}", node_did: "{did}",
                 call_seq: 1, call_kind: "inference", prompt_tokens: {input}, completion_tokens: {output}, cached_input_tokens: {cached}
             }}) {{_docID}} }}"#, escape_graphql_string(doc))).await;
             ensure_no_errors(&call, "usage call fixture").unwrap();
@@ -2551,25 +2547,24 @@ mod tests {
         let identity = Arc::new(
             gents::KeyIdentity::load_or_create(dir.path().join("agent.key"), None).unwrap(),
         );
-        let agent_did = gents::AgentIdentity::did(identity.as_ref()).to_string();
-        let behavior_id = gents::default_behavior_id_for_agent(&agent_did);
+        let node_did = gents::NodeIdentity::did(identity.as_ref()).to_string();
+        let agent_id = gents::default_agent_id_for_node(&node_did);
         let node = Arc::new(
             EmbeddedNode::builder()
                 .data_path(dir.path().join("node"))
                 .with_storage_backend(gents::defra_node::StorageBackend::Regolith)
-                .with_node_identity_did(&agent_did)
+                .with_node_identity_did(&node_did)
                 .build()
                 .await
                 .unwrap(),
         );
         gents::ensure_runtime_schemas(node.as_ref()).await.unwrap();
         let backend =
-            MockStreamingBackend::start_with_plans("grok-control-model", plans(&behavior_id))
-                .unwrap();
-        configure_runtime_behavior(
+            MockStreamingBackend::start_with_plans("grok-control-model", plans(&agent_id)).unwrap();
+        configure_runtime_agent(
             node.as_ref(),
-            &agent_did,
-            &behavior_id,
+            &node_did,
+            &agent_id,
             &format!("grok-control-{name}"),
             backend.endpoint(),
             "grok-control-model",
@@ -2579,22 +2574,22 @@ mod tests {
         let graphql = spawn_mock_graphql(node.clone()).await;
         let config = AcpServiceConfig {
             node: node.clone(),
-            agent_did: Arc::from(agent_did.as_str()),
-            behavior_id: Arc::from(behavior_id.as_str()),
+            node_did: Arc::from(node_did.as_str()),
+            agent_id: Arc::from(agent_id.as_str()),
             current_model: bound_model(),
             grok_home: None,
         };
         let turns = Arc::new(TurnManager::new(
             node.clone(),
             super::super::turn::TurnManagerConfig {
-                actor: identity::Did::new(agent_did.clone()).expect("fixture creator DID"),
-                agent_did: agent_did.clone(),
-                behavior_id: behavior_id.clone(),
+                actor: identity::Did::new(node_did.clone()).expect("fixture creator DID"),
+                node_did: node_did.clone(),
+                agent_id: agent_id.clone(),
                 graphql,
             },
         ));
-        let runtime_identity: Arc<dyn gents::AgentIdentity> = identity;
-        let agent = gents::Gents::from_default_behavior_documents(
+        let runtime_identity: Arc<dyn gents::NodeIdentity> = identity;
+        let agent = gents::Gents::from_default_agent_documents(
             node.clone(),
             runtime_identity,
             gents::DocumentRuntimeOptions {
@@ -2622,15 +2617,15 @@ mod tests {
         let runtime = tokio::spawn(agent.run(shutdown_rx));
         tokio::time::timeout(std::time::Duration::from_secs(20), async {
             loop {
-                let did = escape_graphql_string(&agent_did);
-                let response = node.execute(&format!(r#"{{ AgentRuntime(filter: {{agent_did: {{_eq: "{did}"}}}}, limit: 2) {{reconcile_phase}} AgentBehaviorReadiness(filter: {{agent_did: {{_eq: "{did}"}}}}, limit: 2) {{agent_did snapshot_json updated_at}} }}"#)).await;
+                let did = escape_graphql_string(&node_did);
+                let response = node.execute(&format!(r#"{{ NodeRuntime(filter: {{node_did: {{_eq: "{did}"}}}}, limit: 2) {{reconcile_phase}} NodeReadiness(filter: {{node_did: {{_eq: "{did}"}}}}, limit: 2) {{node_did snapshot_json updated_at}} }}"#)).await;
                 ensure_no_errors(&response, "runtime control readiness").unwrap();
                 let data = response.data.as_ref().unwrap();
-                let status = data["AgentRuntime"].as_array().unwrap();
-                let readiness = data["AgentBehaviorReadiness"].as_array().unwrap();
+                let status = data["NodeRuntime"].as_array().unwrap();
+                let readiness = data["NodeReadiness"].as_array().unwrap();
                 let snapshot = readiness.first().and_then(|row| {
-                    let row = serde_json::from_value::<gents_protocol::row::AgentBehaviorReadinessRow>(row.clone()).ok()?;
-                    gents_protocol::row::decode_behavior_readiness_snapshot(&row, &agent_did).ok()
+                    let row = serde_json::from_value::<gents_protocol::row::NodeReadinessRow>(row.clone()).ok()?;
+                    gents_protocol::row::decode_node_readiness_snapshot(&row, &node_did).ok()
                 });
                 if status.len() == 1
                     && status[0]["reconcile_phase"] == "idle"
@@ -2638,9 +2633,9 @@ mod tests {
                     && snapshot.as_ref().is_some_and(|snapshot| {
                         snapshot.process_state.accepts_work()
                             && snapshot.active_generation >= 1
-                            && snapshot.behaviors.iter().any(|behavior| {
-                                behavior.behavior_id == behavior_id
-                                    && behavior.state == gents_protocol::row::BehaviorReadinessState::Ready
+                            && snapshot.agents.iter().any(|agent| {
+                                agent.agent_id == agent_id
+                                    && agent.state == gents_protocol::row::AgentReadinessState::Ready
                             })
                     })
                 {
@@ -2680,7 +2675,7 @@ mod tests {
     ) -> gents_protocol::row::AgentRequestRow {
         let observed = tokio::time::timeout(std::time::Duration::from_secs(20), async {
             loop {
-                let response = node.execute(r#"{ AgentRequest {_docID request_id agent_did requester_did session_id caused_by_parent_request_id caused_by_parent_request_doc_id caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id} }"#).await;
+                let response = node.execute(r#"{ AgentRequest {_docID request_id node_did requester_did session_id caused_by_parent_request_id caused_by_parent_request_doc_id caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id} }"#).await;
                 ensure_no_errors(&response, "child request").unwrap();
                 let rows = response.data.as_ref().unwrap()["AgentRequest"]
                     .as_array()
@@ -2720,7 +2715,7 @@ mod tests {
                 let presentation = if let Some((tool_doc_id, request_doc_id)) = presentation {
                     let request = node
                         .execute(&format!(
-                            r#"{{ AgentRequest(filter: {{_docID: {{_eq: "{}"}}}}, limit: 2) {{agent_did requester_did session_id}} }}"#,
+                            r#"{{ AgentRequest(filter: {{_docID: {{_eq: "{}"}}}}, limit: 2) {{node_did requester_did session_id}} }}"#,
                             escape_graphql_string(request_doc_id)
                         ))
                         .await;
@@ -2733,7 +2728,7 @@ mod tests {
                         gents::tool_call_lifecycle::load_tool_call_presentation(
                             &gents::ConfigAccess::Local(node.clone()),
                             tool_doc_id,
-                            scope["agent_did"].as_str().unwrap_or_default(),
+                            scope["node_did"].as_str().unwrap_or_default(),
                             scope["session_id"].as_str().unwrap_or_default(),
                             scope["requester_did"].as_str(),
                         )
@@ -2759,7 +2754,7 @@ mod tests {
         doc_id: &str,
     ) -> gents_protocol::row::AgentRequestRow {
         let doc_id = escape_graphql_string(doc_id);
-        let response = node.execute(&format!(r#"{{ AgentRequest(filter: {{_docID: {{_eq: "{doc_id}"}}}}, limit: 2) {{_docID request_id agent_did requester_did session_id}} }}"#)).await;
+        let response = node.execute(&format!(r#"{{ AgentRequest(filter: {{_docID: {{_eq: "{doc_id}"}}}}, limit: 2) {{_docID request_id node_did requester_did session_id}} }}"#)).await;
         ensure_no_errors(&response, "physical parent request").unwrap();
         let rows = response.data.as_ref().unwrap()["AgentRequest"]
             .as_array()
@@ -2775,24 +2770,24 @@ mod tests {
         let identity =
             gents::KeyIdentity::load_or_create(identity_dir.path().join("agent.key"), None)
                 .expect("test signing identity");
-        let agent_did = gents::AgentIdentity::did(&identity).to_string();
-        let actor = ::identity::Did::new(agent_did.clone()).expect("fixture creator DID");
-        let behavior_id = gents::default_behavior_id_for_agent(&agent_did);
+        let node_did = gents::NodeIdentity::did(&identity).to_string();
+        let actor = ::identity::Did::new(node_did.clone()).expect("fixture creator DID");
+        let agent_id = gents::default_agent_id_for_node(&node_did);
         let config = AcpServiceConfig {
             node,
-            agent_did: Arc::from(agent_did.as_str()),
-            behavior_id: Arc::from(behavior_id.as_str()),
+            node_did: Arc::from(node_did.as_str()),
+            agent_id: Arc::from(agent_id.as_str()),
             current_model: bound_model(),
             grok_home: None,
         };
         gents::schema::ensure_runtime_schemas(config.node.as_ref())
             .await
             .expect("runtime schemas");
-        super::super::seed_test_behavior_configuration(
+        super::super::seed_test_agent_configuration(
             config.node.as_ref(),
-            &agent_did,
-            &behavior_id,
-            &behavior_id,
+            &node_did,
+            &agent_id,
+            &agent_id,
             &config.current_model.model_id,
             true,
         )
@@ -2801,8 +2796,8 @@ mod tests {
             config.node.clone(),
             super::super::turn::TurnManagerConfig {
                 actor,
-                agent_did: config.agent_did.to_string(),
-                behavior_id: config.behavior_id.to_string(),
+                node_did: config.node_did.to_string(),
+                agent_id: config.agent_id.to_string(),
                 graphql,
             },
         ));
@@ -2860,7 +2855,7 @@ mod tests {
         let graphql = spawn_mock_graphql(config.node.clone()).await;
         let node = config.node.clone();
         let service = test_service_with_graphql(node, graphql).await;
-        let agent_did = service.config.agent_did.to_string();
+        let node_did = service.config.node_did.to_string();
 
         // Create the session first so the prompt's session is known.
         service
@@ -2890,7 +2885,7 @@ mod tests {
         let node_for_seed = config.node.clone();
         let seed_handle = tokio::spawn(async move {
             loop {
-                let query = r#"{ AgentRequest(filter: { lifecycle_state: { _eq: "pending" } }, limit: 2) { _docID request_id agent_did requester_did session_id } }"#;
+                let query = r#"{ AgentRequest(filter: { lifecycle_state: { _eq: "pending" } }, limit: 2) { _docID request_id node_did requester_did session_id } }"#;
                 let response = node_for_seed.execute(query).await;
                 let rows = response
                     .data
@@ -2906,9 +2901,9 @@ mod tests {
                     let escaped_request =
                         gents::graphql::escape_graphql_string(&request.request_id);
                     let message_key = gents::session::sequence_message_key(
-                        &agent_did,
+                        &node_did,
                         "s-live",
-                        Some(&agent_did),
+                        Some(&node_did),
                         1,
                     );
                     let message_doc_id = seed_canonical_assistant_message(
@@ -3500,7 +3495,7 @@ mod tests {
         let node = service.config.node.clone();
         let query = r#"{
             AgentSession(filter: { session_id: { _eq: "grok-edge-docs" } }) {
-                session_id behavior_id agent_did requester_did created_at closed_at
+                session_id agent_id node_did requester_did created_at closed_at
             }
             AgentRequest(filter: { session_id: { _eq: "grok-edge-docs" } }) { request_id }
         }"#
@@ -3514,8 +3509,8 @@ mod tests {
             .and_then(Value::as_array)
             .expect("AgentSession array");
         assert_eq!(sessions.len(), 1, "exactly one AgentSession document");
-        assert_eq!(sessions[0]["behavior_id"], "did:test:grok-shim:default");
-        assert_eq!(sessions[0]["agent_did"], "did:test:grok-shim");
+        assert_eq!(sessions[0]["agent_id"], "did:test:grok-shim:default");
+        assert_eq!(sessions[0]["node_did"], "did:test:grok-shim");
         assert_eq!(sessions[0]["requester_did"], "did:test:grok-shim");
         assert!(sessions[0]["created_at"].as_str().is_some());
         assert!(sessions[0]["closed_at"].is_null());
@@ -3653,17 +3648,17 @@ mod tests {
 
     #[tokio::test]
     async fn session_new_rejects_an_existing_session_bound_to_a_different_agent() {
-        // `agent_did` is `@immutable` on `AgentSession`. A row stamped for a
-        // different principal must be rejected before reactivation, not
+        // `node_did` is `@immutable` on `AgentSession`. A row stamped for a
+        // different node must be rejected before reactivation, not
         // silently reactivated under this shim's identity.
         let (_staging, service) = test_service().await;
         let node = service.config.node.clone();
         let seed = r#"mutation {
             create_AgentSession(input: {
                 session_id: "grok-edge-foreign-agent",
-                agent_did: "did:test:foreign-agent",
+                node_did: "did:test:foreign-agent",
                 requester_did: "did:test:foreign-agent",
-                behavior_id: "did:test:grok-shim:default",
+                agent_id: "did:test:grok-shim:default",
                 created_at: "2026-08-31T22:46:45Z",
                 closed_at: "2026-08-31T22:46:46Z"
             }) { _docID }
@@ -3690,14 +3685,14 @@ mod tests {
             "the mismatch must name the session's immutable agent: {message}"
         );
         assert!(
-            message.contains("agent_did"),
+            message.contains("node_did"),
             "the mismatch must name the immutable field: {message}"
         );
 
         // The foreign row is untouched: never reactivated, never rewritten.
         let query = r#"{
             AgentSession(filter: { session_id: { _eq: "grok-edge-foreign-agent" } }) {
-                agent_did closed_at
+                node_did closed_at
             }
         }"#
         .to_string();
@@ -3710,7 +3705,7 @@ mod tests {
             .and_then(Value::as_array)
             .expect("AgentSession array");
         assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0]["agent_did"], "did:test:foreign-agent");
+        assert_eq!(sessions[0]["node_did"], "did:test:foreign-agent");
         assert_eq!(sessions[0]["closed_at"], "2026-08-31T22:46:46Z");
     }
 
@@ -4762,7 +4757,7 @@ mod tests {
     }
 
     /// A representative operational failure stays internal `-32603`: the
-    /// immutable `agent_did` identity mismatch on `session/new` is a
+    /// immutable `node_did` identity mismatch on `session/new` is a
     /// storage/identity failure of the durable layer, not a caller-shape
     /// error, and the rejected input fabricates nothing.
     #[tokio::test]
@@ -4772,9 +4767,9 @@ mod tests {
         let seed = r#"mutation {
             create_AgentSession(input: {
                 session_id: "s-internal-op",
-                agent_did: "did:test:foreign-agent",
+                node_did: "did:test:foreign-agent",
                 requester_did: "did:test:foreign-agent",
-                behavior_id: "did:test:grok-shim:default",
+                agent_id: "did:test:grok-shim:default",
                 created_at: "2026-08-31T22:46:45Z",
                 closed_at: "2026-08-31T22:46:46Z"
             }) { _docID }

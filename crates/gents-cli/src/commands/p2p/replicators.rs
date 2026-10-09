@@ -166,7 +166,7 @@ mod tests {
     #[test]
     fn p2p_replicator_rows_resolve_collection_names() {
         let mut names_by_id = BTreeMap::new();
-        names_by_id.insert("bafk-agent-runtime".to_string(), "AgentRuntime".to_string());
+        names_by_id.insert("bafk-agent-runtime".to_string(), "NodeRuntime".to_string());
         let rows = p2p_replicator_rows(
             vec![P2pReplicatorRow {
                 id: Some("peer-1".to_string()),
@@ -177,23 +177,23 @@ mod tests {
         );
 
         assert_eq!(rows[0].id.as_deref(), Some("peer-1"));
-        assert_eq!(rows[0].collection_names, vec!["AgentRuntime"]);
+        assert_eq!(rows[0].collection_names, vec!["NodeRuntime"]);
         assert_eq!(rows[0].collection_ids.len(), 2);
     }
 
     #[test]
     fn parse_replicator_filters_valid_entries() {
         let filters = parse_replicator_filters(&[
-            "AgentRequest:agent_did=did:key:alice".to_string(),
-            "AgentMessage:agent_did=did:key:bob".to_string(),
+            "AgentRequest:node_did=did:key:alice".to_string(),
+            "AgentMessage:node_did=did:key:bob".to_string(),
         ])
         .expect("valid filters should parse");
 
         assert_eq!(filters.len(), 2);
         let req = filters.get("AgentRequest").unwrap();
-        assert_eq!(single_string_eq(req), Some(("agent_did", "did:key:alice")));
+        assert_eq!(single_string_eq(req), Some(("node_did", "did:key:alice")));
         let msg = filters.get("AgentMessage").unwrap();
-        assert_eq!(single_string_eq(msg), Some(("agent_did", "did:key:bob")));
+        assert_eq!(single_string_eq(msg), Some(("node_did", "did:key:bob")));
     }
 
     #[test]
@@ -228,7 +228,7 @@ mod tests {
 
     #[test]
     fn parse_replicator_filters_rejects_missing_colon() {
-        let err = parse_replicator_filters(&["AgentRequestagent_did=value".to_string()])
+        let err = parse_replicator_filters(&["AgentRequestnode_did=value".to_string()])
             .unwrap_err()
             .to_string();
         assert!(
@@ -239,7 +239,7 @@ mod tests {
 
     #[test]
     fn parse_replicator_filters_rejects_missing_equals() {
-        let err = parse_replicator_filters(&["AgentRequest:agent_did_no_value".to_string()])
+        let err = parse_replicator_filters(&["AgentRequest:node_did_no_value".to_string()])
             .unwrap_err()
             .to_string();
         assert!(
@@ -272,7 +272,7 @@ mod tests {
 
     #[test]
     fn parse_replicator_filters_rejects_empty_value() {
-        let err = parse_replicator_filters(&["AgentRequest:agent_did=".to_string()])
+        let err = parse_replicator_filters(&["AgentRequest:node_did=".to_string()])
             .unwrap_err()
             .to_string();
         assert!(
@@ -284,9 +284,9 @@ mod tests {
     #[test]
     fn parse_replicator_filters_value_may_contain_equals() {
         let filters =
-            parse_replicator_filters(&["AgentRequest:agent_did=did:key:z=abc".to_string()])
+            parse_replicator_filters(&["AgentRequest:node_did=did:key:z=abc".to_string()])
                 .expect("filter value with = should parse");
         let pred = filters.get("AgentRequest").unwrap();
-        assert_eq!(single_string_eq(pred), Some(("agent_did", "did:key:z=abc")));
+        assert_eq!(single_string_eq(pred), Some(("node_did", "did:key:z=abc")));
     }
 }

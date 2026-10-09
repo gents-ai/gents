@@ -141,10 +141,10 @@ pub(crate) fn scaffold(dir: &Path, name: &str, args: &PackScaffoldArgs) -> Resul
             manifest["inference_slots"] = json!([{
                 "name": "worker",
                 "description": "Does the pack's work. Any capable profile.",
-                "behaviors": [format!("{}-worker", names.kebab)],
+                "agents": [format!("{}-worker", names.kebab)],
             }]);
             files.push((
-                "agent_behaviors/worker/system_prompt.md".into(),
+                "agents/worker/system_prompt.md".into(),
                 format!(
                     "You are the {} worker. Do the task you are given and nothing else.\n",
                     names.title
@@ -345,11 +345,11 @@ fn echo_source(entry: &str) -> String {
 
 fn config(names: &Names, template: PackTemplate) -> Value {
     let kebab = &names.kebab;
-    let behavior = format!("{kebab}-worker");
+    let agent = format!("{kebab}-worker");
     let mut config = json!({
-        "agent_principal": {},
-        "agent_behaviors": [{
-            "behavior_id": behavior,
+        "node": {},
+        "agents": [{
+            "agent_id": agent,
             "display_name": format!("{} worker", names.title),
             "context_id": format!("{kebab}-worker-context"),
             "inference_profile_id": "gents:inference-slot:worker",
@@ -357,7 +357,7 @@ fn config(names: &Names, template: PackTemplate) -> Value {
         "contexts": [{
             "context_id": format!("{kebab}-worker-context"),
             "display_name": format!("{} worker", names.title),
-            "system_prompt": "./agent_behaviors/worker/system_prompt.md",
+            "system_prompt": "./agents/worker/system_prompt.md",
             "tools_id": format!("{kebab}-worker-tools"),
         }],
         "tools": [{
@@ -367,7 +367,7 @@ fn config(names: &Names, template: PackTemplate) -> Value {
         "tasks": [{
             "task_id": format!("{kebab}-worker-task"),
             "display_name": format!("{} worker task", names.title),
-            "behavior_id": behavior,
+            "agent_id": agent,
             "prompt_template": "./tasks/worker_task/prompt.md",
         }],
     });
@@ -409,7 +409,7 @@ fn config(names: &Names, template: PackTemplate) -> Value {
             config["graphs"] = json!([{ "graph_id": kebab }]);
             config["graph_capabilities"] = json!([{
                 "capability_id": format!("{kebab}-worker"),
-                "allowed_callers": ["${GENTS_PACK_AGENT_DID}"],
+                "allowed_callers": ["${GENTS_PACK_NODE_DID}"],
                 "revision": "v1",
                 "target": {"kind": "task", "task_id": format!("{kebab}-worker-task")},
                 "input_ports": [{
@@ -467,7 +467,7 @@ fn task_prompt(names: &Names, template: PackTemplate) -> String {
 fn readme(names: &Names, template: PackTemplate) -> String {
     let (what, io) = match template {
         PackTemplate::Assets => ("carries files and no configuration", "None."),
-        PackTemplate::Minimal => ("installs one behavior and one task", "The task's prompt."),
+        PackTemplate::Minimal => ("installs one agent and one task", "The task's prompt."),
         PackTemplate::Automation => (
             "runs its worker whenever a job document is created",
             "Input: a `Job` document. Output: whatever the task writes.",

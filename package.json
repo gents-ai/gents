@@ -15,7 +15,7 @@
     "check:package-boundaries": "node scripts/check-desktop-package-boundaries.mjs",
     "pack:packages": "./scripts/pack-desktop-packages.sh",
     "test:triage": "node --test scripts/triage-hygiene/*.test.mjs",
-    "test:evals": "node --test scripts/evals/*.test.mjs"
+    "test:evals": "node --test scripts/evals/test_*.mjs"
   },
   "engines": {
     "node": ">=20"

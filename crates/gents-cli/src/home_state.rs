@@ -6,7 +6,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use gents::config_client::GraphqlEndpoint;
 use gents::identity::{
-    load_macos_keychain_identity, load_macos_secure_enclave_identity, AgentIdentity, KeyIdentity,
+    load_macos_keychain_identity, load_macos_secure_enclave_identity, KeyIdentity, NodeIdentity,
 };
 
 use crate::shared::{StoredInitConfig, StoredRuntimeState};
@@ -38,8 +38,8 @@ pub(crate) fn default_data_dir(home_dir: &Path) -> PathBuf {
     gents::home::default_data_dir(home_dir)
 }
 
-pub(crate) fn default_key_path(home_dir: &Path, agent_name: &str) -> PathBuf {
-    gents::home::default_key_path(home_dir, agent_name)
+pub(crate) fn default_key_path(home_dir: &Path, node_name: &str) -> PathBuf {
+    gents::home::default_key_path(home_dir, node_name)
 }
 
 pub(crate) fn init_config_path(home_dir: &Path) -> PathBuf {
@@ -65,13 +65,13 @@ pub(crate) fn read_init_config(home_dir: &Path) -> Result<Option<StoredInitConfi
 pub(crate) fn load_initialized_home_identity(
     home_dir: &Path,
     config: &StoredInitConfig,
-) -> Result<Arc<dyn AgentIdentity>> {
-    let expected_did = config.agent_did.trim();
+) -> Result<Arc<dyn NodeIdentity>> {
+    let expected_did = config.node_did.trim();
     if expected_did.is_empty() {
-        anyhow::bail!("initialized home {} has no agent DID", home_dir.display());
+        anyhow::bail!("initialized home {} has no node DID", home_dir.display());
     }
 
-    let identity: Arc<dyn AgentIdentity> = if let Some(key_path) = config
+    let identity: Arc<dyn NodeIdentity> = if let Some(key_path) = config
         .key_path
         .as_deref()
         .map(str::trim)
@@ -80,7 +80,7 @@ pub(crate) fn load_initialized_home_identity(
         let key_path = PathBuf::from(key_path);
         if !key_path.exists() {
             anyhow::bail!(
-                "initialized home agent DID {expected_did} requires identity key {} to already exist",
+                "initialized home node DID {expected_did} requires identity key {} to already exist",
                 key_path.display()
             );
         }
@@ -139,7 +139,7 @@ pub(crate) fn load_initialized_home_identity(
 
     if identity.did() != expected_did {
         anyhow::bail!(
-            "initialized home agent DID {expected_did} does not match loaded identity DID {}",
+            "initialized home node DID {expected_did} does not match loaded identity DID {}",
             identity.did()
         );
     }
@@ -257,21 +257,21 @@ fn endpoint_serves_home(home_dir: &Path, url: &str) -> bool {
     })
 }
 
-pub(crate) fn resolve_agent_did(home: Option<&Path>, explicit: Option<&str>) -> Result<String> {
-    if let Some(agent_did) = explicit.map(str::trim).filter(|value| !value.is_empty()) {
-        return Ok(agent_did.to_string());
+pub(crate) fn resolve_node_did(home: Option<&Path>, explicit: Option<&str>) -> Result<String> {
+    if let Some(node_did) = explicit.map(str::trim).filter(|value| !value.is_empty()) {
+        return Ok(node_did.to_string());
     }
 
     let home_dir = resolve_home_dir(home);
     if let Some(runtime_state) = read_runtime_state(&home_dir)? {
-        return Ok(runtime_state.agent_did);
+        return Ok(runtime_state.node_did);
     }
     if let Some(init_config) = read_init_config(&home_dir)? {
-        return Ok(init_config.agent_did);
+        return Ok(init_config.node_did);
     }
 
     anyhow::bail!(
-        "agent DID is required; run `gents init`, start `gents server`, then retry `gents status`, or pass --agent-did explicitly"
+        "node DID is required; run `gents init`, start `gents server`, then retry `gents status`, or pass --node-did explicitly"
     )
 }
 
@@ -326,9 +326,9 @@ mod tests {
             serde_json::to_vec(&serde_json::json!({
                 "home": home.path(),
                 "graphql": url,
-                "agent_name": "trial",
-                "agent_did": "did:key:z6Mk",
-                "default_behavior_id": "subject",
+                "node_name": "trial",
+                "node_did": "did:key:z6Mk",
+                "default_agent_id": "subject",
             }))
             .unwrap(),
         )
@@ -370,9 +370,9 @@ mod tests {
             serde_json::to_vec(&serde_json::json!({
                 "home": home.path(),
                 "graphql": "http://100.69.4.79:9191/api/v0/graphql",
-                "agent_name": "a",
-                "agent_did": "did:key:z6Mk",
-                "default_behavior_id": "b",
+                "node_name": "a",
+                "node_did": "did:key:z6Mk",
+                "default_agent_id": "b",
             }))
             .unwrap(),
         )

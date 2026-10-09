@@ -377,8 +377,8 @@ jobs:
         env:
           RUST_MIN_STACK: 16777216
         # --no-fail-fast: cli binaries run alphabetically; without this the
-        # first red binary hides every later one (how a broken cli_subagent
-        # masked cli_trace_export for days — see #1139).
+        # first red binary hides every later one (how a broken test binary
+        # masked the trace-export suite for days — see #1139).
         # Compiler tests spawn Cargo in temporary plugin source directories.
         # Do not leak the outer job's shared target directory into those child
         # builds: Afterburner reads their standard, source-local target output.

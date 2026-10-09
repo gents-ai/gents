@@ -46,13 +46,10 @@ pub(super) async fn diagnose_backends(
                 report["error"] = Value::String(error.to_string());
             }
         }
-        let observation = crate::shared::load_backend_observation(
-            access,
-            &backend.agent_did,
-            &backend.backend_id,
-        )
-        .await
-        .ok();
+        let observation =
+            crate::shared::load_backend_observation(access, &backend.node_did, &backend.backend_id)
+                .await
+                .ok();
         let warnings = bundle
             .config
             .inference_profiles
@@ -82,7 +79,7 @@ async fn backend_check(
 ) -> Result<Value> {
     backend.validate()?;
     let observation =
-        crate::shared::load_backend_observation(access, &backend.agent_did, &backend.backend_id)
+        crate::shared::load_backend_observation(access, &backend.node_did, &backend.backend_id)
             .await?;
     anyhow::ensure!(
         gents::document_configured_from_fields(
@@ -91,7 +88,7 @@ async fn backend_check(
         ),
         "backend is disabled or has no healthy probe observation"
     );
-    if matches!(backend.auth, BackendAuth::PrincipalOAuth { .. }) {
+    if matches!(backend.auth, BackendAuth::NodeOAuth { .. }) {
         return Ok(json!({"probe_status": observation.probe_status,
             "note": OAUTH_CREDENTIAL_DISCOVERY_NOTE, "discovered_models": []}));
     }
@@ -149,9 +146,9 @@ mod tests {
 
     fn claude_backend(account_ref: Option<&str>) -> InferenceBackend {
         serde_json::from_value(json!({
-            "agent_did": "did:key:owner", "backend_id": "claude", "name": "Claude",
+            "node_did": "did:key:owner", "backend_id": "claude", "name": "Claude",
             "provider_kind": "ClaudeCliSubscription", "endpoint": "claude-cli://subscription",
-            "auth": BackendAuth::PrincipalOAuth { account_ref: account_ref.map(str::to_owned) },
+            "auth": BackendAuth::NodeOAuth { account_ref: account_ref.map(str::to_owned) },
         }))
         .unwrap()
     }
@@ -212,9 +209,9 @@ mod tests {
         let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
         gents::ensure_runtime_schemas(&node).await.unwrap();
         let backend: InferenceBackend = serde_json::from_value(json!({
-            "agent_did": "did:key:owner", "backend_id": "claude-max", "name": "Claude",
+            "node_did": "did:key:owner", "backend_id": "claude-max", "name": "Claude",
             "provider_kind": "ClaudeCliSubscription", "endpoint": "claude-cli://subscription",
-            "auth": BackendAuth::PrincipalOAuth { account_ref: None },
+            "auth": BackendAuth::NodeOAuth { account_ref: None },
         }))
         .unwrap();
         for (owner, status) in [
@@ -222,7 +219,7 @@ mod tests {
             ("did:key:foreign", "unhealthy"),
         ] {
             let mut value = serde_json::to_value(&backend).unwrap();
-            value["agent_did"] = json!(owner);
+            value["node_did"] = json!(owner);
             value["probe_status"] = json!(status);
             value["enabled"] = json!(true);
             let input = gents_protocol::graphql::graphql_input_literal(&value).unwrap();
@@ -240,7 +237,7 @@ mod tests {
         assert_eq!(report["note"], OAUTH_CREDENTIAL_DISCOVERY_NOTE);
         assert_eq!(report["discovered_models"], json!([]));
         let mut missing = backend.clone();
-        missing.agent_did = "did:key:missing".into();
+        missing.node_did = "did:key:missing".into();
         assert!(backend_check(&access, &missing, &BTreeSet::new())
             .await
             .is_err());
@@ -255,8 +252,8 @@ mod tests {
         object.remove("catalogs");
         object.remove("probe_status");
         let bundle: ConfigExportBundle = serde_json::from_value(json!({
-            "format": "test", "agent_did": owner, "exported_at": "2026-01-01T00:00:00Z",
-            "access_mode": "local", "agent_principal": {"agent_did": owner},
+            "format": "test", "node_did": owner, "exported_at": "2026-01-01T00:00:00Z",
+            "access_mode": "local", "node": {"node_did": owner},
             "inference_backends": [backend],
             "inference_profiles": [crate::shared::test_support::xai_effort_profile(owner)],
         }))

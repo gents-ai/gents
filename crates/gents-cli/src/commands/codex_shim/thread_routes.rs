@@ -48,9 +48,9 @@ pub(super) async fn fork_thread_response(
         ForkParams {
             source_session_id: &params.thread_id,
             fork_at_user_turn,
-            caller_agent_did: state.agent_did.as_ref(),
+            caller_node_did: state.node_did.as_ref(),
             caller_requester_did: Some(state.local_requester_did()),
-            target_behavior_id: None,
+            target_agent_id: None,
         },
     )
     .await
@@ -75,8 +75,8 @@ pub(super) async fn fork_thread_response(
     let thread = codex_thread_json_with_turns(&record, turns);
     let bound_model_id = load_bound_model_selection_id_for_state(
         state.node.as_ref(),
-        &state.agent_did,
-        &state.behavior_id,
+        &state.node_did,
+        &state.agent_id,
     )
     .await
     .map_err(internal_error)?;
@@ -89,8 +89,9 @@ pub(super) async fn list_threads_response(
     params: codex::ThreadListParams,
 ) -> std::result::Result<Value, ThreadRouteError> {
     let include_cli = source_filter_allows_cli(params.source_kinds.as_deref());
-    let include_subagents = source_filter_allows_spawned_subagent(params.source_kinds.as_deref());
-    if (!include_cli && !include_subagents)
+    let include_spawned_agents =
+        source_filter_allows_spawned_agent_threads(params.source_kinds.as_deref());
+    if (!include_cli && !include_spawned_agents)
         || !model_provider_filter_allows_gents(params.model_providers.as_deref())
     {
         return Ok(json!({
@@ -102,7 +103,7 @@ pub(super) async fn list_threads_response(
 
     let archived = params.archived.unwrap_or(false);
     let mut records =
-        list_codex_threads_for_sources(state, archived, include_cli, include_subagents)
+        list_codex_threads_for_sources(state, archived, include_cli, include_spawned_agents)
             .await
             .map_err(internal_error)?;
     if let Some(cwd_filter) = params.cwd.as_ref() {
@@ -163,8 +164,9 @@ pub(super) async fn search_threads_response(
         ));
     }
     let include_cli = source_filter_allows_cli(params.source_kinds.as_deref());
-    let include_subagents = source_filter_allows_spawned_subagent(params.source_kinds.as_deref());
-    if !include_cli && !include_subagents {
+    let include_spawned_agents =
+        source_filter_allows_spawned_agent_threads(params.source_kinds.as_deref());
+    if !include_cli && !include_spawned_agents {
         return Ok(json!({
             "data": [],
             "nextCursor": null,
@@ -174,9 +176,10 @@ pub(super) async fn search_threads_response(
 
     let mut matches = Vec::<(CodexThreadRecord, String)>::new();
     let archived = params.archived.unwrap_or(false);
-    let records = list_codex_threads_for_sources(state, archived, include_cli, include_subagents)
-        .await
-        .map_err(internal_error)?;
+    let records =
+        list_codex_threads_for_sources(state, archived, include_cli, include_spawned_agents)
+            .await
+            .map_err(internal_error)?;
     for record in records {
         if let Some(snippet) = record_snippet(&record, search_term) {
             matches.push((record, snippet));
@@ -305,7 +308,7 @@ fn thread_sort_timestamp(record: &CodexThreadRecord, sort_key: codex::ThreadSort
 
 async fn count_user_messages(state: &ShimState, thread_id: &str) -> Result<u32> {
     let scope = gents::session::session_scope_filter(
-        &state.agent_did,
+        &state.node_did,
         thread_id,
         Some(state.local_requester_did()),
     );
@@ -346,7 +349,9 @@ fn source_filter_allows_cli(source_kinds: Option<&[codex::ThreadSourceKind]>) ->
         .is_none_or(|kinds| kinds.contains(&codex::ThreadSourceKind::Cli))
 }
 
-fn source_filter_allows_spawned_subagent(source_kinds: Option<&[codex::ThreadSourceKind]>) -> bool {
+fn source_filter_allows_spawned_agent_threads(
+    source_kinds: Option<&[codex::ThreadSourceKind]>,
+) -> bool {
     source_kinds.is_some_and(|kinds| {
         kinds.iter().any(|kind| {
             matches!(
@@ -457,7 +462,7 @@ fn map_fork_error(err: ForkError) -> ThreadRouteError {
         | ForkError::ForkNotSameAgent
         | ForkError::ForkSourceBusy
         | ForkError::ForkAtUserTurnOutOfRange(_, _)
-        | ForkError::ForkBehaviorNotFound(_) => JSONRPC_INVALID_PARAMS,
+        | ForkError::ForkAgentNotFound(_) => JSONRPC_INVALID_PARAMS,
     };
     ThreadRouteError {
         code,
@@ -487,16 +492,16 @@ mod tests {
     fn source_filters_classify_gents_spawned_children() {
         assert!(source_filter_allows_cli(None));
         assert!(source_filter_allows_cli(Some(&[])));
-        assert!(!source_filter_allows_spawned_subagent(None));
-        assert!(!source_filter_allows_spawned_subagent(Some(&[])));
+        assert!(!source_filter_allows_spawned_agent_threads(None));
+        assert!(!source_filter_allows_spawned_agent_threads(Some(&[])));
 
-        assert!(source_filter_allows_spawned_subagent(Some(&[
+        assert!(source_filter_allows_spawned_agent_threads(Some(&[
             codex::ThreadSourceKind::SubAgent,
         ])));
-        assert!(source_filter_allows_spawned_subagent(Some(&[
+        assert!(source_filter_allows_spawned_agent_threads(Some(&[
             codex::ThreadSourceKind::SubAgentThreadSpawn,
         ])));
-        assert!(!source_filter_allows_spawned_subagent(Some(&[
+        assert!(!source_filter_allows_spawned_agent_threads(Some(&[
             codex::ThreadSourceKind::Cli,
             codex::ThreadSourceKind::SubAgentReview,
         ])));

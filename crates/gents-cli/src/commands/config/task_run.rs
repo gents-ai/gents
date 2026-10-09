@@ -44,8 +44,8 @@ pub(crate) async fn config_task_run(args: ConfigTaskRunArgs) -> Result<()> {
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct TaskRunOutput {
     pub(crate) task_id: String,
-    pub(crate) behavior_id: String,
-    pub(crate) agent_did: String,
+    pub(crate) agent_id: String,
+    pub(crate) node_did: String,
     pub(crate) request_id: String,
     pub(crate) session_id: String,
     pub(crate) request_doc_id: String,
@@ -69,17 +69,17 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
 
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
 
-    let agent_did = crate::resolve_agent_did(args.home.as_deref(), None)?;
-    ensure_local_request_signer(args.home.as_deref(), &agent_did)?;
+    let node_did = crate::resolve_node_did(args.home.as_deref(), None)?;
+    ensure_local_request_signer(args.home.as_deref(), &node_did)?;
     let (task_doc_id, task) = access
         .transact("cli.task_run.read", |txn| {
-            let agent_did = &agent_did;
+            let node_did = &node_did;
             let task_id = &task_id;
             Box::pin(async move {
                 let (task_doc_id, value) = gents::config_client::read_desired_state_record_in_txn(
                     txn,
                     gents::Collection::Task,
-                    agent_did,
+                    node_did,
                     task_id,
                 )
                 .await?
@@ -88,25 +88,20 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
                 anyhow::ensure!(task.enabled, "Task {} is disabled", task.task_id);
                 let (_, value) = gents::config_client::read_desired_state_record_in_txn(
                     txn,
-                    gents::Collection::AgentBehavior,
-                    agent_did,
-                    &task.behavior_id,
+                    gents::Collection::Agent,
+                    node_did,
+                    &task.agent_id,
                 )
                 .await?
-                .context("task behavior not found under the selected principal")?;
-                let behavior: gents::document_config::AgentBehavior =
-                    serde_json::from_value(value)?;
-                anyhow::ensure!(
-                    behavior.enabled,
-                    "AgentBehavior {} is disabled",
-                    behavior.behavior_id
-                );
+                .context("task agent not found under the selected principal")?;
+                let agent: gents::document_config::Agent = serde_json::from_value(value)?;
+                anyhow::ensure!(agent.enabled, "Agent {} is disabled", agent.agent_id);
                 Ok((task_doc_id, task))
             })
         })
         .await?;
     let emit_outcome = task.emit_outcome;
-    let behavior_id = task.behavior_id;
+    let agent_id = task.agent_id;
     let prompt_template = task.prompt_template;
     let goal_objective_template = task.goal_objective_template;
     let goal_token_budget = task.goal_token_budget;
@@ -123,7 +118,7 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
             .and(args.session_id.as_deref()),
     )?;
     let identity = gents_protocol::trigger_delivery::FireIdentity {
-        owner_did: agent_did.clone(),
+        owner_did: node_did.clone(),
         trigger_id: format!("manual:{task_id}:{invocation_key}"),
         source_collection: "Task".into(),
         source_doc_id: task_doc_id,
@@ -147,7 +142,7 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
             .cloned()
             .unwrap_or_else(|| format!("trigger-session:{fire_key}")),
     };
-    let prior_created_at = lookup_request_by_retry_key(&access, &agent_did, &fire_key)
+    let prior_created_at = lookup_request_by_retry_key(&access, &node_did, &fire_key)
         .await?
         .map(|request| {
             anyhow::ensure!(
@@ -161,7 +156,7 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
         .transpose()?;
     let now = prior_created_at
         .unwrap_or_else(|| chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
-    let (node_scope, ctx_scope) = task_node_ctx(&agent_did, &behavior_id, &now);
+    let (node_scope, ctx_scope) = task_node_ctx(&node_did, &agent_id, &now);
     let scope = TemplateScope {
         session: Some(serde_json::json!({"session_id": session_id})),
         request: Some(serde_json::json!({"request_id": request_id})),
@@ -194,7 +189,7 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
 
     let (content, input) = content_and_input_with_prompt_selected_skill_ids(None, &content);
     let admission =
-        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&agent_did);
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&node_did);
     let create = gents::build_signed_request(
         gents::RequestSpec {
             input: input.clone(),
@@ -207,9 +202,9 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
                 gents_protocol::request_admission::RequestPurpose::Normal,
                 gents::RequestIdentity {
                     request_id: request_id.clone(),
-                    agent_did: agent_did.clone(),
+                    node_did: node_did.clone(),
                     requester_did: None,
-                    behavior_id: behavior_id.clone(),
+                    agent_id: agent_id.clone(),
                     session_id: session_id.clone(),
                     content: content.clone(),
                     execution_origin: gents::lifecycle::ExecutionOrigin::Interactive,
@@ -229,7 +224,7 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
         session_id: session_id.clone(),
         goal_id: rendered_goal_objective
             .as_ref()
-            .map(|_| gents::goal::deterministic_goal_id(&agent_did, &session_id)),
+            .map(|_| gents::goal::deterministic_goal_id(&node_did, &session_id)),
         goal_objective: rendered_goal_objective,
         goal_token_budget,
         goal_assignment_applied: false,
@@ -249,23 +244,23 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
     )
     .await?;
 
-    let (behavior_id, input) = if admitted.duplicate {
-        let persisted = lookup_request_by_retry_key(&access, &agent_did, &fire.fire_key)
+    let (agent_id, input) = if admitted.duplicate {
+        let persisted = lookup_request_by_retry_key(&access, &node_did, &fire.fire_key)
             .await?
             .context("duplicate Task fire is missing its admitted request")?;
         (
             persisted
-                .behavior_id
-                .context("admitted Task request lacks behavior_id")?,
+                .agent_id
+                .context("admitted Task request lacks agent_id")?,
             persisted.input.unwrap_or_default(),
         )
     } else {
-        (behavior_id, input)
+        (agent_id, input)
     };
     Ok(TaskRunOutput {
         task_id,
-        behavior_id,
-        agent_did,
+        agent_id,
+        node_did,
         request_id: admitted.request.request_id,
         session_id: admitted.request.session_id,
         request_doc_id: admitted.request.doc_id,
@@ -280,7 +275,7 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
 }
 
 /// Goal invocations use the explicit stable key. Ordinary calls retain their
-/// fresh-invocation behavior even when --session-id supplies a session label.
+/// fresh-invocation agent even when --session-id supplies a session label.
 fn resolve_invocation_key(
     task_id: &str,
     goal_backed: bool,
@@ -300,21 +295,21 @@ fn resolve_invocation_key(
 
 async fn lookup_request_by_retry_key(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     retry_key: &str,
 ) -> Result<Option<AgentRequestRow>> {
     let query = format!(
         r#"query {{
-            AgentRequest(filter: {{ agent_did: {{ _eq: "{owner}" }}, requester_did: {{ _eq: "{owner}" }}, retry_key: {{ _eq: "{key}" }} }}, limit: 2) {{
+            AgentRequest(filter: {{ node_did: {{ _eq: "{owner}" }}, requester_did: {{ _eq: "{owner}" }}, retry_key: {{ _eq: "{key}" }} }}, limit: 2) {{
                 _docID
                 request_id
-                behavior_id
+                agent_id
                 input
                 created_at
             }}
         }}"#,
         key = escape_graphql_string(retry_key),
-        owner = escape_graphql_string(agent_did),
+        owner = escape_graphql_string(node_did),
     );
     let response = access.execute(&query).await?;
     if let Some(errors) = response.get("errors").and_then(Value::as_array) {
@@ -371,7 +366,7 @@ mod tests {
             "req-1",
             "did:test:test",
             "did:test:test",
-            "behavior-1",
+            "agent-1",
             "sess-1",
             "hello Amy",
             "interactive",

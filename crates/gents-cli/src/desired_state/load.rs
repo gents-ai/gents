@@ -44,9 +44,7 @@ pub(crate) fn load_manifest_root_for_owner(
         },
         ok: errors.is_empty(),
         root: root.display().to_string(),
-        agent_did: manifest
-            .as_ref()
-            .map(|config| config.agent_principal.agent_did.clone()),
+        node_did: manifest.as_ref().map(|config| config.node.node_did.clone()),
         counts,
         errors,
     };
@@ -69,8 +67,8 @@ fn load_root(root: &Path, owner: Option<&str>) -> Result<DesiredStateManifest> {
     let config = gents::pack::decode_pack_config(
         value,
         owner
-            .map(|agent_did| gents::pack::PackInstallOptions {
-                agent_did: agent_did.to_owned(),
+            .map(|node_did| gents::pack::PackInstallOptions {
+                node_did: node_did.to_owned(),
             })
             .as_ref(),
         &|name| std::env::var(name).ok(),
@@ -89,7 +87,7 @@ fn load_root(root: &Path, owner: Option<&str>) -> Result<DesiredStateManifest> {
     // Offline validation checks canonical shape, duplicate IDs and owner scope.
     // Existence closure belongs to the transaction over retained + authored docs.
     gents::document_config::ConfigReferences::from_documents(
-        &config.agent_principal.agent_did,
+        &config.node.node_did,
         plan.documents()
             .iter()
             .map(|doc| (doc.collection, doc.add.clone())),
@@ -163,12 +161,12 @@ mod filesystem_tests {
 
     fn config() -> DesiredStateManifest {
         gents::pack::decode_pack_config(json!({
-            "agent_principal":{"agent_did":"owner"},
+            "node":{"node_did":"owner"},
             "contexts":[{"context_id":"context","system_prompt":"  literal ${NOT_EXPANDED} {{node.did}}\n"}],
             "inference_backends":[{"backend_id":"backend","name":"backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
             "inference_profiles":[{"profile_id":"profile","backend_id":"backend","model_name":"model"}],
-            "agent_behaviors":[{"behavior_id":"behavior","context_id":"context","inference_profile_id":"profile"}],
-            "tasks":[{"task_id":"task","behavior_id":"behavior","prompt_template":"  {{args.name}}\n"}]
+            "agents":[{"agent_id":"agent","context_id":"context","inference_profile_id":"profile"}],
+            "tasks":[{"task_id":"task","agent_id":"agent","prompt_template":"  {{args.name}}\n"}]
         }),None,&|name|(name=="NOT_EXPANDED").then(||"${NOT_EXPANDED}".into()),&|_,_,_|unreachable!()).unwrap()
     }
 
@@ -191,8 +189,8 @@ mod filesystem_tests {
         let dir = tempfile::tempdir().unwrap();
         for text in [
             "{broken",
-            r#"{"agent_principal":{"agent_did":"owner"},"unknown":true}"#,
-            r#"{"agent_principal":{"agent_did":"owner"},"contexts":[{"context_id":"context","system_prompt":"./../outside.md"}]}"#,
+            r#"{"node":{"node_did":"owner"},"unknown":true}"#,
+            r#"{"node":{"node_did":"owner"},"contexts":[{"context_id":"context","system_prompt":"./../outside.md"}]}"#,
         ] {
             fs::write(dir.path().join("pack_config.json"), text).unwrap();
             assert!(!load_manifest_root(dir.path()).1.ok, "{text}");
@@ -215,7 +213,7 @@ mod filesystem_tests {
         super::super::write::write_manifest_root(dir.path(), &config, false).unwrap();
         let path = dir.path().join("pack_config.json");
         let before = fs::read(&path).unwrap();
-        config.agent_behaviors[0].agent_did = "foreign".into();
+        config.agents[0].node_did = "foreign".into();
         assert!(super::super::write::write_manifest_root(dir.path(), &config, true).is_err());
         assert_eq!(fs::read(path).unwrap(), before);
     }
@@ -254,7 +252,7 @@ mod filesystem_boundary_tests {
 mod interpolation_tests {
     #[test]
     fn shared_decoder_interpolates_values_after_json_parse_and_enforces_owner() {
-        let value = serde_json::json!({"agent_principal":{"agent_did":"owner"},"contexts":[{"context_id":"context","description":"${DESCRIPTION}"}]});
+        let value = serde_json::json!({"node":{"node_did":"owner"},"contexts":[{"context_id":"context","description":"${DESCRIPTION}"}]});
         let config = gents::pack::decode_pack_config(
             value.clone(),
             None,
@@ -271,15 +269,15 @@ mod interpolation_tests {
                 .is_err()
         );
         let config = gents::pack::decode_pack_config(
-            serde_json::json!({"agent_principal":{"agent_did":"${GENTS_PACK_AGENT_DID}"}}),
+            serde_json::json!({"node":{"node_did":"${GENTS_PACK_NODE_DID}"}}),
             Some(&gents::pack::PackInstallOptions {
-                agent_did: "selected-owner".into(),
+                node_did: "selected-owner".into(),
             }),
             &|_| Some("spoofed-owner".into()),
             &|_, _, _| unreachable!(),
         )
         .unwrap();
-        assert_eq!(config.agent_principal.agent_did, "selected-owner");
+        assert_eq!(config.node.node_did, "selected-owner");
     }
 }
 
@@ -289,15 +287,12 @@ mod retained_reference_tests {
     #[test]
     fn offline_load_and_export_allow_references_to_retained_documents() {
         let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join("pack_config.json"),r#"{"agent_principal":{"agent_did":"owner"},"agent_behaviors":[{"behavior_id":"behavior","inference_profile_id":"retained-profile"}]}"#).unwrap();
+        fs::write(dir.path().join("pack_config.json"),r#"{"node":{"node_did":"owner"},"agents":[{"agent_id":"agent","inference_profile_id":"retained-profile"}]}"#).unwrap();
         let (config, report) = load_manifest_root(dir.path());
         assert!(report.ok, "{:?}", report.errors);
         let config = config.unwrap();
         assert!(config.inference_profiles.is_empty());
-        assert_eq!(
-            config.agent_behaviors[0].inference_profile_id,
-            "retained-profile"
-        );
+        assert_eq!(config.agents[0].inference_profile_id, "retained-profile");
         let exported = tempfile::tempdir().unwrap();
         super::super::write::write_manifest_root(exported.path(), &config, false).unwrap();
         assert!(load_manifest_root(exported.path()).1.ok);

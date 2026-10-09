@@ -6,8 +6,14 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
-- Installing or removing a plugin a behavior's Tools document names now
-  re-admits a behavior that was demoted for failing to build on the missing
+- Breaking: installations are Nodes and their configured behaviors are Agents.
+  Collections, document fields, CLI commands and flags, and desktop preferences
+  use the new names (`gents config agent`, `--node-name`, `node_did`, `agent_id`).
+  Persona requests are removed; Agent changes use authenticated configuration
+  writes. Start with fresh stores and upgrade the desktop and all paired runtimes
+  together; existing stores are not converted.
+- Installing or removing a plugin an Agent's Tools document names now
+  re-admits an Agent that was demoted for failing to build on the missing
   tool (#2338). The resolved plugin identity (version and digest) joins the
   runtime configuration fingerprint and the slot comparison. A plugins pack
   install, `gents plugin install` and their removes now write or delete a

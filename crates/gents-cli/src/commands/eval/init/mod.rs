@@ -1,5 +1,5 @@
 //! `gents eval init`: an interview with a model that drafts an eval
-//! definition pack for one behavior of a subject pack.
+//! definition pack for one agent of a subject pack.
 //!
 //! The pure core: the subject dossier the author reads, the draft it
 //! answers with, the validation that draft must pass, and the writer that
@@ -24,7 +24,7 @@ use self::validate::{assemble, validate, Assembled, Floors};
 use self::write::{case_table, commit, stage, Staged, Written};
 use super::{Deps, EvalContext};
 use crate::cli::EvalInitArgs;
-use crate::commands::pack::{resolve_pack_source, single_slot_behavior, PackSource};
+use crate::commands::pack::{resolve_pack_source, single_slot_agent, PackSource};
 
 mod contract;
 pub(crate) mod dossier;
@@ -38,7 +38,7 @@ mod write;
 /// the floors and where the pack goes.
 pub(crate) struct InitContext<'a> {
     /// The subject as the author reads it; also its identity (pack name,
-    /// digest, behavior, slot) for assembly and the README.
+    /// digest, agent, slot) for assembly and the README.
     pub(crate) dossier: Dossier,
     pub(crate) registry: &'a CheckRegistry,
     pub(crate) floors: Floors,
@@ -219,11 +219,11 @@ fn print_written(
     let scope = scope_flags(&ctx.scope);
     writeln!(
         out,
-        "\nnext:\n  gents config apply --root {} --bind-agent-did home{scope}\n  gents eval run {} --cell baseline={}:{} --profile baseline={}{scope}",
+        "\nnext:\n  gents config apply --root {} --bind-node-did home{scope}\n  gents eval run {} --cell baseline={}:{} --profile baseline={}{scope}",
         written.out.display(),
         definition.definition_id,
         ctx.subject,
-        ctx.dossier.behavior_id,
+        ctx.dossier.agent_id,
         ctx.profile,
     )?;
     Ok(())
@@ -306,19 +306,17 @@ pub(crate) async fn run(
     .await?;
     let subject_dir = subject.directory().to_path_buf();
     let author = resolve_pack_source(&args.author, args.registry.as_deref(), &ctx.home_dir).await?;
-    let (author_slot, author_behavior) = single_slot_behavior(author.manifest())?;
+    let (author_slot, author_agent) = single_slot_agent(author.manifest())?;
     // Before any turn: `--force` would otherwise replace the subject.
     write::refuse_subject_overlap(&args.out, &subject_dir)?;
-    let dossier = dossier::render(&subject_dir, args.behavior.as_deref())?;
+    let dossier = dossier::render(&subject_dir, args.agent.as_deref())?;
     writeln!(
         out,
-        "drafting an eval of behavior {} of pack {} {} ({})",
-        dossier.behavior_id, dossier.pack_name, dossier.pack_version, dossier.pack_digest
+        "drafting an eval of agent {} of pack {} {} ({})",
+        dossier.agent_id, dossier.pack_name, dossier.pack_version, dossier.pack_digest
     )?;
     let profile = args.profile.clone().unwrap_or_else(|| {
-        gents::default_inference_profile_id_for_behavior(&gents::default_behavior_id_for_agent(
-            &ctx.owner,
-        ))
+        gents::default_inference_profile_id_for_agent(&gents::default_agent_id_for_node(&ctx.owner))
     });
     install_pack_slot(&ctx.access, &ctx.owner, &author, &author_slot, &profile).await?;
 
@@ -339,8 +337,8 @@ pub(crate) async fn run(
     };
     let mut turn = turn::LiveTurn {
         graphql: graphql.clone(),
-        agent_did: ctx.owner.clone(),
-        behavior_id: author_behavior.clone(),
+        node_did: ctx.owner.clone(),
+        agent_id: author_agent.clone(),
         session_id: uuid::Uuid::new_v4().to_string(),
         timeout_secs: args.timeout_secs,
         poll_secs: args.poll_secs,
@@ -398,8 +396,8 @@ pub(crate) async fn run(
     // Whatever the outcome, the session is the author's transcript.
     writeln!(
         out,
-        "session {id}: continue it with `gents chat --session-id {id} --behavior-id {}`",
-        author_behavior,
+        "session {id}: continue it with `gents chat --session-id {id} --agent-id {}`",
+        author_agent,
         id = turn.session_id()
     )?;
     result
@@ -444,7 +442,7 @@ pub(crate) fn pack_config(
     gents::pack::load_pack_config(
         pack.manifest(),
         &gents::pack::PackInstallOptions {
-            agent_did: owner.to_owned(),
+            node_did: owner.to_owned(),
         },
         &|path| pack.asset(path).map(Vec::from),
         &|_name| None,
@@ -552,7 +550,7 @@ mod tests {
         let scope = " --home /operator/home --graphql http://127.0.0.1:9181/api/v0/graphql";
         assert!(
             printed.contains(&format!(
-                "gents config apply --root {} --bind-agent-did home{scope}\n",
+                "gents config apply --root {} --bind-node-did home{scope}\n",
                 ctx.out.display()
             )),
             "{printed}"
@@ -560,7 +558,7 @@ mod tests {
         assert!(
             printed.contains(&format!(
                 "gents eval run canary-quality --cell baseline=./canary:{} --profile baseline=local{scope}\n",
-                ctx.dossier.behavior_id
+                ctx.dossier.agent_id
             )),
             "{printed}"
         );
@@ -675,7 +673,7 @@ mod tests {
         };
         let installed = || {
             read([
-                (gents::Collection::AgentBehavior, "fixture-author"),
+                (gents::Collection::Agent, "fixture-author"),
                 (gents::Collection::AgentContext, "fixture-author-context"),
                 (gents::Collection::Tools, "fixture-author-tools"),
             ])
@@ -684,15 +682,15 @@ mod tests {
             "slot_fixture",
             &fixture.ctx.home_dir,
         );
-        let (slot, behavior_id) = single_slot_behavior(author.manifest()).unwrap();
+        let (slot, agent_id) = single_slot_agent(author.manifest()).unwrap();
         assert_eq!(
-            (slot.as_str(), behavior_id.as_str()),
+            (slot.as_str(), agent_id.as_str()),
             ("author", "fixture-author")
         );
         let first_counts = install_pack_slot(access, owner, &author, &slot, "local")
             .await
             .unwrap();
-        assert_eq!(first_counts.get(gents::Collection::AgentBehavior), 1);
+        assert_eq!(first_counts.get(gents::Collection::Agent), 1);
         let first = installed().await;
         install_pack_slot(access, owner, &author, &slot, "local")
             .await
@@ -700,8 +698,8 @@ mod tests {
         // Re-applying rewrites each document in place with what it holds:
         // no new document, no changed field.
         assert_eq!(installed().await, first);
-        let behavior = &first[0].1;
-        assert_eq!(behavior["inference_profile_id"], "local");
+        let agent = &first[0].1;
+        assert_eq!(agent["inference_profile_id"], "local");
 
         let error = install_pack_slot(access, owner, &author, &slot, "no-such-profile")
             .await
@@ -719,15 +717,15 @@ mod tests {
             |name| crate::commands::pack::test_support::fixture_pack_source(name, home.path());
         let mut manifest = pack("slot_fixture").manifest().clone();
         manifest.metadata.inference_slots[0]
-            .behaviors
+            .agents
             .push("second".to_owned());
-        let error = single_slot_behavior(&manifest).unwrap_err().to_string();
+        let error = single_slot_agent(&manifest).unwrap_err().to_string();
         assert_eq!(
             error,
-            "pack slot_fixture slot author declares 2 behaviors; expected exactly one"
+            "pack slot_fixture slot author declares 2 agents; expected exactly one"
         );
         manifest.metadata.inference_slots.clear();
-        let error = single_slot_behavior(&manifest).unwrap_err().to_string();
+        let error = single_slot_agent(&manifest).unwrap_err().to_string();
         assert_eq!(
             error,
             "pack slot_fixture declares 0 inference slots; expected exactly one"
@@ -809,7 +807,7 @@ mod tests {
     }
 
     /// A live smoke test: the author runs as a real request on a served
-    /// home, `gents eval init <subject> --behavior fixture-worker`-style, the
+    /// home, `gents eval init <subject> --agent fixture-worker`-style, the
     /// operator answering every question with "draft". Needs `GENTS_EVAL_INIT_HOME`
     /// pointing at a home `gents server` already serves, with a backend the
     /// resolved profile can reach. It asserts only that a pack was written
@@ -826,18 +824,18 @@ mod tests {
             .expect("a runtime state written by `gents server`");
         let graphql = crate::home_graphql_endpoint(&home_dir, state.graphql.clone());
         let access = gents::ConfigAccess::Graphql(graphql.clone());
-        let owner = state.agent_did.clone();
+        let owner = state.node_did.clone();
 
         let subject_dir = PathBuf::from(SMOKE_SUBJECT);
         let dossier = dossier::render(&subject_dir, Some(SMOKE_BEHAVIOR)).unwrap();
         let registry = CheckRegistry::builtin();
-        let profile = gents::default_inference_profile_id_for_behavior(
-            &gents::default_behavior_id_for_agent(&owner),
+        let profile = gents::default_inference_profile_id_for_agent(
+            &gents::default_agent_id_for_node(&owner),
         );
         let author = resolve_pack_source("gents/eval_author", None, &home_dir)
             .await
             .expect("gents/eval_author is in the home's store or the registry");
-        let (slot, author_behavior) = single_slot_behavior(author.manifest()).unwrap();
+        let (slot, author_agent) = single_slot_agent(author.manifest()).unwrap();
         install_pack_slot(&access, &owner, &author, &slot, &profile)
             .await
             .unwrap();
@@ -861,8 +859,8 @@ mod tests {
         };
         let mut turn = turn::LiveTurn {
             graphql,
-            agent_did: owner,
-            behavior_id: author_behavior,
+            node_did: owner,
+            agent_id: author_agent,
             session_id: uuid::Uuid::new_v4().to_string(),
             timeout_secs: 300,
             poll_secs: 1,

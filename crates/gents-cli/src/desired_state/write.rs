@@ -22,14 +22,14 @@ pub(crate) fn write_manifest_root(
 fn write_root(root: &Path, manifest: &DesiredStateManifest, force: bool) -> anyhow::Result<()> {
     let plan = gents::config_client::DesiredStateApplyPlan::from_pack_config(manifest)?;
     gents::document_config::ConfigReferences::from_documents(
-        &manifest.agent_principal.agent_did,
+        &manifest.node.node_did,
         plan.documents()
             .iter()
             .map(|doc| (doc.collection, doc.add.clone())),
     )?;
     let mut handles = BTreeSet::new();
     for doc in plan.documents() {
-        if doc.collection == Collection::AgentPrincipal {
+        if doc.collection == Collection::Node {
             continue;
         }
         let id = doc.add[doc.collection.unique_field()]
@@ -135,8 +135,7 @@ fn prepare_root(root: &Path, force: bool) -> Result<(), String> {
 mod tests {
     use super::*;
     fn config() -> DesiredStateManifest {
-        serde_json::from_value(serde_json::json!({"agent_principal":{"agent_did":"owner"}}))
-            .unwrap()
+        serde_json::from_value(serde_json::json!({"node":{"node_did":"owner"}})).unwrap()
     }
     #[test]
     fn filesystem_id_boundary_preserves_human_keys() {
@@ -176,7 +175,7 @@ mod tests {
             config.contexts = ids
                 .into_iter()
                 .map(|id| {
-                    serde_json::from_value(serde_json::json!({"agent_did":"owner","context_id":id}))
+                    serde_json::from_value(serde_json::json!({"node_did":"owner","context_id":id}))
                         .unwrap()
                 })
                 .collect();
@@ -189,7 +188,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut config = config();
         config.contexts.push(
-            serde_json::from_value(serde_json::json!({"agent_did":"owner","context_id":"context"}))
+            serde_json::from_value(serde_json::json!({"node_did":"owner","context_id":"context"}))
                 .unwrap(),
         );
         write_manifest_root(dir.path(), &config, false).unwrap();

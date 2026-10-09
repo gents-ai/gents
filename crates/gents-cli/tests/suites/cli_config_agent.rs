@@ -6,31 +6,22 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 use uuid::Uuid;
 
-/// Ties Task 6 (materializer-backed `config behavior create|clone|disable` +
-/// enriched `show`) to the shared persona materializer landed earlier on
-/// this branch (`gents::agent::persona_ops` + the persona-request
-/// reconciler, `crates/gents/src/agent/p2p_reconcile/persona_requests.rs`).
-/// The CLI submits a `PersonaConfigRequest` row over HTTP GraphQL and polls
-/// it to a terminal status — the exact channel the reconciler and the
-/// agent's own `config behavior` self-config tool use — so this test
-/// exercises the real end-to-end path against a running `gents server`,
-/// following the harness precedent in `cli_config_workspace_root.rs`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn behavior_create_clone_disable_round_trip_and_enriched_show() -> Result<()> {
+async fn agent_create_clone_disable_round_trip_and_enriched_show() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     std::fs::create_dir_all(&home_dir)?;
 
-    let model_name = format!("mock-persona-{}", Uuid::new_v4().simple());
+    let model_name = format!("mock-agent-{}", Uuid::new_v4().simple());
     let mock_endpoint = MockModelEndpoint::start(&model_name)?;
     let port = allocate_port()?;
-    let agent_name = format!("cli-persona-{}", Uuid::new_v4().simple());
+    let agent_name = format!("cli-agent-{}", Uuid::new_v4().simple());
     let graphql = graphql_url(port);
 
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             &agent_name,
             "--model-name",
             &model_name,
@@ -38,7 +29,7 @@ async fn behavior_create_clone_disable_round_trip_and_enriched_show() -> Result<
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     let profile_id = init
         .get("inference_profile_id")
         .and_then(Value::as_str)
@@ -47,19 +38,19 @@ async fn behavior_create_clone_disable_round_trip_and_enriched_show() -> Result<
 
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
     // -- create --
     let created = run_cli_json(
         &home_dir,
         &[
             "config",
-            "behavior",
+            "agent",
             "create",
             "--graphql",
             &graphql,
-            "--agent-did",
-            &agent_did,
+            "--node-did",
+            &node_did,
             "--display-name",
             "Research Assistant",
             "--system-prompt",
@@ -71,24 +62,24 @@ async fn behavior_create_clone_disable_round_trip_and_enriched_show() -> Result<
         ],
     )?;
     assert_eq!(
-        created.get("status").and_then(Value::as_str),
-        Some("applied")
+        created.get("committed").and_then(Value::as_bool),
+        Some(true)
     );
-    let behavior_id = created
-        .get("behavior_id")
+    let agent_id = created
+        .get("agent_id")
         .and_then(Value::as_str)
-        .context("create output missing behavior_id")?
+        .context("create output missing agent_id")?
         .to_string();
-    assert_eq!(behavior_id, format!("{agent_did}:research-assistant"));
+    assert_eq!(agent_id, format!("{node_did}:research-assistant"));
 
     // -- clone --
     let cloned = run_cli_json(
         &home_dir,
         &[
             "config",
-            "behavior",
+            "agent",
             "clone",
-            &behavior_id,
+            &agent_id,
             "--graphql",
             &graphql,
             "--display-name",
@@ -97,23 +88,20 @@ async fn behavior_create_clone_disable_round_trip_and_enriched_show() -> Result<
             &profile_id,
         ],
     )?;
-    assert_eq!(
-        cloned.get("status").and_then(Value::as_str),
-        Some("applied")
-    );
+    assert_eq!(cloned.get("committed").and_then(Value::as_bool), Some(true));
     let cloned_id = cloned
-        .get("behavior_id")
+        .get("agent_id")
         .and_then(Value::as_str)
-        .context("clone output missing behavior_id")?
+        .context("clone output missing agent_id")?
         .to_string();
-    assert_eq!(cloned_id, format!("{agent_did}:cloned-assistant"));
+    assert_eq!(cloned_id, format!("{node_did}:cloned-assistant"));
 
     // -- disable the clone --
     let disabled = run_cli_json(
         &home_dir,
         &[
             "config",
-            "behavior",
+            "agent",
             "disable",
             &cloned_id,
             "--graphql",
@@ -121,24 +109,17 @@ async fn behavior_create_clone_disable_round_trip_and_enriched_show() -> Result<
         ],
     )?;
     assert_eq!(
-        disabled.get("status").and_then(Value::as_str),
-        Some("applied")
+        disabled.get("committed").and_then(Value::as_bool),
+        Some(true)
     );
     assert_eq!(
-        disabled.get("behavior_id").and_then(Value::as_str),
+        disabled.get("agent_id").and_then(Value::as_str),
         Some(cloned_id.as_str())
     );
 
     let cloned_show = run_cli_json(
         &home_dir,
-        &[
-            "config",
-            "behavior",
-            "show",
-            &cloned_id,
-            "--graphql",
-            &graphql,
-        ],
+        &["config", "agent", "show", &cloned_id, "--graphql", &graphql],
     )?;
     assert_eq!(
         cloned_show.get("enabled").and_then(Value::as_bool),
@@ -149,14 +130,7 @@ async fn behavior_create_clone_disable_round_trip_and_enriched_show() -> Result<
     //    selection, and "custom" once hand-tuned --
     let write_show = run_cli_json(
         &home_dir,
-        &[
-            "config",
-            "behavior",
-            "show",
-            &behavior_id,
-            "--graphql",
-            &graphql,
-        ],
+        &["config", "agent", "show", &agent_id, "--graphql", &graphql],
     )?;
     assert_eq!(
         write_show
@@ -178,14 +152,14 @@ async fn behavior_create_clone_disable_round_trip_and_enriched_show() -> Result<
         &home_dir,
         &[
             "config",
-            "behavior",
+            "agent",
             "create",
             "--graphql",
             &graphql,
-            "--agent-did",
-            &agent_did,
+            "--node-did",
+            &node_did,
             "--display-name",
-            "Readonly Persona",
+            "Readonly Agent",
             "--system-prompt",
             "Inspect the requested files and report findings without modifying them.",
             "--preset",
@@ -195,16 +169,16 @@ async fn behavior_create_clone_disable_round_trip_and_enriched_show() -> Result<
         ],
     )?;
     let readonly_id = readonly_created
-        .get("behavior_id")
+        .get("agent_id")
         .and_then(Value::as_str)
-        .context("create output missing behavior_id")?
+        .context("create output missing agent_id")?
         .to_string();
 
     let readonly_show = run_cli_json(
         &home_dir,
         &[
             "config",
-            "behavior",
+            "agent",
             "show",
             &readonly_id,
             "--graphql",
@@ -226,7 +200,7 @@ async fn behavior_create_clone_disable_round_trip_and_enriched_show() -> Result<
 
     // Hand-tune the readonly-template selection: this is exactly the
     // "one extra argv prefix classifies as custom" case
-    // `persona_presets::preset_name` fences.
+    // `presets::classify_tools` fences.
     let mut tools = readonly_show["resolved"]["tools"].clone();
     tools["host"]["bash"]["allowed_argv_prefixes"] = serde_json::json!([["git", "status"]]);
     let tools_file = tempdir.path().join("tuned-tools.json");
@@ -248,7 +222,7 @@ async fn behavior_create_clone_disable_round_trip_and_enriched_show() -> Result<
         &home_dir,
         &[
             "config",
-            "behavior",
+            "agent",
             "show",
             &readonly_id,
             "--graphql",

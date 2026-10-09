@@ -12,8 +12,8 @@ use crate::post_graphql;
 const RECENT_REQUEST_SCAN: usize = 200;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub(crate) struct SelfBehavior {
-    pub(crate) behavior_id: String,
+pub(crate) struct SelfAgent {
+    pub(crate) agent_id: String,
     pub(crate) display_name: String,
     pub(crate) model_name: String,
     pub(crate) enabled: bool,
@@ -22,7 +22,7 @@ pub(crate) struct SelfBehavior {
     pub(crate) endpoint: String,
     pub(crate) inference_profile_id: String,
     pub(crate) context_window: Option<i64>,
-    /// Compaction threshold fraction (0.0-1.0) resolved through the behavior's
+    /// Compaction threshold fraction (0.0-1.0) resolved through the agent's
     /// context and compaction document. Missing optional configuration uses
     /// the runtime default.
     pub(crate) compaction_threshold: f64,
@@ -41,7 +41,7 @@ pub(crate) struct ContextBudget {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub(crate) struct ContextIndicator {
     /// The effective input budget (context window scaled by the compaction
-    /// threshold) of the primary behavior, not the raw context window.
+    /// threshold) of the primary agent, not the raw context window.
     pub(crate) max_tokens: Option<i64>,
     pub(crate) current_estimate: Option<i64>,
     pub(crate) utilization_percent: Option<f64>,
@@ -51,8 +51,8 @@ pub(crate) struct ContextIndicator {
 
 #[derive(Debug, Deserialize)]
 struct SelfViewEnvelope {
-    #[serde(rename = "AgentBehavior", default)]
-    behaviors: Vec<BehaviorRow>,
+    #[serde(rename = "Agent", default)]
+    agents: Vec<AgentRow>,
     #[serde(rename = "InferenceBackend", default)]
     backends: Vec<BackendRow>,
     #[serde(rename = "InferenceProfile", default)]
@@ -72,9 +72,9 @@ struct CompactionEnvelope {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct BehaviorRow {
+struct AgentRow {
     #[serde(default)]
-    behavior_id: String,
+    agent_id: String,
     #[serde(default)]
     display_name: Option<String>,
     #[serde(default)]
@@ -135,13 +135,13 @@ struct CompactionRow {
 
 pub(crate) async fn load_self_view(
     graphql: &GraphqlEndpoint,
-    agent_did: &str,
-) -> Result<(Vec<SelfBehavior>, ContextBudget, ContextIndicator)> {
-    let response = post_graphql(graphql, &self_view_query(agent_did)).await?;
+    node_did: &str,
+) -> Result<(Vec<SelfAgent>, ContextBudget, ContextIndicator)> {
+    let response = post_graphql(graphql, &self_view_query(node_did)).await?;
     let envelope = decode::<SelfViewEnvelope>(response, "self view")?;
 
-    let behaviors = build_behaviors(
-        envelope.behaviors,
+    let agents = build_agents(
+        envelope.agents,
         envelope.backends,
         envelope.profiles,
         envelope.contexts,
@@ -152,48 +152,48 @@ pub(crate) async fn load_self_view(
     let mut context_budget = if session_ids.is_empty() {
         ContextBudget::default()
     } else {
-        let response = post_graphql(graphql, &compaction_query(agent_did, &session_ids)).await?;
+        let response = post_graphql(graphql, &compaction_query(node_did, &session_ids)).await?;
         let envelope = decode::<CompactionEnvelope>(response, "context budget")?;
         aggregate_compaction(envelope.compactions)
     };
     context_budget.sessions_considered = session_ids.len() as i64;
     context_budget.request_scan_limit = RECENT_REQUEST_SCAN as i64;
-    let context = build_context_indicator(&behaviors, &context_budget);
+    let context = build_context_indicator(&agents, &context_budget);
 
-    Ok((behaviors, context_budget, context))
+    Ok((agents, context_budget, context))
 }
 
-fn self_view_query(agent_did: &str) -> String {
-    let agent_did = escape_graphql_string(agent_did);
+fn self_view_query(node_did: &str) -> String {
+    let node_did = escape_graphql_string(node_did);
     format!(
         r#"{{
-        AgentBehavior(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}, order: {{ behavior_id: ASC }}) {{
-            behavior_id
+        Agent(filter: {{ node_did: {{ _eq: "{node_did}" }} }}, order: {{ agent_id: ASC }}) {{
+            agent_id
             display_name
             inference_profile_id
             context_id
             enabled
         }}
-        InferenceBackend(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}, order: {{ backend_id: ASC }}) {{
+        InferenceBackend(filter: {{ node_did: {{ _eq: "{node_did}" }} }}, order: {{ backend_id: ASC }}) {{
             backend_id
             provider_kind
             endpoint
         }}
-        InferenceProfile(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}, order: {{ profile_id: ASC }}) {{
+        InferenceProfile(filter: {{ node_did: {{ _eq: "{node_did}" }} }}, order: {{ profile_id: ASC }}) {{
             profile_id
             backend_id
             model_name
             context_window
         }}
-        AgentContext(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{
+        AgentContext(filter: {{ node_did: {{ _eq: "{node_did}" }} }}) {{
             context_id
             compaction_id
         }}
-        CompactionConfig(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{
+        CompactionConfig(filter: {{ node_did: {{ _eq: "{node_did}" }} }}) {{
             compaction_id
             threshold
         }}
-        AgentRequest(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}, order: {{ created_at: DESC }}, limit: {RECENT_REQUEST_SCAN}) {{
+        AgentRequest(filter: {{ node_did: {{ _eq: "{node_did}" }} }}, order: {{ created_at: DESC }}, limit: {RECENT_REQUEST_SCAN}) {{
             request_id
             session_id
         }}
@@ -201,8 +201,8 @@ fn self_view_query(agent_did: &str) -> String {
     )
 }
 
-fn compaction_query(agent_did: &str, session_ids: &[String]) -> String {
-    let agent_did = escape_graphql_string(agent_did);
+fn compaction_query(node_did: &str, session_ids: &[String]) -> String {
+    let node_did = escape_graphql_string(node_did);
     let list = session_ids
         .iter()
         .map(|id| format!(r#""{}""#, escape_graphql_string(id)))
@@ -211,7 +211,7 @@ fn compaction_query(agent_did: &str, session_ids: &[String]) -> String {
     format!(
         r#"{{
         CompactionEntry(filter: {{ _and: [
-            {{ agent_did: {{ _eq: "{agent_did}" }} }},
+            {{ node_did: {{ _eq: "{node_did}" }} }},
             {{ session_id: {{ _in: [{list}] }} }}
         ] }}, order: {{ created_at: DESC }}) {{
             created_at
@@ -231,13 +231,13 @@ fn decode<T: serde::de::DeserializeOwned>(response: Value, label: &str) -> Resul
     serde_json::from_value(data).with_context(|| format!("decoding {label} query response"))
 }
 
-fn build_behaviors(
-    behaviors: Vec<BehaviorRow>,
+fn build_agents(
+    agents: Vec<AgentRow>,
     backends: Vec<BackendRow>,
     profiles: Vec<ProfileRow>,
     contexts: Vec<ContextRow>,
     compaction_configs: Vec<CompactionConfigRow>,
-) -> Vec<SelfBehavior> {
+) -> Vec<SelfAgent> {
     use std::collections::BTreeMap;
 
     let backends = backends
@@ -269,19 +269,23 @@ fn build_behaviors(
         })
         .collect::<BTreeMap<_, _>>();
 
-    behaviors
+    agents
         .into_iter()
-        .filter_map(|behavior| {
-            let behavior_id = behavior.behavior_id.trim().to_string();
-            if behavior_id.is_empty() {
+        .filter_map(|agent_config| {
+            let agent_id = agent_config.agent_id.trim().to_string();
+            if agent_id.is_empty() {
                 return None;
             }
-            let inference_profile_id = behavior
+            let inference_profile_id = agent_config
                 .inference_profile_id
                 .unwrap_or_default()
                 .trim()
                 .to_string();
-            let context_id = behavior.context_id.as_deref().unwrap_or_default().trim();
+            let context_id = agent_config
+                .context_id
+                .as_deref()
+                .unwrap_or_default()
+                .trim();
             let context = contexts.get(context_id);
             let compaction = context
                 .and_then(|context| context.compaction_id.as_deref())
@@ -293,13 +297,13 @@ fn build_behaviors(
                 .trim()
                 .to_string();
             let backend = backends.get(&backend_id);
-            Some(SelfBehavior {
-                behavior_id,
-                display_name: behavior.display_name.unwrap_or_default(),
+            Some(SelfAgent {
+                agent_id,
+                display_name: agent_config.display_name.unwrap_or_default(),
                 model_name: profile
                     .and_then(|profile| profile.model_name.clone())
                     .unwrap_or_default(),
-                enabled: behavior.enabled.unwrap_or(true),
+                enabled: agent_config.enabled.unwrap_or(true),
                 backend_id,
                 provider_kind: backend
                     .and_then(|backend| backend.provider_kind.clone())
@@ -344,23 +348,23 @@ fn aggregate_compaction(compactions: Vec<CompactionRow>) -> ContextBudget {
 }
 
 fn build_context_indicator(
-    behaviors: &[SelfBehavior],
+    agents: &[SelfAgent],
     context_budget: &ContextBudget,
 ) -> ContextIndicator {
     // max_tokens is the effective input budget (context window scaled by the
-    // compaction threshold) of the enabled behavior with the largest window,
+    // compaction threshold) of the enabled agent with the largest window,
     // not the raw context window: utilization is measured against the same
     // budget the runtime dispatches against.
-    let max_tokens = behaviors
+    let max_tokens = agents
         .iter()
-        .filter(|behavior| behavior.enabled)
-        .filter(|behavior| behavior.context_window.is_some_and(|value| value > 0))
-        .max_by_key(|behavior| behavior.context_window.unwrap_or_default())
-        .map(|behavior| {
-            let context_window = behavior.context_window.unwrap_or_default().max(0) as usize;
+        .filter(|agent_config| agent_config.enabled)
+        .filter(|agent_config| agent_config.context_window.is_some_and(|value| value > 0))
+        .max_by_key(|agent_config| agent_config.context_window.unwrap_or_default())
+        .map(|agent_config| {
+            let context_window = agent_config.context_window.unwrap_or_default().max(0) as usize;
             let budget = gents::provider_budget::effective_input_budget(
                 context_window,
-                behavior.compaction_threshold,
+                agent_config.compaction_threshold,
             );
             i64::try_from(budget).unwrap_or(i64::MAX)
         });
@@ -391,10 +395,10 @@ mod tests {
     }
 
     #[test]
-    fn joins_behavior_with_backend_and_profile() {
-        let behaviors = build_behaviors(
+    fn joins_agent_with_backend_and_profile() {
+        let agents = build_agents(
             rows(json!([{
-                "behavior_id": "amy-general",
+                "agent_id": "amy-general",
                 "display_name": "Amy General",
                 "inference_profile_id": "p1",
                 "context_id": "c1",
@@ -412,8 +416,8 @@ mod tests {
             rows(json!([{ "compaction_id": "compact-1", "threshold": 0.8 }])),
         );
 
-        assert_eq!(behaviors.len(), 1);
-        let b = &behaviors[0];
+        assert_eq!(agents.len(), 1);
+        let b = &agents[0];
         assert_eq!(b.model_name, "gpt-4");
         assert_eq!(b.provider_kind, "OpenAiCompatible");
         assert_eq!(b.endpoint, "http://host/v1");
@@ -422,21 +426,21 @@ mod tests {
     }
 
     #[test]
-    fn behavior_without_matching_backend_or_profile_has_empty_join() {
-        let behaviors = build_behaviors(
-            rows(json!([{ "behavior_id": "orphan", "inference_profile_id": "missing" }])),
+    fn agent_without_matching_backend_or_profile_has_empty_join() {
+        let agents = build_agents(
+            rows(json!([{ "agent_id": "orphan", "inference_profile_id": "missing" }])),
             rows(json!([])),
             rows(json!([])),
             rows(json!([])),
             rows(json!([])),
         );
-        assert_eq!(behaviors.len(), 1);
-        assert_eq!(behaviors[0].provider_kind, "");
-        assert_eq!(behaviors[0].endpoint, "");
-        assert_eq!(behaviors[0].context_window, None);
-        assert!(behaviors[0].enabled);
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].provider_kind, "");
+        assert_eq!(agents[0].endpoint, "");
+        assert_eq!(agents[0].context_window, None);
+        assert!(agents[0].enabled);
         assert_eq!(
-            behaviors[0].compaction_threshold,
+            agents[0].compaction_threshold,
             gents::config::DEFAULT_COMPACTION_THRESHOLD
         );
     }
@@ -490,10 +494,10 @@ mod tests {
     }
 
     #[test]
-    fn context_indicator_uses_enabled_behavior_window_and_latest_compaction() {
-        let behaviors = vec![
-            SelfBehavior {
-                behavior_id: "disabled".to_string(),
+    fn context_indicator_uses_enabled_agent_window_and_latest_compaction() {
+        let agents = vec![
+            SelfAgent {
+                agent_id: "disabled".to_string(),
                 display_name: String::new(),
                 model_name: String::new(),
                 enabled: false,
@@ -504,8 +508,8 @@ mod tests {
                 context_window: Some(2000),
                 compaction_threshold: 0.75,
             },
-            SelfBehavior {
-                behavior_id: "enabled".to_string(),
+            SelfAgent {
+                agent_id: "enabled".to_string(),
                 display_name: String::new(),
                 model_name: String::new(),
                 enabled: true,
@@ -526,9 +530,9 @@ mod tests {
             request_scan_limit: RECENT_REQUEST_SCAN as i64,
         };
 
-        let context = build_context_indicator(&behaviors, &budget);
+        let context = build_context_indicator(&agents, &budget);
 
-        // max_tokens is the effective input budget of the enabled behavior
+        // max_tokens is the effective input budget of the enabled agent_config
         // with the largest window (1000 * 0.8 == 800), not the raw window.
         assert_eq!(context.max_tokens, Some(800));
         assert_eq!(context.current_estimate, Some(400));
@@ -542,8 +546,8 @@ mod tests {
 
     #[test]
     fn context_indicator_utilization_is_measured_against_the_effective_input_budget() {
-        let behaviors = vec![SelfBehavior {
-            behavior_id: "enabled".to_string(),
+        let agents = vec![SelfAgent {
+            agent_id: "enabled".to_string(),
             display_name: String::new(),
             model_name: String::new(),
             enabled: true,
@@ -563,7 +567,7 @@ mod tests {
             request_scan_limit: RECENT_REQUEST_SCAN as i64,
         };
 
-        let context = build_context_indicator(&behaviors, &budget);
+        let context = build_context_indicator(&agents, &budget);
 
         // Budget is 100_000 * 0.75 == 75_000, so 60_000 current tokens is
         // 80% utilized, not 60% of the raw 100_000 window.

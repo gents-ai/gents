@@ -30,7 +30,7 @@ pub fn register_served_home(home: &Path, port: u16) -> Result<()> {
     served_principals()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .insert(port, gents::AgentIdentity::did(&identity).to_string());
+        .insert(port, gents::NodeIdentity::did(&identity).to_string());
     Ok(())
 }
 

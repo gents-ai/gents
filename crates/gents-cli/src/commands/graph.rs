@@ -27,7 +27,7 @@ use crate::cli::{
     GraphCancelArgs, GraphCommand, GraphResultArgs, GraphRunArgs, GraphScopeArgs, GraphToggleArgs,
     GraphWatchArgs, PackInstallArgs,
 };
-use crate::{print_json, print_ndjson, resolve_agent_did, resolve_config_access};
+use crate::{print_json, print_ndjson, resolve_config_access, resolve_node_did};
 
 pub(crate) async fn dispatch(command: GraphCommand) -> Result<()> {
     match command {
@@ -61,7 +61,7 @@ pub(crate) async fn install_with_access(
 ) -> Result<()> {
     let requested = super::pack::parse_inference_slot_bindings(&args.inference_slots)?;
     let scope = gents::pack::PackInstallOptions {
-        agent_did: owner_did.to_owned(),
+        node_did: owner_did.to_owned(),
     };
     let package = load_archive_graph_package_with_environment(source.archive(), &scope, &|name| {
         std::env::var(name).ok()
@@ -72,10 +72,10 @@ pub(crate) async fn install_with_access(
                 .with_context(|| format!("reading graph package bindings {}", path.display()))?,
         )
         .with_context(|| format!("parsing graph package bindings {}", path.display()))?;
-        if bindings.agent_did != owner_did {
+        if bindings.node_did != owner_did {
             anyhow::bail!(
                 "binding owner {} does not match selected package owner {}",
-                bindings.agent_did,
+                bindings.node_did,
                 owner_did
             );
         }
@@ -205,7 +205,7 @@ pub(crate) async fn install_with_access(
 }
 
 async fn access_and_actor(scope: &GraphScopeArgs) -> Result<(crate::CommandAccess, String)> {
-    let actor = resolve_agent_did(scope.home.as_deref(), scope.agent_did.as_deref())?;
+    let actor = resolve_node_did(scope.home.as_deref(), scope.node_did.as_deref())?;
     let (access, _) =
         resolve_config_access(scope.home.as_deref(), scope.graphql.as_deref()).await?;
     Ok((access, actor))

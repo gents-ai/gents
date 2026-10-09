@@ -8,26 +8,26 @@ use std::collections::BTreeSet;
 
 pub(crate) async fn build_config_export_bundle(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
 ) -> Result<ConfigExportBundle> {
-    read_owned_config_bundle(access, agent_did)
+    read_owned_config_bundle(access, node_did)
         .await?
-        .context("configuration owner has no AgentPrincipal")
+        .context("configuration owner has no Node")
 }
 
 pub(crate) async fn build_desired_state_live_bundle(
     access: &ConfigAccess,
     desired: &desired_state::DesiredStateManifest,
 ) -> Result<Option<ConfigExportBundle>> {
-    read_owned_config_bundle(access, &desired.agent_principal.agent_did).await
+    read_owned_config_bundle(access, &desired.node.node_did).await
 }
 
 async fn read_owned_config_bundle(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
 ) -> Result<Option<ConfigExportBundle>> {
-    anyhow::ensure!(!agent_did.trim().is_empty(), "configuration owner is blank");
-    let owner = agent_did.to_owned();
+    anyhow::ensure!(!node_did.trim().is_empty(), "configuration owner is blank");
+    let owner = node_did.to_owned();
     let access_mode = access.mode().to_owned();
     access
         .transact("export_owned_configuration", |txn| {
@@ -41,7 +41,7 @@ async fn read_owned_config_bundle(
                     let (fields, _) = config_projection(collection, None)?;
                     let response = txn
                         .execute(&format!(
-                            "{{{name}(filter:{{agent_did:{{_eq:\"{}\"}}}}) {{{}}}}}",
+                            "{{{name}(filter:{{node_did:{{_eq:\"{}\"}}}}) {{{}}}}}",
                             escape_graphql_string(&owner),
                             fields.join(" ")
                         ))
@@ -57,7 +57,7 @@ async fn read_owned_config_bundle(
                         let (_, document) = config_projection(collection, Some(row))?;
                         let document = document.context("canonical config projection missing")?;
                         anyhow::ensure!(
-                            document.get("agent_did").and_then(Value::as_str)
+                            document.get("node_did").and_then(Value::as_str)
                                 == Some(owner.as_str()),
                             "{name} query returned a foreign owner"
                         );
@@ -78,16 +78,16 @@ async fn read_owned_config_bundle(
                             config.insert(key.to_owned(), Value::Array(normalized));
                         }
                     } else {
-                        anyhow::ensure!(normalized.len() <= 1, "ambiguous configuration principal");
-                        if let Some(principal) = normalized.pop() {
-                            config.insert("agent_principal".into(), principal);
+                        anyhow::ensure!(normalized.len() <= 1, "ambiguous configuration node");
+                        if let Some(node) = normalized.pop() {
+                            config.insert("node".into(), node);
                         }
                     }
                 }
-                if !config.contains_key("agent_principal") {
+                if !config.contains_key("node") {
                     anyhow::ensure!(
                         !has_documents,
-                        "owned configuration exists without its AgentPrincipal"
+                        "owned configuration exists without its Node"
                     );
                     return Ok(None);
                 }
@@ -95,7 +95,7 @@ async fn read_owned_config_bundle(
                     .context("decode canonical configuration snapshot")?;
                 Ok(Some(ConfigExportBundle {
                     format: CONFIG_EXPORT_FORMAT.into(),
-                    agent_did: owner,
+                    node_did: owner,
                     exported_at: chrono::Utc::now().to_rfc3339(),
                     access_mode,
                     config,
@@ -109,15 +109,14 @@ pub(crate) fn live_manifest_from_bundle(
     desired: &desired_state::DesiredStateManifest,
     live: &Option<ConfigExportBundle>,
 ) -> Result<(
-    Option<desired_state::DesiredAgentPrincipal>,
+    Option<desired_state::DesiredNode>,
     desired_state::DesiredStateManifest,
 )> {
     if let Some(bundle) = live {
         let manifest = desired_state::manifest_from_export_bundle(bundle)?;
-        Ok((Some(manifest.agent_principal.clone()), manifest))
+        Ok((Some(manifest.node.clone()), manifest))
     } else {
-        let empty =
-            serde_json::from_value(serde_json::json!({"agent_principal":desired.agent_principal}))?;
+        let empty = serde_json::from_value(serde_json::json!({"node":desired.node}))?;
         Ok((None, empty))
     }
 }
@@ -185,8 +184,8 @@ mod tests {
 
     fn bundle(owner: &str) -> ConfigExportBundle {
         ConfigExportBundle {
-            format: CONFIG_EXPORT_FORMAT.into(), agent_did:owner.into(), exported_at:"2026-01-01T00:00:00Z".into(), access_mode:"test".into(),
-            config:serde_json::from_value(json!({"agent_principal":{"agent_did":owner},"contexts":[{"context_id":"unused-context","agent_did":owner,"tools_id":"unused"}],"inference_backends":[{"backend_id":"unused-backend","agent_did":owner,"name":"Local","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:8000/v1","auth":{"kind":"unauthenticated"}}],"inference_profiles":[{"profile_id":"unused-profile","agent_did":owner,"backend_id":"unused-backend","model_name":"selected-model"}],"tools":[{"agent_did":owner,"tools_id":"unused","host":{"bash":{"allowed_argv_prefixes":[],"forbidden_argv_prefixes":[]}}}]})).unwrap(),
+            format: CONFIG_EXPORT_FORMAT.into(), node_did:owner.into(), exported_at:"2026-01-01T00:00:00Z".into(), access_mode:"test".into(),
+            config:serde_json::from_value(json!({"node":{"node_did":owner},"contexts":[{"context_id":"unused-context","node_did":owner,"tools_id":"unused"}],"inference_backends":[{"backend_id":"unused-backend","node_did":owner,"name":"Local","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:8000/v1","auth":{"kind":"unauthenticated"}}],"inference_profiles":[{"profile_id":"unused-profile","node_did":owner,"backend_id":"unused-backend","model_name":"selected-model"}],"tools":[{"node_did":owner,"tools_id":"unused","host":{"bash":{"allowed_argv_prefixes":[],"forbidden_argv_prefixes":[]}}}]})).unwrap(),
         }
     }
 
@@ -238,7 +237,7 @@ mod tests {
             1,
             "unreferenced tools must be exported"
         );
-        assert_eq!(exported.config.tools[0].agent_did, "owner-a");
+        assert_eq!(exported.config.tools[0].node_did, "owner-a");
         let counts = crate::shared::ConfigApplyCounts::from_config(&exported.config).unwrap();
         assert_eq!(counts.get(Collection::Tools), 1);
         assert_eq!(counts.get(Collection::AgentContext), 1);
@@ -292,7 +291,7 @@ mod tests {
             .is_none());
         let raw = node
             .execute(
-                r#"mutation {create_Tools(input:{agent_did:"orphan",tools_id:"unused"}){_docID}}"#,
+                r#"mutation {create_Tools(input:{node_did:"orphan",tools_id:"unused"}){_docID}}"#,
             )
             .await;
         assert!(!raw.has_errors(), "{:?}", raw.errors);

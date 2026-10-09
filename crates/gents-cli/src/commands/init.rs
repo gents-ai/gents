@@ -4,22 +4,21 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use gents::agent::persona_ops::setup_steward_self_config;
 use gents::config::{DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_OUTPUT_TOKENS};
 use gents::config_client::{
     apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
     DesiredStateApplyPlan,
 };
 use gents::document_config::{
-    AgentBehavior, AgentContext, BackendAuth, BashTools, BuiltInTools,
+    Agent, AgentContext, AgentTools, BackendAuth, BashTools, BuiltInTools,
     DatastoreToolSurfaceDocument, DatastoreTools, FileTools, HostTools, InferenceBackend,
-    InferenceExecution, SubagentTools, SurfaceToolDecl, Tools,
+    InferenceExecution, SurfaceToolDecl, Tools,
 };
+use gents::self_config::engineer_self_config;
 use gents::{
-    default_behavior_id_for_agent, default_inference_profile_id_for_behavior, load_agent_behavior,
-    load_agent_principal, load_or_create_macos_keychain_identity,
-    load_or_create_macos_secure_enclave_identity, AgentIdentity, BashMode, Collection,
-    CommandExecutionMode, FileToolMode, InferenceProfile, KeyIdentity,
+    default_agent_id_for_node, default_inference_profile_id_for_agent, load_agent, load_node,
+    load_or_create_macos_keychain_identity, load_or_create_macos_secure_enclave_identity, BashMode,
+    Collection, CommandExecutionMode, FileToolMode, InferenceProfile, KeyIdentity, NodeIdentity,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -60,7 +59,7 @@ You have write-capable local tools. When the user asks you to make a change, you
 
 For long-running commands such as builds, test suites, installs, servers, and log tails, prefer spawn_process with tool_name "bash_unrestricted" instead of shell backgrounding with "&". Use list_processes, read_process, wait_process, or cancel_process to inspect, finish, or stop backgrounded work."#;
 
-const SETUP_STEWARD_SYSTEM_PROMPT: &str = gents_protocol::SETUP_STEWARD_PROMPT;
+const ENGINEER_SYSTEM_PROMPT: &str = gents_protocol::ENGINEER_PROMPT;
 
 const YOLO_WARNING: &str = "\
 WARNING: --yolo bootstraps UNRESTRICTED tools. The agent can run any command\n\
@@ -176,11 +175,11 @@ pub(crate) async fn init(mut args: InitArgs) -> Result<()> {
         let key_path = (args.identity_backend == IdentityBackendArg::File).then(|| {
             args.key_path
                 .clone()
-                .unwrap_or_else(|| default_key_path(&home_dir, &args.agent_name))
+                .unwrap_or_else(|| default_key_path(&home_dir, &args.node_name))
         });
         let summary = write_identity_only_home_metadata(IdentityOnlyHomeOptions {
             home: &home_dir,
-            agent_name: &args.agent_name,
+            node_name: &args.node_name,
             key_path: key_path.as_deref(),
             identity_backend: args.identity_backend,
             keychain_label: args.keychain_label.as_deref(),
@@ -195,23 +194,23 @@ pub(crate) async fn init(mut args: InitArgs) -> Result<()> {
             "status": "initialized",
             "identity_only": true,
             "home": summary.home,
-            "agent_name": summary.agent_name,
-            "agent_did": summary.agent_did,
+            "node_name": summary.node_name,
+            "node_did": summary.node_did,
             "key_path": summary.key_path,
             "tool_package": format_tool_package(summary.tool_package),
             "tool_ceiling": format_tool_ceiling(summary.tool_ceiling),
             "tool_root": summary.tool_root,
             "runtime_state_reset": summary.runtime_state_reset,
             "identity": {
-                "agent_did": summary.agent_did,
+                "node_did": summary.node_did,
                 "key_path": summary.key_path,
                 "identity_backend": summary.identity_backend,
                 "keychain_label": summary.keychain_label,
                 "secure_enclave_label": summary.secure_enclave_label,
-                "permission_boundary": "This DID and key identify the permission boundary for every action the agent runtime performs."
+                "permission_boundary": "This DID and key identify the permission boundary for every action the node runtime performs."
             },
             "next_steps": [
-                "gents config apply --root <manifest-root> --home <home> --bind-agent-did home",
+                "gents config apply --root <manifest-root> --home <home> --bind-node-did home",
                 "gents server"
             ],
             "init": null
@@ -222,7 +221,7 @@ pub(crate) async fn init(mut args: InitArgs) -> Result<()> {
 
     let initialized_identity = load_or_create_home_identity(HomeIdentityOptions {
         home: &home_dir,
-        agent_name: &args.agent_name,
+        node_name: &args.node_name,
         key_path: args.key_path.as_deref(),
         identity_backend: args.identity_backend,
         keychain_label: args.keychain_label.as_deref(),
@@ -232,13 +231,13 @@ pub(crate) async fn init(mut args: InitArgs) -> Result<()> {
         .identity
         .sign(b"gents init identity")
         .await
-        .context("creating or loading agent identity key")?;
+        .context("creating or loading node identity key")?;
 
     gents::storage_backend::reject_legacy_store(&data_dir)?;
     let mut stored = StoredInitConfig {
         home: home_dir.to_string_lossy().to_string(),
-        agent_name: args.agent_name.clone(),
-        agent_did: initialized_identity.identity.did().to_string(),
+        node_name: args.node_name.clone(),
+        node_did: initialized_identity.identity.did().to_string(),
         key_path: initialized_identity.key_path.clone(),
         identity_backend: initialized_identity.identity_backend.clone(),
         keychain_label: initialized_identity.keychain_label.clone(),
@@ -297,13 +296,13 @@ pub(crate) async fn init(mut args: InitArgs) -> Result<()> {
     let output = json!({
         "status": "initialized",
         "home": home_dir,
-        "agent_name": args.agent_name,
-        "agent_did": initialized_identity.identity.did(),
+        "node_name": args.node_name,
+        "node_did": initialized_identity.identity.did(),
         "key_path": initialized_identity.key_path,
         "identity_backend": initialized_identity.identity_backend,
         "keychain_label": initialized_identity.keychain_label,
         "secure_enclave_label": initialized_identity.secure_enclave_label,
-        "default_behavior_id": summary.default_behavior_id,
+        "default_agent_id": summary.default_agent_id,
         "tools_id": summary.tools_id,
         "wide_open_preset_id": summary.wide_open_preset_id,
         "inference_profile_id": summary.inference_profile_id,
@@ -315,12 +314,12 @@ pub(crate) async fn init(mut args: InitArgs) -> Result<()> {
         "defra_query_collections": summary.defra_query_collections,
         "runtime_state_reset": runtime_state_reset,
         "identity": {
-            "agent_did": initialized_identity.identity.did(),
+            "node_did": initialized_identity.identity.did(),
             "key_path": stored.key_path,
             "identity_backend": stored.identity_backend,
             "keychain_label": stored.keychain_label,
             "secure_enclave_label": stored.secure_enclave_label,
-            "permission_boundary": "This DID and key identify the permission boundary for every action the agent runtime performs."
+            "permission_boundary": "This DID and key identify the permission boundary for every action the node runtime performs."
         },
         "codex_login": codex_login
             .outcome()
@@ -398,7 +397,7 @@ impl InlineGrokLoginState {
 
 async fn maybe_inline_grok_login(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     summary: &InitSummary,
 ) -> InlineGrokLoginState {
     if summary.provider_kind != gents::BackendProviderKind::XaiGrokOAuth {
@@ -411,7 +410,7 @@ async fn maybe_inline_grok_login(
     // `init` writes a backend with no account reference, which runs on the original account.
     match gents::oauth_credential::resolve_oauth_credential(
         access,
-        agent_did,
+        node_did,
         &provider,
         gents::oauth_credential::AccountPick::Reference(None),
     )
@@ -429,7 +428,7 @@ async fn maybe_inline_grok_login(
     }
     match crate::commands::grok_login::run_grok_login(
         access,
-        agent_did,
+        node_did,
         &crate::commands::grok_login::GrokLoginOptions {
             provider,
             label: None,
@@ -471,7 +470,7 @@ impl InlineClaudeLoginState {
 
 async fn maybe_inline_claude_login(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     summary: &InitSummary,
 ) -> InlineClaudeLoginState {
     if summary.provider_kind != gents::BackendProviderKind::ClaudeCliSubscription {
@@ -485,7 +484,7 @@ async fn maybe_inline_claude_login(
     // `init` writes a backend with no account reference, which runs on the original account.
     match gents::oauth_credential::resolve_oauth_credential(
         access,
-        agent_did,
+        node_did,
         &provider,
         gents::oauth_credential::AccountPick::Reference(None),
     )
@@ -502,7 +501,7 @@ async fn maybe_inline_claude_login(
     }
     match crate::commands::claude_login::run_claude_login(
         access,
-        agent_did,
+        node_did,
         &crate::commands::claude_login::ClaudeLoginOptions {
             provider,
             label: None,
@@ -529,7 +528,7 @@ async fn maybe_inline_claude_login(
 
 async fn maybe_inline_codex_login(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     summary: &InitSummary,
 ) -> InlineCodexLoginState {
     if summary.provider_kind != gents::BackendProviderKind::ChatGptCodex {
@@ -542,7 +541,7 @@ async fn maybe_inline_codex_login(
     // `init` writes a backend with no account reference, which runs on the original account.
     match gents::oauth_credential::resolve_oauth_credential(
         access,
-        agent_did,
+        node_did,
         &provider,
         gents::oauth_credential::AccountPick::Reference(None),
     )
@@ -559,7 +558,7 @@ async fn maybe_inline_codex_login(
     }
     match crate::commands::codex_login::run_codex_login(
         access,
-        agent_did,
+        node_did,
         &crate::commands::codex_login::CodexLoginOptions {
             provider,
             label: None,
@@ -589,7 +588,7 @@ async fn maybe_inline_codex_login(
 
 pub(crate) struct IdentityOnlyHomeOptions<'a> {
     pub(crate) home: &'a Path,
-    pub(crate) agent_name: &'a str,
+    pub(crate) node_name: &'a str,
     pub(crate) key_path: Option<&'a Path>,
     pub(crate) identity_backend: IdentityBackendArg,
     pub(crate) keychain_label: Option<&'a str>,
@@ -602,7 +601,7 @@ pub(crate) struct IdentityOnlyHomeOptions<'a> {
 
 struct HomeIdentityOptions<'a> {
     home: &'a Path,
-    agent_name: &'a str,
+    node_name: &'a str,
     key_path: Option<&'a Path>,
     identity_backend: IdentityBackendArg,
     keychain_label: Option<&'a str>,
@@ -610,7 +609,7 @@ struct HomeIdentityOptions<'a> {
 }
 
 struct HomeIdentity {
-    identity: Arc<dyn AgentIdentity>,
+    identity: Arc<dyn NodeIdentity>,
     key_path: Option<String>,
     identity_backend: Option<String>,
     keychain_label: Option<String>,
@@ -621,8 +620,8 @@ struct HomeIdentity {
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct IdentityOnlyHomeSummary {
     pub(crate) home: String,
-    pub(crate) agent_name: String,
-    pub(crate) agent_did: String,
+    pub(crate) node_name: String,
+    pub(crate) node_did: String,
     pub(crate) key_path: Option<String>,
     pub(crate) identity_backend: Option<String>,
     pub(crate) keychain_label: Option<String>,
@@ -642,7 +641,7 @@ pub(crate) async fn write_identity_only_home_metadata(
 
     let initialized_identity = load_or_create_home_identity(HomeIdentityOptions {
         home: options.home,
-        agent_name: options.agent_name,
+        node_name: options.node_name,
         key_path: options.key_path,
         identity_backend: options.identity_backend,
         keychain_label: options.keychain_label,
@@ -652,7 +651,7 @@ pub(crate) async fn write_identity_only_home_metadata(
         .identity
         .sign(b"gents init identity")
         .await
-        .context("creating or loading agent identity key")?;
+        .context("creating or loading node identity key")?;
 
     let tool_ceiling = tool_ceiling_for_package(options.tool_package);
     let tool_root = resolve_tool_root_for_package(options.tool_package, options.tool_root)?
@@ -660,8 +659,8 @@ pub(crate) async fn write_identity_only_home_metadata(
     gents::storage_backend::reject_legacy_store(&data_dir)?;
     let mut stored = StoredInitConfig {
         home: options.home.to_string_lossy().to_string(),
-        agent_name: options.agent_name.to_string(),
-        agent_did: initialized_identity.identity.did().to_string(),
+        node_name: options.node_name.to_string(),
+        node_did: initialized_identity.identity.did().to_string(),
         key_path: initialized_identity.key_path.clone(),
         identity_backend: initialized_identity.identity_backend.clone(),
         keychain_label: initialized_identity.keychain_label.clone(),
@@ -687,8 +686,8 @@ pub(crate) async fn write_identity_only_home_metadata(
 
     Ok(IdentityOnlyHomeSummary {
         home: options.home.to_string_lossy().to_string(),
-        agent_name: options.agent_name.to_string(),
-        agent_did: initialized_identity.identity.did().to_string(),
+        node_name: options.node_name.to_string(),
+        node_did: initialized_identity.identity.did().to_string(),
         key_path: initialized_identity.key_path,
         identity_backend: initialized_identity.identity_backend,
         keychain_label: initialized_identity.keychain_label,
@@ -742,10 +741,10 @@ fn load_or_create_home_identity(options: HomeIdentityOptions<'_>) -> Result<Home
             let key_path = options
                 .key_path
                 .map(Path::to_path_buf)
-                .unwrap_or_else(|| default_key_path(options.home, options.agent_name));
+                .unwrap_or_else(|| default_key_path(options.home, options.node_name));
             let identity = Arc::new(
                 KeyIdentity::load_or_create(&key_path, None)
-                    .context("creating or loading agent identity key")?,
+                    .context("creating or loading node identity key")?,
             );
             let node_identity_did = identity.did().to_string();
             Ok(HomeIdentity {
@@ -819,7 +818,7 @@ fn load_or_create_home_identity(options: HomeIdentityOptions<'_>) -> Result<Home
 async fn initialize_runtime_home(
     access: &ConfigAccess,
     args: &InitArgs,
-    agent_did: &str,
+    node_did: &str,
     tool_package: ToolPackageArg,
 ) -> Result<InitSummary> {
     let ConfigAccess::Local(node) = access else {
@@ -840,50 +839,52 @@ async fn initialize_runtime_home(
     let backend_id_was_generated = explicit_backend_id.is_none();
     let backend_id = explicit_backend_id
         .map(ToOwned::to_owned)
-        .unwrap_or_else(|| default_backend_id_for_agent(agent_did));
+        .unwrap_or_else(|| default_backend_id_for_agent(node_did));
     let backend_name = explicit_backend_name
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| {
             if backend_id_was_generated {
-                format!("{} backend", args.agent_name)
+                format!("{} backend", args.node_name)
             } else {
                 backend_id.clone()
             }
         });
-    let existing_principal = load_agent_principal(node, agent_did).await?;
-    let default_behavior_id = existing_principal
+    let existing_node = load_node(node, node_did).await?;
+    let default_agent_id = existing_node
         .as_ref()
-        .and_then(|principal| normalize_optional_string(principal.default_behavior_id.as_deref()))
-        .unwrap_or_else(|| default_behavior_id_for_agent(agent_did));
-    let existing_default_behavior = load_agent_behavior(node, &default_behavior_id).await?;
-    if let Some(behavior) = existing_default_behavior.as_ref() {
-        if behavior.agent_did != agent_did {
+        .and_then(|node_document| {
+            normalize_optional_string(node_document.default_agent_id.as_deref())
+        })
+        .unwrap_or_else(|| default_agent_id_for_node(node_did));
+    let existing_default_agent = load_agent(node, &default_agent_id).await?;
+    if let Some(agent) = existing_default_agent.as_ref() {
+        if agent.node_did != node_did {
             anyhow::bail!(
-                "AgentBehavior {} belongs to {} not {}",
-                default_behavior_id,
-                behavior.agent_did,
-                agent_did
+                "Agent {} belongs to {} not {}",
+                default_agent_id,
+                agent.node_did,
+                node_did
             );
         }
     }
-    let principal_display_name = existing_principal
+    let node_display_name = existing_node
         .as_ref()
-        .and_then(|principal| normalize_optional_string(principal.display_name.as_deref()))
-        .unwrap_or_else(|| args.agent_name.clone());
-    let principal_enabled = existing_principal
+        .and_then(|node_document| normalize_optional_string(node_document.display_name.as_deref()))
+        .unwrap_or_else(|| args.node_name.clone());
+    let node_enabled = existing_node
         .as_ref()
-        .map(|principal| principal.enabled)
+        .map(|node_document| node_document.enabled)
         .unwrap_or(true);
-    let tools_id = default_tools_id_for_behavior(&default_behavior_id);
+    let tools_id = default_tools_id_for_agent(&default_agent_id);
     let tool_ceiling = tool_ceiling_for_package(tool_package);
     let tool_root = resolve_tool_root_for_package(tool_package, args.tool_root.as_deref())?;
     // Canonical auth is a typed selection, never a raw key copy: an
     // environment-key endpoint reads the key from the runtime host at call
-    // time, and agent-scoped OAuth providers keep using the principal's
+    // time, and agent-scoped OAuth providers keep using the node's
     // existing OAuthCredential owner.
     let backend_auth = backend_auth_for_init(&backend)?;
     let backend_doc = InferenceBackend {
-        agent_did: agent_did.to_string(),
+        node_did: node_did.to_string(),
         backend_id: backend_id.clone(),
         name: backend_name.clone(),
         provider_kind: backend.provider_kind,
@@ -907,7 +908,7 @@ async fn initialize_runtime_home(
         args.disable_defra_query,
     );
     let mut tools = tools_for_package(
-        agent_did,
+        node_did,
         &tools_id,
         tool_package,
         tool_root.clone(),
@@ -918,25 +919,25 @@ async fn initialize_runtime_home(
     // Every first run carries the Engineer's configuration tools, as the
     // desktop first run does; the stored tool ceiling still bounds any host
     // tool change they make.
-    tools.self_config = Some(setup_steward_self_config());
+    tools.self_config = Some(engineer_self_config());
     tools
         .built_ins
         .get_or_insert_with(Default::default)
         .enable_graph_tools = Some(true);
     let engineer_mailbox = args
-        .setup_steward
-        .then(|| engineer_tools(&mut tools, agent_did, !args.disable_defra_query));
+        .engineer
+        .then(|| engineer_tools(&mut tools, node_did, !args.disable_defra_query));
     let context = AgentContext {
-        context_id: default_context_id_for_behavior(&default_behavior_id),
-        agent_did: agent_did.to_string(),
-        display_name: Some(if args.setup_steward {
+        context_id: default_context_id_for_agent(&default_agent_id),
+        node_did: node_did.to_string(),
+        display_name: Some(if args.engineer {
             "The Engineer".to_string()
         } else {
             "Default".to_string()
         }),
         description: None,
-        system_prompt: Some(if args.setup_steward {
-            SETUP_STEWARD_SYSTEM_PROMPT.to_string()
+        system_prompt: Some(if args.engineer {
+            ENGINEER_SYSTEM_PROMPT.to_string()
         } else {
             standard_system_prompt(tool_package).to_string()
         }),
@@ -945,28 +946,28 @@ async fn initialize_runtime_home(
         skill_ids: Vec::new(),
         tags: Vec::new(),
     };
-    let inference_profile_id = default_inference_profile_id_for_behavior(&default_behavior_id);
+    let inference_profile_id = default_inference_profile_id_for_agent(&default_agent_id);
     let inference_execution_id = default_inference_execution_id_for_profile(&inference_profile_id);
-    let inference_execution = standard_inference_execution(agent_did, &inference_execution_id);
+    let inference_execution = standard_inference_execution(node_did, &inference_execution_id);
     let mut inference_profile = standard_inference_profile(
-        agent_did,
+        node_did,
         &inference_profile_id,
         &backend_id,
         &model_name.to_string(),
     );
     inference_profile.execution_id = Some(inference_execution_id);
-    // Canonical chain: behavior -> context (system prompt, tools, compaction)
-    // and behavior -> inference profile. No backend/model copies on the
-    // behavior.
-    let behavior = AgentBehavior {
-        behavior_id: default_behavior_id.clone(),
-        agent_did: agent_did.to_string(),
-        display_name: Some(if args.setup_steward {
+    // Canonical chain: agent -> context (system prompt, tools, compaction)
+    // and agent -> inference profile. No backend/model copies on the
+    // agent.
+    let agent = Agent {
+        agent_id: default_agent_id.clone(),
+        node_did: node_did.to_string(),
+        display_name: Some(if args.engineer {
             "The Engineer".to_string()
         } else {
             "Default".to_string()
         }),
-        description: if args.setup_steward {
+        description: if args.engineer {
             Some("Walks you through configuring Gents for the work you want to do.".to_string())
         } else {
             None
@@ -974,8 +975,8 @@ async fn initialize_runtime_home(
         context_id: Some(context.context_id.clone()),
         inference_profile_id: inference_profile_id.clone(),
         enabled: true,
-        tags: if args.setup_steward {
-            vec![gents::agent::persona_ops::SETUP_STEWARD_BEHAVIOR_TAG.to_string()]
+        tags: if args.engineer {
+            vec![gents::self_config::ENGINEER_AGENT_TAG.to_string()]
         } else {
             Vec::new()
         },
@@ -991,7 +992,7 @@ async fn initialize_runtime_home(
     if let Some(error) = tools
         .validation_violations()
         .into_iter()
-        .chain(wide_open_tools_document(agent_did).validation_violations())
+        .chain(wide_open_tools_document(node_did).validation_violations())
         .next()
     {
         return Err(anyhow::anyhow!("seeded Tools document: {error}"));
@@ -999,25 +1000,25 @@ async fn initialize_runtime_home(
     backend_doc.validate()?;
     inference_execution.validate()?;
     inference_profile.validate()?;
-    let wide_open_preset_id = wide_open_tools_id_for_agent(agent_did);
+    let wide_open_preset_id = wide_open_tools_id_for_node(node_did);
     let mut documents = vec![
         replacement(Collection::InferenceBackend, &backend_doc)?,
         replacement(Collection::Tools, &tools)?,
         replacement(Collection::AgentContext, &context)?,
         replacement(Collection::InferenceExecution, &inference_execution)?,
         replacement(Collection::InferenceProfile, &inference_profile)?,
-        replacement(Collection::AgentBehavior, &behavior)?,
-        replacement(Collection::Tools, &wide_open_tools_document(agent_did))?,
+        replacement(Collection::Agent, &agent)?,
+        replacement(Collection::Tools, &wide_open_tools_document(node_did))?,
     ];
     if let Some(surface) = &engineer_mailbox {
         documents.push(replacement(Collection::DatastoreToolSurface, surface)?);
     }
     publish_home_config(
         access,
-        agent_did,
-        &principal_display_name,
-        &default_behavior_id,
-        principal_enabled,
+        node_did,
+        &node_display_name,
+        &default_agent_id,
+        node_enabled,
         documents,
     )
     .await?;
@@ -1028,7 +1029,7 @@ async fn initialize_runtime_home(
     // will replace this observation with measured state once the server runs.
     gents::backend_registry::set_backend_probe_status_with_last_probe(
         node,
-        agent_did,
+        node_did,
         &backend_id,
         gents::HEALTHY_PROBE_STATUS,
         chrono::Utc::now(),
@@ -1045,7 +1046,7 @@ async fn initialize_runtime_home(
         model_name: model_name.to_string(),
         max_concurrent: args.max_concurrent,
         max_queue_depth: args.max_queue_depth,
-        default_behavior_id,
+        default_agent_id,
         tools_id: tools_id.clone(),
         wide_open_preset_id,
         inference_profile_id,
@@ -1055,19 +1056,19 @@ async fn initialize_runtime_home(
         enable_memory: args.enable_memory,
         enable_defra_query,
         defra_query_collections: args.defra_query_collections.clone(),
-        created_principal: existing_principal.is_none(),
-        created_default_behavior: existing_default_behavior.is_none(),
+        created_node: existing_node.is_none(),
+        created_default_agent: existing_default_agent.is_none(),
     })
 }
 
-/// Publish init's documents and the principal that names their default
-/// behavior as one validated plan: a failed init leaves no default pointing at
-/// a missing or disabled behavior.
+/// Publish init's documents and the node_document that names their default
+/// agent as one validated plan: a failed init leaves no default pointing at
+/// a missing or disabled agent.
 async fn publish_home_config(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     display_name: &str,
-    default_behavior_id: &str,
+    default_agent_id: &str,
     enabled: bool,
     documents: Vec<DesiredStateApplyDocument>,
 ) -> Result<()> {
@@ -1075,28 +1076,24 @@ async fn publish_home_config(
         .transact("init.initialize_runtime_home", |txn| {
             let mut documents = documents.clone();
             Box::pin(async move {
-                let mut principal = read_desired_state_record_in_txn(
-                    txn,
-                    Collection::AgentPrincipal,
-                    agent_did,
-                    agent_did,
-                )
-                .await?
-                .map(|(_, value)| value)
-                .unwrap_or_else(|| {
-                    json!({
-                        "agent_did": agent_did,
-                        "created_at": chrono::Utc::now().to_rfc3339(),
-                        "created_by": agent_did,
-                    })
-                });
-                principal["display_name"] = json!(display_name);
-                principal["default_behavior_id"] = json!(default_behavior_id);
-                principal["enabled"] = json!(enabled);
+                let mut node_document =
+                    read_desired_state_record_in_txn(txn, Collection::Node, node_did, node_did)
+                        .await?
+                        .map(|(_, value)| value)
+                        .unwrap_or_else(|| {
+                            json!({
+                                "node_did": node_did,
+                                "created_at": chrono::Utc::now().to_rfc3339(),
+                                "created_by": node_did,
+                            })
+                        });
+                node_document["display_name"] = json!(display_name);
+                node_document["default_agent_id"] = json!(default_agent_id);
+                node_document["enabled"] = json!(enabled);
                 documents.push(DesiredStateApplyDocument {
-                    collection: Collection::AgentPrincipal,
-                    add: principal.clone(),
-                    update: principal,
+                    collection: Collection::Node,
+                    add: node_document.clone(),
+                    update: node_document,
                 });
                 let plan = DesiredStateApplyPlan::new(documents)?;
                 apply_desired_state_plan(txn, &plan).await.map(|_| ())
@@ -1119,12 +1116,12 @@ fn replacement<T: serde::Serialize>(
     })
 }
 
-fn default_tools_id_for_behavior(behavior_id: &str) -> String {
-    format!("{behavior_id}-tools")
+fn default_tools_id_for_agent(agent_id: &str) -> String {
+    format!("{agent_id}-tools")
 }
 
-fn default_context_id_for_behavior(behavior_id: &str) -> String {
-    format!("{behavior_id}-context")
+fn default_context_id_for_agent(agent_id: &str) -> String {
+    format!("{agent_id}-context")
 }
 
 /// Canonical `Tools` document for an init tool package. Typed nested groups
@@ -1135,7 +1132,7 @@ fn default_context_id_for_behavior(behavior_id: &str) -> String {
 /// Backgrounding is per-capability: only write-capable bash may run in the
 /// background, which the derived allowlist materializes as `bash_unrestricted`.
 fn tools_for_package(
-    agent_did: &str,
+    node_did: &str,
     tools_id: &str,
     tool_package: ToolPackageArg,
     tool_root: Option<PathBuf>,
@@ -1182,7 +1179,7 @@ fn tools_for_package(
     let privileged = !matches!(tool_package, ToolPackageArg::Minimal);
     Tools {
         tools_id: tools_id.to_string(),
-        agent_did: agent_did.to_string(),
+        node_did: node_did.to_string(),
         display_name: Some(
             match tool_package {
                 ToolPackageArg::Minimal => "Minimal Tools",
@@ -1195,7 +1192,7 @@ fn tools_for_package(
         ),
         host,
         remote: None,
-        subagents: None,
+        agents: None,
         built_ins: Some(BuiltInTools {
             enable_graph_tools: None,
             enable_goal_tools: privileged.then_some(true),
@@ -1225,10 +1222,10 @@ fn tools_for_package(
 /// shape: explicitly enabled meta-adjacent and DefraDB query capabilities,
 /// every privilege-bearing host capability absent. Absence grants nothing —
 /// the permissive surface is explicit, never implied by a policy version.
-fn wide_open_tools_document(agent_did: &str) -> Tools {
+fn wide_open_tools_document(node_did: &str) -> Tools {
     Tools {
-        tools_id: wide_open_tools_id_for_agent(agent_did),
-        agent_did: agent_did.to_string(),
+        tools_id: wide_open_tools_id_for_node(node_did),
+        node_did: node_did.to_string(),
         display_name: Some("Wide-open (permissive preset)".to_string()),
         built_ins: Some(BuiltInTools {
             enable_context_budget: Some(true),
@@ -1245,15 +1242,15 @@ fn wide_open_tools_document(agent_did: &str) -> Tools {
 /// The Engineer builds, starts, observes and steers its crew (#1796): the
 /// agents tools, the sessions tool, read-only query and an escalation surface
 /// holding the canonical `file_mailbox_item` declaration (default event/flag/ack
-/// policy). `agent_new` appears once these Tools select a SubagentTarget, which
+/// policy). `agent_new` appears once these Tools select a AgentTarget, which
 /// the Engineer creates through self-config.
 fn engineer_tools(
     tools: &mut Tools,
-    agent_did: &str,
+    node_did: &str,
     enable_defra_query: bool,
 ) -> DatastoreToolSurfaceDocument {
     let surface_id = "engineer-mailbox".to_string();
-    tools.subagents = Some(SubagentTools {
+    tools.agents = Some(AgentTools {
         target_ids: Vec::new(),
         enabled: Some(true),
     });
@@ -1270,7 +1267,7 @@ fn engineer_tools(
     datastore.datastore_tool_surface_ids = Some(vec![surface_id.clone()]);
     DatastoreToolSurfaceDocument {
         surface_id,
-        agent_did: agent_did.to_string(),
+        node_did: node_did.to_string(),
         display_name: Some("Engineer escalations".to_string()),
         enabled: true,
         entries: Some(vec![SurfaceToolDecl::Create(
@@ -1281,18 +1278,18 @@ fn engineer_tools(
     }
 }
 
-fn wide_open_tools_id_for_agent(agent_did: &str) -> String {
-    format!("{agent_did}:wide-open")
+fn wide_open_tools_id_for_node(node_did: &str) -> String {
+    format!("{node_did}:wide-open")
 }
 
 /// Canonical typed auth for an init-resolved backend. Agent-scoped OAuth
-/// providers resolve the principal's existing `OAuthCredential` at call time;
+/// providers resolve the node's existing `OAuthCredential` at call time;
 /// a raw key is stored under DefraDB ACP in the backend document; an
 /// environment key is read from the runtime host per call; a deliberately
 /// unauthenticated endpoint (local model server) stays explicit.
 fn backend_auth_for_init(backend: &ResolvedBackendConfig) -> Result<BackendAuth> {
-    if backend.provider_kind.is_agent_scoped_oauth() {
-        return Ok(BackendAuth::PrincipalOAuth { account_ref: None });
+    if backend.provider_kind.is_node_scoped_oauth() {
+        return Ok(BackendAuth::NodeOAuth { account_ref: None });
     }
     match (
         backend.api_key.as_deref(),
@@ -1312,7 +1309,7 @@ fn backend_auth_for_init(backend: &ResolvedBackendConfig) -> Result<BackendAuth>
 
 fn resolve_initial_tool_package(args: &InitArgs) -> Result<ToolPackageArg> {
     resolve_init_tool_package(
-        args.write_tools || (args.setup_steward && !args.yolo && args.tool_package.is_none()),
+        args.write_tools || (args.engineer && !args.yolo && args.tool_package.is_none()),
         args.yolo,
         args.tool_package,
     )
@@ -1407,13 +1404,13 @@ fn resolve_tool_root_for_package(
 /// document this leaves unset, because the self-config tool can only edit an
 /// execution its profile already names.
 fn standard_inference_profile(
-    agent_did: &str,
+    node_did: &str,
     profile_id: &str,
     backend_id: &str,
     model_name: &str,
 ) -> InferenceProfile {
     InferenceProfile {
-        agent_did: agent_did.to_string(),
+        node_did: node_did.to_string(),
         profile_id: profile_id.to_string(),
         display_name: Some("Default".to_string()),
         description: None,
@@ -1434,17 +1431,17 @@ fn default_inference_execution_id_for_profile(profile_id: &str) -> String {
 
 /// Every limit stays unset so the canonical defaults keep owning each bound;
 /// the document exists only so the configurator has an execution to reach.
-fn standard_inference_execution(agent_did: &str, execution_id: &str) -> InferenceExecution {
+fn standard_inference_execution(node_did: &str, execution_id: &str) -> InferenceExecution {
     InferenceExecution {
-        agent_did: agent_did.to_string(),
+        node_did: node_did.to_string(),
         execution_id: execution_id.to_string(),
         display_name: Some("Default".to_string()),
         ..Default::default()
     }
 }
 
-fn default_backend_id_for_agent(agent_did: &str) -> String {
-    format!("{agent_did}:backend")
+fn default_backend_id_for_agent(node_did: &str) -> String {
+    format!("{node_did}:backend")
 }
 
 fn standard_system_prompt(tool_package: ToolPackageArg) -> &'static str {
@@ -1509,7 +1506,7 @@ fn resolve_init_backend_config(args: &InitArgs) -> Result<ResolvedBackendConfig>
 }
 
 fn initial_backend_enabled(args: &InitArgs) -> bool {
-    !args.setup_steward || args.model_name.is_some() || args.backend_preset.is_some()
+    !args.engineer || args.model_name.is_some() || args.backend_preset.is_some()
 }
 
 fn resolve_init_model_name(args: &InitArgs) -> Result<&str> {
@@ -1753,7 +1750,7 @@ mod tests {
 
     /// Compile-only guard that the retired flat Tools vocabulary is
     /// gone from the init test surface: preset classification now goes through
-    /// the shared `persona_presets::classify_tools` owner against the
+    /// the shared `tool_surface::presets::classify_tools` owner against the
     /// canonical nested `Tools` document.
     #[test]
     fn tests_reference_canonical_tools_not_flat_selection() {
@@ -1786,14 +1783,14 @@ mod tests {
         gents::ensure_runtime_schemas(&node).await.unwrap();
         let access = ConfigAccess::Local(node.clone());
 
-        let behavior_id = default_behavior_id_for_agent(&owner);
-        let profile_id = default_inference_profile_id_for_behavior(&behavior_id);
+        let agent_id = default_agent_id_for_node(&owner);
+        let profile_id = default_inference_profile_id_for_agent(&agent_id);
         let execution_id = default_inference_execution_id_for_profile(&profile_id);
         let backend_id = default_backend_id_for_agent(&owner);
-        let backend = json!({"agent_did": owner, "backend_id": backend_id, "name": "Local",
+        let backend = json!({"node_did": owner, "backend_id": backend_id, "name": "Local",
             "provider_kind": "OpenAiCompatible", "endpoint": "http://localhost:8000/v1",
             "auth": {"kind": "unauthenticated"}, "enabled": true});
-        let behavior = json!({"agent_did": owner, "behavior_id": behavior_id,
+        let agent = json!({"node_did": owner, "agent_id": agent_id,
             "inference_profile_id": profile_id, "enabled": true});
         let mut profile = standard_inference_profile(&owner, &profile_id, &backend_id, "model");
         profile.execution_id = Some(execution_id.clone());
@@ -1810,12 +1807,12 @@ mod tests {
             .unwrap(),
             replacement(Collection::InferenceProfile, &profile).unwrap(),
             DesiredStateApplyDocument {
-                collection: Collection::AgentBehavior,
-                add: behavior.clone(),
-                update: behavior,
+                collection: Collection::Agent,
+                add: agent.clone(),
+                update: agent,
             },
         ];
-        publish_home_config(&access, &owner, "Agent", &behavior_id, true, documents)
+        publish_home_config(&access, &owner, "Agent", &agent_id, true, documents)
             .await
             .unwrap();
         gents::backend_registry::set_backend_probe_status_with_last_probe(
@@ -1828,7 +1825,7 @@ mod tests {
         .await
         .unwrap();
 
-        let agent = gents::Gents::from_default_behavior_documents(
+        let agent = gents::Gents::from_default_agent_documents(
             node.clone(),
             identity,
             gents::DocumentRuntimeOptions::default(),
@@ -1836,10 +1833,10 @@ mod tests {
         .await
         .unwrap();
         let resolved = agent
-            .behaviors()
+            .agents()
             .iter()
-            .find(|resolved| resolved.behavior_id == behavior_id)
-            .expect("init default behavior resolves");
+            .find(|resolved| resolved.agent_id == agent_id)
+            .expect("init default agent resolves");
         assert_eq!(resolved.max_turns, gents::config::DEFAULT_MAX_TURNS);
         assert_eq!(resolved.max_turns, 1_000);
         assert_eq!(
@@ -1856,7 +1853,7 @@ mod tests {
         use gents::llm::tool::ToolDyn;
 
         let temp = tempfile::tempdir().unwrap();
-        let identity: Arc<dyn gents::AgentIdentity> =
+        let identity: Arc<dyn gents::NodeIdentity> =
             Arc::new(KeyIdentity::load_or_create(temp.path().join("agent.key"), None).unwrap());
         let owner = identity.did().to_string();
         let node = Arc::new(
@@ -1875,7 +1872,7 @@ mod tests {
             .await
             .expect("a fresh home initializes");
 
-        let categories = setup_steward_self_config()
+        let categories = engineer_self_config()
             .self_config_categories
             .expect("the configurator grant names its categories");
         assert!(categories.iter().any(|category| category == "profile"));
@@ -1885,7 +1882,7 @@ mod tests {
             Some(identity.clone()),
             &gents::tool_surface::SelfConfigToolConfig {
                 enabled: true,
-                behavior_id: summary.default_behavior_id.clone(),
+                agent_id: summary.default_agent_id.clone(),
                 categories: categories.into_iter().collect(),
                 ..Default::default()
             },
@@ -1902,7 +1899,7 @@ mod tests {
             .await
             .expect("a freshly initialized home binds an execution the configurator can edit");
 
-        let agent = gents::Gents::from_default_behavior_documents(
+        let agent = gents::Gents::from_default_agent_documents(
             node.clone(),
             identity,
             gents::DocumentRuntimeOptions::default(),
@@ -1910,10 +1907,10 @@ mod tests {
         .await
         .unwrap();
         let resolved = agent
-            .behaviors()
+            .agents()
             .iter()
-            .find(|resolved| resolved.behavior_id == summary.default_behavior_id)
-            .expect("init default behavior resolves")
+            .find(|resolved| resolved.agent_id == summary.default_agent_id)
+            .expect("init default agent resolves")
             .clone();
         assert_eq!(resolved.max_turns, 250);
         assert_eq!(
@@ -1923,7 +1920,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn failed_init_publishes_no_default_behavior() {
+    async fn failed_init_publishes_no_default_agent() {
         let node = Arc::new(
             gents::defra_node::EmbeddedNode::builder()
                 .build()
@@ -1933,13 +1930,13 @@ mod tests {
         gents::ensure_runtime_schemas(&node).await.unwrap();
         let access = ConfigAccess::Local(node.clone());
         let owner = "did:key:z-init-atomic";
-        let backend = json!({"agent_did":owner,"backend_id":"backend","name":"Local",
+        let backend = json!({"node_did":owner,"backend_id":"backend","name":"Local",
             "provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1",
             "auth":{"kind":"unauthenticated"}});
-        let profile = json!({"agent_did":owner,"profile_id":"profile","backend_id":"backend",
+        let profile = json!({"node_did":owner,"profile_id":"profile","backend_id":"backend",
             "model_name":"model"});
-        let behavior = |enabled: bool| {
-            json!({"agent_did":owner,"behavior_id":"default",
+        let agent = |enabled: bool| {
+            json!({"node_did":owner,"agent_id":"default",
                 "inference_profile_id":"profile","enabled":enabled})
         };
         let entry = |collection, value: serde_json::Value| DesiredStateApplyDocument {
@@ -1947,9 +1944,9 @@ mod tests {
             add: value.clone(),
             update: value,
         };
-        let principal = || async { load_agent_principal(&node, owner).await.unwrap() };
+        let node_document = || async { load_node(&node, owner).await.unwrap() };
 
-        // The named behavior is missing, then disabled: neither publishes a principal.
+        // The named agent is missing, then disabled: neither publishes a node_document.
         let missing = vec![
             entry(Collection::InferenceBackend, backend.clone()),
             entry(Collection::InferenceProfile, profile.clone()),
@@ -1959,11 +1956,11 @@ mod tests {
                 .await
                 .is_err()
         );
-        assert_eq!(principal().await, None);
+        assert_eq!(node_document().await, None);
         let disabled = vec![
             entry(Collection::InferenceBackend, backend.clone()),
             entry(Collection::InferenceProfile, profile.clone()),
-            entry(Collection::AgentBehavior, behavior(false)),
+            entry(Collection::Agent, agent(false)),
         ];
         let error = publish_home_config(&access, owner, "Agent", "default", true, disabled)
             .await
@@ -1972,18 +1969,18 @@ mod tests {
             format!("{error:#}").contains("must be enabled"),
             "{error:#}"
         );
-        assert_eq!(principal().await, None);
+        assert_eq!(node_document().await, None);
 
         let complete = vec![
             entry(Collection::InferenceBackend, backend),
             entry(Collection::InferenceProfile, profile),
-            entry(Collection::AgentBehavior, behavior(true)),
+            entry(Collection::Agent, agent(true)),
         ];
         publish_home_config(&access, owner, "Agent", "default", true, complete)
             .await
             .unwrap();
         assert_eq!(
-            principal().await.unwrap().default_behavior_id.as_deref(),
+            node_document().await.unwrap().default_agent_id.as_deref(),
             Some("default")
         );
     }
@@ -1999,7 +1996,7 @@ mod tests {
             model_name: "test-model".to_string(),
             max_concurrent: 2,
             max_queue_depth: 16,
-            default_behavior_id: "default".to_string(),
+            default_agent_id: "default".to_string(),
             tools_id: "default-tools".to_string(),
             wide_open_preset_id: "wide-open".to_string(),
             inference_profile_id: "default-profile".to_string(),
@@ -2009,8 +2006,8 @@ mod tests {
             enable_memory: false,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
-            created_principal: true,
-            created_default_behavior: true,
+            created_node: true,
+            created_default_agent: true,
         }
     }
 
@@ -2130,7 +2127,7 @@ mod tests {
             dangerously_overwrite: false,
             reset: false,
             identity_only: false,
-            agent_name: "test-agent".to_string(),
+            node_name: "test-agent".to_string(),
             key_path: None,
             identity_backend: IdentityBackendArg::File,
             keychain_label: None,
@@ -2150,7 +2147,7 @@ mod tests {
             write_tools: false,
             yolo: false,
             tool_package: None,
-            setup_steward: false,
+            engineer: false,
             tool_root: None,
             enable_memory: false,
             disable_defra_query: false,
@@ -2160,15 +2157,15 @@ mod tests {
     }
 
     #[test]
-    fn setup_steward_placeholder_is_disabled_until_inference_is_selected() {
+    fn engineer_placeholder_is_disabled_until_inference_is_selected() {
         let mut args = init_args();
-        args.setup_steward = true;
+        args.engineer = true;
         args.model_name = None;
         assert!(!initial_backend_enabled(&args));
         args.model_name = Some("selected-model".into());
         assert!(initial_backend_enabled(&args));
         args.model_name = None;
-        args.setup_steward = false;
+        args.engineer = false;
         assert!(initial_backend_enabled(&args));
     }
 
@@ -2202,7 +2199,7 @@ mod tests {
     }
 
     #[test]
-    fn setup_steward_uses_the_selected_process_permissions() {
+    fn engineer_uses_the_selected_process_permissions() {
         let selected = ToolPackageArg::Yolo;
         assert_eq!(
             tool_ceiling_for_package(ToolPackageArg::Yolo),
@@ -2223,18 +2220,18 @@ mod tests {
         assert_eq!(host.files.unwrap().mode, FileToolMode::ReadWrite);
         assert_eq!(host.bash.unwrap().mode, BashMode::Unrestricted);
         assert_eq!(
-            setup_steward_self_config().self_config_categories,
+            engineer_self_config().self_config_categories,
             Some(vec![
-                "behavior".to_string(),
+                "node".to_string(),
+                "agent".to_string(),
                 "tools".to_string(),
                 "profile".to_string(),
-                "persona".to_string(),
                 "backend".to_string(),
                 "mcp_service".to_string(),
                 "automation".to_string(),
             ])
         );
-        assert_eq!(setup_steward_self_config().enable_pack_install, Some(true));
+        assert_eq!(engineer_self_config().enable_pack_install, Some(true));
     }
 
     #[test]
@@ -2254,7 +2251,7 @@ mod tests {
             Some(true)
         );
         assert!(tools.validation_violations().is_empty());
-        assert_eq!(tools.subagents.as_ref().unwrap().enabled, Some(true));
+        assert_eq!(tools.agents.as_ref().unwrap().enabled, Some(true));
         assert_eq!(
             tools
                 .built_ins
@@ -2269,7 +2266,7 @@ mod tests {
             datastore.datastore_tool_surface_ids,
             Some(vec![surface.surface_id.clone()])
         );
-        assert_eq!(surface.agent_did, "did:key:z-init");
+        assert_eq!(surface.node_did, "did:key:z-init");
         assert_eq!(
             surface.entries,
             Some(vec![SurfaceToolDecl::Create(
@@ -2281,7 +2278,7 @@ mod tests {
     #[test]
     fn engineer_defaults_to_write_without_overriding_explicit_restrictions() {
         let mut args = init_args();
-        args.setup_steward = true;
+        args.engineer = true;
         assert_eq!(
             resolve_initial_tool_package(&args).unwrap(),
             ToolPackageArg::Write
@@ -2298,8 +2295,8 @@ mod tests {
         }
     }
 
-    /// Drift fence between init's tool packages and the directory persona
-    /// catalog's preset templates (`gents::agent::persona_presets`): the
+    /// Drift fence between init's tool packages and the directory agent
+    /// catalog's preset templates (`gents::tool_surface::presets`): the
     /// templates are copied verbatim from init's package profiles, and
     /// nothing else ties the two together. Classify the exact canonical
     /// `Tools` document init mints — projected into `PresetFields`
@@ -2308,8 +2305,8 @@ mod tests {
     /// rows — so a change to either side fails here instead of silently
     /// mislabeling directory rows.
     #[test]
-    fn init_minted_selections_classify_as_their_persona_preset() {
-        use gents::agent::persona_presets::{classify_tools, PRESET_READONLY, PRESET_WRITE};
+    fn init_minted_selections_classify_as_their_agent_preset() {
+        use gents::tool_surface::presets::{classify_tools, PRESET_READONLY, PRESET_WRITE};
 
         fn classify(package: ToolPackageArg) -> Option<&'static str> {
             let tools = tools_for_package(
@@ -2417,9 +2414,9 @@ mod tests {
                 tools.datastore.as_ref().unwrap().enable_defra_query,
                 Some(case.enable_defra_query)
             );
-            // Canonical subagent capability is absent unless authored: no
-            // targets, no spawn/steering/background, no cross-principal grant.
-            assert!(tools.subagents.is_none());
+            // Canonical agent capability is absent unless authored: no
+            // targets, no spawn/steering/background, no cross-node_document grant.
+            assert!(tools.agents.is_none());
             assert!(tools.remote.is_none());
             assert!(tools.self_config.is_none());
             assert_eq!(
@@ -2565,7 +2562,7 @@ mod tests {
     fn wide_open_preset_is_canonical_permissive_tools() {
         let preset = wide_open_tools_document("did:key:z-init");
         assert_eq!(preset.tools_id, "did:key:z-init:wide-open");
-        assert_eq!(preset.agent_did, "did:key:z-init");
+        assert_eq!(preset.node_did, "did:key:z-init");
         assert_eq!(
             preset.built_ins.as_ref().unwrap().enable_context_budget,
             Some(true)
@@ -2574,12 +2571,12 @@ mod tests {
             preset.datastore.as_ref().unwrap().enable_defra_query,
             Some(true)
         );
-        // No host tools, remote services, subagents, integrations, or
+        // No host tools, remote services, agents, integrations, or
         // self-config: the permissive surface is explicit, never implied by a
         // policy version.
         assert!(preset.host.is_none());
         assert!(preset.remote.is_none());
-        assert!(preset.subagents.is_none());
+        assert!(preset.agents.is_none());
         assert!(preset.integrations.is_none());
         assert!(preset.self_config.is_none());
         assert!(preset.validate().is_ok());
@@ -2613,13 +2610,13 @@ mod tests {
                 variable: "PROVIDER_KEY".to_string()
             }
         );
-        // Agent-scoped OAuth providers resolve the principal's existing
+        // Agent-scoped OAuth providers resolve the node's existing
         // OAuthCredential; the backend never copies tokens or keys.
         backend.provider_kind = gents::BackendProviderKind::ChatGptCodex;
         backend.api_key = Some("ignored".to_string());
         assert_eq!(
             backend_auth_for_init(&backend).unwrap(),
-            BackendAuth::PrincipalOAuth { account_ref: None }
+            BackendAuth::NodeOAuth { account_ref: None }
         );
     }
 

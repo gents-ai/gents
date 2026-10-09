@@ -2,13 +2,13 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use gents::{AgentIdentity, KeyIdentity};
+use gents::{KeyIdentity, NodeIdentity};
 use gents_protocol::row::{
-    decode_behavior_readiness_snapshot, AgentBehaviorReadinessRow, BehaviorReadinessProcessState,
+    decode_node_readiness_snapshot, NodeReadinessProcessState, NodeReadinessRow,
 };
 use serde_json::Value;
 
-use crate::cli::ManifestAgentDidBindingArg;
+use crate::cli::ManifestNodeDidBindingArg;
 use crate::config_writes::ConfigAccess;
 use crate::desired_state::{self, DesiredStateManifest, DesiredStateValidationReport};
 use crate::print_json;
@@ -17,7 +17,7 @@ pub(crate) struct ManifestBindingOptions<'a> {
     pub(crate) root: &'a Path,
     pub(crate) home: Option<&'a Path>,
     pub(crate) graphql: Option<&'a str>,
-    pub(crate) bind_agent_did: Option<ManifestAgentDidBindingArg>,
+    pub(crate) bind_node_did: Option<ManifestNodeDidBindingArg>,
     pub(crate) force_rebind_concrete_did: bool,
     pub(crate) access: Option<&'a ConfigAccess>,
 }
@@ -36,7 +36,7 @@ pub(crate) struct BoundDesiredManifest {
 #[allow(dead_code)]
 pub(crate) struct ManifestBindingContext {
     pub(crate) bind_mode: ManifestBindMode,
-    pub(crate) target_agent_did: String,
+    pub(crate) target_node_did: String,
     pub(crate) source_manifest_dids: BTreeSet<String>,
 }
 
@@ -48,11 +48,11 @@ pub(crate) enum ManifestBindMode {
 }
 
 impl ManifestBindMode {
-    fn from_cli(value: Option<ManifestAgentDidBindingArg>) -> Self {
+    fn from_cli(value: Option<ManifestNodeDidBindingArg>) -> Self {
         match value {
             None => Self::Manifest,
-            Some(ManifestAgentDidBindingArg::Home) => Self::Home,
-            Some(ManifestAgentDidBindingArg::Live) => Self::Live,
+            Some(ManifestNodeDidBindingArg::Home) => Self::Home,
+            Some(ManifestNodeDidBindingArg::Live) => Self::Live,
         }
     }
 }
@@ -72,12 +72,12 @@ pub(crate) async fn load_bound_manifest(
     options: ManifestBindingOptions<'_>,
 ) -> Result<BoundManifestLoad> {
     let root_display = options.root.display().to_string();
-    let bind_mode = ManifestBindMode::from_cli(options.bind_agent_did);
+    let bind_mode = ManifestBindMode::from_cli(options.bind_node_did);
     let (mut manifest, mut initial_report) = desired_state::load_manifest_root(options.root);
     let mut decoded_for_target = None;
     if manifest.is_none() && bind_mode != ManifestBindMode::Manifest {
         let target =
-            resolve_bound_agent_did(bind_mode, options.home, options.graphql, options.access)
+            resolve_bound_node_did(bind_mode, options.home, options.graphql, options.access)
                 .await?;
         (manifest, initial_report) =
             desired_state::load_manifest_root_for_owner(options.root, Some(&target));
@@ -90,15 +90,15 @@ pub(crate) async fn load_bound_manifest(
         });
     };
 
-    let source_manifest_dids = manifest_agent_dids(&manifest)?;
+    let source_manifest_dids = manifest_node_dids(&manifest)?;
 
     if bind_mode == ManifestBindMode::Manifest {
-        let target_agent_did = manifest.agent_principal.agent_did.clone();
+        let target_node_did = manifest.node.node_did.clone();
         return Ok(BoundManifestLoad {
             bound: Some(BoundDesiredManifest {
                 context: ManifestBindingContext {
                     bind_mode,
-                    target_agent_did,
+                    target_node_did,
                     source_manifest_dids,
                 },
                 manifest,
@@ -110,17 +110,17 @@ pub(crate) async fn load_bound_manifest(
     let target_did = if let Some(target) = decoded_for_target {
         target
     } else {
-        resolve_bound_agent_did(bind_mode, options.home, options.graphql, options.access).await?
+        resolve_bound_node_did(bind_mode, options.home, options.graphql, options.access).await?
     };
     enforce_manifest_rebind_safety(&manifest, &target_did, options.force_rebind_concrete_did)?;
-    rebind_manifest_agent_did(&mut manifest, &target_did)?;
+    rebind_manifest_node_did(&mut manifest, &target_did)?;
 
     let report = validation_report_for_manifest(root_display, &manifest);
     Ok(BoundManifestLoad {
         bound: Some(BoundDesiredManifest {
             context: ManifestBindingContext {
                 bind_mode,
-                target_agent_did: target_did,
+                target_node_did: target_did,
                 source_manifest_dids,
             },
             manifest,
@@ -129,35 +129,35 @@ pub(crate) async fn load_bound_manifest(
     })
 }
 
-pub(crate) async fn resolve_target_agent_did(
-    explicit_agent_did: Option<&str>,
-    bind_agent_did: Option<ManifestAgentDidBindingArg>,
+pub(crate) async fn resolve_target_node_did(
+    explicit_node_did: Option<&str>,
+    bind_node_did: Option<ManifestNodeDidBindingArg>,
     home: Option<&Path>,
     graphql: Option<&str>,
     access: Option<&ConfigAccess>,
 ) -> Result<String> {
-    if explicit_agent_did
+    if explicit_node_did
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .is_some()
-        && bind_agent_did.is_some()
+        && bind_node_did.is_some()
     {
-        anyhow::bail!("pass either --agent-did or --bind-agent-did, not both");
+        anyhow::bail!("pass either --node-did or --bind-node-did, not both");
     }
 
-    if let Some(agent_did) = explicit_agent_did
+    if let Some(node_did) = explicit_node_did
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        return Ok(agent_did.to_string());
+        return Ok(node_did.to_string());
     }
 
-    let Some(bind_agent_did) = bind_agent_did else {
-        return crate::resolve_agent_did(home, None);
+    let Some(bind_node_did) = bind_node_did else {
+        return crate::resolve_node_did(home, None);
     };
 
-    resolve_bound_agent_did(
-        ManifestBindMode::from_cli(Some(bind_agent_did)),
+    resolve_bound_node_did(
+        ManifestBindMode::from_cli(Some(bind_node_did)),
         home,
         graphql,
         access,
@@ -165,13 +165,13 @@ pub(crate) async fn resolve_target_agent_did(
     .await
 }
 
-pub(crate) fn rebind_manifest_to_agent(
+pub(crate) fn rebind_manifest_to_node(
     manifest: &mut DesiredStateManifest,
-    target_agent_did: &str,
+    target_node_did: &str,
     force_rebind_concrete_did: bool,
 ) -> Result<()> {
-    enforce_manifest_rebind_safety(manifest, target_agent_did, force_rebind_concrete_did)?;
-    rebind_manifest_agent_did(manifest, target_agent_did)
+    enforce_manifest_rebind_safety(manifest, target_node_did, force_rebind_concrete_did)?;
+    rebind_manifest_node_did(manifest, target_node_did)
 }
 
 fn validation_report_for_manifest(
@@ -193,13 +193,13 @@ fn validation_report_for_manifest(
         },
         ok: errors.is_empty(),
         root: root_display,
-        agent_did: Some(manifest.agent_principal.agent_did.clone()),
+        node_did: Some(manifest.node.node_did.clone()),
         counts,
         errors,
     }
 }
 
-async fn resolve_bound_agent_did(
+async fn resolve_bound_node_did(
     bind_mode: ManifestBindMode,
     home: Option<&Path>,
     graphql: Option<&str>,
@@ -209,33 +209,34 @@ async fn resolve_bound_agent_did(
         ManifestBindMode::Manifest => {
             anyhow::bail!("manifest binding mode does not resolve a runtime DID")
         }
-        ManifestBindMode::Home => resolve_home_binding_agent_did(home)
-            .context("resolving agent DID from initialized home"),
+        ManifestBindMode::Home => {
+            resolve_home_binding_node_did(home).context("resolving node DID from initialized home")
+        }
         ManifestBindMode::Live => {
             if let Some(access) = access {
-                return resolve_live_agent_did(access).await;
+                return resolve_live_node_did(access).await;
             }
             let (access, _) = crate::resolve_config_access(home, graphql).await?;
-            resolve_live_agent_did(&access).await
+            resolve_live_node_did(&access).await
         }
     }
 }
 
-fn resolve_home_binding_agent_did(home: Option<&Path>) -> Result<String> {
+fn resolve_home_binding_node_did(home: Option<&Path>) -> Result<String> {
     let home_dir = crate::resolve_home_dir(home);
     let init_config = crate::read_init_config(&home_dir)?.ok_or_else(|| {
         anyhow::anyhow!(
-            "initialized home metadata is required for --bind-agent-did home; run `gents init --identity-only --home {}` first",
+            "initialized home metadata is required for --bind-node-did home; run `gents init --identity-only --home {}` first",
             home_dir.display()
         )
     })?;
 
-    let init_did = init_config.agent_did.trim();
+    let init_did = init_config.node_did.trim();
     if !init_did.is_empty() {
         if let Some(key_did) = load_init_key_did(init_config.key_path.as_deref(), &home_dir)? {
             if key_did != init_did {
                 anyhow::bail!(
-                    "initialized home {} has agent DID {init_did}, but identity key resolves to {key_did}; rerun `gents init --identity-only` or repair the home identity metadata",
+                    "initialized home {} has node DID {init_did}, but identity key resolves to {key_did}; rerun `gents init --identity-only` or repair the home identity metadata",
                     home_dir.display()
                 );
             }
@@ -245,7 +246,7 @@ fn resolve_home_binding_agent_did(home: Option<&Path>) -> Result<String> {
 
     load_init_key_did(init_config.key_path.as_deref(), &home_dir)?.ok_or_else(|| {
         anyhow::anyhow!(
-            "initialized home {} does not contain an agent DID or identity key path; rerun `gents init --identity-only`",
+            "initialized home {} does not contain an node DID or identity key path; rerun `gents init --identity-only`",
             home_dir.display()
         )
     })
@@ -272,21 +273,21 @@ fn load_init_key_did(key_path: Option<&str>, home_dir: &Path) -> Result<Option<S
     Ok(Some(identity.did().to_string()))
 }
 
-async fn resolve_live_agent_did(access: &ConfigAccess) -> Result<String> {
+async fn resolve_live_node_did(access: &ConfigAccess) -> Result<String> {
     let response = access
         .execute(
             r#"{
-                AgentBehaviorReadiness(order: { updated_at: DESC }) {
-                    agent_did
+                NodeReadiness(order: { updated_at: DESC }) {
+                    node_did
                     snapshot_json
                     updated_at
                 }
             }"#,
         )
         .await
-        .context("querying live behavior readiness for agent DID")?;
+        .context("querying live node readiness for node DID")?;
     let rows = response
-        .pointer("/data/AgentBehaviorReadiness")
+        .pointer("/data/NodeReadiness")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
@@ -295,31 +296,31 @@ async fn resolve_live_agent_did(access: &ConfigAccess) -> Result<String> {
         .iter()
         .copied()
         .find(|row| {
-            serde_json::from_value::<AgentBehaviorReadinessRow>((*row).clone())
+            serde_json::from_value::<NodeReadinessRow>((*row).clone())
                 .ok()
                 .and_then(|row| {
-                    decode_behavior_readiness_snapshot(&row, &row.agent_did)
+                    decode_node_readiness_snapshot(&row, &row.node_did)
                         .ok()
                         .map(|snapshot| snapshot.process_state)
                 })
                 .is_some_and(is_active_runtime_state)
         })
-        .ok_or_else(|| anyhow::anyhow!("live runtime did not publish active behavior readiness"))?;
-    let agent_did = selected
-        .get("agent_did")
+        .ok_or_else(|| anyhow::anyhow!("live runtime did not publish active node readiness"))?;
+    let node_did = selected
+        .get("node_did")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| anyhow::anyhow!("live behavior readiness row did not contain agent_did"))?;
-    Ok(agent_did.to_string())
+        .ok_or_else(|| anyhow::anyhow!("live node readiness row did not contain node_did"))?;
+    Ok(node_did.to_string())
 }
 
-fn is_active_runtime_state(state: BehaviorReadinessProcessState) -> bool {
+fn is_active_runtime_state(state: NodeReadinessProcessState) -> bool {
     !matches!(
         state,
-        BehaviorReadinessProcessState::Shutdown | BehaviorReadinessProcessState::ShuttingDown
+        NodeReadinessProcessState::Shutdown | NodeReadinessProcessState::ShuttingDown
     )
 }
 
 mod owner;
-use owner::{enforce_manifest_rebind_safety, manifest_agent_dids, rebind_manifest_agent_did};
+use owner::{enforce_manifest_rebind_safety, manifest_node_dids, rebind_manifest_node_did};

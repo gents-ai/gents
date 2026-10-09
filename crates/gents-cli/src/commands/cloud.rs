@@ -23,7 +23,7 @@ use tokio::time::Instant;
 
 use crate::cli::args::{CloudCommand, CloudLoginArgs};
 use crate::config_writes::ConfigAccess;
-use crate::{print_json, resolve_agent_did, resolve_config_access};
+use crate::{print_json, resolve_config_access, resolve_node_did};
 
 /// Per-request ceiling on a single call to the cloud. Long enough for a
 /// cold pod, short enough that a black-holed host fails while the person
@@ -86,10 +86,10 @@ pub(crate) struct CloudLoginOutcome {
 pub(crate) async fn cloud_login(args: CloudLoginArgs) -> Result<()> {
     let (access, home_dir) =
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
-    let agent_did = resolve_agent_did(Some(&home_dir), args.agent_did.as_deref())?;
+    let node_did = resolve_node_did(Some(&home_dir), args.node_did.as_deref())?;
     let outcome = run_cloud_login(
         &access,
-        &agent_did,
+        &node_did,
         &CloudLoginOptions {
             cloud: args.cloud,
             provider: args.provider,
@@ -102,7 +102,7 @@ pub(crate) async fn cloud_login(args: CloudLoginArgs) -> Result<()> {
 
 pub(crate) async fn run_cloud_login(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     opts: &CloudLoginOptions,
 ) -> Result<CloudLoginOutcome> {
     let base = cloud_base_url(&opts.cloud)?;
@@ -129,7 +129,7 @@ pub(crate) async fn run_cloud_login(
     eprintln!("Signed in as {}", session.email);
     eprintln!("Workspace {} is ready.", session.workspace_id);
 
-    let credential = credential_from_session(agent_did, provider, &session, Utc::now());
+    let credential = credential_from_session(node_did, provider, &session, Utc::now());
     let mutation = gents::oauth_credential::oauth_credential_upsert_mutation(&credential);
     let response = access
         .write("cli.cloud_login.credential", &mutation)
@@ -150,7 +150,7 @@ pub(crate) fn cloud_login_result_json(outcome: &CloudLoginOutcome) -> Value {
         "login": "completed",
         "doc_id": outcome.doc_id,
         "credential_id": credential.credential_id,
-        "agent_did": credential.agent_did,
+        "node_did": credential.node_did,
         "provider": credential.provider,
         "email": outcome.email,
         "workspace_id": outcome.workspace_id,
@@ -320,15 +320,15 @@ async fn wait_for_approval(polls: &impl DevicePolls, start: &DeviceStart) -> Res
 }
 
 fn credential_from_session(
-    agent_did: &str,
+    node_did: &str,
     provider: &str,
     session: &SignedIn,
     now: DateTime<Utc>,
 ) -> gents::oauth_credential::OAuthCredential {
     gents::oauth_credential::OAuthCredential {
         doc_id: None,
-        credential_id: gents::oauth_credential::oauth_credential_id(agent_did, provider),
-        agent_did: agent_did.to_string(),
+        credential_id: gents::oauth_credential::oauth_credential_id(node_did, provider),
+        node_did: node_did.to_string(),
         provider: provider.to_string(),
         access_token: session.token.clone(),
         refresh_token: NO_REFRESH_GRANT.to_string(),
@@ -895,7 +895,7 @@ mod tests {
                 "OAuthCredential": [{
                     "_docID": "doc-1",
                     "credential_id": credential.credential_id,
-                    "agent_did": credential.agent_did,
+                    "node_did": credential.node_did,
                     "provider": credential.provider,
                     "access_token": credential.access_token,
                     "refresh_token": credential.refresh_token,

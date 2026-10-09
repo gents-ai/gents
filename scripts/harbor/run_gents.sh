@@ -1,26 +1,17 @@
 #!/bin/sh
 set -eu
 
-# Classify a terminal response document. Budget exhaustion is the only
-# terminal error Harbor should verifier-score: the workspace may hold real
-# work. The match is anchored to the full owned-loop error shape — the
-# max-turn guard's `PromptError::MaxTurnsError` display as persisted by
-# `agent stream failed: {error}` (pinned by the runtime max-turns test) at
-# the very start of the error_message value. A provider error that merely
-# echoes upstream text mentioning MaxTurnError therefore stays an agent
-# exception, as does everything else unrecognized. Matching the quoted
-# key-plus-prefix is safe against model content: JSON escapes quotes inside
-# string values, so this byte sequence can only introduce the real field.
-_MAX_TURN_ERROR_PREFIX='"error_message": "agent stream failed: PromptError: MaxTurnError: '
-_AGGREGATE_TOKEN_ERROR_PREFIX='"error_message": "agent stream failed: CompletionError: ProviderError: aggregate_token_budget_exhausted: '
-_COMPACTION_PROVIDER_ERROR='compaction_provider_failure:'
-
-response_error_has() {
-  response_file=$1
-  expected=$2
-  sed -n '/^[[:space:]]*"error_message":/p' "${response_file}" |
-    head -1 |
-    grep -qF "${expected}"
+# Read only the canonical request metadata, never model-authored output.
+response_status() {
+  python3 - "$1" <<'PYSTATUS'
+import json, sys
+try:
+    request = json.load(open(sys.argv[1])).get("request", {})
+    state = request.get("lifecycle_state") if isinstance(request, dict) else None
+    print(state if isinstance(state, str) else "missing")
+except (OSError, ValueError, AttributeError):
+    print("missing")
+PYSTATUS
 }
 
 # Read one non-negative integer from the root final_metrics.extra object in
@@ -54,27 +45,33 @@ normalize_token_budget_outcome() {
 }
 
 classify_response() {
-  response_file=$1
-  response_file_status=$(sed -n 's/^[[:space:]]*"status": "\([^"]*\)",*$/\1/p' "${response_file}" | head -1)
-  case "${response_file_status}" in
-    complete|completed)
-      printf 'completed\n'
-      ;;
-    error)
-      if grep -qF "${_MAX_TURN_ERROR_PREFIX}" "${response_file}"; then
-        printf 'max_turns_exhausted\n'
-      elif grep -qF "${_AGGREGATE_TOKEN_ERROR_PREFIX}" "${response_file}"; then
-        printf 'token_budget_exhausted\n'
-      elif response_error_has "${response_file}" "${_COMPACTION_PROVIDER_ERROR}"; then
-        printf 'compaction_provider_error\n'
-      else
-        printf 'agent_error\n'
-      fi
-      ;;
-    *)
-      printf 'unexpected:%s\n' "${response_file_status:-missing}"
-      ;;
-  esac
+  python3 - "$1" <<'PYCLASSIFY'
+import json, sys
+try:
+    envelope = json.load(open(sys.argv[1]))
+    request = envelope.get("request", {})
+    output = envelope.get("output", {})
+    state = request.get("lifecycle_state") if isinstance(request, dict) else None
+    reason = request.get("failure_reason") if isinstance(request, dict) else None
+    kind = output.get("kind") if isinstance(output, dict) else None
+except (OSError, ValueError, AttributeError):
+    state = reason = kind = None
+if state not in {"completed", "failed"}:
+    outcome = "unexpected:" + (state if isinstance(state, str) else "missing")
+elif kind not in {"terminal_message", "terminal_no_message"}:
+    outcome = "unexpected:output"
+elif state == "completed":
+    outcome = "completed"
+elif isinstance(reason, str) and reason.startswith("agent stream failed: PromptError: MaxTurnError: "):
+    outcome = "max_turns_exhausted"
+elif isinstance(reason, str) and reason.startswith("agent stream failed: CompletionError: ProviderError: aggregate_token_budget_exhausted: "):
+    outcome = "token_budget_exhausted"
+elif isinstance(reason, str) and "compaction_provider_failure:" in reason:
+    outcome = "compaction_provider_error"
+else:
+    outcome = "agent_error"
+print(outcome)
+PYCLASSIFY
 }
 
 # Fixture-driven check of terminal-response classification. Runs without any
@@ -100,10 +97,17 @@ run_self_test() {
 
   cat >"${self_test_dir}/complete.json" <<'EOF'
 {
-  "request_id": "req-1",
-  "status": "complete",
-  "content": "done",
-  "error_message": null
+  "request": {
+    "request_id": "req-1",
+    "lifecycle_state": "completed",
+    "failure_reason": null
+  },
+  "output": {
+    "kind": "terminal_message",
+    "presentation": {
+      "body_markdown": "done"
+    }
+  }
 }
 EOF
   cat >"${self_test_dir}/trajectory.json" <<'EOF'
@@ -130,99 +134,166 @@ EOF
 EOF
   cat >"${self_test_dir}/completed.json" <<'EOF'
 {
-  "request_id": "req-2",
-  "status": "completed",
-  "content": "done",
-  "error_message": null
+  "request": {
+    "request_id": "req-2",
+    "lifecycle_state": "completed",
+    "failure_reason": null
+  },
+  "output": {
+    "kind": "terminal_message",
+    "presentation": {
+      "body_markdown": "done"
+    }
+  }
 }
 EOF
   cat >"${self_test_dir}/max-turns.json" <<'EOF'
 {
-  "request_id": "req-3",
-  "status": "error",
-  "content": "partial work",
-  "error_message": "agent stream failed: PromptError: MaxTurnError: (reached max turn limit: 250)"
+  "request": {
+    "request_id": "req-3",
+    "lifecycle_state": "failed",
+    "failure_reason": "agent stream failed: PromptError: MaxTurnError: (reached max turn limit: 250)"
+  },
+  "output": {
+    "kind": "terminal_message",
+    "presentation": {
+      "body_markdown": "partial work"
+    }
+  }
 }
 EOF
   cat >"${self_test_dir}/provider-error.json" <<'EOF'
 {
-  "request_id": "req-4",
-  "status": "error",
-  "content": null,
-  "error_message": "agent stream failed: CompletionError: ProviderError: upstream returned HTTP 500"
+  "request": {
+    "request_id": "req-4",
+    "lifecycle_state": "failed",
+    "failure_reason": "agent stream failed: CompletionError: ProviderError: upstream returned HTTP 500"
+  },
+  "output": {
+    "kind": "terminal_message",
+    "presentation": {
+      "body_markdown": null
+    }
+  }
 }
 EOF
   cat >"${self_test_dir}/token-budget.json" <<'EOF'
 {
-  "request_id": "req-token-budget",
-  "status": "error",
-  "content": "partial work",
-  "error_message": "agent stream failed: CompletionError: ProviderError: aggregate_token_budget_exhausted: limit=100000, used=100000 after provider call"
+  "request": {
+    "request_id": "req-token-budget",
+    "lifecycle_state": "failed",
+    "failure_reason": "agent stream failed: CompletionError: ProviderError: aggregate_token_budget_exhausted: limit=100000, used=100000 after provider call"
+  },
+  "output": {
+    "kind": "terminal_message",
+    "presentation": {
+      "body_markdown": "partial work"
+    }
+  }
 }
 EOF
   cat >"${self_test_dir}/compaction-error.json" <<'EOF'
 {
-  "request_id": "req-5",
-  "status": "error",
-  "content": null,
-  "error_message": "compaction failed: summary request rejected by provider"
+  "request": {
+    "request_id": "req-5",
+    "lifecycle_state": "failed",
+    "failure_reason": "compaction failed: summary request rejected by provider"
+  },
+  "output": {
+    "kind": "terminal_message",
+    "presentation": {
+      "body_markdown": null
+    }
+  }
 }
 EOF
   cat >"${self_test_dir}/compaction-provider-error.json" <<'EOF'
 {
-  "request_id": "req-12",
-  "status": "error",
-  "content": null,
-  "error_message": "agent stream failed: CompletionError: ProviderError: per-turn provider-input compaction failed: compaction_provider_failure: guided and fallback output failed"
+  "request": {
+    "request_id": "req-12",
+    "lifecycle_state": "failed",
+    "failure_reason": "agent stream failed: CompletionError: ProviderError: per-turn provider-input compaction failed: compaction_provider_failure: guided and fallback output failed"
+  },
+  "output": {
+    "kind": "terminal_message",
+    "presentation": {
+      "body_markdown": null
+    }
+  }
 }
 EOF
   cat >"${self_test_dir}/content-mentions-max-turn.json" <<'EOF'
 {
-  "request_id": "req-6",
-  "status": "error",
-  "content": "I hit MaxTurnError: in a log I was reading",
-  "error_message": "agent stream failed: CompletionError: ProviderError: connection reset"
+  "request": {
+    "request_id": "req-6",
+    "lifecycle_state": "failed",
+    "failure_reason": "agent stream failed: CompletionError: ProviderError: connection reset"
+  },
+  "output": {
+    "kind": "terminal_message",
+    "presentation": {
+      "body_markdown": "I hit MaxTurnError: in a log I was reading"
+    }
+  }
 }
 EOF
   cat >"${self_test_dir}/content-mentions-compaction-provider.json" <<'EOF'
 {
-  "request_id": "req-13",
-  "status": "error",
-  "content": "A log contained compaction_provider_failure: but it was not this request failure.",
-  "error_message": "agent stream failed: CompletionError: ProviderError: connection reset"
+  "request": {
+    "request_id": "req-13",
+    "lifecycle_state": "failed",
+    "failure_reason": "agent stream failed: CompletionError: ProviderError: connection reset"
+  },
+  "output": {
+    "kind": "terminal_message",
+    "presentation": {
+      "body_markdown": "A log contained compaction_provider_failure: but it was not this request failure."
+    }
+  }
 }
 EOF
   cat >"${self_test_dir}/unexpected-status.json" <<'EOF'
 {
-  "request_id": "req-7",
-  "status": "interrupted",
-  "content": null,
-  "error_message": null
+  "request": {
+    "request_id": "req-7",
+    "lifecycle_state": "interrupted",
+    "failure_reason": null
+  },
+  "output": {
+    "kind": "terminal_message",
+    "presentation": {
+      "body_markdown": null
+    }
+  }
 }
 EOF
   cat >"${self_test_dir}/missing-status.json" <<'EOF'
 {
-  "request_id": "req-8",
-  "content": null
+  "request": {
+    "request_id": "req-8",
+    "failure_reason": null
+  },
+  "output": {
+    "kind": "terminal_message",
+    "presentation": {
+      "body_markdown": null
+    }
+  }
 }
 EOF
-  # Full `response wait` envelope: flat AgentResponse fields plus a nested
-  # `request` object whose `failure_reason` duplicates the terminal error.
+  # Canonical request metadata carries the terminal failure independently of output.
   cat >"${self_test_dir}/envelope-max-turns.json" <<'EOF'
 {
-  "request_id": "req-9",
-  "behavior_id": "b-1",
-  "session_id": "s-1",
-  "status": "error",
-  "content": "partial work",
-  "reasoning": null,
-  "error_message": "agent stream failed: PromptError: MaxTurnError: (reached max turn limit: 250)",
-  "token_count": 12345,
-  "completed_at": "2026-08-04T00:00:00Z",
   "request": {
     "request_id": "req-9",
     "lifecycle_state": "failed",
     "failure_reason": "agent stream failed: PromptError: MaxTurnError: (reached max turn limit: 250)"
+  },
+  "output": {
+    "kind": "terminal_message",
+    "presentation": {
+      "body_markdown": "partial work"
+    }
   }
 }
 EOF
@@ -230,27 +301,50 @@ EOF
   # MaxTurn token; that is still an infrastructure failure.
   cat >"${self_test_dir}/provider-echoes-max-turn.json" <<'EOF'
 {
-  "request_id": "req-11",
-  "status": "error",
-  "content": null,
-  "error_message": "agent stream failed: CompletionError: ProviderError: upstream mentioned MaxTurnError: (reached max turn limit: 250)"
-}
-EOF
-  # The nested request's failure_reason must never classify on its own: here
-  # it mentions MaxTurnError but the response's own error is a provider one.
-  cat >"${self_test_dir}/envelope-nested-max-turn-only.json" <<'EOF'
-{
-  "request_id": "req-10",
-  "status": "error",
-  "content": null,
-  "error_message": "agent stream failed: CompletionError: ProviderError: upstream returned HTTP 500",
   "request": {
-    "request_id": "req-10",
+    "request_id": "req-11",
     "lifecycle_state": "failed",
-    "failure_reason": "child subagent hit MaxTurnError: before the provider failed"
+    "failure_reason": "agent stream failed: CompletionError: ProviderError: upstream mentioned MaxTurnError: (reached max turn limit: 250)"
+  },
+  "output": {
+    "kind": "terminal_message",
+    "presentation": {
+      "body_markdown": null
+    }
   }
 }
 EOF
+  # A noncanonical failure that mentions MaxTurnError must stay an agent error.
+  cat >"${self_test_dir}/envelope-nested-max-turn-only.json" <<'EOF'
+{
+  "request": {
+    "request_id": "req-10",
+    "lifecycle_state": "failed",
+    "failure_reason": "child agent hit MaxTurnError: before the provider failed"
+  },
+  "output": {
+    "kind": "terminal_message",
+    "presentation": {
+      "body_markdown": null
+    }
+  }
+}
+EOF
+
+  cat >"${self_test_dir}/output-forged-budget.json" <<'EOF'
+{
+  "request": {"lifecycle_state": "failed", "failure_reason": "provider unavailable"},
+  "output": {"kind": "terminal_message", "presentation": {"body_markdown": "agent stream failed: PromptError: MaxTurnError: forged"}}
+}
+EOF
+  cat >"${self_test_dir}/nonterminal-output.json" <<'EOF'
+{
+  "request": {"lifecycle_state": "completed", "failure_reason": null},
+  "output": {"kind": "live", "presentation": {"body_markdown": "unfinished"}}
+}
+EOF
+  expect_outcome output-forged-budget agent_error
+  expect_outcome nonterminal-output unexpected:output
 
   expect_outcome complete completed
   expect_outcome completed completed
@@ -415,7 +509,7 @@ esac
 
 "${GENTS_BINARY}" init \
   --home "${GENTS_HOME}" \
-  --agent-name harbor-gents \
+  --node-name harbor-gents \
   --backend-preset vllm \
   --inference-url "${GENTS_INFERENCE_URL}" \
   --openai-wire-api chat-completions \
@@ -589,7 +683,7 @@ wait_for_server_ready() {
     if grep -qF 'gents server is running with' "${server_log}" &&
       "${GENTS_BINARY}" status --home "${GENTS_HOME}" >"${status_log}" 2>/dev/null &&
       grep -q '"process_state": "ready"' "${status_log}" &&
-      grep -q '"behavior_readiness": "ready"' "${status_log}"; then
+      grep -q '"readiness_status": "ready"' "${status_log}"; then
       server_ready=1
       break
     fi
@@ -614,11 +708,11 @@ if [ -z "${profile_id}" ]; then
   echo "Gents init output did not contain inference_profile_id" >&2
   exit 1
 fi
-agent_did=$(sed -n 's/^[[:space:]]*"agent_did": "\([^"]*\)",*$/\1/p' "${init_log}" | head -1)
+node_did=$(sed -n 's/^[[:space:]]*"node_did": "\([^"]*\)",*$/\1/p' "${init_log}" | head -1)
 tools_id=$(sed -n 's/^[[:space:]]*"tools_id": "\([^"]*\)",*$/\1/p' "${init_log}" | head -1)
-behavior_id=$(sed -n 's/^[[:space:]]*"default_behavior_id": "\([^"]*\)",*$/\1/p' "${init_log}" | head -1)
-if [ -z "${agent_did}" ] || [ -z "${tools_id}" ] || [ -z "${behavior_id}" ]; then
-  echo "Gents init output did not contain agent_did, default_behavior_id, and tools_id" >&2
+agent_id=$(sed -n 's/^[[:space:]]*"default_agent_id": "\([^"]*\)",*$/\1/p' "${init_log}" | head -1)
+if [ -z "${node_did}" ] || [ -z "${tools_id}" ] || [ -z "${agent_id}" ]; then
+  echo "Gents init output did not contain node_did, default_agent_id, and tools_id" >&2
   exit 1
 fi
 
@@ -660,14 +754,14 @@ configure_profile() {
 
 configure_tools() {
   tools_config="${GENTS_HOME}/harbor-tools.json"
-  python3 - "${tools_config}" "${agent_did}" "${tools_id}" "${GENTS_TOOL_ROOT}" <<'PY'
+  python3 - "${tools_config}" "${node_did}" "${tools_id}" "${GENTS_TOOL_ROOT}" <<'PY'
 import json
 import sys
 
-path, agent_did, tools_id, root = sys.argv[1:]
+path, node_did, tools_id, root = sys.argv[1:]
 with open(path, "w", encoding="utf-8") as output:
     json.dump({
-        "agent_did": agent_did,
+        "node_did": node_did,
         "tools_id": tools_id,
         "host": {
             "root": root,
@@ -709,7 +803,7 @@ trap 'exit 130' INT TERM
 configure_profile
 configure_tools
 
-# Configure through GraphQL before requiring behavior readiness. This also
+# Configure through GraphQL before requiring node readiness. This also
 # bootstraps binaries whose schema materializes an omitted nullable string as
 # an empty value. Restarting makes the persisted profile part of the startup
 # snapshot before any benchmark request can exist.
@@ -722,7 +816,7 @@ wait_for_server_ready
 
 "${GENTS_BINARY}" tools explain \
   --home "${GENTS_HOME}" \
-  --behavior-id "${behavior_id}" \
+  --agent-id "${agent_id}" \
   >"${tools_explain_log}"
 
 metadata=$(printf '{"harness":"harbor","model_name":"%s"}' "${GENTS_MODEL}")
@@ -824,7 +918,7 @@ done
 
 # Persist terminal classification before projection. If projection cannot
 # reopen the store, diagnostics still retain the response-derived outcome.
-response_status=$(sed -n 's/^[[:space:]]*"status": "\([^"]*\)",*$/\1/p' "${response_log}" | head -1)
+response_status=$(response_status "${response_log}")
 outcome=$(classify_response "${response_log}")
 printf '{\n  "outcome": "%s",\n  "response_status": "%s",\n  "max_turns": %s,\n  "max_total_tokens": %s,\n  "request_id": "%s"\n}\n' \
   "${outcome}" "${response_status:-missing}" "${GENTS_MAX_TURNS}" "${GENTS_MAX_TOTAL}" "${request_id}" \
@@ -867,24 +961,24 @@ case "${outcome}" in
     ;;
   max_turns_exhausted)
     echo "Gents request ${request_id} exhausted its ${GENTS_MAX_TURNS}-turn budget; returning the workspace for verification" >&2
-    sed -n '/^[[:space:]]*"error_message":/p' "${response_log}" >&2 || true
+    sed -n '/^[[:space:]]*"failure_reason":/p' "${response_log}" >&2 || true
     printf 'gents request %s reached the %s-turn limit; trajectory=%s\n' \
       "${request_id}" "${GENTS_MAX_TURNS}" "${trajectory_path}"
     ;;
   token_budget_exhausted)
     echo "Gents request ${request_id} exhausted its ${GENTS_MAX_TOTAL}-token aggregate budget; returning the workspace for verification" >&2
-    sed -n '/^[[:space:]]*"error_message":/p' "${response_log}" >&2 || true
+    sed -n '/^[[:space:]]*"failure_reason":/p' "${response_log}" >&2 || true
     printf 'gents request %s reached the %s-token aggregate limit; trajectory=%s\n' \
       "${request_id}" "${GENTS_MAX_TOTAL}" "${trajectory_path}"
     ;;
   compaction_provider_error)
     echo "Gents request ${request_id} terminated because both guided and strict fallback compaction failed" >&2
-    sed -n '/^[[:space:]]*"error_message":/p' "${response_log}" >&2 || true
+    sed -n '/^[[:space:]]*"failure_reason":/p' "${response_log}" >&2 || true
     exit 1
     ;;
   agent_error)
     echo "Gents request ${request_id} terminated with an error response" >&2
-    sed -n '/^[[:space:]]*"error_message":/p' "${response_log}" >&2 || true
+    sed -n '/^[[:space:]]*"failure_reason":/p' "${response_log}" >&2 || true
     exit 1
     ;;
   *)

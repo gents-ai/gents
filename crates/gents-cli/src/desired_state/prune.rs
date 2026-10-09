@@ -7,13 +7,13 @@ pub(crate) fn prune_safe_deletes(
     live: &DesiredStateManifest,
 ) -> Result<Vec<DocRef>> {
     anyhow::ensure!(
-        desired.agent_principal.agent_did == live.agent_principal.agent_did,
-        "cannot prune configuration across principals"
+        desired.node.node_did == live.node.node_did,
+        "cannot prune configuration across nodes"
     );
     let desired = canonical_records(desired)?;
     let records = canonical_records(live)?;
     let references = ConfigReferences::from_documents(
-        &live.agent_principal.agent_did,
+        &live.node.node_did,
         records
             .iter()
             .map(|((collection, _), value)| (*collection, value.clone())),

@@ -8,7 +8,7 @@ use tokio::process::{Child, Command};
 
 use gents::graphql::escape_graphql_string;
 use gents_protocol::row::{
-    decode_behavior_readiness_snapshot, AgentBehaviorReadinessRow, BehaviorReadinessSnapshot,
+    decode_node_readiness_snapshot, NodeReadinessRow, NodeReadinessSnapshot,
 };
 
 use crate::graphql_access::post_graphql;
@@ -54,19 +54,19 @@ pub(super) fn spawn_server_with_args_and_env(
 }
 
 /// `/healthz` only proves that HTTP is up; gate commands on the authoritative
-/// runtime behavior-readiness projection.
+/// runtime agent-readiness projection.
 pub(super) async fn wait_runtime_ready(
     graphql: &GraphqlEndpoint,
-    agent_did: &str,
+    node_did: &str,
     server: &mut Child,
 ) -> Result<()> {
     let query = format!(
-        r#"{{ AgentBehaviorReadiness(filter: {{ agent_did: {{ _eq: "{}" }} }}, limit: 1) {{ agent_did snapshot_json updated_at }} }}"#,
-        escape_graphql_string(agent_did)
+        r#"{{ NodeReadiness(filter: {{ node_did: {{ _eq: "{}" }} }}, limit: 1) {{ node_did snapshot_json updated_at }} }}"#,
+        escape_graphql_string(node_did)
     );
     for _ in 0..360 {
         if let Ok(resp) = post_graphql(graphql, &query).await {
-            if readiness_snapshot(&resp, agent_did).is_some_and(|snapshot| {
+            if readiness_snapshot(&resp, node_did).is_some_and(|snapshot| {
                 snapshot.process_state.accepts_work()
                     && snapshot.active_generation > 0
                     && snapshot.router_generation == snapshot.active_generation
@@ -82,15 +82,12 @@ pub(super) async fn wait_runtime_ready(
     bail!("timed out waiting for the pack runtime at {graphql} to become ready")
 }
 
-fn readiness_snapshot(
-    response: &Value,
-    expected_agent_did: &str,
-) -> Option<BehaviorReadinessSnapshot> {
+fn readiness_snapshot(response: &Value, expected_node_did: &str) -> Option<NodeReadinessSnapshot> {
     let row = response
-        .pointer("/data/AgentBehaviorReadiness/0")
+        .pointer("/data/NodeReadiness/0")
         .cloned()
-        .and_then(|row| serde_json::from_value::<AgentBehaviorReadinessRow>(row).ok())?;
-    decode_behavior_readiness_snapshot(&row, expected_agent_did).ok()
+        .and_then(|row| serde_json::from_value::<NodeReadinessRow>(row).ok())?;
+    decode_node_readiness_snapshot(&row, expected_node_did).ok()
 }
 
 pub(super) async fn wait_http(url: &str, server: &mut Child) -> Result<()> {

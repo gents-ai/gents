@@ -19,7 +19,7 @@ async fn config_apply_updates_backend_from_canonical_bundle_over_graphql() -> Re
     let init = run_init_json(
         &home,
         &[
-            "--agent-name",
+            "--node-name",
             "graphql-apply",
             "--model-name",
             &model,
@@ -27,7 +27,7 @@ async fn config_apply_updates_backend_from_canonical_bundle_over_graphql() -> Re
             endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     run_cli_text(
         &home,
         &["config", "export", "--root", root.to_str().unwrap()],
@@ -44,7 +44,7 @@ async fn config_apply_updates_backend_from_canonical_bundle_over_graphql() -> Re
 
     let mut server = spawn_server(&home, port)?;
     wait_for_port(port, &mut server)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
     let applied = run_cli_json(
         &home,
         &[

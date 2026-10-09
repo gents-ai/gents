@@ -11,6 +11,12 @@ use serde::de::DeserializeOwned;
 pub mod accounts {
     pub use crate::commands::accounts::{remove_account, request_usage_reads, UsageReads};
 }
+/// Authenticated enrollment offer issuance shared by native server hosts.
+pub mod enrollment {
+    pub use crate::http::enrollment::{
+        ensure_enrollment_network, EnrollmentOfferIssuer, EnrollmentOfferStatus,
+    };
+}
 mod caused_sessions;
 mod cli;
 mod commands;
@@ -42,7 +48,7 @@ use home_state::*;
 use request_helpers::*;
 use resolve_helpers::*;
 
-const DEFAULT_AGENT_NAME: &str = "default";
+const DEFAULT_NODE_NAME: &str = "default";
 const DEFAULT_INIT_ENDPOINT: &str = "http://127.0.0.1:8080/v1";
 const DEFAULT_INIT_MODEL_NAME: &str = "google/gemma-4-12B-it-qat-q4_0-gguf";
 const DEFAULT_OLLAMA_ENDPOINT: &str = "http://localhost:11434/v1";
@@ -100,10 +106,10 @@ Inspect the local runtime:
 
 Update runtime documents:
   gents config backend set ...
-  gents config behavior set ...
+  gents config agent set ...
   gents config tools set ...";
 const INIT_AFTER_HELP: &str = "\
-Bootstrap a local home directory with one default backend, one default behavior, and a safe read-only Tools document.
+Bootstrap a local home directory with one default backend, one default agent, and a safe read-only Tools document.
 
 Examples:
   gents init
@@ -137,8 +143,8 @@ Examples:
 Production low-level flow:
   gents init --identity-only --identity-backend macos-keychain --keychain-label LABEL
   gents init --identity-only --identity-backend macos-secure-enclave --secure-enclave-label LABEL
-  gents config apply --root <root> --home <home> --bind-agent-did home
-  gents config diff --root <root> --home <home> --bind-agent-did home
+  gents config apply --root <root> --home <home> --bind-node-did home
+  gents config diff --root <root> --home <home> --bind-node-did home
 
 File-key development flow:
   gents provision --root <root> --bootstrap-file-identity";
@@ -164,7 +170,7 @@ listener and advertise that endpoint:
 
 Identity note:
   Standalone server startup supports file keys, macOS keychain software-key homes initialized with identity_backend=macos-keychain, and macOS Secure Enclave homes initialized with identity_backend=macos-secure-enclave.
-  Homes with a real agent DID and no key_path must include a supported identity_backend and label in init.json.";
+  Homes with a real node DID and no key_path must include a supported identity_backend and label in init.json.";
 const CHAT_AFTER_HELP: &str = "\
 Examples:
   gents chat
@@ -176,7 +182,7 @@ Diagnostics:
   gents response show REQUEST_ID";
 const CODEX_AFTER_HELP: &str = "\
 Launches the `codex` terminal UI as a separate process connected to the local
-agent's Codex shim. Codex-side approvals and sandboxing are bypassed: the tool
+node's Codex shim. Codex-side approvals and sandboxing are bypassed: the tool
 preset chosen at `gents init` (read-only by default) is the permission boundary.
 
 Examples:
@@ -204,7 +210,7 @@ Examples:
 
   # Low-level non-authoritative live wiring for diagnostics/repair:
   gents p2p admin connect --peer <peer-id-or-address>
-  gents p2p admin replicators add --peer <peer-id-or-address> --collection AgentRequest --filter AgentRequest:agent_did=<agent-did>
+  gents p2p admin replicators add --peer <peer-id-or-address> --collection AgentRequest --filter AgentRequest:node_did=<node-did>
   gents p2p admin documents sync --collection AgentRequest --doc-id <doc-id>";
 const SCHEMA_AFTER_HELP: &str = "\
 Apply app-specific DefraDB collection schemas to a running or local store.
@@ -239,7 +245,7 @@ Examples:
 const MCP_AFTER_HELP: &str = "\
 Examples:
   gents mcp register web --endpoint http://127.0.0.1:9213/mcp
-  gents mcp register web --endpoint http://127.0.0.1:9213/mcp --send-agent-did
+  gents mcp register web --endpoint http://127.0.0.1:9213/mcp --send-node-did
   gents mcp probe SERVICE_ID
   gents mcp probe --all
   gents mcp probe SERVICE_ID --timeout 10s
@@ -254,7 +260,7 @@ Examples:
 const CLOUD_AFTER_HELP: &str = "\
 Signs in through another device: the cloud prints a short code, you approve it on the
 console page it names, and the workspace token is stored as an OAuthCredential document
-for this agent DID. Google authenticates you on that page; gents never sees a password.
+for this node DID. Google authenticates you on that page; gents never sees a password.
 
 Examples:
   gents cloud login --cloud app.dev.gents.xyz
@@ -286,18 +292,18 @@ Examples:
   gents trace project --projection atif --request-id REQUEST_ID --format native-json --output-file /logs/agent/trajectory.json --home /path/to/home
   gents trace project --projection openai-codex --request-id REQUEST_ID --redaction public --home /path/to/home
   gents trace project --projection langgraph --request-id REQUEST_ID --format jsonl --home /path/to/home
-  gents trace project --projection multi-agent --request-id REQUEST_ID --scope-agent-did DID --home /path/to/home
+  gents trace project --projection multi-agent --request-id REQUEST_ID --scope-node-did DID --home /path/to/home
   gents trace project --projection multi-agent --request-id REQUEST_ID --format eval-jsonl --home /path/to/home
   gents trace project-schema --projection multi-agent --format eval-jsonl";
 const CONFIG_AFTER_HELP: &str = "\
 Examples:
   gents config validate --root infra/agents/default
-  gents config validate --root infra/agents/default --home /path/to/home --bind-agent-did home
+  gents config validate --root infra/agents/default --home /path/to/home --bind-node-did home
   gents config diff --root infra/agents/default --home /path/to/home
-  gents config apply --root infra/agents/default --home /path/to/home --bind-agent-did home
+  gents config apply --root infra/agents/default --home /path/to/home --bind-node-did home
   gents config backend set --graphql URL --backend-id <backend-id> --name <name> --backend-preset openrouter --max-concurrent 2
   gents config backend discover-models --backend-preset openrouter
-  gents config behavior set --graphql URL --agent-did <AGENT_DID> --context-id <context-id> --inference-profile-id <profile-id>
+  gents config agent set --graphql URL --node-did <NODE_DID> --context-id <context-id> --inference-profile-id <profile-id>
   gents config tools set --graphql URL --file tools.json";
 const REQUEST_AFTER_HELP: &str = "\
 `request` is the low-level document path. Most users should prefer `gents chat`.
@@ -314,8 +320,8 @@ Examples:
   gents response show REQUEST_ID";
 const SESSION_AFTER_HELP: &str = "\
 Fork a conversation into a new session seeded from a user-turn prefix \
-of the source. Child inherits principal; behavior can be swapped with \
---behavior.";
+of the source. Child inherits node identity; agent can be swapped with \
+--agent.";
 const DIAGNOSE_AFTER_HELP: &str = "\
 Examples:
   gents diagnose
@@ -324,14 +330,14 @@ Examples:
 const TOOLS_AFTER_HELP: &str = "\
 Examples:
   gents tools explain
-  gents tools explain --behavior-id BEHAVIOR_ID
+  gents tools explain --agent-id AGENT_ID
   gents tools explain --graphql http://127.0.0.1:9191/api/v0/graphql
 
 The explain output separates model-callable tools from operator HTTP/MCP surfaces
 and includes warnings for confusing defaults such as empty allowlists that mean
 all, or built-in read tools that are always included today.";
 const CONFIG_EXPORT_AFTER_HELP: &str = "\
-Exports the desired configuration documents for one agent principal as a
+Exports the desired configuration documents for one node as a
 manifest root directory (`pack_config.json` with optional prompt sidecars).
 The output is designed to be committed to version control and applied with
 `config apply --root <dir>`.
@@ -339,15 +345,15 @@ The output is designed to be committed to version control and applied with
 Examples:
   gents config export --root ./my-agent
   gents config export --root ./my-agent --force
-  gents config export --root ./my-agent --agent-did <AGENT_DID>
-  gents config export --root ./my-agent --home /path/to/home --bind-agent-did home";
+  gents config export --root ./my-agent --node-did <NODE_DID>
+  gents config export --root ./my-agent --home /path/to/home --bind-node-did home";
 pub(crate) const CONFIG_EXPORT_FORMAT: &str = "gents-config/v2";
 
 pub(crate) const SCHEMA_COLLECTION_CHECKS: &[(&str, &str)] = &[
-    ("AgentPrincipal", "agent_did"),
-    ("AgentBehavior", "behavior_id"),
+    ("Node", "node_did"),
+    ("Agent", "agent_id"),
     ("AgentContext", "context_id"),
-    ("AgentRuntime", "agent_did"),
+    ("NodeRuntime", "node_did"),
     ("Tools", "tools_id"),
     ("InferenceProfile", "profile_id"),
     ("InferenceBackend", "backend_id"),
@@ -368,8 +374,8 @@ pub(crate) const SCHEMA_COLLECTION_CHECKS: &[(&str, &str)] = &[
     ("ToolServiceRegistry", "service_id"),
 ];
 const CONFIG_SCHEMA_COLLECTIONS: &[&str] = &[
-    "AgentPrincipal",
-    "AgentBehavior",
+    "Node",
+    "Agent",
     "AgentContext",
     "Tools",
     "InferenceBackend",
@@ -378,7 +384,7 @@ const CONFIG_SCHEMA_COLLECTIONS: &[&str] = &[
     "InferenceExecution",
     "InferenceRetryPolicy",
 ];
-pub(crate) const EXPORT_SKILL_FIELDS: &str = "skill_id agent_did name description instructions source_directory tool_refs display_name interface_json enabled created_at tags";
+pub(crate) const EXPORT_SKILL_FIELDS: &str = "skill_id node_did name description instructions source_directory tool_refs display_name interface_json enabled created_at tags";
 
 pub fn run_cli() -> Result<()> {
     tokio::runtime::Builder::new_multi_thread()
@@ -766,7 +772,7 @@ pub(crate) fn server_start_failure_hint(home_dir: &Path) -> String {
 mod tests {
     use super::*;
     use crate::shared::StoredInitConfig;
-    use gents::AgentIdentity as _;
+    use gents::NodeIdentity as _;
 
     #[tokio::test]
     async fn initialized_offline_node_reuses_the_home_signer() {
@@ -781,8 +787,8 @@ mod tests {
             &home,
             &StoredInitConfig {
                 home: home.to_string_lossy().to_string(),
-                agent_name: "default".to_string(),
-                agent_did: did.clone(),
+                node_name: "default".to_string(),
+                node_did: did.clone(),
                 key_path: Some(key_path.to_string_lossy().to_string()),
                 identity_backend: None,
                 keychain_label: None,
@@ -842,8 +848,8 @@ mod tests {
             &home,
             &StoredInitConfig {
                 home: home.to_string_lossy().to_string(),
-                agent_name: "default".to_string(),
-                agent_did: identity.did().to_string(),
+                node_name: "default".to_string(),
+                node_did: identity.did().to_string(),
                 key_path: Some(key_path.to_string_lossy().to_string()),
                 identity_backend: None,
                 keychain_label: None,
@@ -947,7 +953,7 @@ mod tests {
 
     #[test]
     fn canonical_import_rejects_observation_fields_instead_of_silently_dropping_them() {
-        let service = serde_json::json!({"agent_did":"owner","service_id":"mcp","hostname":"host"});
+        let service = serde_json::json!({"node_did":"owner","service_id":"mcp","hostname":"host"});
         for (field, value) in [
             ("status", serde_json::json!("offline")),
             ("tools", serde_json::json!([{"name":"tool"}])),
@@ -969,7 +975,7 @@ mod tests {
 
     #[test]
     fn canonical_service_import_preserves_optional_endpoint_and_exact_values() {
-        let input = serde_json::json!({"agent_did":"owner","service_id":"mcp","hostname":"host","mcp_path":null});
+        let input = serde_json::json!({"node_did":"owner","service_id":"mcp","hostname":"host","mcp_path":null});
         let projected = gents::config_client::config_projection(
             gents::Collection::ToolServiceRegistry,
             Some(&input),
@@ -980,9 +986,9 @@ mod tests {
         assert_eq!(projected["hostname"], "host");
         assert!(projected["mcp_path"].is_null());
         assert!(projected.get("status").is_none());
-        assert_eq!(projected["agent_did"], "owner");
+        assert_eq!(projected["node_did"], "owner");
         let mut missing_owner = input;
-        missing_owner.as_object_mut().unwrap().remove("agent_did");
+        missing_owner.as_object_mut().unwrap().remove("node_did");
         assert!(gents::config_client::config_projection(
             gents::Collection::ToolServiceRegistry,
             Some(&missing_owner)

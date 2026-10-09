@@ -3,13 +3,13 @@ mod schema;
 mod tool_ceiling;
 
 use anyhow::Result;
-use gents_protocol::row::{project_behavior_readiness_summary, ProjectedBehaviorReadinessSummary};
+use gents_protocol::row::{project_node_readiness_summary, ProjectedNodeReadinessSummary};
 use serde_json::{json, Value};
 
 use crate::cli::args::{DiagnoseArgs, P2pTransportArg};
 use crate::{
     build_config_export_bundle, graphql_endpoint_available, print_json, read_init_config,
-    read_runtime_state, resolve_agent_did, resolve_config_access, resolve_home_dir,
+    read_runtime_state, resolve_config_access, resolve_home_dir, resolve_node_did,
 };
 
 use backends::diagnose_backends;
@@ -28,60 +28,58 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         Some(endpoint) => graphql_endpoint_available(endpoint).await,
         None => false,
     };
-    let agent_did = resolve_agent_did(args.home.as_deref(), args.agent_did.as_deref())?;
+    let node_did = resolve_node_did(args.home.as_deref(), args.node_did.as_deref())?;
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
 
     let schema_checks = diagnose_schema_presence(&access).await;
-    let bundle_result = build_config_export_bundle(&access, &agent_did).await;
+    let bundle_result = build_config_export_bundle(&access, &node_did).await;
     let config_load_error = bundle_result.as_ref().err().map(ToString::to_string);
     let bundle = bundle_result.ok();
-    let runtime_row = match load_runtime_row(&access, &agent_did).await {
+    let runtime_row = match load_runtime_row(&access, &node_did).await {
         Ok(Some(row)) => row,
         Ok(None) => Value::Null,
         Err(error) => json!({
             "error": error.to_string(),
         }),
     };
-    let live_runtime = graphql_reachable && runtime_row.get("agent_did").is_some();
-    let readiness_row = crate::commands::status::load_behavior_readiness(&access, &agent_did).await;
-    let (runtime_behavior_readiness, runtime_behavior_readiness_check) = match readiness_row {
-        Ok(row) => {
-            match project_behavior_readiness_summary(row.as_ref(), &agent_did, chrono::Utc::now()) {
-                ProjectedBehaviorReadinessSummary::Observed(summary) => {
-                    let unavailable = summary
-                        .unavailable_behaviors
-                        .iter()
-                        .map(|(behavior_id, reason)| {
-                            json!({
-                                "behavior_id": behavior_id,
-                                "reason": reason,
-                                "message": reason.public_message(),
-                            })
-                        })
-                        .collect::<Vec<_>>();
-                    let observed_ready = unavailable.is_empty();
-                    (
-                        serde_json::to_value(&summary.snapshot).unwrap_or(Value::Null),
+    let live_runtime = graphql_reachable && runtime_row.get("node_did").is_some();
+    let readiness_row = crate::commands::status::load_node_readiness(&access, &node_did).await;
+    let (runtime_node_readiness, runtime_node_readiness_check) = match readiness_row {
+        Ok(row) => match project_node_readiness_summary(row.as_ref(), &node_did) {
+            ProjectedNodeReadinessSummary::Observed(summary) => {
+                let unavailable = summary
+                    .unavailable_agents
+                    .iter()
+                    .map(|(agent_id, reason)| {
                         json!({
-                            "ok": !live_runtime || observed_ready,
-                            "required": live_runtime,
-                            "status": if observed_ready { "ready" } else { "degraded" },
-                            "ready_behavior_count": summary.ready_count,
-                            "unavailable_behaviors": unavailable,
-                        }),
-                    )
-                }
-                ProjectedBehaviorReadinessSummary::Unknown(reason) => (
-                    json!({ "state": "unknown", "reason": reason }),
+                            "agent_id": agent_id,
+                            "reason": reason,
+                            "message": reason.public_message(),
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                let observed_ready = unavailable.is_empty();
+                (
+                    serde_json::to_value(&summary.snapshot).unwrap_or(Value::Null),
                     json!({
-                        "ok": !live_runtime,
+                        "ok": !live_runtime || observed_ready,
                         "required": live_runtime,
-                        "status": "unknown",
-                        "reason": reason,
+                        "status": if observed_ready { "ready" } else { "degraded" },
+                        "ready_agent_count": summary.ready_count,
+                        "unavailable_agents": unavailable,
                     }),
-                ),
+                )
             }
-        }
+            ProjectedNodeReadinessSummary::Unknown(reason) => (
+                json!({ "state": "unknown", "reason": reason }),
+                json!({
+                    "ok": !live_runtime,
+                    "required": live_runtime,
+                    "status": "unknown",
+                    "reason": reason,
+                }),
+            ),
+        },
         Err(error) => (
             json!({ "state": "unknown", "error": error.to_string() }),
             json!({
@@ -92,37 +90,37 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
             }),
         ),
     };
-    let runtime_behavior_readiness_ok = runtime_behavior_readiness_check
+    let runtime_node_readiness_ok = runtime_node_readiness_check
         .get("ok")
         .and_then(Value::as_bool)
         .unwrap_or(false);
 
-    let behavior_ids = bundle
+    let agent_ids = bundle
         .as_ref()
         .into_iter()
-        .flat_map(|bundle| &bundle.config.agent_behaviors)
-        .map(|behavior| behavior.behavior_id.as_str())
+        .flat_map(|bundle| &bundle.config.agents)
+        .map(|agent| agent.agent_id.as_str())
         .collect::<std::collections::BTreeSet<_>>();
-    let default_behavior_id = bundle
+    let default_agent_id = bundle
         .as_ref()
-        .and_then(|bundle| bundle.config.agent_principal.default_behavior_id.as_deref());
-    let default_behavior_check = match default_behavior_id {
-        Some(behavior_id) if behavior_ids.contains(behavior_id) => json!({
+        .and_then(|bundle| bundle.config.node.default_agent_id.as_deref());
+    let default_agent_check = match default_agent_id {
+        Some(agent_id) if agent_ids.contains(agent_id) => json!({
             "ok": true,
-            "default_behavior_id": behavior_id,
+            "default_agent_id": agent_id,
         }),
-        Some(behavior_id) => json!({
+        Some(agent_id) => json!({
             "ok": false,
-            "default_behavior_id": behavior_id,
-            "error": format!("default behavior {} is not present in AgentBehavior documents", behavior_id),
+            "default_agent_id": agent_id,
+            "error": format!("default agent {} is not present in Agent documents", agent_id),
         }),
         None => json!({
             "ok": false,
-            "error": format!("AgentPrincipal {} is missing or has no default_behavior_id", agent_did),
+            "error": format!("Node {} is missing or has no default_agent_id", node_did),
         }),
     };
     let tool_ceiling_check = diagnose_tool_ceiling(init_config.as_ref());
-    let accounts = gents::oauth_credential::list_accounts(&access, &agent_did).await;
+    let accounts = gents::oauth_credential::list_accounts(&access, &node_did).await;
     let backend_reports = match bundle.as_ref() {
         Some(bundle) => {
             diagnose_backends(&access, bundle, accounts.as_deref().unwrap_or_default()).await
@@ -170,7 +168,7 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
     let backends_ok = backend_reports
         .iter()
         .all(|check| check.get("ok").and_then(Value::as_bool) == Some(true));
-    let default_behavior_ok = default_behavior_check
+    let default_agent_ok = default_agent_check
         .get("ok")
         .and_then(Value::as_bool)
         .unwrap_or(false);
@@ -183,7 +181,7 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
     let chatgpt_provider = gents::chatgpt_codex::CHATGPT_CODEX_PROVIDER;
     let mut chatgpt_auth_check = match gents::oauth_credential::resolve_oauth_credential(
         &access,
-        &agent_did,
+        &node_did,
         chatgpt_provider,
         gents::oauth_credential::AccountPick::ProviderDefault,
     )
@@ -207,7 +205,7 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
             "provider": credential.provider,
             "expires_at": credential.access_token_expires_at,
             "guidance": gents::oauth_credential::classify_chatgpt_auth_error(
-                &agent_did,
+                &node_did,
                 chatgpt_provider,
                 &gents::oauth_credential::OAuthAuthProblem::Expired,
             ),
@@ -216,7 +214,7 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
             "ok": false,
             "provider": chatgpt_provider,
             "guidance": gents::oauth_credential::classify_chatgpt_auth_error(
-                &agent_did,
+                &node_did,
                 chatgpt_provider,
                 &gents::oauth_credential::OAuthAuthProblem::Missing,
             ),
@@ -231,7 +229,7 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
     let xai_provider = gents::xai_grok_oauth::XAI_OAUTH_PROVIDER;
     let mut xai_auth_check = match gents::oauth_credential::resolve_oauth_credential(
         &access,
-        &agent_did,
+        &node_did,
         xai_provider,
         gents::oauth_credential::AccountPick::ProviderDefault,
     )
@@ -253,7 +251,7 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
             "provider": credential.provider,
             "expires_at": credential.access_token_expires_at,
             "guidance": gents::xai_grok_oauth::classify_xai_auth_error(
-                &agent_did,
+                &node_did,
                 xai_provider,
                 &gents::oauth_credential::OAuthAuthProblem::Expired,
             ),
@@ -262,7 +260,7 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
             "ok": false,
             "provider": xai_provider,
             "guidance": gents::xai_grok_oauth::classify_xai_auth_error(
-                &agent_did,
+                &node_did,
                 xai_provider,
                 &gents::oauth_credential::OAuthAuthProblem::Missing,
             ),
@@ -277,7 +275,7 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
     let claude_provider = gents::claude_oauth::CLAUDE_OAUTH_PROVIDER;
     let mut claude_auth_check = match gents::oauth_credential::resolve_oauth_credential(
         &access,
-        &agent_did,
+        &node_did,
         claude_provider,
         gents::oauth_credential::AccountPick::ProviderDefault,
     )
@@ -299,7 +297,7 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
             "provider": credential.provider,
             "expires_at": credential.access_token_expires_at,
             "guidance": gents::claude_oauth::classify_claude_auth_error(
-                &agent_did,
+                &node_did,
                 claude_provider,
                 &gents::oauth_credential::OAuthAuthProblem::Expired,
             ),
@@ -308,7 +306,7 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
             "ok": false,
             "provider": claude_provider,
             "guidance": gents::claude_oauth::classify_claude_auth_error(
-                &agent_did,
+                &node_did,
                 claude_provider,
                 &gents::oauth_credential::OAuthAuthProblem::Missing,
             ),
@@ -344,7 +342,7 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
                     .iter()
                     .filter(|account| account.provider == provider)
                     .collect::<Vec<_>>(),
-                &agent_did,
+                &node_did,
                 provider,
                 classify,
             ),
@@ -380,14 +378,14 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
 
     let status = if schemas_ok
         && principal_present
-        && default_behavior_ok
+        && default_agent_ok
         && tool_ceiling_ok
         && backends_ok
         && chatgpt_auth_ok
         && xai_auth_ok
         && claude_auth_ok
         && p2p_ok
-        && runtime_behavior_readiness_ok
+        && runtime_node_readiness_ok
         && config_load_error.is_none()
     {
         "ok"
@@ -398,12 +396,12 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
     let mut output = json!({
         "status": status,
         "home": home_dir,
-        "agent_did": agent_did,
+        "node_did": node_did,
         "access_mode": access.mode(),
         "graphql": graphql,
         "graphql_reachable": graphql_reachable,
         "runtime": runtime_row,
-        "runtime_behavior_readiness": runtime_behavior_readiness,
+        "runtime_node_readiness": runtime_node_readiness,
         "p2p": p2p_status,
         "checks": {
             "schemas": schema_checks,
@@ -411,9 +409,9 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
                 "ok": config_load_error.is_none(),
                 "error": config_load_error,
             },
-            "agent_principal_present": principal_present,
-            "default_behavior": default_behavior_check,
-            "runtime_behavior_readiness": runtime_behavior_readiness_check,
+            "node_present": principal_present,
+            "default_agent": default_agent_check,
+            "runtime_node_readiness": runtime_node_readiness_check,
             "tool_ceiling": tool_ceiling_check,
             "chatgpt_auth": chatgpt_auth_check,
             "xai_auth": xai_auth_check,
@@ -430,7 +428,7 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         "config_counts": bundle.as_ref().map(|bundle| {
             gents::Collection::ALL.into_iter().map(|collection| {
                 let count = bundle.docs_for_collection(collection)?.len();
-                Ok((collection.dir_name().unwrap_or("agent_principal").to_owned(), count))
+                Ok((collection.dir_name().unwrap_or("node").to_owned(), count))
             }).collect::<Result<std::collections::BTreeMap<_, _>>>()
         }).transpose()?,
     });
@@ -447,7 +445,7 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
 /// check's own fields and gate stay on the provider's default account.
 fn accounts_json(
     accounts: &[&gents::oauth_credential::AccountSummary],
-    agent_did: &str,
+    node_did: &str,
     provider: &str,
     classify: fn(&str, &str, &gents::oauth_credential::OAuthAuthProblem) -> String,
 ) -> Value {
@@ -468,7 +466,7 @@ fn accounts_json(
                 "label": account.label,
                 "ok": problem.is_none(),
                 "expires_at": account.access_token_expires_at,
-                "guidance": problem.map(|problem| classify(agent_did, provider, &problem)),
+                "guidance": problem.map(|problem| classify(node_did, provider, &problem)),
             })
         })
         .collect()
@@ -478,7 +476,7 @@ fn accounts_json(
 /// alone does not degrade the overall status: the prober counts such a
 /// credential healthy and the next request refreshes it. Only a credential
 /// that could not be read at all (missing, or a decode error) degrades — the
-/// agent snapshot gate refuses the behavior in that case.
+/// agent snapshot gate refuses the agent in that case.
 fn claude_auth_gate(backend_configured: bool, check: &Value) -> bool {
     !backend_configured || check.get("credential_id").is_some()
 }

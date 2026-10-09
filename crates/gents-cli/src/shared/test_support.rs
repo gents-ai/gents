@@ -26,19 +26,19 @@ pub(crate) async fn seed_unsent_xai_effort(owner: &str) -> gents::config_client:
 
 pub(crate) fn xai_effort_backend(owner: &str) -> Value {
     serde_json::json!({
-        "agent_did": owner, "backend_id": "xai", "name": "xAI",
+        "node_did": owner, "backend_id": "xai", "name": "xAI",
         "provider_kind": "OpenAiCompatible", "openai_wire_api": "responses",
         "endpoint": "https://api.x.ai/v1", "enabled": true,
         "auth": {"kind": "environment", "variable": "XAI_API_KEY"},
         "probe_status": "unhealthy",
-        "catalogs": {"entries": [{"agent_did": null, "observed_at": "2026-01-01T00:00:00Z",
+        "catalogs": {"entries": [{"node_did": null, "observed_at": "2026-01-01T00:00:00Z",
             "models": [{"model_name": "grok-4.20-0309-reasoning", "reasoning_efforts": []}]}]}
     })
 }
 
 pub(crate) fn xai_effort_profile(owner: &str) -> Value {
     serde_json::json!({
-        "agent_did": owner, "profile_id": "grok", "backend_id": "xai",
+        "node_did": owner, "profile_id": "grok", "backend_id": "xai",
         "model_name": "grok-4.20-0309-reasoning", "reasoning_effort": "low"
     })
 }

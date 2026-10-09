@@ -1,4 +1,4 @@
-//! A proposer that asks a behavior on the served home: one rendered turn
+//! A proposer that asks an agent on the served home: one rendered turn
 //! per round, answered with exactly one fenced json block.
 
 use anyhow::{anyhow, Result};
@@ -9,14 +9,14 @@ use crate::commands::eval::init::draft::json_blocks;
 use crate::commands::eval::init::turn::Turn;
 use crate::commands::eval::render::percent;
 
-pub(crate) struct BehaviorProposer<T> {
+pub(crate) struct AgentProposer<T> {
     turn: Mutex<T>,
     /// Sent as the session's first user turn, before the first round; its
     /// reply is required but not read.
     preamble: Mutex<Option<String>>,
 }
 
-impl<T: Turn + Send> BehaviorProposer<T> {
+impl<T: Turn + Send> AgentProposer<T> {
     #[cfg(test)]
     pub(crate) fn new(turn: T) -> Self {
         Self {
@@ -34,7 +34,7 @@ impl<T: Turn + Send> BehaviorProposer<T> {
 }
 
 #[async_trait::async_trait]
-impl<T: Turn + Send> Proposer for BehaviorProposer<T> {
+impl<T: Turn + Send> Proposer for AgentProposer<T> {
     async fn propose(&self, input: ProposalInput) -> Result<Proposal> {
         let mut turn = self.turn.lock().await;
         if let Some(preamble) = self.preamble.lock().await.take() {
@@ -51,7 +51,7 @@ impl<T: Turn + Send> Proposer for BehaviorProposer<T> {
             ))
             .await?;
         parse_reply(&reply)
-            .map_err(|problem| anyhow!("the behavior's second reply is not a proposal: {problem}"))
+            .map_err(|problem| anyhow!("the agent's second reply is not a proposal: {problem}"))
     }
 }
 
@@ -124,7 +124,7 @@ fn parse_reply(reply: &str) -> Result<Proposal, String> {
 mod tests {
     use gents::optimization::{CheckFeedback, ProposalInput, Proposer, Rejection};
 
-    use super::{render, BehaviorProposer};
+    use super::{render, AgentProposer};
     use crate::commands::eval::init::turn::ScriptedTurn;
 
     fn input() -> ProposalInput {
@@ -220,7 +220,7 @@ Reply with exactly one fenced json block: {\"text\": ..., \"rationale\": ...}
 
     #[tokio::test]
     async fn a_good_reply_is_the_proposal() {
-        let proposer = BehaviorProposer::new(ScriptedTurn::new([GOOD]));
+        let proposer = AgentProposer::new(ScriptedTurn::new([GOOD]));
         let proposal = proposer.propose(input()).await.unwrap();
         assert_eq!(proposal.text, "Answer in two sentences.");
         assert_eq!(proposal.rationale, "tone");
@@ -230,7 +230,7 @@ Reply with exactly one fenced json block: {\"text\": ..., \"rationale\": ...}
 
     #[tokio::test]
     async fn a_preamble_is_sent_once_before_the_first_round() {
-        let proposer = BehaviorProposer::with_preamble(
+        let proposer = AgentProposer::with_preamble(
             ScriptedTurn::new(["noted", GOOD, GOOD]),
             "# Subject\n\nthe dossier".to_owned(),
         );
@@ -249,7 +249,7 @@ Reply with exactly one fenced json block: {\"text\": ..., \"rationale\": ...}
 
     #[tokio::test]
     async fn a_reply_without_a_block_gets_one_corrective_turn() {
-        let proposer = BehaviorProposer::new(ScriptedTurn::new(["Which tone?", GOOD]));
+        let proposer = AgentProposer::new(ScriptedTurn::new(["Which tone?", GOOD]));
         let proposal = proposer.propose(input()).await.unwrap();
         assert_eq!(proposal.text, "Answer in two sentences.");
         let sent = proposer.turn.into_inner().sent;
@@ -264,7 +264,7 @@ Reply with exactly one fenced json block: {\"text\": ..., \"rationale\": ...}
     #[tokio::test]
     async fn two_bad_replies_are_an_error_naming_the_problem() {
         let two = format!("{GOOD}{GOOD}");
-        let proposer = BehaviorProposer::new(ScriptedTurn::new(["no", two.as_str()]));
+        let proposer = AgentProposer::new(ScriptedTurn::new(["no", two.as_str()]));
         let error = proposer.propose(input()).await.unwrap_err();
         assert!(
             format!("{error:#}").contains("2 fenced json blocks"),
@@ -275,7 +275,7 @@ Reply with exactly one fenced json block: {\"text\": ..., \"rationale\": ...}
     #[tokio::test]
     async fn a_block_without_rationale_is_bad() {
         let missing = "```json\n{\"text\": \"Answer in two sentences.\"}\n```\n";
-        let proposer = BehaviorProposer::new(ScriptedTurn::new([missing, GOOD]));
+        let proposer = AgentProposer::new(ScriptedTurn::new([missing, GOOD]));
         proposer.propose(input()).await.unwrap();
         let sent = proposer.turn.into_inner().sent;
         assert!(sent[1].contains("missing field `rationale`"), "{}", sent[1]);

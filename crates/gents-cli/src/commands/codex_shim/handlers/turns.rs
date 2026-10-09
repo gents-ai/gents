@@ -44,7 +44,7 @@ pub(super) async fn handle_turn_request(
         } => {
             let caused = load_codex_thread(state, &params.thread_id)
                 .await?
-                .and_then(|record| record.subagent);
+                .and_then(|record| record.caused);
             trace::shim_event_fields(
                 &state.trace_path,
                 "turn_interrupt_received",
@@ -57,7 +57,7 @@ pub(super) async fn handle_turn_request(
             if let Some(thread) = caused.as_ref() {
                 // The Codex user speaks for the root thread.
                 let caller = gents::session_origin::SessionScope {
-                    agent_did: state.agent_did.to_string(),
+                    node_did: state.node_did.to_string(),
                     session_id: thread.root_session_id.clone(),
                     requester_did: Some(state.local_requester_did().to_string()),
                 };

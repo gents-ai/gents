@@ -38,7 +38,7 @@ fn scope(home: PathBuf) -> GraphScopeArgs {
     GraphScopeArgs {
         home: Some(home),
         graphql: None,
-        agent_did: None,
+        node_did: None,
     }
 }
 

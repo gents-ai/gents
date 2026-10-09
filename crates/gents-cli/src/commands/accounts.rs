@@ -17,7 +17,7 @@ use serde_json::{json, Value};
 use crate::cli::args::{AccountsCommand, AccountsTargetArgs};
 use crate::cli::output_format::OutputFormat;
 use crate::config_writes::ConfigAccess;
-use crate::{print_json, resolve_agent_did, resolve_config_access};
+use crate::{print_json, resolve_config_access, resolve_node_did};
 
 /// One `accounts list` row: a sign-in account, a backend that uses no
 /// account, or a subscription backend whose account is not on this node.
@@ -56,7 +56,7 @@ const USAGE_READ_SIGNATURE_DOMAIN: &str = "gents-account-usage-read-v1";
 
 impl UsageReadCommand {
     pub(crate) async fn signed(
-        identity: &dyn gents::AgentIdentity,
+        identity: &dyn gents::NodeIdentity,
         trigger: UsageTrigger,
         provider: Option<&str>,
     ) -> Result<Self> {
@@ -114,7 +114,7 @@ impl UsageReadCommand {
 /// The runtime's answer to a [`UsageReadCommand`].
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct UsageReads {
-    pub agent_did: String,
+    pub node_did: String,
     pub reads: Vec<AccountUsageRead>,
 }
 
@@ -127,7 +127,7 @@ pub(crate) async fn dispatch(command: AccountsCommand) -> Result<()> {
         } => {
             let (access, home_dir) =
                 resolve_config_access(target.home.as_deref(), target.graphql.as_deref()).await?;
-            let did = resolve_agent_did(Some(&home_dir), target.agent_did.as_deref())?;
+            let did = resolve_node_did(Some(&home_dir), target.node_did.as_deref())?;
             let rows = list_with_usage(
                 &access,
                 &home_dir,
@@ -208,25 +208,25 @@ pub(crate) async fn dispatch(command: AccountsCommand) -> Result<()> {
 async fn target_access(target: &AccountsTargetArgs) -> Result<(crate::CommandAccess, String)> {
     let (access, home_dir) =
         resolve_config_access(target.home.as_deref(), target.graphql.as_deref()).await?;
-    let did = resolve_agent_did(Some(&home_dir), target.agent_did.as_deref())?;
+    let did = resolve_node_did(Some(&home_dir), target.node_did.as_deref())?;
     Ok((access, did))
 }
 
-/// The principal's accounts and the configuration that uses them.
+/// The node's accounts and the configuration that uses them.
 pub(crate) struct Snapshot {
     pub(crate) accounts: Vec<AccountSummary>,
     pub(crate) backends: Vec<InferenceBackend>,
     pub(crate) profiles: Vec<InferenceProfile>,
 }
 
-pub(crate) async fn snapshot(access: &ConfigAccess, agent_did: &str) -> Result<Snapshot> {
-    let accounts = gents::oauth_credential::list_accounts(access, agent_did).await?;
+pub(crate) async fn snapshot(access: &ConfigAccess, node_did: &str) -> Result<Snapshot> {
+    let accounts = gents::oauth_credential::list_accounts(access, node_did).await?;
     let (backends, profiles) = access
         .transact("accounts.config", |txn| {
             Box::pin(async move {
                 Ok((
-                    gents::config_client::list_inference_backends_in_txn(txn, agent_did).await?,
-                    gents::config_client::list_inference_profiles_in_txn(txn, agent_did).await?,
+                    gents::config_client::list_inference_backends_in_txn(txn, node_did).await?,
+                    gents::config_client::list_inference_profiles_in_txn(txn, node_did).await?,
                 ))
             })
         })
@@ -322,11 +322,11 @@ async fn stored_view(
 
 pub(crate) async fn account_rows(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     provider: Option<&str>,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<Vec<AccountRow>> {
-    let snapshot = snapshot(access, agent_did).await?;
+    let snapshot = snapshot(access, node_did).await?;
     let mut rows = Vec::new();
     for account in snapshot
         .accounts
@@ -340,7 +340,7 @@ pub(crate) async fn account_rows(
             Some(kind) if account.enabled => {
                 let usage_account = UsageAccount::Credential {
                     doc_id: None,
-                    agent_did: agent_did.to_owned(),
+                    node_did: node_did.to_owned(),
                     provider: account.provider.clone(),
                     account_ref: account.account_ref.clone(),
                 };
@@ -380,7 +380,7 @@ pub(crate) async fn account_rows(
         };
         let usage = if status == "enabled" {
             let usage_account = UsageAccount::Backend {
-                agent_did: agent_did.to_owned(),
+                node_did: node_did.to_owned(),
                 provider: backend.provider_kind.as_str().to_owned(),
                 backend_id: backend.backend_id.clone(),
             };
@@ -408,7 +408,7 @@ pub(crate) async fn account_rows(
 
 /// Asks the runtime behind `graphql` to read usage now.
 pub async fn request_usage_reads(
-    identity: &dyn gents::AgentIdentity,
+    identity: &dyn gents::NodeIdentity,
     graphql: &gents::config_client::GraphqlEndpoint,
     trigger: UsageTrigger,
     provider: Option<&str>,
@@ -442,9 +442,9 @@ pub async fn request_usage_reads(
         .context("decoding the runtime's usage reads")
 }
 
-/// Labels rows with the reads the runtime ran for `agent_did`.
-pub(crate) fn attach_reads(rows: &mut [AccountRow], reads: &UsageReads, agent_did: &str) {
-    if reads.agent_did != agent_did {
+/// Labels rows with the reads the runtime ran for `node_did`.
+pub(crate) fn attach_reads(rows: &mut [AccountRow], reads: &UsageReads, node_did: &str) {
+    if reads.node_did != node_did {
         return;
     }
     for read in &reads.reads {
@@ -467,7 +467,7 @@ pub(crate) fn attach_reads(rows: &mut [AccountRow], reads: &UsageReads, agent_di
 pub(crate) async fn list_with_usage(
     access: &ConfigAccess,
     home: &std::path::Path,
-    agent_did: &str,
+    node_did: &str,
     provider: Option<&str>,
     refresh: bool,
     now: chrono::DateTime<chrono::Utc>,
@@ -503,9 +503,9 @@ pub(crate) async fn list_with_usage(
             None
         }
     };
-    let mut rows = account_rows(access, agent_did, provider, now).await?;
+    let mut rows = account_rows(access, node_did, provider, now).await?;
     if let Some(reads) = reads {
-        attach_reads(&mut rows, &reads, agent_did);
+        attach_reads(&mut rows, &reads, node_did);
     }
     Ok(rows)
 }
@@ -642,11 +642,11 @@ pub(crate) fn render_table(rows: &[AccountRow]) -> String {
 
 pub(crate) async fn resolve_account(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     account: &str,
     provider: Option<&str>,
 ) -> Result<AccountSummary> {
-    Ok(snapshot(access, agent_did)
+    Ok(snapshot(access, node_did)
         .await?
         .pick(account, provider)?
         .clone())
@@ -654,13 +654,13 @@ pub(crate) async fn resolve_account(
 
 pub(crate) async fn label_account(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     account: &str,
     provider: Option<&str>,
     label: &str,
 ) -> Result<Value> {
-    let account = resolve_account(access, agent_did, account, provider).await?;
-    gents::oauth_credential::set_account_label(access, agent_did, &account.credential_id, label)
+    let account = resolve_account(access, node_did, account, provider).await?;
+    gents::oauth_credential::set_account_label(access, node_did, &account.credential_id, label)
         .await?;
     Ok(json!({
         "credential_id": account.credential_id,
@@ -672,12 +672,12 @@ pub(crate) async fn label_account(
 /// Say which profiles fail their next turn once `account` stops.
 async fn warn_profiles(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     account: &str,
     provider: Option<&str>,
     warnings: &mut impl Write,
 ) -> Result<()> {
-    let snapshot = snapshot(access, agent_did).await?;
+    let snapshot = snapshot(access, node_did).await?;
     let profiles = snapshot.account_profiles(snapshot.pick(account, provider)?);
     if !profiles.is_empty() {
         writeln!(
@@ -692,15 +692,15 @@ async fn warn_profiles(
 
 pub(crate) async fn disable_account(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     account: &str,
     provider: Option<&str>,
     warnings: &mut impl Write,
 ) -> Result<Value> {
-    warn_profiles(access, agent_did, account, provider, warnings).await?;
-    let snapshot = snapshot(access, agent_did).await?;
+    warn_profiles(access, node_did, account, provider, warnings).await?;
+    let snapshot = snapshot(access, node_did).await?;
     let account = snapshot.pick(account, provider)?;
-    gents::oauth_credential::set_account_enabled(access, agent_did, &account.credential_id, false)
+    gents::oauth_credential::set_account_enabled(access, node_did, &account.credential_id, false)
         .await?;
     Ok(json!({
         "credential_id": account.credential_id,
@@ -716,12 +716,12 @@ pub(crate) async fn disable_account(
 /// with no reference is never deleted: it is the provider's own backend.
 pub async fn remove_account(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     account: &str,
     provider: Option<&str>,
     confirmed: bool,
 ) -> Result<Value> {
-    let snapshot = snapshot(access, agent_did).await?;
+    let snapshot = snapshot(access, node_did).await?;
     let account = snapshot.pick(account, provider)?.clone();
     anyhow::ensure!(
         confirmed,
@@ -733,14 +733,14 @@ pub async fn remove_account(
             Box::pin(async move {
                 gents::oauth_credential::remove_account_in_txn(
                     txn,
-                    agent_did,
+                    node_did,
                     &account.credential_id,
                 )
                 .await?;
                 let profiles =
-                    gents::config_client::list_inference_profiles_in_txn(txn, agent_did).await?;
+                    gents::config_client::list_inference_profiles_in_txn(txn, node_did).await?;
                 let (kept, deleted): (Vec<_>, Vec<_>) =
-                    gents::config_client::list_inference_backends_in_txn(txn, agent_did)
+                    gents::config_client::list_inference_backends_in_txn(txn, node_did)
                         .await?
                         .into_iter()
                         .filter(|backend| {
@@ -758,7 +758,7 @@ pub async fn remove_account(
                 crate::config_import::apply_delete_collection(
                     txn,
                     gents::Collection::InferenceBackend,
-                    agent_did,
+                    node_did,
                     &deleted,
                 )
                 .await?;
@@ -783,7 +783,7 @@ pub async fn remove_account(
 /// failures.
 pub(crate) async fn probe_each_account<F, Fut>(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     provider: &str,
     probe: F,
 ) -> Result<Vec<String>>
@@ -793,7 +793,7 @@ where
 {
     let mut blocks = Vec::new();
     let mut failed = Vec::new();
-    for account in gents::oauth_credential::list_accounts(access, agent_did)
+    for account in gents::oauth_credential::list_accounts(access, node_did)
         .await?
         .into_iter()
         .filter(|account| account.provider == provider)
@@ -804,7 +804,7 @@ where
         }
         let probed = match gents::oauth_credential::resolve_oauth_credential(
             access,
-            agent_did,
+            node_did,
             provider,
             gents::oauth_credential::AccountPick::Reference(account.account_ref.as_deref()),
         )
@@ -882,7 +882,7 @@ mod tests {
         auth: BackendAuth,
     ) -> InferenceBackend {
         let mut value = json!({
-            "agent_did": DID,
+            "node_did": DID,
             "backend_id": backend_id,
             "name": name,
             "provider_kind": provider_kind,
@@ -903,7 +903,7 @@ mod tests {
 
     async fn seed_profile(access: &ConfigAccess, profile_id: &str, backend_id: &str) {
         let profile = serde_json::from_value(json!({
-            "agent_did": DID,
+            "node_did": DID,
             "profile_id": profile_id,
             "backend_id": backend_id,
             "model_name": "model-x",
@@ -915,7 +915,7 @@ mod tests {
     }
 
     fn oauth(account_ref: Option<&str>) -> BackendAuth {
-        BackendAuth::PrincipalOAuth {
+        BackendAuth::NodeOAuth {
             account_ref: account_ref.map(str::to_owned),
         }
     }
@@ -1339,7 +1339,7 @@ mod tests {
             node,
             &gents::usage_observation::UsageAccount::Credential {
                 doc_id: None,
-                agent_did: DID.to_owned(),
+                node_did: DID.to_owned(),
                 provider: provider.to_owned(),
                 account_ref: account_ref.map(str::to_owned),
             },
@@ -1465,7 +1465,7 @@ mod tests {
     async fn usage_reads_post_the_trigger_to_the_runtime() {
         use axum::{routing::post, Json, Router};
         let temp = tempfile::tempdir().unwrap();
-        let identity: Arc<dyn gents::AgentIdentity> = Arc::new(
+        let identity: Arc<dyn gents::NodeIdentity> = Arc::new(
             gents::KeyIdentity::load_or_create(temp.path().join("home.key"), None).unwrap(),
         );
         let recorded = Arc::new(std::sync::Mutex::new(None::<Value>));
@@ -1476,7 +1476,7 @@ mod tests {
                 move |Json(body): Json<Value>| async move {
                     *recorded.lock().unwrap() = Some(body);
                     Json(json!({
-                        "agent_did": DID,
+                        "node_did": DID,
                         "reads": [{
                             "provider": CLAUDE,
                             "account_ref": null,
@@ -1500,7 +1500,7 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(reads.agent_did, DID);
+        assert_eq!(reads.node_did, DID);
         assert_eq!(
             reads.reads,
             [usage_read(CLAUDE, None, None, UsageRead::Read)]
@@ -1542,7 +1542,7 @@ mod tests {
             .await
             .unwrap();
         let mut reads = UsageReads {
-            agent_did: "did:key:z6MkSomeoneElse".to_owned(),
+            node_did: "did:key:z6MkSomeoneElse".to_owned(),
             reads: vec![
                 usage_read(
                     GROK,
@@ -1557,7 +1557,7 @@ mod tests {
         attach_reads(&mut rows, &reads, DID);
         assert!(rows.iter().all(|row| row.read.is_none()));
 
-        reads.agent_did = DID.to_owned();
+        reads.node_did = DID.to_owned();
         attach_reads(&mut rows, &reads, DID);
         assert_eq!(
             row(&rows, "Grok 2").read,

@@ -21,7 +21,7 @@ use crate::http::prometheus::{
     load_metrics_core_data, load_metrics_query_data, render_prometheus_metrics,
     with_local_native_executors, MetricsRuntimeRow, P2pMetricsSnapshot,
 };
-use crate::http::self_view::{load_self_view, ContextBudget, SelfBehavior};
+use crate::http::self_view::{load_self_view, ContextBudget, SelfAgent};
 use crate::http::sessions::{load_session_history_snapshot, SessionHistoryParams};
 use crate::http::version::version_response;
 use crate::shared::P2pAdmissionState;
@@ -40,8 +40,8 @@ pub(crate) struct RuntimeHttpState {
     /// The served principal, for the P2P status the node's access control
     /// admits only from it.
     pub(crate) p2p_graphql: GraphqlEndpoint,
-    pub(crate) agent_name: String,
-    pub(crate) agent_did: String,
+    pub(crate) node_name: String,
+    pub(crate) node_did: String,
     /// Live process ceiling advertised to desktop start/readiness checks.
     /// Lowercase `meta-only` / `readonly` / `readwrite`, matching `gents status`.
     pub(crate) tool_ceiling: String,
@@ -123,8 +123,8 @@ pub(crate) fn empty_activation_state() -> (
 
 pub(crate) fn runtime_contract_router(
     graphql: String,
-    agent_name: String,
-    agent_did: String,
+    node_name: String,
+    node_did: String,
     tool_ceiling: String,
     tool_root: Option<String>,
     home: Option<String>,
@@ -145,10 +145,10 @@ pub(crate) fn runtime_contract_router(
 ) -> Router {
     let graphql_for_mcp = graphql.clone();
     let state = RuntimeHttpState {
-        p2p_graphql: GraphqlEndpoint::as_principal(graphql.clone(), agent_did.clone()),
+        p2p_graphql: GraphqlEndpoint::as_principal(graphql.clone(), node_did.clone()),
         graphql: GraphqlEndpoint::anonymous(graphql),
-        agent_name,
-        agent_did,
+        node_name,
+        node_did,
         tool_ceiling,
         tool_root,
         home,
@@ -239,17 +239,16 @@ async fn wait_for_activation(state: RuntimeHttpState) -> Response {
                 return (StatusCode::CONFLICT, axum::Json(json!({"error":"event-source activation failed", "generation":generation, "fingerprint":fingerprint, "detail":error}))).into_response();
             }
             if current.successful_for(*generation, fingerprint) {
-                let readiness = match crate::commands::status::load_live_behavior_readiness(
+                let readiness = match crate::commands::status::load_live_node_readiness(
                     &state.graphql,
-                    &state.agent_did,
+                    &state.node_did,
                 )
                 .await
                 {
-                    Ok(Some(row)) => gents_protocol::row::decode_behavior_readiness_snapshot(
-                        &row,
-                        &state.agent_did,
-                    )
-                    .ok(),
+                    Ok(Some(row)) => {
+                        gents_protocol::row::decode_node_readiness_snapshot(&row, &state.node_did)
+                            .ok()
+                    }
                     Ok(None) | Err(_) => None,
                 };
                 let ready = readiness.is_some_and(|snapshot| {
@@ -326,7 +325,7 @@ async fn account_usage_read_handler(
     {
         Ok(reads) => (
             StatusCode::OK,
-            axum::Json(json!({ "agent_did": runtime.agent_did(), "reads": reads })),
+            axum::Json(json!({ "node_did": runtime.node_did(), "reads": reads })),
         )
             .into_response(),
         Err(failed) => error(StatusCode::INTERNAL_SERVER_ERROR, format!("{failed:#}")),
@@ -393,7 +392,7 @@ async fn metrics_handler(State(state): State<RuntimeHttpState>) -> Response {
     let p2p_metrics = load_p2p_metrics_for_scrape(&state).await;
     match render_prometheus_metrics(
         &state.graphql,
-        &state.agent_did,
+        &state.node_did,
         &measured_backend_health,
         Some(&p2p_metrics),
     )
@@ -459,7 +458,7 @@ async fn version_handler() -> impl IntoResponse {
 }
 
 async fn healthz_handler(State(state): State<RuntimeHttpState>) -> Response {
-    match load_metrics_query_data(&state.graphql, &state.agent_did).await {
+    match load_metrics_query_data(&state.graphql, &state.node_did).await {
         Ok(data) => {
             let data = with_local_native_executors(data);
             let health = render_healthz_payload(&state, Some(&data), None);
@@ -534,7 +533,7 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
     let probe_deadline = tokio::time::Instant::now() + STATUS_PROBE_BUDGET;
     let metrics = tokio::time::timeout_at(
         probe_deadline,
-        load_metrics_core_data(&state.graphql, &state.agent_did),
+        load_metrics_core_data(&state.graphql, &state.node_did),
     )
     .await;
     let metrics = match metrics {
@@ -549,9 +548,9 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
             let data = with_local_native_executors(data);
             let health = render_healthz_payload(&state, Some(&data), None);
             let runtime = data
-                .agent_runtimes
+                .node_runtimes
                 .iter()
-                .find(|runtime| runtime.agent_did == state.agent_did);
+                .find(|runtime| runtime.node_did == state.node_did);
             json!({
                 "status": health.get("status").cloned().unwrap_or(Value::String("unknown".to_string())),
                 "ok": health.get("ok").cloned().unwrap_or(Value::Bool(false)),
@@ -560,13 +559,13 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
                 "started_at": state.started_at,
                 "uptime_seconds": state.started_instant.elapsed().as_secs(),
                 "graphql": state.graphql,
-                "agent_name": state.agent_name,
-                "agent_did": state.agent_did,
+                "node_name": state.node_name,
+                "node_did": state.node_did,
                 "tool_ceiling": state.tool_ceiling,
                 "tool_root": state.tool_root,
                 "home": state.home,
                 "runtime": runtime,
-                "runtimes": data.agent_runtimes,
+                "runtimes": data.node_runtimes,
                 "backends": data.inference_backends,
                 "liveness": data.liveness,
                 "p2p": p2p.clone(),
@@ -580,8 +579,8 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
             "started_at": state.started_at,
             "uptime_seconds": state.started_instant.elapsed().as_secs(),
             "graphql": state.graphql,
-            "agent_name": state.agent_name,
-            "agent_did": state.agent_did,
+            "node_name": state.node_name,
+            "node_did": state.node_did,
             "tool_ceiling": state.tool_ceiling,
             "tool_root": state.tool_root,
             "home": state.home,
@@ -599,8 +598,8 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
             "started_at": state.started_at,
             "uptime_seconds": state.started_instant.elapsed().as_secs(),
             "graphql": state.graphql,
-            "agent_name": state.agent_name,
-            "agent_did": state.agent_did,
+            "node_name": state.node_name,
+            "node_did": state.node_did,
             "tool_ceiling": state.tool_ceiling,
             "tool_root": state.tool_root,
             "home": state.home,
@@ -613,14 +612,14 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
     };
 
     if body.get("error").is_none() {
-        if let Ok(Ok((behaviors, context_budget, context))) = tokio::time::timeout(
+        if let Ok(Ok((agents, context_budget, context))) = tokio::time::timeout(
             STATUS_PROBE_BUDGET,
-            load_self_view(&state.graphql, &state.agent_did),
+            load_self_view(&state.graphql, &state.node_did),
         )
         .await
         {
             if let Some(map) = body.as_object_mut() {
-                map.insert("behaviors".to_string(), json!(behaviors));
+                map.insert("agents".to_string(), json!(agents));
                 map.insert("context".to_string(), json!(context));
                 map.insert("context_budget".to_string(), json!(context_budget));
             }
@@ -671,7 +670,7 @@ fn replicated_schema_status(
 
 async fn self_handler(State(state): State<RuntimeHttpState>) -> Response {
     let (health, runtime, readiness, status_code) =
-        match load_metrics_query_data(&state.graphql, &state.agent_did).await {
+        match load_metrics_query_data(&state.graphql, &state.node_did).await {
             Ok(data) => {
                 let data = with_local_native_executors(data);
                 let health = render_healthz_payload(&state, Some(&data), None);
@@ -681,14 +680,14 @@ async fn self_handler(State(state): State<RuntimeHttpState>) -> Response {
                     StatusCode::SERVICE_UNAVAILABLE
                 };
                 let runtime = data
-                    .agent_runtimes
+                    .node_runtimes
                     .iter()
-                    .find(|runtime| runtime.agent_did == state.agent_did)
+                    .find(|runtime| runtime.node_did == state.node_did)
                     .cloned();
                 let readiness = data
-                    .behavior_readiness
+                    .node_readiness
                     .iter()
-                    .find(|row| row.agent_did == state.agent_did)
+                    .find(|row| row.node_did == state.node_did)
                     .cloned();
                 (health, runtime, readiness, status_code)
             }
@@ -698,14 +697,14 @@ async fn self_handler(State(state): State<RuntimeHttpState>) -> Response {
             }
         };
 
-    match load_self_view(&state.graphql, &state.agent_did).await {
-        Ok((behaviors, context_budget, _context_indicator)) => {
+    match load_self_view(&state.graphql, &state.node_did).await {
+        Ok((agents, context_budget, _context_indicator)) => {
             let body = render_self_payload(
                 &state,
                 &health,
                 runtime.as_ref(),
                 readiness.as_ref(),
-                &behaviors,
+                &agents,
                 &context_budget,
             );
             (status_code, axum::Json(body)).into_response()
@@ -719,11 +718,11 @@ async fn self_handler(State(state): State<RuntimeHttpState>) -> Response {
                 "started_at": state.started_at,
                 "uptime_seconds": state.started_instant.elapsed().as_secs(),
                 "graphql": state.graphql,
-                "agent_name": state.agent_name,
-                "agent_did": state.agent_did,
+                "node_name": state.node_name,
+                "node_did": state.node_did,
                 "process_state": "unknown",
-                "behavior": Value::Null,
-                "behaviors": [],
+                "agent": Value::Null,
+                "agents": [],
                 "context_budget": ContextBudget::default(),
                 "error": format!("self view query failed: {error:#}"),
             });
@@ -741,7 +740,7 @@ async fn sessions_handler(
     State(state): State<RuntimeHttpState>,
     Query(query): Query<SessionHistoryParams>,
 ) -> Response {
-    match load_session_history_snapshot(&state.graphql, &state.agent_did, query.limit).await {
+    match load_session_history_snapshot(&state.graphql, &state.node_did, query.limit).await {
         Ok(snapshot) => (StatusCode::OK, axum::Json(snapshot)).into_response(),
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -756,30 +755,27 @@ fn render_self_payload(
     state: &RuntimeHttpState,
     health: &Value,
     runtime: Option<&MetricsRuntimeRow>,
-    readiness: Option<&gents_protocol::row::AgentBehaviorReadinessRow>,
-    behaviors: &[SelfBehavior],
+    readiness: Option<&gents_protocol::row::NodeReadinessRow>,
+    agents: &[SelfAgent],
     context_budget: &ContextBudget,
 ) -> Value {
     let readiness = readiness.and_then(|row| {
-        gents_protocol::row::decode_behavior_readiness_snapshot(row, &state.agent_did).ok()
+        gents_protocol::row::decode_node_readiness_snapshot(row, &state.node_did).ok()
     });
     let process_state = readiness
         .as_ref()
         .map(|snapshot| snapshot.process_state.as_str())
         .unwrap_or("unknown");
-    let behavior = readiness
+    let agent_config = readiness
         .as_ref()
         .and_then(|snapshot| {
-            behaviors
+            agents
                 .iter()
-                .find(|behavior| behavior.behavior_id == snapshot.default_behavior_id)
+                .find(|agent_config| agent_config.agent_id == snapshot.default_agent_id)
         })
-        .map(render_self_behavior)
+        .map(render_self_agent)
         .unwrap_or(Value::Null);
-    let behaviors = behaviors
-        .iter()
-        .map(render_self_behavior)
-        .collect::<Vec<_>>();
+    let agents = agents.iter().map(render_self_agent).collect::<Vec<_>>();
 
     json!({
         "status": health.get("status").cloned().unwrap_or(Value::String("unknown".to_string())),
@@ -789,27 +785,27 @@ fn render_self_payload(
         "started_at": &state.started_at,
         "uptime_seconds": state.started_instant.elapsed().as_secs(),
         "graphql": &state.graphql,
-        "agent_name": &state.agent_name,
-        "agent_did": &state.agent_did,
+        "node_name": &state.node_name,
+        "node_did": &state.node_did,
         "process_state": process_state,
         "runtime": runtime,
-        "behavior": behavior,
-        "behaviors": behaviors,
+        "agent": agent_config,
+        "agents": agents,
         "context_budget": context_budget,
     })
 }
 
-fn render_self_behavior(behavior: &SelfBehavior) -> Value {
+fn render_self_agent(agent_config: &SelfAgent) -> Value {
     json!({
-        "behavior_id": &behavior.behavior_id,
-        "display_name": &behavior.display_name,
-        "model_name": &behavior.model_name,
-        "enabled": behavior.enabled,
-        "backend_id": &behavior.backend_id,
-        "backend_provider": &behavior.provider_kind,
-        "backend_endpoint": &behavior.endpoint,
-        "inference_profile_id": &behavior.inference_profile_id,
-        "context_window": behavior.context_window,
+        "agent_id": &agent_config.agent_id,
+        "display_name": &agent_config.display_name,
+        "model_name": &agent_config.model_name,
+        "enabled": agent_config.enabled,
+        "backend_id": &agent_config.backend_id,
+        "backend_provider": &agent_config.provider_kind,
+        "backend_endpoint": &agent_config.endpoint,
+        "inference_profile_id": &agent_config.inference_profile_id,
+        "context_window": agent_config.context_window,
     })
 }
 
@@ -838,7 +834,7 @@ async fn fleet_slots_handler(State(state): State<RuntimeHttpState>) -> Response 
 }
 
 async fn mcp_pool_handler(State(state): State<RuntimeHttpState>) -> Response {
-    match load_mcp_pool_snapshot(&state.graphql, &state.agent_did).await {
+    match load_mcp_pool_snapshot(&state.graphql, &state.node_did).await {
         Ok(snapshot) => (StatusCode::OK, axum::Json(snapshot)).into_response(),
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -854,8 +850,8 @@ mod tests {
     use std::time::Instant;
 
     use gents_protocol::row::{
-        AgentBehaviorReadinessRow, BehaviorReadinessEntry, BehaviorReadinessProcessState,
-        BehaviorReadinessSnapshot, BehaviorReadinessState, BEHAVIOR_READINESS_FORMAT_VERSION,
+        AgentReadinessEntry, AgentReadinessState, NodeReadinessProcessState, NodeReadinessRow,
+        NodeReadinessSnapshot, NODE_READINESS_FORMAT_VERSION,
     };
     use serde_json::json;
 
@@ -895,8 +891,8 @@ mod tests {
             p2p_graphql: gents::config_client::GraphqlEndpoint::anonymous(
                 "http://127.0.0.1:9181/api/v0/graphql",
             ),
-            agent_name: "amy".to_string(),
-            agent_did: "did:key:zAgent".to_string(),
+            node_name: "amy".to_string(),
+            node_did: "did:key:zAgent".to_string(),
             tool_ceiling: "readwrite".to_string(),
             tool_root: Some("/Users/test".to_string()),
             home: None,
@@ -938,9 +934,9 @@ mod tests {
         assert!(!torn.successful_for(4, "desired"));
     }
 
-    fn behavior(id: &str, enabled: bool, model_name: &str) -> SelfBehavior {
-        SelfBehavior {
-            behavior_id: id.to_string(),
+    fn agent_config(id: &str, enabled: bool, model_name: &str) -> SelfAgent {
+        SelfAgent {
+            agent_id: id.to_string(),
             display_name: id.to_string(),
             model_name: model_name.to_string(),
             enabled,
@@ -955,25 +951,25 @@ mod tests {
 
     fn runtime() -> MetricsRuntimeRow {
         MetricsRuntimeRow {
-            agent_did: "did:key:zAgent".to_string(),
+            node_did: "did:key:zAgent".to_string(),
             reconcile_phase: "idle".to_string(),
             last_reconcile_result: "applied".to_string(),
             last_reconcile_completed_at: "2026-06-04T00:00:00Z".to_string(),
         }
     }
 
-    fn readiness(default_behavior_id: &str) -> AgentBehaviorReadinessRow {
-        AgentBehaviorReadinessRow {
-            agent_did: "did:key:zAgent".to_string(),
-            snapshot_json: serde_json::to_string(&BehaviorReadinessSnapshot {
-                format_version: BEHAVIOR_READINESS_FORMAT_VERSION,
-                process_state: BehaviorReadinessProcessState::Ready,
+    fn readiness(default_agent_id: &str) -> NodeReadinessRow {
+        NodeReadinessRow {
+            node_did: "did:key:zAgent".to_string(),
+            snapshot_json: serde_json::to_string(&NodeReadinessSnapshot {
+                format_version: NODE_READINESS_FORMAT_VERSION,
+                process_state: NodeReadinessProcessState::Ready,
                 active_generation: 1,
                 router_generation: 1,
-                default_behavior_id: default_behavior_id.to_string(),
-                behaviors: vec![BehaviorReadinessEntry {
-                    behavior_id: default_behavior_id.to_string(),
-                    state: BehaviorReadinessState::Ready,
+                default_agent_id: default_agent_id.to_string(),
+                agents: vec![AgentReadinessEntry {
+                    agent_id: default_agent_id.to_string(),
+                    state: AgentReadinessState::Ready,
                     reason: None,
                 }],
             })
@@ -1057,13 +1053,13 @@ mod tests {
         let claimed_at = chrono::Utc::now() - chrono::Duration::seconds(120);
         let core = json!({
             "data": {
-                "AgentRuntime": [serde_json::to_value(runtime()).unwrap()],
-                "AgentBehaviorReadiness": [serde_json::to_value(readiness("default")).unwrap()],
+                "NodeRuntime": [serde_json::to_value(runtime()).unwrap()],
+                "NodeReadiness": [serde_json::to_value(readiness("default")).unwrap()],
                 "InferenceBackend": [],
                 "AgentRequest": [{
                     "_docID": "doc-req-1",
                     "request_id": "req-1",
-                    "agent_did": "did:key:zAgent",
+                    "node_did": "did:key:zAgent",
                     "claimed_at": claimed_at.to_rfc3339(),
                     "deadline": (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339(),
                 }],
@@ -1076,7 +1072,7 @@ mod tests {
                 let core = core.clone();
                 async move {
                     let query = body["query"].as_str().unwrap_or_default().to_string();
-                    if query.contains("AgentRuntime") {
+                    if query.contains("NodeRuntime") {
                         tokio::time::sleep(core_delay).await;
                         return Ok(Json(core));
                     }
@@ -1179,26 +1175,26 @@ mod tests {
     }
 
     #[test]
-    fn self_payload_uses_acceptance_field_names_and_primary_behavior() {
-        let behaviors = vec![
-            behavior("disabled", false, "llama-local"),
-            behavior("default", true, "gpt-4.1"),
+    fn self_payload_uses_acceptance_field_names_and_primary_agent() {
+        let agents = vec![
+            agent_config("disabled", false, "llama-local"),
+            agent_config("default", true, "gpt-4.1"),
         ];
         let payload = render_self_payload(
             &state(),
             &json!({ "status": "ok", "ok": true }),
             Some(&runtime()),
             Some(&readiness("default")),
-            &behaviors,
+            &agents,
             &ContextBudget::default(),
         );
 
         assert_eq!(
-            payload.get("agent_name").and_then(Value::as_str),
+            payload.get("node_name").and_then(Value::as_str),
             Some("amy")
         );
         assert_eq!(
-            payload.get("agent_did").and_then(Value::as_str),
+            payload.get("node_did").and_then(Value::as_str),
             Some("did:key:zAgent")
         );
         assert_eq!(
@@ -1206,26 +1202,24 @@ mod tests {
             Some("ready")
         );
         assert_eq!(
-            payload
-                .pointer("/behavior/model_name")
-                .and_then(Value::as_str),
+            payload.pointer("/agent/model_name").and_then(Value::as_str),
             Some("gpt-4.1")
         );
         assert_eq!(
             payload
-                .pointer("/behavior/backend_endpoint")
+                .pointer("/agent/backend_endpoint")
                 .and_then(Value::as_str),
             Some("https://api.example.test/v1")
         );
         assert_eq!(
             payload
-                .pointer("/behavior/backend_provider")
+                .pointer("/agent/backend_provider")
                 .and_then(Value::as_str),
             Some("OpenAiCompatible")
         );
         assert_eq!(
             payload
-                .get("behaviors")
+                .get("agents")
                 .and_then(Value::as_array)
                 .map(Vec::len),
             Some(2)
@@ -1234,13 +1228,13 @@ mod tests {
 
     #[test]
     fn self_payload_does_not_invent_process_or_default_without_readiness() {
-        let behaviors = vec![behavior("fallback", false, "minimax")];
+        let agents = vec![agent_config("fallback", false, "minimax")];
         let payload = render_self_payload(
             &state(),
             &json!({ "status": "degraded", "ok": true }),
             None,
             None,
-            &behaviors,
+            &agents,
             &ContextBudget::default(),
         );
 
@@ -1248,7 +1242,7 @@ mod tests {
             payload.get("process_state").and_then(Value::as_str),
             Some("unknown")
         );
-        assert_eq!(payload.get("behavior"), Some(&Value::Null));
+        assert_eq!(payload.get("agent"), Some(&Value::Null));
     }
 
     async fn usage_route(
@@ -1284,7 +1278,7 @@ mod tests {
     #[tokio::test]
     async fn account_usage_route_refuses_unsigned_and_foreign_signers() {
         let temp = tempfile::tempdir().unwrap();
-        let key = |name: &str| -> Arc<dyn gents::AgentIdentity> {
+        let key = |name: &str| -> Arc<dyn gents::NodeIdentity> {
             Arc::new(gents::KeyIdentity::load_or_create(temp.path().join(name), None).unwrap())
         };
         let (identity, other) = (key("runtime.key"), key("other.key"));
@@ -1301,7 +1295,7 @@ mod tests {
         *state.enrollment_decisions.write().await = Some(
             crate::http::enrollment::EnrollmentDecisionService::new(identity.clone(), node),
         );
-        let signed = |identity: &Arc<dyn gents::AgentIdentity>| {
+        let signed = |identity: &Arc<dyn gents::NodeIdentity>| {
             let identity = identity.clone();
             async move {
                 crate::commands::accounts::UsageReadCommand::signed(

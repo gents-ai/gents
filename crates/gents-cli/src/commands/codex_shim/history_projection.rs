@@ -65,10 +65,10 @@ pub(super) async fn load_thread_turns(
     record: &CodexThreadRecord,
 ) -> Result<Vec<codex::Turn>> {
     let (owner, requester) = record
-        .subagent
+        .caused
         .as_ref()
-        .map(|link| (link.agent_did.as_str(), link.requester_did.as_deref()))
-        .unwrap_or((state.agent_did.as_ref(), Some(state.local_requester_did())));
+        .map(|link| (link.node_did.as_str(), link.requester_did.as_deref()))
+        .unwrap_or((state.node_did.as_ref(), Some(state.local_requester_did())));
     let session_scope = gents::session::session_scope_filter(owner, &record.session_id, requester);
     let request_scope = gents::session::public_request_filter(&session_scope);
     let query = format!(
@@ -92,7 +92,7 @@ pub(super) async fn load_thread_turns(
                 order: {{ started_at: ASC }}
             ) {{
                 _docID
-                agent_did
+                node_did
                 requester_did
                 tool_call_key
                 request_doc_id
@@ -317,7 +317,7 @@ fn project_request_turns(
 ) -> Result<Vec<codex::Turn>> {
     let requests = requests
         .into_iter()
-        .filter(|request| record.is_subagent() || is_codex_visible_request(request))
+        .filter(|request| record.is_caused() || is_codex_visible_request(request))
         .collect::<Vec<_>>();
     let requests_by_id = requests
         .iter()
@@ -751,7 +751,7 @@ async fn decode_canonical_message_rows(
         let (header, message) = gents::session::load_canonical_message(
             &access,
             &observed.doc_id,
-            &observed.message.agent_did,
+            &observed.message.node_did,
             observed.message.requester_did.as_deref(),
         )
         .await
@@ -979,7 +979,7 @@ mod tests {
             projection_started: None,
             session: None,
             latest_request: None,
-            subagent: None,
+            caused: None,
         };
         let request = request_row(json!({
             "request_id": "wake-1",
@@ -1112,7 +1112,7 @@ mod tests {
             projection_started: None,
             session: None,
             latest_request: None,
-            subagent: None,
+            caused: None,
         };
         let request = request_row(json!({
             "request_id": "request-1",
@@ -1234,7 +1234,7 @@ mod tests {
             projection_started: None,
             session: None,
             latest_request: None,
-            subagent: None,
+            caused: None,
         };
         let request = request_row(json!({
             "request_id": "request-1",

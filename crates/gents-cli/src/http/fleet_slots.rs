@@ -6,8 +6,8 @@ use chrono::{DateTime, Utc};
 use gents::tool_call_lifecycle::deadline_is_expired;
 use gents::{call_state_holds_backend_slot, UNKNOWN_PROBE_STATUS};
 use gents_protocol::row::{
-    project_behavior_readiness_summary, AgentBehaviorReadinessRow, AgentRequestRow,
-    BehaviorReadinessState, ProjectedBehaviorReadinessSummary,
+    project_node_readiness_summary, AgentReadinessState, AgentRequestRow, NodeReadinessRow,
+    ProjectedNodeReadinessSummary,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -22,7 +22,7 @@ pub(crate) struct FleetSlotSnapshot {
     pub(crate) source: String,
     pub(crate) totals: FleetSlotTotals,
     pub(crate) expired: FleetExpiredCounts,
-    pub(crate) behaviors: Vec<FleetBehaviorSlotUsage>,
+    pub(crate) agents: Vec<FleetAgentSlotUsage>,
     pub(crate) backends: Vec<FleetBackendAdmissionCounters>,
 }
 
@@ -40,9 +40,9 @@ pub(crate) struct FleetExpiredCounts {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub(crate) struct FleetBehaviorSlotUsage {
-    pub(crate) behavior_id: String,
-    pub(crate) agent_did: String,
+pub(crate) struct FleetAgentSlotUsage {
+    pub(crate) agent_id: String,
+    pub(crate) node_did: String,
     pub(crate) backend_id: String,
     pub(crate) configured: bool,
     pub(crate) enabled: bool,
@@ -57,7 +57,7 @@ pub(crate) struct FleetBehaviorSlotUsage {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct FleetBackendAdmissionCounters {
     pub(crate) backend_id: String,
-    pub(crate) agent_did: String,
+    pub(crate) node_did: String,
     pub(crate) configured: bool,
     pub(crate) enabled: bool,
     pub(crate) probe_status: String,
@@ -72,8 +72,8 @@ pub(crate) struct FleetBackendAdmissionCounters {
 
 #[derive(Debug, Deserialize)]
 struct FleetSlotQueryEnvelope {
-    #[serde(rename = "AgentBehavior", default)]
-    behaviors: Vec<BehaviorRow>,
+    #[serde(rename = "Agent", default)]
+    agents: Vec<AgentRow>,
     #[serde(rename = "InferenceProfile", default)]
     profiles: Vec<InferenceProfileRow>,
     #[serde(rename = "InferenceBackend", default)]
@@ -82,25 +82,25 @@ struct FleetSlotQueryEnvelope {
     calls: Vec<InferenceCallRow>,
     #[serde(rename = "AgentRequest", default)]
     requests: Vec<AgentRequestRow>,
-    #[serde(rename = "AgentBehaviorReadiness", default)]
-    behavior_readiness: Vec<AgentBehaviorReadinessRow>,
+    #[serde(rename = "NodeReadiness", default)]
+    node_readiness: Vec<NodeReadinessRow>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct BehaviorRow {
+struct AgentRow {
     #[serde(default)]
-    behavior_id: String,
+    agent_id: String,
     #[serde(default)]
-    agent_did: String,
+    node_did: String,
     #[serde(default)]
     inference_profile_id: Option<String>,
     #[serde(default)]
     enabled: Option<bool>,
 }
 
-impl BehaviorRow {
-    fn normalized_behavior_id(&self) -> String {
-        clean_string(&self.behavior_id)
+impl AgentRow {
+    fn normalized_agent_id(&self) -> String {
+        clean_string(&self.agent_id)
     }
 
     fn is_enabled(&self) -> bool {
@@ -113,18 +113,18 @@ struct InferenceProfileRow {
     #[serde(default)]
     profile_id: String,
     #[serde(default)]
-    agent_did: String,
+    node_did: String,
     #[serde(default)]
     backend_id: String,
 }
 
 #[derive(Debug, Clone)]
-struct ResolvedBehaviorRow {
-    behavior: BehaviorRow,
+struct ResolvedAgentRow {
+    agent_config: AgentRow,
     backend_id: String,
 }
 
-impl ResolvedBehaviorRow {
+impl ResolvedAgentRow {
     fn normalized_backend_id(&self) -> String {
         clean_string(&self.backend_id)
     }
@@ -135,7 +135,7 @@ struct BackendRow {
     #[serde(default)]
     backend_id: String,
     #[serde(default)]
-    agent_did: String,
+    node_did: String,
     #[serde(default)]
     enabled: Option<bool>,
     #[serde(default)]
@@ -181,9 +181,9 @@ struct InferenceCallRow {
     #[serde(default)]
     backend_id: Option<String>,
     #[serde(default)]
-    behavior_id: Option<String>,
+    agent_id: Option<String>,
     #[serde(default)]
-    agent_did: Option<String>,
+    node_did: Option<String>,
     #[serde(default)]
     call_state: String,
 }
@@ -217,20 +217,20 @@ fn decode_fleet_slot_query_response(response: Value) -> Result<FleetSlotQueryEnv
 
 fn fleet_slot_snapshot_query() -> &'static str {
     r#"{
-        AgentBehavior(order: { behavior_id: ASC }) {
-            behavior_id
-            agent_did
+        Agent(order: { agent_id: ASC }) {
+            agent_id
+            node_did
             inference_profile_id
             enabled
         }
         InferenceProfile(order: { profile_id: ASC }) {
             profile_id
-            agent_did
+            node_did
             backend_id
         }
         InferenceBackend(order: { backend_id: ASC }) {
             backend_id
-            agent_did
+            node_did
             enabled
             max_concurrent
             max_queue_depth
@@ -238,20 +238,20 @@ fn fleet_slot_snapshot_query() -> &'static str {
         }
         InferenceCall(filter: { call_state: { _in: ["queued", "running"] } }) {
             backend_id
-            behavior_id
-            agent_did
+            agent_id
+            node_did
             call_state
         }
         AgentRequest(filter: {
             lifecycle_state: { _eq: "processing" }
         }) {
             request_id
-            agent_did
-            behavior_id
+            node_did
+            agent_id
             deadline
         }
-        AgentBehaviorReadiness(order: { agent_did: ASC }) {
-            agent_did
+        NodeReadiness(order: { node_did: ASC }) {
+            node_did
             snapshot_json
             updated_at
         }
@@ -263,60 +263,60 @@ fn build_fleet_slot_snapshot(
     envelope: FleetSlotQueryEnvelope,
 ) -> FleetSlotSnapshot {
     let FleetSlotQueryEnvelope {
-        behaviors,
+        agents,
         profiles,
         backends,
         calls,
         requests,
-        behavior_readiness,
+        node_readiness,
     } = envelope;
     let backends = backends
         .into_iter()
         .filter_map(|backend| {
-            let agent_did = clean_string(&backend.agent_did);
+            let node_did = clean_string(&backend.node_did);
             let backend_id = backend.normalized_backend_id();
-            (!agent_did.is_empty() && !backend_id.is_empty())
-                .then_some(((agent_did, backend_id), backend))
+            (!node_did.is_empty() && !backend_id.is_empty())
+                .then_some(((node_did, backend_id), backend))
         })
         .collect::<BTreeMap<_, _>>();
 
     let profile_backends = profiles
         .into_iter()
         .filter_map(|profile| {
-            let agent_did = clean_string(&profile.agent_did);
+            let node_did = clean_string(&profile.node_did);
             let profile_id = clean_string(&profile.profile_id);
             let backend_id = clean_string(&profile.backend_id);
-            (!agent_did.is_empty() && !profile_id.is_empty() && !backend_id.is_empty())
-                .then_some(((agent_did, profile_id), backend_id))
+            (!node_did.is_empty() && !profile_id.is_empty() && !backend_id.is_empty())
+                .then_some(((node_did, profile_id), backend_id))
         })
         .collect::<BTreeMap<_, _>>();
 
-    let behaviors = behaviors
+    let agents = agents
         .into_iter()
-        .filter_map(|behavior| {
-            let agent_did = clean_string(&behavior.agent_did);
-            let behavior_id = behavior.normalized_behavior_id();
-            if agent_did.is_empty() || behavior_id.is_empty() {
+        .filter_map(|agent_config| {
+            let node_did = clean_string(&agent_config.node_did);
+            let agent_id = agent_config.normalized_agent_id();
+            if node_did.is_empty() || agent_id.is_empty() {
                 return None;
             }
-            let profile_id = clean_optional_string(behavior.inference_profile_id.as_deref());
+            let profile_id = clean_optional_string(agent_config.inference_profile_id.as_deref());
             let backend_id = profile_backends
-                .get(&(agent_did.clone(), profile_id))
+                .get(&(node_did.clone(), profile_id))
                 .cloned()
                 .unwrap_or_default();
             Some((
-                (agent_did, behavior_id),
-                ResolvedBehaviorRow {
-                    behavior,
+                (node_did, agent_id),
+                ResolvedAgentRow {
+                    agent_config,
                     backend_id,
                 },
             ))
         })
         .collect::<BTreeMap<_, _>>();
 
-    let readiness_by_agent = behavior_readiness
+    let readiness_by_agent = node_readiness
         .into_iter()
-        .map(|row| (row.agent_did.clone(), row))
+        .map(|row| (row.node_did.clone(), row))
         .collect::<BTreeMap<_, _>>();
 
     // Measured backend health is never persisted to `InferenceBackend`
@@ -324,34 +324,32 @@ fn build_fleet_slot_snapshot(
     // admission from that document's `enabled`/`probe_status` fields —
     // only the runtime that owns the live `BackendHealthMap` can. The
     // per-backend "accepting" flag instead comes from the readiness rows
-    // for behaviors bound to that backend, published by each behavior's
+    // for agents bound to that backend, published by each agent's
     // own runtime.
     let backend_accepting =
-        backend_admission_from_readiness(&behaviors, &readiness_by_agent, generated_at);
+        backend_admission_from_readiness(&agents, &readiness_by_agent, generated_at);
 
     let mut backend_counts = BTreeMap::<(String, String), SlotCounts>::new();
-    let mut behavior_counts = BTreeMap::<(String, String), SlotCounts>::new();
-    let mut active_behavior_backends = BTreeMap::<(String, String), String>::new();
+    let mut agent_counts = BTreeMap::<(String, String), SlotCounts>::new();
+    let mut active_agent_backends = BTreeMap::<(String, String), String>::new();
     let mut active_backend_ids = BTreeSet::<(String, String)>::new();
 
     for call in calls {
         let backend_id = clean_optional_string(call.backend_id.as_deref());
-        let behavior_id = clean_optional_string(call.behavior_id.as_deref());
-        let agent_did = clean_optional_string(call.agent_did.as_deref());
+        let agent_id = clean_optional_string(call.agent_id.as_deref());
+        let node_did = clean_optional_string(call.node_did.as_deref());
 
-        if !agent_did.is_empty() && !backend_id.is_empty() {
-            let backend_key = (agent_did.clone(), backend_id.clone());
+        if !node_did.is_empty() && !backend_id.is_empty() {
+            let backend_key = (node_did.clone(), backend_id.clone());
             active_backend_ids.insert(backend_key.clone());
             let counts = backend_counts.entry(backend_key).or_default();
             apply_call_state(&call.call_state, counts);
         }
-        if !agent_did.is_empty() && !behavior_id.is_empty() {
-            let behavior_key = (agent_did, behavior_id);
-            let counts = behavior_counts.entry(behavior_key.clone()).or_default();
+        if !node_did.is_empty() && !agent_id.is_empty() {
+            let agent_key = (node_did, agent_id);
+            let counts = agent_counts.entry(agent_key.clone()).or_default();
             apply_call_state(&call.call_state, counts);
-            active_behavior_backends
-                .entry(behavior_key)
-                .or_insert(backend_id);
+            active_agent_backends.entry(agent_key).or_insert(backend_id);
         }
     }
 
@@ -359,11 +357,11 @@ fn build_fleet_slot_snapshot(
     for request in requests {
         if deadline_is_expired(generated_at, request.deadline.as_deref()) {
             expired.processing_requests += 1;
-            let agent_did = clean_optional_string(request.agent_did.as_deref());
-            let behavior_id = clean_optional_string(request.behavior_id.as_deref());
-            if !agent_did.is_empty() && !behavior_id.is_empty() {
-                behavior_counts
-                    .entry((agent_did, behavior_id))
+            let node_did = clean_optional_string(request.node_did.as_deref());
+            let agent_id = clean_optional_string(request.agent_id.as_deref());
+            if !node_did.is_empty() && !agent_id.is_empty() {
+                agent_counts
+                    .entry((node_did, agent_id))
                     .or_default()
                     .expired_processing += 1;
             }
@@ -373,8 +371,8 @@ fn build_fleet_slot_snapshot(
     let mut backend_ids = backends.keys().cloned().collect::<BTreeSet<_>>();
     backend_ids.extend(active_backend_ids);
     let mut backend_snapshots = Vec::new();
-    for (agent_did, backend_id) in backend_ids {
-        let backend_key = (agent_did.clone(), backend_id.clone());
+    for (node_did, backend_id) in backend_ids {
+        let backend_key = (node_did.clone(), backend_id.clone());
         let configured = backends.get(&backend_key);
         let counts = backend_counts
             .get(&backend_key)
@@ -389,7 +387,7 @@ fn build_fleet_slot_snapshot(
             .unwrap_or(false);
         backend_snapshots.push(FleetBackendAdmissionCounters {
             backend_id,
-            agent_did,
+            node_did,
             configured: configured.is_some(),
             enabled: configured.map(BackendRow::is_enabled).unwrap_or(false),
             probe_status: configured
@@ -410,22 +408,19 @@ fn build_fleet_slot_snapshot(
         });
     }
 
-    let mut behavior_ids = behaviors.keys().cloned().collect::<BTreeSet<_>>();
-    behavior_ids.extend(active_behavior_backends.keys().cloned());
-    let mut behavior_snapshots = Vec::new();
-    for (agent_did, behavior_id) in behavior_ids {
-        let behavior_key = (agent_did.clone(), behavior_id.clone());
-        let configured = behaviors.get(&behavior_key);
-        let active_backend_id = active_behavior_backends.get(&behavior_key);
+    let mut agent_ids = agents.keys().cloned().collect::<BTreeSet<_>>();
+    agent_ids.extend(active_agent_backends.keys().cloned());
+    let mut agent_snapshots = Vec::new();
+    for (node_did, agent_id) in agent_ids {
+        let agent_key = (node_did.clone(), agent_id.clone());
+        let configured = agents.get(&agent_key);
+        let active_backend_id = active_agent_backends.get(&agent_key);
         let backend_id = configured
-            .map(ResolvedBehaviorRow::normalized_backend_id)
+            .map(ResolvedAgentRow::normalized_backend_id)
             .or_else(|| active_backend_id.cloned())
             .unwrap_or_default();
-        let counts = behavior_counts
-            .get(&behavior_key)
-            .cloned()
-            .unwrap_or_default();
-        let backend_key = (agent_did.clone(), backend_id.clone());
+        let counts = agent_counts.get(&agent_key).cloned().unwrap_or_default();
+        let backend_key = (node_did.clone(), backend_id.clone());
         let backend = backends.get(&backend_key);
         let max = backend.map(BackendRow::max_concurrent).unwrap_or_default();
         let backend_available = backend_accepting
@@ -433,15 +428,15 @@ fn build_fleet_slot_snapshot(
             .copied()
             .unwrap_or(false);
         let enabled = configured
-            .map(|row| row.behavior.is_enabled())
+            .map(|row| row.agent_config.is_enabled())
             .unwrap_or(false);
         let backend_running = backend_counts
             .get(&backend_key)
             .map(|counts| counts.assigned)
             .unwrap_or_default();
-        behavior_snapshots.push(FleetBehaviorSlotUsage {
-            behavior_id: behavior_id.clone(),
-            agent_did,
+        agent_snapshots.push(FleetAgentSlotUsage {
+            agent_id: agent_id.clone(),
+            node_did,
             backend_id,
             configured: configured.is_some(),
             enabled,
@@ -479,43 +474,42 @@ fn build_fleet_slot_snapshot(
         source: SNAPSHOT_SOURCE.to_string(),
         totals,
         expired,
-        behaviors: behavior_snapshots,
+        agents: agent_snapshots,
         backends: backend_snapshots,
     }
 }
 
 /// Per-backend "accepting admission" from the readiness rows of the
-/// behaviors currently bound to it — never from `InferenceBackend`'s
+/// agents currently bound to it — never from `InferenceBackend`'s
 /// `enabled`/`probe_status` (measured health stays unpersisted; see
-/// `backend_health.rs`). A backend accepts once any bound behavior's own
+/// `backend_health.rs`). A backend accepts once any bound agent's own
 /// runtime reports it `Ready`; with no such signal the projection is
 /// not-accepting. This is last-known capacity information, not an admission
 /// gate or a connectivity probe. The runtime's admission owner and transport
 /// health remain authoritative for live execution and reachability.
 fn backend_admission_from_readiness(
-    behaviors: &BTreeMap<(String, String), ResolvedBehaviorRow>,
-    readiness_by_agent: &BTreeMap<String, AgentBehaviorReadinessRow>,
+    agents: &BTreeMap<(String, String), ResolvedAgentRow>,
+    readiness_by_agent: &BTreeMap<String, NodeReadinessRow>,
     observed_at: DateTime<Utc>,
 ) -> BTreeMap<(String, String), bool> {
     let mut accepting = BTreeMap::<(String, String), bool>::new();
-    for ((agent_did, behavior_id), behavior) in behaviors {
-        let backend_id = behavior.normalized_backend_id();
+    for ((node_did, agent_id), agent_config) in agents {
+        let backend_id = agent_config.normalized_backend_id();
         if backend_id.is_empty() {
             continue;
         }
-        let readiness_row = readiness_by_agent.get(agent_did);
-        let projected =
-            project_behavior_readiness_summary(readiness_row, agent_did.as_str(), observed_at);
+        let readiness_row = readiness_by_agent.get(node_did);
+        let projected = project_node_readiness_summary(readiness_row, node_did.as_str());
         let ready = matches!(
             &projected,
-            ProjectedBehaviorReadinessSummary::Observed(summary)
-                if summary.snapshot.behaviors.iter().any(|entry| {
-                    &entry.behavior_id == behavior_id
-                        && entry.state == BehaviorReadinessState::Ready
+            ProjectedNodeReadinessSummary::Observed(summary)
+                if summary.snapshot.agents.iter().any(|entry| {
+                    &entry.agent_id == agent_id
+                        && entry.state == AgentReadinessState::Ready
                 })
         );
         let entry = accepting
-            .entry((agent_did.clone(), backend_id))
+            .entry((node_did.clone(), backend_id))
             .or_insert(false);
         *entry = *entry || ready;
     }
@@ -542,8 +536,8 @@ fn clean_string(value: &str) -> String {
 mod tests {
     use super::*;
     use gents_protocol::row::{
-        BehaviorReadinessEntry, BehaviorReadinessProcessState, BehaviorReadinessSnapshot,
-        BEHAVIOR_READINESS_FORMAT_VERSION,
+        AgentReadinessEntry, NodeReadinessProcessState, NodeReadinessSnapshot,
+        NODE_READINESS_FORMAT_VERSION,
     };
     use serde_json::json;
 
@@ -552,24 +546,24 @@ mod tests {
     }
 
     fn readiness_row(
-        agent_did: &str,
-        default_behavior_id: &str,
-        ready_behavior_ids: &[&str],
+        node_did: &str,
+        default_agent_id: &str,
+        ready_agent_ids: &[&str],
         updated_at: &str,
-    ) -> AgentBehaviorReadinessRow {
-        AgentBehaviorReadinessRow {
-            agent_did: agent_did.to_string(),
-            snapshot_json: serde_json::to_string(&BehaviorReadinessSnapshot {
-                format_version: BEHAVIOR_READINESS_FORMAT_VERSION,
-                process_state: BehaviorReadinessProcessState::Ready,
+    ) -> NodeReadinessRow {
+        NodeReadinessRow {
+            node_did: node_did.to_string(),
+            snapshot_json: serde_json::to_string(&NodeReadinessSnapshot {
+                format_version: NODE_READINESS_FORMAT_VERSION,
+                process_state: NodeReadinessProcessState::Ready,
                 active_generation: 1,
                 router_generation: 1,
-                default_behavior_id: default_behavior_id.to_string(),
-                behaviors: ready_behavior_ids
+                default_agent_id: default_agent_id.to_string(),
+                agents: ready_agent_ids
                     .iter()
-                    .map(|behavior_id| BehaviorReadinessEntry {
-                        behavior_id: behavior_id.to_string(),
-                        state: BehaviorReadinessState::Ready,
+                    .map(|agent_id| AgentReadinessEntry {
+                        agent_id: agent_id.to_string(),
+                        state: AgentReadinessState::Ready,
                         reason: None,
                     })
                     .collect(),
@@ -581,46 +575,48 @@ mod tests {
 
     fn find_backend<'a>(
         snapshot: &'a FleetSlotSnapshot,
-        agent_did: &str,
+        node_did: &str,
         backend_id: &str,
     ) -> &'a FleetBackendAdmissionCounters {
         snapshot
             .backends
             .iter()
-            .find(|backend| backend.agent_did == agent_did && backend.backend_id == backend_id)
+            .find(|backend| backend.node_did == node_did && backend.backend_id == backend_id)
             .unwrap()
     }
 
-    fn find_behavior<'a>(
+    fn find_agent<'a>(
         snapshot: &'a FleetSlotSnapshot,
-        agent_did: &str,
-        behavior_id: &str,
-    ) -> &'a FleetBehaviorSlotUsage {
+        node_did: &str,
+        agent_id: &str,
+    ) -> &'a FleetAgentSlotUsage {
         snapshot
-            .behaviors
+            .agents
             .iter()
-            .find(|behavior| behavior.agent_did == agent_did && behavior.behavior_id == behavior_id)
+            .find(|agent_config| {
+                agent_config.node_did == node_did && agent_config.agent_id == agent_id
+            })
             .unwrap()
     }
 
     #[test]
-    fn snapshot_reconstructs_slots_by_backend_and_behavior() {
+    fn snapshot_reconstructs_slots_by_backend_and_agent() {
         let now = DateTime::parse_from_rfc3339("2026-05-20T12:00:00Z")
             .unwrap()
             .with_timezone(&Utc);
         let snapshot = build_fleet_slot_snapshot(
             now,
             FleetSlotQueryEnvelope {
-                behaviors: vec![
-                    BehaviorRow {
-                        behavior_id: "behavior-a".to_string(),
-                        agent_did: "did:test:test".to_string(),
+                agents: vec![
+                    AgentRow {
+                        agent_id: "agent-a".to_string(),
+                        node_did: "did:test:test".to_string(),
                         inference_profile_id: Some("profile-a".to_string()),
                         enabled: Some(true),
                     },
-                    BehaviorRow {
-                        behavior_id: "behavior-b".to_string(),
-                        agent_did: "did:test:test".to_string(),
+                    AgentRow {
+                        agent_id: "agent-b".to_string(),
+                        node_did: "did:test:test".to_string(),
                         inference_profile_id: Some("profile-b".to_string()),
                         enabled: Some(true),
                     },
@@ -628,18 +624,18 @@ mod tests {
                 profiles: vec![
                     InferenceProfileRow {
                         profile_id: "profile-a".to_string(),
-                        agent_did: "did:test:test".to_string(),
+                        node_did: "did:test:test".to_string(),
                         backend_id: "backend-a".to_string(),
                     },
                     InferenceProfileRow {
                         profile_id: "profile-b".to_string(),
-                        agent_did: "did:test:test".to_string(),
+                        node_did: "did:test:test".to_string(),
                         backend_id: "backend-a".to_string(),
                     },
                 ],
                 backends: vec![BackendRow {
                     backend_id: "backend-a".to_string(),
-                    agent_did: "did:test:test".to_string(),
+                    node_did: "did:test:test".to_string(),
                     enabled: Some(true),
                     max_concurrent: Some(2),
                     max_queue_depth: Some(4),
@@ -648,27 +644,27 @@ mod tests {
                 calls: vec![
                     InferenceCallRow {
                         backend_id: Some("backend-a".to_string()),
-                        behavior_id: Some("behavior-a".to_string()),
-                        agent_did: Some("did:test:test".to_string()),
+                        agent_id: Some("agent-a".to_string()),
+                        node_did: Some("did:test:test".to_string()),
                         call_state: "running".to_string(),
                     },
                     InferenceCallRow {
                         backend_id: Some("backend-a".to_string()),
-                        behavior_id: Some("behavior-b".to_string()),
-                        agent_did: Some("did:test:test".to_string()),
+                        agent_id: Some("agent-b".to_string()),
+                        node_did: Some("did:test:test".to_string()),
                         call_state: "queued".to_string(),
                     },
                 ],
                 requests: vec![AgentRequestRow {
-                    agent_did: Some("did:test:test".to_string()),
-                    behavior_id: Some("behavior-a".to_string()),
+                    node_did: Some("did:test:test".to_string()),
+                    agent_id: Some("agent-a".to_string()),
                     deadline: Some("2026-05-20T11:59:00Z".to_string()),
                     ..empty_request_row()
                 }],
-                behavior_readiness: vec![readiness_row(
+                node_readiness: vec![readiness_row(
                     "did:test:test",
-                    "behavior-a",
-                    &["behavior-a", "behavior-b"],
+                    "agent-a",
+                    &["agent-a", "agent-b"],
                     "2026-05-20T11:59:50Z",
                 )],
             },
@@ -689,24 +685,24 @@ mod tests {
         assert_eq!(snapshot.backends[0].queued, 1);
         assert_eq!(snapshot.backends[0].available, 1);
 
-        let behavior_a = snapshot
-            .behaviors
+        let agent_a = snapshot
+            .agents
             .iter()
-            .find(|behavior| behavior.behavior_id == "behavior-a")
+            .find(|agent_config| agent_config.agent_id == "agent-a")
             .unwrap();
-        assert_eq!(behavior_a.assigned, 1);
-        assert_eq!(behavior_a.available, 1);
-        assert_eq!(behavior_a.max, 2);
-        assert_eq!(behavior_a.expired_processing, 1);
+        assert_eq!(agent_a.assigned, 1);
+        assert_eq!(agent_a.available, 1);
+        assert_eq!(agent_a.max, 2);
+        assert_eq!(agent_a.expired_processing, 1);
 
-        let behavior_b = snapshot
-            .behaviors
+        let agent_b = snapshot
+            .agents
             .iter()
-            .find(|behavior| behavior.behavior_id == "behavior-b")
+            .find(|agent_config| agent_config.agent_id == "agent-b")
             .unwrap();
-        assert_eq!(behavior_b.assigned, 0);
-        assert_eq!(behavior_b.queued, 1);
-        assert_eq!(behavior_b.available, 1);
+        assert_eq!(agent_b.assigned, 0);
+        assert_eq!(agent_b.queued, 1);
+        assert_eq!(agent_b.available, 1);
     }
 
     #[test]
@@ -717,21 +713,21 @@ mod tests {
         let snapshot = build_fleet_slot_snapshot(
             now,
             FleetSlotQueryEnvelope {
-                behaviors: vec![BehaviorRow {
-                    behavior_id: "behavior-disabled".to_string(),
-                    agent_did: "did:test:test".to_string(),
+                agents: vec![AgentRow {
+                    agent_id: "agent-disabled".to_string(),
+                    node_did: "did:test:test".to_string(),
                     inference_profile_id: Some("profile-unhealthy".to_string()),
                     enabled: Some(false),
                 }],
                 profiles: vec![InferenceProfileRow {
                     profile_id: "profile-unhealthy".to_string(),
-                    agent_did: "did:test:test".to_string(),
+                    node_did: "did:test:test".to_string(),
                     backend_id: "backend-unhealthy".to_string(),
                 }],
                 backends: vec![
                     BackendRow {
                         backend_id: "backend-unhealthy".to_string(),
-                        agent_did: "did:test:test".to_string(),
+                        node_did: "did:test:test".to_string(),
                         enabled: Some(true),
                         max_concurrent: Some(3),
                         max_queue_depth: Some(4),
@@ -739,7 +735,7 @@ mod tests {
                     },
                     BackendRow {
                         backend_id: "backend-missing-flags".to_string(),
-                        agent_did: "did:test:test".to_string(),
+                        node_did: "did:test:test".to_string(),
                         enabled: None,
                         max_concurrent: Some(2),
                         max_queue_depth: Some(1),
@@ -749,38 +745,38 @@ mod tests {
                 calls: vec![
                     InferenceCallRow {
                         backend_id: Some("backend-unhealthy".to_string()),
-                        behavior_id: Some("behavior-disabled".to_string()),
-                        agent_did: Some("did:test:test".to_string()),
+                        agent_id: Some("agent-disabled".to_string()),
+                        node_did: Some("did:test:test".to_string()),
                         call_state: "running".to_string(),
                     },
                     InferenceCallRow {
                         backend_id: Some("backend-stale".to_string()),
-                        behavior_id: Some("behavior-stale".to_string()),
-                        agent_did: Some("did:test:stale".to_string()),
+                        agent_id: Some("agent-stale".to_string()),
+                        node_did: Some("did:test:stale".to_string()),
                         call_state: "running".to_string(),
                     },
                 ],
                 requests: vec![
                     AgentRequestRow {
-                        agent_did: Some("did:test:test".to_string()),
-                        behavior_id: Some("behavior-disabled".to_string()),
+                        node_did: Some("did:test:test".to_string()),
+                        agent_id: Some("agent-disabled".to_string()),
                         deadline: Some("2026-05-20T11:59:00Z".to_string()),
                         ..empty_request_row()
                     },
                     AgentRequestRow {
-                        agent_did: Some("did:test:test".to_string()),
-                        behavior_id: Some("behavior-disabled".to_string()),
+                        node_did: Some("did:test:test".to_string()),
+                        agent_id: Some("agent-disabled".to_string()),
                         deadline: Some("not-a-date".to_string()),
                         ..empty_request_row()
                     },
                     AgentRequestRow {
-                        agent_did: Some("did:test:test".to_string()),
-                        behavior_id: Some("behavior-disabled".to_string()),
+                        node_did: Some("did:test:test".to_string()),
+                        agent_id: Some("agent-disabled".to_string()),
                         deadline: None,
                         ..empty_request_row()
                     },
                 ],
-                behavior_readiness: Vec::new(),
+                node_readiness: Vec::new(),
             },
         );
 
@@ -818,7 +814,7 @@ mod tests {
         assert_eq!(stale_backend.running, 1);
         assert_eq!(stale_backend.max_concurrent, 0);
 
-        let disabled = find_behavior(&snapshot, "did:test:test", "behavior-disabled");
+        let disabled = find_agent(&snapshot, "did:test:test", "agent-disabled");
         assert!(disabled.configured);
         assert!(!disabled.enabled);
         assert!(!disabled.backend_available);
@@ -827,14 +823,14 @@ mod tests {
         assert_eq!(disabled.max, 3);
         assert_eq!(disabled.expired_processing, 1);
 
-        let stale_behavior = find_behavior(&snapshot, "did:test:stale", "behavior-stale");
-        assert!(!stale_behavior.configured);
-        assert!(!stale_behavior.enabled);
-        assert_eq!(stale_behavior.agent_did, "did:test:stale");
-        assert_eq!(stale_behavior.backend_id, "backend-stale");
-        assert_eq!(stale_behavior.assigned, 1);
-        assert_eq!(stale_behavior.available, 0);
-        assert_eq!(stale_behavior.max, 0);
+        let stale_agent = find_agent(&snapshot, "did:test:stale", "agent-stale");
+        assert!(!stale_agent.configured);
+        assert!(!stale_agent.enabled);
+        assert_eq!(stale_agent.node_did, "did:test:stale");
+        assert_eq!(stale_agent.backend_id, "backend-stale");
+        assert_eq!(stale_agent.assigned, 1);
+        assert_eq!(stale_agent.available, 0);
+        assert_eq!(stale_agent.max, 0);
     }
 
     #[test]
@@ -842,64 +838,64 @@ mod tests {
         let now = DateTime::parse_from_rfc3339("2026-05-20T12:00:00Z")
             .unwrap()
             .with_timezone(&Utc);
-        let behavior = |agent_did: &str| BehaviorRow {
-            behavior_id: "shared-behavior".to_string(),
-            agent_did: agent_did.to_string(),
+        let agent_config = |node_did: &str| AgentRow {
+            agent_id: "shared-agent".to_string(),
+            node_did: node_did.to_string(),
             inference_profile_id: Some("shared-profile".to_string()),
             enabled: Some(true),
         };
-        let profile = |agent_did: &str| InferenceProfileRow {
+        let profile = |node_did: &str| InferenceProfileRow {
             profile_id: "shared-profile".to_string(),
-            agent_did: agent_did.to_string(),
+            node_did: node_did.to_string(),
             backend_id: "shared-backend".to_string(),
         };
-        let backend = |agent_did: &str, max_concurrent| BackendRow {
+        let backend = |node_did: &str, max_concurrent| BackendRow {
             backend_id: "shared-backend".to_string(),
-            agent_did: agent_did.to_string(),
+            node_did: node_did.to_string(),
             enabled: Some(true),
             max_concurrent: Some(max_concurrent),
             max_queue_depth: Some(4),
             probe_status: Some("healthy".to_string()),
         };
-        let call = |agent_did: &str, call_state: &str| InferenceCallRow {
+        let call = |node_did: &str, call_state: &str| InferenceCallRow {
             backend_id: Some("shared-backend".to_string()),
-            behavior_id: Some("shared-behavior".to_string()),
-            agent_did: Some(agent_did.to_string()),
+            agent_id: Some("shared-agent".to_string()),
+            node_did: Some(node_did.to_string()),
             call_state: call_state.to_string(),
         };
 
         let snapshot = build_fleet_slot_snapshot(
             now,
             FleetSlotQueryEnvelope {
-                behaviors: vec![behavior("did:test:a"), behavior("did:test:b")],
+                agents: vec![agent_config("did:test:a"), agent_config("did:test:b")],
                 profiles: vec![profile("did:test:a"), profile("did:test:b")],
                 backends: vec![backend("did:test:a", 2), backend("did:test:b", 4)],
                 calls: vec![call("did:test:a", "running"), call("did:test:b", "queued")],
                 requests: vec![
                     AgentRequestRow {
-                        agent_did: Some("did:test:a".to_string()),
-                        behavior_id: Some("shared-behavior".to_string()),
+                        node_did: Some("did:test:a".to_string()),
+                        agent_id: Some("shared-agent".to_string()),
                         deadline: Some("2026-05-20T11:59:00Z".to_string()),
                         ..empty_request_row()
                     },
                     AgentRequestRow {
-                        agent_did: Some("did:test:b".to_string()),
-                        behavior_id: Some("shared-behavior".to_string()),
+                        node_did: Some("did:test:b".to_string()),
+                        agent_id: Some("shared-agent".to_string()),
                         deadline: Some("2026-05-20T12:01:00Z".to_string()),
                         ..empty_request_row()
                     },
                 ],
-                behavior_readiness: vec![
+                node_readiness: vec![
                     readiness_row(
                         "did:test:a",
-                        "shared-behavior",
-                        &["shared-behavior"],
+                        "shared-agent",
+                        &["shared-agent"],
                         "2026-05-20T11:59:50Z",
                     ),
                     readiness_row(
                         "did:test:b",
-                        "shared-behavior",
-                        &["shared-behavior"],
+                        "shared-agent",
+                        &["shared-agent"],
                         "2026-05-20T11:59:50Z",
                     ),
                 ],
@@ -917,16 +913,16 @@ mod tests {
         assert_eq!(backend_b.available, 4);
         assert_eq!(backend_b.max_concurrent, 4);
 
-        let behavior_a = find_behavior(&snapshot, "did:test:a", "shared-behavior");
-        assert_eq!(behavior_a.assigned, 1);
-        assert_eq!(behavior_a.queued, 0);
-        assert_eq!(behavior_a.expired_processing, 1);
-        assert_eq!(behavior_a.available, 1);
-        let behavior_b = find_behavior(&snapshot, "did:test:b", "shared-behavior");
-        assert_eq!(behavior_b.assigned, 0);
-        assert_eq!(behavior_b.queued, 1);
-        assert_eq!(behavior_b.expired_processing, 0);
-        assert_eq!(behavior_b.available, 4);
+        let agent_a = find_agent(&snapshot, "did:test:a", "shared-agent");
+        assert_eq!(agent_a.assigned, 1);
+        assert_eq!(agent_a.queued, 0);
+        assert_eq!(agent_a.expired_processing, 1);
+        assert_eq!(agent_a.available, 1);
+        let agent_b = find_agent(&snapshot, "did:test:b", "shared-agent");
+        assert_eq!(agent_b.assigned, 0);
+        assert_eq!(agent_b.queued, 1);
+        assert_eq!(agent_b.expired_processing, 0);
+        assert_eq!(agent_b.available, 4);
 
         assert_eq!(snapshot.expired.processing_requests, 1);
         assert_eq!(snapshot.totals.assigned, 1);

@@ -11,7 +11,7 @@ use gents::eval::documents::default_breaker_threshold;
 use gents::eval::load_trials;
 use gents::eval::report::load_report;
 use gents::eval::runner::{self, CellRequest, RunOutcome, RunRequest, CANCEL_MARKER};
-use gents::{default_behavior_id_for_agent, default_inference_profile_id_for_behavior};
+use gents::{default_agent_id_for_node, default_inference_profile_id_for_agent};
 
 use super::{
     default_id, follow_progress, render, source_commit, source_dirty, write_json, Deps,
@@ -137,21 +137,21 @@ pub(super) async fn run_request(
 ) -> Result<(RunRequest, Vec<SubjectPack>)> {
     let profiles = profiles_by_cell(args).map_err(anyhow::Error::msg)?;
     let default_profile =
-        default_inference_profile_id_for_behavior(&default_behavior_id_for_agent(&ctx.owner));
+        default_inference_profile_id_for_agent(&default_agent_id_for_node(&ctx.owner));
     let mut cells = Vec::with_capacity(args.cells.len());
     let mut packs = Vec::with_capacity(args.cells.len());
     for cell in &args.cells {
         let pack =
             resolve_subject_pack(&ctx.home_dir, &cell.pack, args.registry.as_deref()).await?;
-        let behavior_id = match &cell.behavior {
-            Some(behavior) => behavior.clone(),
-            None => pack.default_behavior()?,
+        let agent_id = match &cell.agent {
+            Some(agent) => agent.clone(),
+            None => pack.default_agent()?,
         };
         cells.push(CellRequest {
             cell_id: cell.cell_id.clone(),
             label: cell.cell_id.clone(),
             source: pack.source.clone(),
-            behavior_id,
+            agent_id,
             inference_profile_id: profiles
                 .get(cell.cell_id.as_str())
                 .map_or_else(|| default_profile.clone(), |profile| (*profile).to_owned()),
@@ -553,8 +553,8 @@ mod tests {
         )
         .await
         .unwrap_err();
-        let profile = gents::default_inference_profile_id_for_behavior(
-            &gents::default_behavior_id_for_agent(&fixture.ctx.owner),
+        let profile = gents::default_inference_profile_id_for_agent(
+            &gents::default_agent_id_for_node(&fixture.ctx.owner),
         );
         assert_eq!(
             error.to_string(),

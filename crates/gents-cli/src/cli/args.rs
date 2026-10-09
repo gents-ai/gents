@@ -45,10 +45,10 @@ pub(crate) struct Cli {
 pub(crate) enum Command {
     #[command(about = "Print build and release metadata")]
     Version,
-    #[command(about = "Initialize a local agent home directory", after_help = INIT_AFTER_HELP)]
+    #[command(about = "Initialize a local node home directory", after_help = INIT_AFTER_HELP)]
     Init(InitArgs),
     #[command(
-        about = "Provision a local agent home from a portable manifest root",
+        about = "Provision a local node home from a portable manifest root",
         after_help = PROVISION_AFTER_HELP
     )]
     Provision(ProvisionArgs),
@@ -130,7 +130,7 @@ pub(crate) enum Command {
     Query(QueryArgs),
     #[command(about = "Preview and apply scoped application document mutations")]
     Write(WriteArgs),
-    #[command(about = "Create documents as the home principal")]
+    #[command(about = "Create documents as the home node")]
     Document {
         #[command(subcommand)]
         command: DocumentCommand,
@@ -178,7 +178,7 @@ pub(crate) enum Command {
     },
     #[command(about = "Run local configuration and runtime diagnostics", after_help = DIAGNOSE_AFTER_HELP)]
     Diagnose(DiagnoseArgs),
-    #[command(about = "Explain resolved behavior tool surfaces", after_help = TOOLS_AFTER_HELP)]
+    #[command(about = "Explain resolved agent tool surfaces", after_help = TOOLS_AFTER_HELP)]
     Tools {
         #[command(subcommand)]
         command: ToolsCommand,
@@ -318,7 +318,7 @@ pub(crate) struct GraphScopeArgs {
     #[arg(long)]
     pub(crate) graphql: Option<String>,
     #[arg(long)]
-    pub(crate) agent_did: Option<String>,
+    pub(crate) node_did: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -349,7 +349,7 @@ pub(crate) struct PackListArgs {
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum PackTemplate {
-    /// A documents pack: one behavior, context, tools and task.
+    /// A documents pack: one agent, context, tools and task.
     Minimal,
     /// The minimal pack plus a job schema, an event source and a trigger.
     Automation,
@@ -414,20 +414,17 @@ pub(crate) struct PackAddArgs {
 
 #[derive(clap::Subcommand)]
 pub(crate) enum PackAddCommand {
-    /// A behavior with its prompt, context and tools, in an inference slot.
-    Behavior {
+    /// An agent with its prompt, context and tools, in an inference slot.
+    Agent {
         id: String,
-        #[arg(
-            long,
-            help = "Inference slot; defaults to one named after the behavior"
-        )]
+        #[arg(long, help = "Inference slot; defaults to one named after the agent")]
         slot: Option<String>,
     },
-    /// A task with its prompt, run by an existing behavior.
+    /// A task with its prompt, run by an existing agent.
     Task {
         id: String,
         #[arg(long)]
-        behavior: String,
+        agent: String,
     },
     /// An event source and a trigger that runs a task when a document is created.
     Trigger {
@@ -487,7 +484,7 @@ pub(crate) enum PackAddCommand {
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug)]
 pub(crate) enum PackPart {
-    Behavior,
+    Agent,
     Task,
     Trigger,
     Graph,
@@ -888,7 +885,7 @@ pub(crate) struct PackUpdateArgs {
     #[arg(
         long,
         requires = "package",
-        help = "JSON file containing agent_did and an optional inference_slots map, as for install"
+        help = "JSON file containing node_did and an optional inference_slots map, as for install"
     )]
     pub(crate) bindings: Option<PathBuf>,
     #[arg(
@@ -896,7 +893,7 @@ pub(crate) struct PackUpdateArgs {
         value_name = "NAME=PROFILE_ID",
         action = clap::ArgAction::Append,
         requires = "package",
-        help = "Bind a declared inference slot to an existing principal-owned profile, as for install"
+        help = "Bind a declared inference slot to an existing node-owned profile, as for install"
     )]
     pub(crate) inference_slots: Vec<String>,
     #[command(flatten)]
@@ -923,14 +920,14 @@ pub(crate) struct PackInstallArgs {
     pub(crate) package: String,
     #[arg(
         long,
-        help = "JSON file containing agent_did and an optional inference_slots map"
+        help = "JSON file containing node_did and an optional inference_slots map"
     )]
     pub(crate) bindings: Option<PathBuf>,
     #[arg(
         long = "inference-slot",
         value_name = "NAME=PROFILE_ID",
         action = clap::ArgAction::Append,
-        help = "Bind a declared inference slot to an existing principal-owned profile; repeat for every slot"
+        help = "Bind a declared inference slot to an existing node-owned profile; repeat for every slot"
     )]
     pub(crate) inference_slots: Vec<String>,
     #[arg(
@@ -1337,8 +1334,8 @@ pub(crate) struct CodexAuthProbeArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long, help = "GraphQL endpoint for the target gents node")]
     pub(crate) graphql: Option<String>,
-    #[arg(long, help = "Agent DID that owns the OAuthCredential document")]
-    pub(crate) agent_did: Option<String>,
+    #[arg(long, help = "Node DID that owns the OAuthCredential document")]
+    pub(crate) node_did: Option<String>,
     #[arg(long, default_value = "chatgpt-codex")]
     pub(crate) provider: String,
     #[arg(
@@ -1355,8 +1352,8 @@ pub(crate) struct AccountsTargetArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long, help = "GraphQL endpoint for the target gents node")]
     pub(crate) graphql: Option<String>,
-    #[arg(long, help = "Agent DID that owns the accounts")]
-    pub(crate) agent_did: Option<String>,
+    #[arg(long, help = "Node DID that owns the accounts")]
+    pub(crate) node_did: Option<String>,
     #[arg(long, value_parser = ACCOUNT_PROVIDERS, help = "Only accounts of this sign-in provider")]
     pub(crate) provider: Option<String>,
 }
@@ -1419,8 +1416,8 @@ pub(crate) struct CodexLoginArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long, help = "GraphQL endpoint for the target gents node")]
     pub(crate) graphql: Option<String>,
-    #[arg(long, help = "Agent DID that owns the OAuthCredential document")]
-    pub(crate) agent_did: Option<String>,
+    #[arg(long, help = "Node DID that owns the OAuthCredential document")]
+    pub(crate) node_did: Option<String>,
     #[arg(long, default_value = "chatgpt-codex", value_parser = ["chatgpt-codex"], help = "OAuth provider key (only chatgpt-codex)")]
     pub(crate) provider: String,
     #[arg(long, help = LOGIN_LABEL_HELP)]
@@ -1439,8 +1436,8 @@ pub(crate) struct GrokAuthProbeArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long, help = "GraphQL endpoint for the target gents node")]
     pub(crate) graphql: Option<String>,
-    #[arg(long, help = "Agent DID that owns the OAuthCredential document")]
-    pub(crate) agent_did: Option<String>,
+    #[arg(long, help = "Node DID that owns the OAuthCredential document")]
+    pub(crate) node_did: Option<String>,
     #[arg(long, default_value = "xai-oauth")]
     pub(crate) provider: String,
     #[arg(
@@ -1457,8 +1454,8 @@ pub(crate) struct GrokLoginArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long, help = "GraphQL endpoint for the target gents node")]
     pub(crate) graphql: Option<String>,
-    #[arg(long, help = "Agent DID that owns the OAuthCredential document")]
-    pub(crate) agent_did: Option<String>,
+    #[arg(long, help = "Node DID that owns the OAuthCredential document")]
+    pub(crate) node_did: Option<String>,
     #[arg(long, default_value = "xai-oauth", value_parser = ["xai-oauth"], help = "OAuth provider key (only xai-oauth)")]
     pub(crate) provider: String,
     #[arg(long, help = LOGIN_LABEL_HELP)]
@@ -1471,8 +1468,8 @@ pub(crate) struct ClaudeLoginArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long, help = "GraphQL endpoint for the target gents node")]
     pub(crate) graphql: Option<String>,
-    #[arg(long, help = "Agent DID that owns the OAuthCredential document")]
-    pub(crate) agent_did: Option<String>,
+    #[arg(long, help = "Node DID that owns the OAuthCredential document")]
+    pub(crate) node_did: Option<String>,
     #[arg(long, default_value = "claude-subscription", value_parser = ["claude-subscription"], help = "OAuth provider key (only claude-subscription)")]
     pub(crate) provider: String,
     #[arg(long, help = LOGIN_LABEL_HELP)]
@@ -1518,8 +1515,8 @@ pub(crate) struct CloudLoginArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long, help = "GraphQL endpoint for the target gents node")]
     pub(crate) graphql: Option<String>,
-    #[arg(long, help = "Agent DID that owns the OAuthCredential document")]
-    pub(crate) agent_did: Option<String>,
+    #[arg(long, help = "Node DID that owns the OAuthCredential document")]
+    pub(crate) node_did: Option<String>,
     #[arg(long, default_value = "gents-cloud")]
     pub(crate) provider: String,
 }
@@ -1538,7 +1535,7 @@ pub(crate) struct ProvisionArgs {
         long,
         help = "Local display name and default key filename when the home has not been initialized. Defaults to the manifest root directory name."
     )]
-    pub(crate) agent_name: Option<String>,
+    pub(crate) node_name: Option<String>,
     #[arg(
         long,
         default_value_t = false,
@@ -1623,8 +1620,8 @@ pub(crate) struct InitArgs {
         help = "Create/load identity and write init.json without seeding runtime config documents"
     )]
     pub(crate) identity_only: bool,
-    #[arg(long, default_value = crate::DEFAULT_AGENT_NAME, help = "Local display name and default key filename. The agent DID is derived from the identity key.")]
-    pub(crate) agent_name: String,
+    #[arg(long, default_value = crate::DEFAULT_NODE_NAME, help = "Local display name and default key filename. The node DID is derived from the identity key.")]
+    pub(crate) node_name: String,
     #[arg(long)]
     pub(crate) key_path: Option<PathBuf>,
     #[arg(
@@ -1658,7 +1655,7 @@ pub(crate) struct InitArgs {
     pub(crate) inference_endpoint: Option<String>,
     #[arg(
         long,
-        help = "Optional backend document id. Defaults to <agent-name>-backend"
+        help = "Optional backend document id. Defaults to <node-name>-backend"
     )]
     pub(crate) backend_id: Option<String>,
     #[arg(
@@ -1689,7 +1686,7 @@ pub(crate) struct InitArgs {
     pub(crate) api_key_env_var: Option<String>,
     #[arg(
         long,
-        help = "Model id to bind to the default behavior. Required for presets without a local default model"
+        help = "Model id to bind to the default agent. Required for presets without a local default model"
     )]
     pub(crate) model_name: Option<String>,
     #[arg(long, default_value_t = 2)]
@@ -1718,9 +1715,9 @@ pub(crate) struct InitArgs {
     #[arg(
         long,
         default_value_t = false,
-        help = "Seed the default behavior as The Engineer: setup prompt and tag, the write package unless one is chosen, and inference off until a model is selected. Every init enables the self-config tools"
+        help = "Seed the default agent as The Engineer: setup prompt and tag, the write package unless one is chosen, and inference off until a model is selected. Every init enables the self-config tools"
     )]
-    pub(crate) setup_steward: bool,
+    pub(crate) engineer: bool,
     #[arg(
         long,
         help = "Root directory for local file/bash tools. Defaults to the current working directory"
@@ -1783,7 +1780,7 @@ pub(crate) struct ServeArgs {
     )]
     pub(crate) http_port: Option<u16>,
     #[arg(long)]
-    pub(crate) agent_name: Option<String>,
+    pub(crate) node_name: Option<String>,
     #[arg(long)]
     pub(crate) key_path: Option<PathBuf>,
     #[arg(
@@ -1865,8 +1862,8 @@ pub(crate) struct ServeArgs {
         help = "Public wss:// app-server URL advertised when TLS terminates in a reverse proxy"
     )]
     pub(crate) codex_shim_public_url: Option<String>,
-    #[arg(long, help = "Optional GENTS behavior override for Codex turns")]
-    pub(crate) codex_shim_behavior_id: Option<String>,
+    #[arg(long, help = "Optional GENTS agent override for Codex turns")]
+    pub(crate) codex_shim_agent_id: Option<String>,
     #[arg(long, default_value_t = crate::DEFAULT_CODEX_SHIM_TIMEOUT_SECS)]
     pub(crate) codex_shim_timeout_secs: u64,
     #[arg(long, default_value_t = 250)]
@@ -1886,9 +1883,9 @@ pub(crate) struct ServeArgs {
     #[arg(
         long,
         requires = "grok_shim",
-        help = "Optional GENTS behavior override for Grok pager turns"
+        help = "Optional GENTS agent override for Grok pager turns"
     )]
-    pub(crate) grok_shim_behavior_id: Option<String>,
+    pub(crate) grok_shim_agent_id: Option<String>,
     #[arg(
         long,
         value_enum,
@@ -1939,7 +1936,7 @@ pub(crate) struct ServeArgs {
     #[arg(
         long = "apply-root",
         value_name = "ROOT",
-        help = "After the server is ready, run config apply on this pack root (schemas/ then desired-state) against the in-process node. Rebinds pack placeholder DIDs to the home principal (same as config apply --bind-agent-did home --force-rebind-concrete-did)"
+        help = "After the server is ready, run config apply on this pack root (schemas/ then desired-state) against the in-process node. Rebinds pack placeholder DIDs to the home node (same as config apply --bind-node-did home --force-rebind-concrete-did)"
     )]
     pub(crate) apply_root: Option<PathBuf>,
     #[arg(
@@ -1986,16 +1983,16 @@ pub(crate) struct ChatArgs {
     #[arg(long)]
     pub(crate) graphql: Option<String>,
     #[arg(long)]
-    pub(crate) agent_did: Option<String>,
+    pub(crate) node_did: Option<String>,
     #[arg(long)]
-    pub(crate) agent_name: Option<String>,
+    pub(crate) node_name: Option<String>,
     #[arg(
         long,
         help = "Continue an existing session instead of starting a fresh one"
     )]
     pub(crate) session_id: Option<String>,
-    #[arg(long, help = "Override the behavior for this one-off turn or session")]
-    pub(crate) behavior_id: Option<String>,
+    #[arg(long, help = "Override the agent for this one-off turn or session")]
+    pub(crate) agent_id: Option<String>,
     #[arg(
         long,
         value_name = "OBJECTIVE",
@@ -2073,7 +2070,7 @@ pub(crate) struct McpRegisterArgs {
     #[arg(long, value_name = "VERSION", default_value = "unversioned")]
     pub(crate) version: String,
     #[arg(long, action = ArgAction::SetTrue)]
-    pub(crate) send_agent_did: bool,
+    pub(crate) send_node_did: bool,
 }
 
 #[derive(clap::Args)]
@@ -2148,7 +2145,7 @@ pub(crate) struct StatusArgs {
     #[arg(long)]
     pub(crate) graphql: Option<String>,
     #[arg(long)]
-    pub(crate) agent_did: Option<String>,
+    pub(crate) node_did: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -2220,7 +2217,7 @@ pub(crate) struct WriteArgs {
 pub(crate) enum DocumentCommand {
     #[command(
         about = "Create one document in a collection and print its document id",
-        long_about = "Create one document in a collection and print its document id.\n\nThis is an operator command: it refuses protected eval/optimization and canonical configuration collections. Writes to the home runtime are signed as the home principal; an unrelated explicit endpoint uses anonymous access with a warning. The mutation input schema is validated before writing."
+        long_about = "Create one document in a collection and print its document id.\n\nThis is an operator command: it refuses protected eval/optimization and canonical configuration collections. Writes to the home runtime are signed as the home node; an unrelated explicit endpoint uses anonymous access with a warning. The mutation input schema is validated before writing."
     )]
     Create(DocumentCreateArgs),
 }
@@ -2427,9 +2424,9 @@ pub(crate) struct DiagnoseArgs {
     #[arg(long)]
     pub(crate) graphql: Option<String>,
     #[arg(long)]
-    pub(crate) agent_did: Option<String>,
-    #[arg(long = "bind-agent-did", value_enum)]
-    pub(crate) bind_agent_did: Option<ManifestAgentDidBindingArg>,
+    pub(crate) node_did: Option<String>,
+    #[arg(long = "bind-node-did", value_enum)]
+    pub(crate) bind_node_did: Option<ManifestNodeDidBindingArg>,
 }
 
 #[derive(Subcommand)]
@@ -2560,15 +2557,15 @@ pub(crate) struct TraceProjectArgs {
     )]
     pub(crate) acp_policy_id: Option<String>,
     #[arg(
-        long = "scope-agent-did",
-        help = "Require the root request to match this agent DID and omit content-bearing events for other agents"
+        long = "scope-node-did",
+        help = "Require the root request to match this node DID and omit content-bearing events for other agents"
     )]
-    pub(crate) scope_agent_did: Option<String>,
+    pub(crate) scope_node_did: Option<String>,
     #[arg(
-        long = "scope-behavior-id",
-        help = "Require the root request to match this behavior id and omit content-bearing events for other behaviors"
+        long = "scope-agent-id",
+        help = "Require the root request to match this agent id and omit content-bearing events for other agents"
     )]
-    pub(crate) scope_behavior_id: Option<String>,
+    pub(crate) scope_agent_id: Option<String>,
     #[arg(
         long = "scope-session-id",
         help = "Require the root request to belong to this session id"
@@ -2642,10 +2639,10 @@ pub(crate) enum ConfigCommand {
         #[command(subcommand)]
         command: BackendCommand,
     },
-    #[command(about = "Write an AgentBehavior document")]
-    Behavior {
+    #[command(about = "Write an Agent document")]
+    Agent {
         #[command(subcommand)]
-        command: BehaviorCommand,
+        command: AgentCommand,
     },
     #[command(about = "Write a Tools document")]
     Tools {
@@ -2717,29 +2714,29 @@ pub(crate) enum BackendCommand {
 }
 
 #[derive(Subcommand)]
-pub(crate) enum BehaviorCommand {
+pub(crate) enum AgentCommand {
     #[command(name = "set")]
-    Set(BehaviorUpsertArgs),
+    Set(AgentUpsertArgs),
     #[command(
         name = "create",
-        about = "Create a persona's AgentBehavior through the shared persona materializer"
+        about = "Create an Agent through the shared agent materializer"
     )]
-    Create(BehaviorCreateArgs),
+    Create(AgentCreateArgs),
     #[command(
         name = "clone",
-        about = "Clone an existing persona's context and tools into a new AgentBehavior"
+        about = "Clone an existing agent's context and tools into a new Agent"
     )]
-    Clone(BehaviorCloneArgs),
+    Clone(AgentCloneArgs),
     #[command(
         name = "disable",
-        about = "Disable a persona's AgentBehavior through the shared persona materializer"
+        about = "Disable an Agent through the shared agent materializer"
     )]
-    Disable(BehaviorDisableArgs),
-    #[command(name = "list", about = "List AgentBehavior documents")]
+    Disable(AgentDisableArgs),
+    #[command(name = "list", about = "List Agent documents")]
     List(ConfigListArgs),
-    #[command(name = "show", about = "Show an AgentBehavior document")]
+    #[command(name = "show", about = "Show an Agent document")]
     Show(ConfigShowArgs),
-    #[command(name = "rm", about = "Delete an AgentBehavior document")]
+    #[command(name = "rm", about = "Delete an Agent document")]
     Rm(ConfigShowArgs),
 }
 
@@ -2766,24 +2763,24 @@ pub(crate) enum ToolsConfigCommand {
     #[command(name = "rm", about = "Delete a Tools document")]
     Rm(ConfigShowArgs),
     #[command(
-        name = "subagent-target-entry",
-        about = "Emit a canonical SubagentTarget document"
+        name = "agent-target-entry",
+        about = "Emit a canonical AgentTarget document"
     )]
-    SubagentTargetEntry(SubagentTargetEntryArgs),
+    AgentTargetEntry(AgentTargetEntryArgs),
 }
 
 #[derive(Debug, clap::Args)]
-pub(crate) struct SubagentTargetEntryArgs {
-    #[arg(long, help = "Logical ID referenced by Tools.subagents.target_ids")]
+pub(crate) struct AgentTargetEntryArgs {
+    #[arg(long, help = "Logical ID referenced by Tools.agents.target_ids")]
     pub(crate) target_id: String,
     #[arg(long, help = "Principal that owns this target configuration")]
-    pub(crate) agent_did: String,
-    #[arg(long, help = "Principal that owns the destination behavior")]
-    pub(crate) target_agent_did: String,
+    pub(crate) node_did: String,
+    #[arg(long, help = "Principal that owns the destination agent")]
+    pub(crate) target_node_did: String,
     #[arg(long, help = "Model-facing target name")]
     pub(crate) name: String,
     #[arg(long)]
-    pub(crate) behavior_id: String,
+    pub(crate) agent_id: String,
     #[arg(long)]
     pub(crate) description: Option<String>,
 }
@@ -2818,7 +2815,7 @@ pub(crate) enum SkillCommand {
 pub(crate) enum ToolsCommand {
     #[command(
         name = "explain",
-        about = "Explain final model-callable tools per behavior"
+        about = "Explain final model-callable tools per agent"
     )]
     Explain(ToolExplainArgs),
 }
@@ -2830,9 +2827,9 @@ pub(crate) struct ToolExplainArgs {
     #[arg(long, help = "GraphQL endpoint to read instead of local home state")]
     pub(crate) graphql: Option<String>,
     #[arg(long)]
-    pub(crate) agent_did: Option<String>,
-    #[arg(long, help = "Only explain one behavior_id")]
-    pub(crate) behavior_id: Option<String>,
+    pub(crate) node_did: Option<String>,
+    #[arg(long, help = "Only explain one agent_id")]
+    pub(crate) agent_id: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -2840,7 +2837,7 @@ pub(crate) struct SkillAddArgs {
     #[arg(long)]
     pub(crate) graphql: String,
     #[arg(long)]
-    pub(crate) agent_did: String,
+    pub(crate) node_did: String,
     #[arg(long)]
     pub(crate) skill_id: String,
     #[arg(long)]
@@ -2853,7 +2850,7 @@ pub(crate) struct SkillAddArgs {
     /// Read instructions from a file (takes precedence over --instructions).
     #[arg(long)]
     pub(crate) instructions_file: Option<PathBuf>,
-    /// Declared tool dependency (repeatable). Intersected with the behavior
+    /// Declared tool dependency (repeatable). Intersected with the agent
     /// tool ceiling at activation; never grants a tool.
     #[arg(long = "tool-ref")]
     pub(crate) tool_refs: Vec<String>,
@@ -2868,7 +2865,7 @@ pub(crate) struct SkillImportArgs {
     #[arg(long)]
     pub(crate) graphql: String,
     #[arg(long)]
-    pub(crate) agent_did: String,
+    pub(crate) node_did: String,
     /// A SKILL.md file, skill directory, or directory tree to scan. Each
     /// skill may include optional agents/openai.yaml metadata.
     #[arg(value_name = "PATH")]
@@ -2886,7 +2883,7 @@ pub(crate) struct SkillExportArgs {
     #[arg(long)]
     pub(crate) graphql: String,
     #[arg(long)]
-    pub(crate) agent_did: String,
+    pub(crate) node_did: String,
     /// Output directory. Each skill is written to `<dir>/<skill_id>/SKILL.md`
     /// (plus `agents/openai.yaml` when it has tool_refs or a display name).
     #[arg(value_name = "DIR")]
@@ -2898,7 +2895,7 @@ pub(crate) struct SkillListArgs {
     #[arg(long)]
     pub(crate) graphql: String,
     #[arg(long)]
-    pub(crate) agent_did: String,
+    pub(crate) node_did: String,
 }
 
 #[derive(clap::Args)]
@@ -2957,15 +2954,15 @@ pub(crate) struct WorkspaceRootUpsertArgs {
     pub(crate) disabled: bool,
 }
 
-/// Replace one canonical behavior document through the shared config writer.
+/// Replace one canonical agent document through the shared config writer.
 #[derive(clap::Args)]
-pub(crate) struct BehaviorUpsertArgs {
+pub(crate) struct AgentUpsertArgs {
     #[arg(long)]
     pub(crate) graphql: String,
     #[arg(long)]
-    pub(crate) agent_did: String,
+    pub(crate) node_did: String,
     #[arg(long)]
-    pub(crate) behavior_id: Option<String>,
+    pub(crate) agent_id: Option<String>,
     #[arg(long)]
     pub(crate) display_name: Option<String>,
     #[arg(long)]
@@ -2977,7 +2974,7 @@ pub(crate) struct BehaviorUpsertArgs {
     pub(crate) context_id: Option<String>,
     #[arg(
         long,
-        help = "Required InferenceProfile reference; Task -> Behavior -> Profile is the only model-selection path"
+        help = "Required InferenceProfile reference; Task -> Agent -> Profile is the only model-selection path"
     )]
     pub(crate) inference_profile_id: String,
     #[arg(long = "tag", help = "Optional UI/discovery label (repeatable)")]
@@ -2986,22 +2983,22 @@ pub(crate) struct BehaviorUpsertArgs {
     pub(crate) enabled: bool,
 }
 
-/// Submit an owned, signed persona creation request.
+/// Configure an agent through the shared self-config owner.
 #[derive(clap::Args)]
-pub(crate) struct BehaviorCreateArgs {
+pub(crate) struct AgentCreateArgs {
     #[arg(long)]
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]
     pub(crate) graphql: String,
     #[arg(long)]
-    pub(crate) agent_did: String,
-    #[arg(long, help = "Persona display name")]
+    pub(crate) node_did: String,
+    #[arg(long, help = "Agent display name")]
     pub(crate) display_name: String,
-    #[arg(long, help = "Concise purpose for the created behavior")]
+    #[arg(long, help = "Concise purpose for the created agent")]
     pub(crate) description: Option<String>,
     #[arg(
         long,
-        help = "Complete behavior instructions; required with --preset and optional as a clone override"
+        help = "Complete agent instructions; required with --preset and optional as a clone override"
     )]
     pub(crate) system_prompt: Option<String>,
     #[arg(
@@ -3009,14 +3006,11 @@ pub(crate) struct BehaviorCreateArgs {
         help = "Built-in permission preset (readonly|write); mutually exclusive with --clone-from"
     )]
     pub(crate) preset: Option<String>,
-    #[arg(
-        long,
-        help = "Optional host cwd from the principal's published choices"
-    )]
+    #[arg(long, help = "Optional host cwd from the node's published choices")]
     pub(crate) root: Option<String>,
     #[arg(
         long,
-        help = "behavior_id of an existing enabled persona to clone the context/tools from; mutually exclusive with --preset"
+        help = "agent_id of an existing enabled agent to clone the context/tools from; mutually exclusive with --preset"
     )]
     pub(crate) clone_from: Option<String>,
     #[arg(
@@ -3026,18 +3020,18 @@ pub(crate) struct BehaviorCreateArgs {
     pub(crate) profile_id: String,
 }
 
-/// Clone a behavior belonging to the initialized home signer.
+/// Clone an agent belonging to the initialized home signer.
 #[derive(clap::Args)]
-pub(crate) struct BehaviorCloneArgs {
+pub(crate) struct AgentCloneArgs {
     #[arg(long)]
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]
     pub(crate) graphql: String,
-    #[arg(value_name = "SOURCE_BEHAVIOR_ID")]
-    pub(crate) source_behavior_id: String,
-    #[arg(long, help = "Display name for the cloned persona")]
+    #[arg(value_name = "SOURCE_AGENT_ID")]
+    pub(crate) source_agent_id: String,
+    #[arg(long, help = "Display name for the cloned agent")]
     pub(crate) display_name: String,
-    #[arg(long, help = "Override the source behavior/context description")]
+    #[arg(long, help = "Override the source agent/context description")]
     pub(crate) description: Option<String>,
     #[arg(long, help = "Override the source context system prompt")]
     pub(crate) system_prompt: Option<String>,
@@ -3050,15 +3044,15 @@ pub(crate) struct BehaviorCloneArgs {
     pub(crate) profile_id: String,
 }
 
-/// Disable a behavior belonging to the initialized home signer.
+/// Disable an agent belonging to the initialized home signer.
 #[derive(clap::Args)]
-pub(crate) struct BehaviorDisableArgs {
+pub(crate) struct AgentDisableArgs {
     #[arg(long)]
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]
     pub(crate) graphql: String,
-    #[arg(value_name = "BEHAVIOR_ID")]
-    pub(crate) behavior_id: String,
+    #[arg(value_name = "AGENT_ID")]
+    pub(crate) agent_id: String,
 }
 
 #[derive(Debug, clap::Args)]
@@ -3124,11 +3118,11 @@ pub(crate) enum TaskCommand {
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct TaskListArgs {
-    /// GraphQL endpoint of the running agent's DefraDB. Defaults to local.
+    /// GraphQL endpoint of the running node's DefraDB. Defaults to local.
     #[arg(long)]
     pub(crate) graphql: Option<String>,
 
-    /// Path to the agent home. Used to resolve GraphQL endpoint when
+    /// Path to the node home. Used to resolve GraphQL endpoint when
     /// `--graphql` is not set.
     #[arg(long)]
     pub(crate) home: Option<PathBuf>,
@@ -3144,11 +3138,11 @@ pub(crate) struct TaskShowArgs {
     #[arg(value_name = "TASK_ID")]
     pub(crate) task_id: Option<String>,
 
-    /// GraphQL endpoint of the running agent's DefraDB. Defaults to local.
+    /// GraphQL endpoint of the running node's DefraDB. Defaults to local.
     #[arg(long)]
     pub(crate) graphql: Option<String>,
 
-    /// Path to the agent home. Used to resolve GraphQL endpoint when
+    /// Path to the node home. Used to resolve GraphQL endpoint when
     /// `--graphql` is not set.
     #[arg(long)]
     pub(crate) home: Option<PathBuf>,
@@ -3181,11 +3175,11 @@ pub(crate) struct ConfigTaskRunArgs {
     #[arg(long)]
     pub(crate) continue_session: Option<String>,
 
-    /// GraphQL endpoint of the running agent's DefraDB. Defaults to local.
+    /// GraphQL endpoint of the running node's DefraDB. Defaults to local.
     #[arg(long)]
     pub(crate) graphql: Option<String>,
 
-    /// Path to the agent home. Used to resolve GraphQL endpoint when
+    /// Path to the node home. Used to resolve GraphQL endpoint when
     /// `--graphql` is not set.
     #[arg(long)]
     pub(crate) home: Option<PathBuf>,
@@ -3205,7 +3199,7 @@ pub(crate) struct ConfigTaskRunArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct InferenceProfileSetArgs {
-    /// Canonical InferenceProfile JSON document, including its owning agent DID.
+    /// Canonical InferenceProfile JSON document, including its owning node DID.
     #[arg(long)]
     pub(crate) file: PathBuf,
     /// Create or move the profile on this account; fills the document's backend_id.
@@ -3231,7 +3225,7 @@ pub(crate) struct InferenceProfileSetAccountArgs {
     pub(crate) account: Option<String>,
     #[arg(long, value_parser = ACCOUNT_PROVIDERS, help = "Narrows the account to this sign-in provider")]
     pub(crate) provider: Option<String>,
-    /// Also move the other profiles of the profile's behaviors on the same account.
+    /// Also move the other profiles of the profile's agents on the same account.
     #[arg(long, requires = "account")]
     pub(crate) with_compaction: bool,
     #[arg(long)]
@@ -3242,7 +3236,7 @@ pub(crate) struct InferenceProfileSetAccountArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct BackendSetArgs {
-    /// Canonical InferenceBackend JSON document, including its owning agent DID.
+    /// Canonical InferenceBackend JSON document, including its owning node DID.
     #[arg(long)]
     pub(crate) file: PathBuf,
     #[arg(long)]
@@ -3282,12 +3276,12 @@ pub(crate) struct BackendDiscoverModelsArgs {
     pub(crate) api_key_env_var: Option<String>,
     #[arg(
         long,
-        help = "Agent DID owning the OAuth credential (defaults to the local agent). Only used for OAuth-credential backends (ChatGptCodex, XaiGrokOAuth, ClaudeCliSubscription), whose bearer is a DefraDB document rather than an api_key"
+        help = "Node DID owning the OAuth credential (defaults to the local node). Only used for OAuth-credential backends (ChatGptCodex, XaiGrokOAuth, ClaudeCliSubscription), whose bearer is a DefraDB document rather than an api_key"
     )]
-    pub(crate) agent_did: Option<String>,
+    pub(crate) node_did: Option<String>,
     #[arg(
         long,
-        help = "Agent home directory used to resolve the local agent DID for OAuth-credential backend discovery (defaults to ~/.gents). Pass --agent-did instead to target a specific agent"
+        help = "Node home directory used to resolve the local node DID for OAuth-credential backend discovery (defaults to ~/.gents). Pass --node-did instead to target a specific node"
     )]
     pub(crate) home: Option<PathBuf>,
 }
@@ -3311,9 +3305,9 @@ pub(crate) struct ConfigExportArgs {
     #[arg(long)]
     pub(crate) graphql: Option<String>,
     #[arg(long)]
-    pub(crate) agent_did: Option<String>,
-    #[arg(long = "bind-agent-did", value_enum)]
-    pub(crate) bind_agent_did: Option<ManifestAgentDidBindingArg>,
+    pub(crate) node_did: Option<String>,
+    #[arg(long = "bind-node-did", value_enum)]
+    pub(crate) bind_node_did: Option<ManifestNodeDidBindingArg>,
 }
 
 #[derive(clap::Args)]
@@ -3324,8 +3318,8 @@ pub(crate) struct ConfigValidateArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]
     pub(crate) graphql: Option<String>,
-    #[arg(long = "bind-agent-did", value_enum)]
-    pub(crate) bind_agent_did: Option<ManifestAgentDidBindingArg>,
+    #[arg(long = "bind-node-did", value_enum)]
+    pub(crate) bind_node_did: Option<ManifestNodeDidBindingArg>,
     #[arg(long, default_value_t = false)]
     pub(crate) force_rebind_concrete_did: bool,
 }
@@ -3338,8 +3332,8 @@ pub(crate) struct ConfigDiffArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]
     pub(crate) graphql: Option<String>,
-    #[arg(long = "bind-agent-did", value_enum)]
-    pub(crate) bind_agent_did: Option<ManifestAgentDidBindingArg>,
+    #[arg(long = "bind-node-did", value_enum)]
+    pub(crate) bind_node_did: Option<ManifestNodeDidBindingArg>,
     #[arg(long, default_value_t = false)]
     pub(crate) force_rebind_concrete_did: bool,
 }
@@ -3356,8 +3350,8 @@ pub(crate) struct ConfigApplyArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]
     pub(crate) graphql: Option<String>,
-    #[arg(long = "bind-agent-did", value_enum)]
-    pub(crate) bind_agent_did: Option<ManifestAgentDidBindingArg>,
+    #[arg(long = "bind-node-did", value_enum)]
+    pub(crate) bind_node_did: Option<ManifestNodeDidBindingArg>,
     #[arg(long, default_value_t = false)]
     pub(crate) force_rebind_concrete_did: bool,
     #[arg(
@@ -3369,7 +3363,7 @@ pub(crate) struct ConfigApplyArgs {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
-pub(crate) enum ManifestAgentDidBindingArg {
+pub(crate) enum ManifestNodeDidBindingArg {
     Home,
     Live,
 }
@@ -3684,7 +3678,7 @@ pub(crate) struct P2pReplicatorAddArgs {
     pub(crate) profiles: Vec<P2pCollectionProfileArg>,
     /// Per-collection field-equality filter for filtered replication (repeatable).
     /// Format: `<collection>:<field>=<value>`, e.g.
-    /// `AgentRequest:agent_did=did:key:alice`. Forwarded to the node as the
+    /// `AgentRequest:node_did=did:key:alice`. Forwarded to the node as the
     /// replicator's `Filters`, which installs a filtered (push-only) replicator
     /// that sends only matching documents. The filter field must be `@immutable`.
     #[arg(long = "filter", value_name = "COLLECTION:FIELD=VALUE")]
@@ -3778,7 +3772,7 @@ pub(crate) struct RequestSubmitArgs {
     #[arg(long)]
     pub(crate) graphql: Option<String>,
     #[arg(long)]
-    pub(crate) agent_did: Option<String>,
+    pub(crate) node_did: Option<String>,
     #[arg(long)]
     pub(crate) content: Option<String>,
     #[arg(long = "content-file")]
@@ -3786,7 +3780,7 @@ pub(crate) struct RequestSubmitArgs {
     #[arg(long)]
     pub(crate) session_id: Option<String>,
     #[arg(long)]
-    pub(crate) behavior_id: Option<String>,
+    pub(crate) agent_id: Option<String>,
     /// Canonical request input JSON (skills, cwd, title, and queue settings).
     #[arg(long)]
     pub(crate) input: Option<String>,
@@ -3910,7 +3904,7 @@ pub(crate) struct GoalScopeArgs {
         long,
         help = "Override the goal owner DID (defaults to local identity)"
     )]
-    pub(crate) agent_did: Option<String>,
+    pub(crate) node_did: Option<String>,
     #[arg(long, value_name = "SESSION_ID")]
     pub(crate) session: String,
 }
@@ -3954,7 +3948,7 @@ pub(crate) struct GoalResumeOnArgs {
     pub(crate) from: String,
     #[arg(long, value_parser = ACCOUNT_PROVIDERS, help = "Narrows the account to this sign-in provider")]
     pub(crate) provider: Option<String>,
-    /// Also move the other profiles of the profile's behaviors on the same account.
+    /// Also move the other profiles of the profile's agents on the same account.
     #[arg(long)]
     pub(crate) with_compaction: bool,
     #[arg(long, value_enum, default_value_t = OutputFormat::Json)]
@@ -4028,7 +4022,7 @@ pub(crate) struct ChainQueryArgs {
 pub(crate) enum ChainKeyCommand {
     #[command(about = "Generate a secp256k1 chain key in the OS keyring")]
     Generate(ChainKeyGenerateArgs),
-    #[command(about = "List chain-key bindings for the local principal")]
+    #[command(about = "List chain-key bindings for the local node")]
     List(ChainKeyAccessArgs),
     #[command(about = "Show one chain-key binding (never prints key material)")]
     Show(ChainKeyShowArgs),
@@ -4061,7 +4055,7 @@ pub(crate) struct ChainKeyShowArgs {
 
 #[derive(Subcommand)]
 pub(crate) enum MailboxCommand {
-    #[command(about = "List open mailbox items for the local principal")]
+    #[command(about = "List open mailbox items for the local node")]
     List(MailboxListArgs),
     #[command(about = "Show one mailbox item")]
     Show(MailboxItemArgs),
@@ -4118,9 +4112,9 @@ pub(crate) struct SessionForkArgs {
     pub(crate) graphql: Option<String>,
     #[arg(
         long,
-        help = "Override the caller agent DID (defaults to local identity)"
+        help = "Override the caller node DID (defaults to local identity)"
     )]
-    pub(crate) agent_did: Option<String>,
+    pub(crate) node_did: Option<String>,
     #[arg(
         long,
         help = "Exact source requester DID; omit for a session with no requester"
@@ -4136,9 +4130,9 @@ pub(crate) struct SessionForkArgs {
     pub(crate) at_user_turn: u32,
     #[arg(
         long,
-        help = "Target behavior_id for the child; omit to inherit the parent's behavior"
+        help = "Target agent_id for the child; omit to inherit the parent's agent"
     )]
-    pub(crate) behavior: Option<String>,
+    pub(crate) agent: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -4234,7 +4228,7 @@ pub(crate) enum EvalCommand {
     )]
     Checks(EvalChecksArgs),
     #[command(
-        about = "Interview a model about one behavior of a pack and write the eval definition pack it drafts",
+        about = "Interview a model about one agent of a pack and write the eval definition pack it drafts",
         after_help = EVAL_INIT_AFTER_HELP
     )]
     Init(EvalInitArgs),
@@ -4479,35 +4473,35 @@ pub(crate) struct EvalCompareArgs {
     pub(crate) scope: EvalScopeArgs,
 }
 
-/// One `--cell <id>=<pack>[:<behavior>]`.
+/// One `--cell <id>=<pack>[:<agent>]`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CellArg {
     pub(crate) cell_id: String,
     /// A directory, or a pack name resolved like `gents pack install`.
     pub(crate) pack: String,
-    pub(crate) behavior: Option<String>,
+    pub(crate) agent: Option<String>,
 }
 
-/// Split at the first `:` after the `=`: behavior ids may hold colons
+/// Split at the first `:` after the `=`: agent ids may hold colons
 /// (`did:key:…:default`), pack names and ordinary paths do not.
 pub(crate) fn parse_cell(raw: &str) -> Result<CellArg, String> {
     let (cell_id, rest) = raw
         .split_once('=')
-        .ok_or_else(|| format!("--cell {raw:?} must be <id>=<pack>[:<behavior>]"))?;
-    let (pack, behavior) = match rest.split_once(':') {
-        Some((pack, behavior)) => (pack, Some(behavior)),
+        .ok_or_else(|| format!("--cell {raw:?} must be <id>=<pack>[:<agent>]"))?;
+    let (pack, agent) = match rest.split_once(':') {
+        Some((pack, agent)) => (pack, Some(agent)),
         None => (rest, None),
     };
     if cell_id.trim().is_empty()
         || pack.trim().is_empty()
-        || behavior.is_some_and(|behavior| behavior.trim().is_empty())
+        || agent.is_some_and(|agent| agent.trim().is_empty())
     {
-        return Err(format!("--cell {raw:?} has an empty id, pack or behavior"));
+        return Err(format!("--cell {raw:?} has an empty id, pack or agent"));
     }
     Ok(CellArg {
         cell_id: cell_id.trim().to_owned(),
         pack: pack.trim().to_owned(),
-        behavior: behavior.map(|behavior| behavior.trim().to_owned()),
+        agent: agent.map(|agent| agent.trim().to_owned()),
     })
 }
 
@@ -4543,7 +4537,7 @@ pub(crate) fn parse_split(raw: &str) -> Result<gents::document_config::EvalSplit
 #[derive(clap::Args)]
 pub(crate) struct EvalRunArgs {
     pub(crate) definition_id: String,
-    /// `<id>=<pack>[:<behavior>]`, once per cell. `<pack>` is a pack name,
+    /// `<id>=<pack>[:<agent>]`, once per cell. `<pack>` is a pack name,
     /// resolved as `gents pack install` resolves one, or a pack directory
     /// written as a path (`./subject`, `/work/subject`).
     #[arg(long = "cell", value_parser = parse_cell, required = true)]
@@ -4581,19 +4575,19 @@ pub(crate) struct EvalRunArgs {
 }
 
 /// `gents eval init`'s exit statuses.
-const EVAL_INIT_AFTER_HELP: &str = "Needs a terminal (this command is an interview) and a served home: start `gents server` first, or the command refuses before reading anything. An existing --out refuses unless --force replaces it, and --force replaces only a definition pack gents eval init wrote; an --out that is, lies inside, or contains the subject's directory, a Gents home, the user home or the working directory always refuses. --validation-min (default 6) is the floor the author drafts the validation split against; lower it when the operator wants fewer validation cases. --pilot runs the written pack once against the subject, one trial per case and one run per populated split (train, validation, held-out), and asks to spend that before it does, unless --yes; a decline leaves the pack written at --out but the command still exits 1. The session id printed at the end continues with `gents chat --session-id <id> --behavior-id <the author's behavior>`. A documents capture filter's only variable is \"$trial\", replaced with the trial's DID wherever it appears in a string value. Exit status: 0 when the pack was written and validated (piloted too, with --pilot) or the operator ended the interview with nothing written; 1 when refused (an existing --out without --force, an --out overlapping the subject, a non-terminal stdin, an unserved home, a declined pilot, or another failure) or when three drafts did not validate; 2 on a usage error.";
+const EVAL_INIT_AFTER_HELP: &str = "Needs a terminal (this command is an interview) and a served home: start `gents server` first, or the command refuses before reading anything. An existing --out refuses unless --force replaces it, and --force replaces only a definition pack gents eval init wrote; an --out that is, lies inside, or contains the subject's directory, a Gents home, the user home or the working directory always refuses. --validation-min (default 6) is the floor the author drafts the validation split against; lower it when the operator wants fewer validation cases. --pilot runs the written pack once against the subject, one trial per case and one run per populated split (train, validation, held-out), and asks to spend that before it does, unless --yes; a decline leaves the pack written at --out but the command still exits 1. The session id printed at the end continues with `gents chat --session-id <id> --agent-id <the author's agent>`. A documents capture filter's only variable is \"$trial\", replaced with the trial's DID wherever it appears in a string value. Exit status: 0 when the pack was written and validated (piloted too, with --pilot) or the operator ended the interview with nothing written; 1 when refused (an existing --out without --force, an --out overlapping the subject, a non-terminal stdin, an unserved home, a declined pilot, or another failure) or when three drafts did not validate; 2 on a usage error.";
 
 #[derive(clap::Args)]
 pub(crate) struct EvalInitArgs {
     /// A pack name, resolved as `gents pack install` resolves one, or a pack
     /// directory written as a path (`./subject`, `/work/subject`).
     pub(crate) subject: String,
-    /// The behavior to draft cases for; implied when the pack has one.
+    /// The agent to draft cases for; implied when the pack has one.
     #[arg(long)]
-    pub(crate) behavior: Option<String>,
+    pub(crate) agent: Option<String>,
     /// The pack that authors the draft, resolved like `gents pack install`
     /// (or a directory path); it declares one inference slot with one
-    /// behavior.
+    /// agent.
     #[arg(long, default_value = "gents/eval_author")]
     pub(crate) author: String,
     /// Where the definition pack is written; refused when it exists, unless
@@ -4642,30 +4636,30 @@ pub(crate) struct EvalResumeArgs {
     pub(crate) scope: EvalScopeArgs,
 }
 
-/// `--subject <pack>[:<behavior>]`.
+/// `--subject <pack>[:<agent>]`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SubjectArg {
     pub(crate) pack: String,
-    pub(crate) behavior: Option<String>,
+    pub(crate) agent: Option<String>,
 }
 
 pub(crate) fn parse_subject(raw: &str) -> Result<SubjectArg, String> {
-    let (pack, behavior) = match raw.split_once(':') {
-        Some((pack, behavior)) => (pack, Some(behavior)),
+    let (pack, agent) = match raw.split_once(':') {
+        Some((pack, agent)) => (pack, Some(agent)),
         None => (raw, None),
     };
-    if pack.trim().is_empty() || behavior.is_some_and(|behavior| behavior.trim().is_empty()) {
-        return Err(format!("--subject {raw:?} must be <pack>[:<behavior>]"));
+    if pack.trim().is_empty() || agent.is_some_and(|agent| agent.trim().is_empty()) {
+        return Err(format!("--subject {raw:?} must be <pack>[:<agent>]"));
     }
     Ok(SubjectArg {
         pack: pack.trim().to_owned(),
-        behavior: behavior.map(|behavior| behavior.trim().to_owned()),
+        agent: agent.map(|agent| agent.trim().to_owned()),
     })
 }
 
-/// `--target context` (the subject behavior's system prompt) or
+/// `--target context` (the subject agent's system prompt) or
 /// `--target task:<task_id>` (the prompt template of that task of the
-/// subject behavior).
+/// subject agent).
 pub(crate) fn parse_target(raw: &str) -> Result<JobTarget, String> {
     match raw.trim() {
         "context" => Ok(JobTarget::Context),
@@ -4678,23 +4672,20 @@ pub(crate) fn parse_target(raw: &str) -> Result<JobTarget, String> {
     }
 }
 
-/// `--proposer scripted:<file>` or `--proposer behavior:<pack>[:<behavior>]`.
+/// `--proposer scripted:<file>` or `--proposer agent:<pack>[:<agent>]`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ProposerArg {
     /// A script of proposals, one per round.
     Scripted(PathBuf),
-    /// A behavior of a pack asked once per round; without a
-    /// behavior, the pack's only inference-slot behavior.
-    Behavior {
-        pack: String,
-        behavior: Option<String>,
-    },
+    /// An agent of a pack asked once per round; without a
+    /// agent, the pack's only inference-slot agent.
+    Agent { pack: String, agent: Option<String> },
 }
 
 pub(crate) fn parse_proposer(raw: &str) -> Result<ProposerArg, String> {
     let usage = || {
         format!(
-            "unknown proposer {raw:?}; pass --proposer scripted:<file> or --proposer behavior:<pack>[:<behavior>]"
+            "unknown proposer {raw:?}; pass --proposer scripted:<file> or --proposer agent:<pack>[:<agent>]"
         )
     };
     if let Some(path) = raw.strip_prefix("scripted:") {
@@ -4703,11 +4694,11 @@ pub(crate) fn parse_proposer(raw: &str) -> Result<ProposerArg, String> {
             path => Ok(ProposerArg::Scripted(PathBuf::from(path))),
         };
     }
-    let Some(target) = raw.strip_prefix("behavior:") else {
+    let Some(target) = raw.strip_prefix("agent:") else {
         return Err(usage());
     };
-    let SubjectArg { pack, behavior } = parse_subject(target).map_err(|_| usage())?;
-    Ok(ProposerArg::Behavior { pack, behavior })
+    let SubjectArg { pack, agent } = parse_subject(target).map_err(|_| usage())?;
+    Ok(ProposerArg::Agent { pack, agent })
 }
 
 /// `gents optimization run`'s exit statuses: scripts must not read a job left
@@ -4750,13 +4741,13 @@ impl OptimizationCommand {
 #[derive(clap::Args)]
 pub(crate) struct OptimizationRunArgs {
     pub(crate) definition_id: String,
-    /// `<pack>[:<behavior>]`: a pack name, resolved as `gents pack install`
+    /// `<pack>[:<agent>]`: a pack name, resolved as `gents pack install`
     /// resolves one, or a pack directory written as a path. Without a
-    /// behavior, the pack's only inference-slot behavior.
+    /// agent, the pack's only inference-slot agent.
     #[arg(long, value_parser = parse_subject)]
     pub(crate) subject: SubjectArg,
-    /// `context`: the behavior's system prompt; `task:<task_id>`: the prompt
-    /// template of that task of the behavior.
+    /// `context`: the agent's system prompt; `task:<task_id>`: the prompt
+    /// template of that task of the agent.
     #[arg(long, value_parser = parse_target, default_value = "context")]
     pub(crate) target: JobTarget,
     #[arg(long, default_value_t = 3)]
@@ -4775,13 +4766,13 @@ pub(crate) struct OptimizationRunArgs {
     pub(crate) job_id: Option<String>,
     /// `scripted:<file>`: a JSON array of `{"text", "rationale"}`, one per
     /// round; a file holding fewer than `--rounds` is refused before the job
-    /// is frozen. `behavior:<pack>[:<behavior>]`: a behavior of a pack
+    /// is frozen. `agent:<pack>[:<agent>]`: an agent of a pack
     /// (`<pack>` resolves like `gents pack install`, e.g. `prompt_proposer`
     /// or `gents/prompt_proposer@1.0.0`, or is a directory path), installed
     /// into the home and asked once per round on the served home.
     #[arg(long, value_parser = parse_proposer)]
     pub(crate) proposer: Option<ProposerArg>,
-    /// The inference profile the proposer behavior runs on; the home's
+    /// The inference profile the proposer agent runs on; the home's
     /// default when absent.
     #[arg(long)]
     pub(crate) proposer_profile: Option<String>,

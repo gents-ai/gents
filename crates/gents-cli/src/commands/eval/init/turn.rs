@@ -21,13 +21,13 @@ pub(crate) trait Turn {
 }
 
 /// A turn on the served home, as `gents chat` sends one: submitted on the
-/// session with `behavior_id`, followed until the response lands. Its
+/// session with `agent_id`, followed until the response lands. Its
 /// progress and the reply print as they arrive, unless `quiet`: then the
 /// turn is followed without writing to stdout, as `gents chat --json` does.
 pub(crate) struct LiveTurn {
     pub(crate) graphql: gents::config_client::GraphqlEndpoint,
-    pub(crate) agent_did: String,
-    pub(crate) behavior_id: String,
+    pub(crate) node_did: String,
+    pub(crate) agent_id: String,
     pub(crate) session_id: String,
     pub(crate) timeout_secs: u64,
     pub(crate) poll_secs: u64,
@@ -39,14 +39,14 @@ impl Turn for LiveTurn {
     async fn send(&mut self, content: &str) -> Result<String> {
         let submitted = create_agent_request(
             &self.graphql,
-            &self.agent_did,
+            &self.node_did,
             content,
             Some(&self.session_id),
-            Some(&self.behavior_id),
+            Some(&self.agent_id),
             RequestSubmitOptions::default(),
         )
         .await
-        .with_context(|| format!("submitting the {} turn", self.behavior_id))?;
+        .with_context(|| format!("submitting the {} turn", self.agent_id))?;
         let response = if self.quiet {
             wait_for_terminal_response(
                 &self.graphql,
@@ -72,7 +72,7 @@ impl Turn for LiveTurn {
         anyhow::ensure!(
             !text.trim().is_empty(),
             "the {} turn ended without a reply; `gents response show {}` shows why",
-            self.behavior_id,
+            self.agent_id,
             submitted.request_id
         );
         Ok(text.to_owned())
@@ -130,8 +130,8 @@ mod tests {
     fn live(quiet: bool) -> LiveTurn {
         LiveTurn {
             graphql: gents::config_client::GraphqlEndpoint::anonymous("http://localhost:0/graphql"),
-            agent_did: "did:key:owner".to_owned(),
-            behavior_id: "prompt-proposer".to_owned(),
+            node_did: "did:key:owner".to_owned(),
+            agent_id: "prompt-proposer".to_owned(),
             session_id: "session".to_owned(),
             timeout_secs: 1,
             poll_secs: 1,

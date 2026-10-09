@@ -26,7 +26,7 @@ pub(crate) struct InitSummary {
     pub(crate) model_name: String,
     pub(crate) max_concurrent: i64,
     pub(crate) max_queue_depth: i64,
-    pub(crate) default_behavior_id: String,
+    pub(crate) default_agent_id: String,
     pub(crate) tools_id: String,
     pub(crate) wide_open_preset_id: String,
     pub(crate) inference_profile_id: String,
@@ -36,8 +36,8 @@ pub(crate) struct InitSummary {
     pub(crate) enable_memory: bool,
     pub(crate) enable_defra_query: bool,
     pub(crate) defra_query_collections: Vec<String>,
-    pub(crate) created_principal: bool,
-    pub(crate) created_default_behavior: bool,
+    pub(crate) created_node: bool,
+    pub(crate) created_default_agent: bool,
 }
 
 /// This home's persisted `init.json`, in gents-cli's own CLI-facing
@@ -58,7 +58,7 @@ pub(crate) type StoredInitConfig = gents::home::StoredInitConfig<ToolPackageArg,
 /// how a fleet-wide bring-up looked healthy while no operator could reach a
 /// single agent. The state is shared because the shim may bind *after* the HTTP
 /// surface is already serving: the supervisor flips it when a published
-/// generation makes the bound behavior runnable.
+/// generation makes the bound agent_config runnable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CodexShimHealth {
     /// `--no-codex-shim`: not an error, and not a thing to report as degraded.
@@ -67,13 +67,13 @@ pub(crate) enum CodexShimHealth {
     Listening {
         websocket: String,
         auth_required: bool,
-        bound_agent_did: String,
-        bound_behavior_id: String,
+        bound_node_did: String,
+        bound_agent_id: String,
     },
-    /// Waiting for the control plane to supply the bound behavior. Transient by
+    /// Waiting for the control plane to supply the bound agent_config. Transient by
     /// construction — the supervisor binds on the generation that carries it.
     Pending {
-        bound_behavior_id: String,
+        bound_agent_id: String,
         reason: String,
     },
     /// A host resource we cannot get. No generation retracts this.
@@ -91,21 +91,21 @@ impl CodexShimHealth {
             Self::Listening {
                 websocket,
                 auth_required,
-                bound_agent_did,
-                bound_behavior_id,
+                bound_node_did,
+                bound_agent_id,
             } => serde_json::json!({
                 "status": "ok",
                 "websocket": websocket,
                 "auth_required": auth_required,
-                "bound_agent_did": bound_agent_did,
-                "bound_behavior_id": bound_behavior_id,
+                "bound_node_did": bound_node_did,
+                "bound_agent_id": bound_agent_id,
             }),
             Self::Pending {
-                bound_behavior_id,
+                bound_agent_id,
                 reason,
             } => serde_json::json!({
                 "status": "pending",
-                "bound_behavior_id": bound_behavior_id,
+                "bound_agent_id": bound_agent_id,
                 "reason": reason,
             }),
             Self::Disabled { reason } => serde_json::json!({
@@ -143,9 +143,9 @@ impl P2pAdmissionState {
 pub(crate) struct StoredRuntimeState {
     pub(crate) home: String,
     pub(crate) graphql: String,
-    pub(crate) agent_name: String,
-    pub(crate) agent_did: String,
-    pub(crate) default_behavior_id: String,
+    pub(crate) node_name: String,
+    pub(crate) node_did: String,
+    pub(crate) default_agent_id: String,
     #[serde(default = "default_p2p_transport")]
     pub(crate) p2p_transport: String,
     #[serde(default)]
@@ -239,7 +239,7 @@ pub(crate) struct P2pSyncVersionsRequest {
 #[serde(deny_unknown_fields)]
 pub(crate) struct ConfigExportBundle {
     pub(crate) format: String,
-    pub(crate) agent_did: String,
+    pub(crate) node_did: String,
     pub(crate) exported_at: String,
     pub(crate) access_mode: String,
     #[serde(flatten)]
@@ -250,7 +250,7 @@ impl ConfigExportBundle {
     pub(crate) fn docs_for_collection(&self, collection: Collection) -> anyhow::Result<Vec<Value>> {
         let config = serde_json::to_value(&self.config)?;
         match collection.dir_name() {
-            None => Ok(vec![config["agent_principal"].clone()]),
+            None => Ok(vec![config["node"].clone()]),
             Some(key) => match config.get(key) {
                 None | Some(Value::Null) => Ok(Vec::new()),
                 Some(Value::Array(rows)) => Ok(rows.clone()),
@@ -270,7 +270,7 @@ impl Serialize for ConfigApplyCounts {
         use serde::ser::SerializeMap;
         let mut map = serializer.serialize_map(Some(Collection::ALL.len()))?;
         for collection in Collection::ALL {
-            let key = collection.dir_name().unwrap_or("agent_principal");
+            let key = collection.dir_name().unwrap_or("node");
             map.serialize_entry(key, &self.get(collection))?;
         }
         map.end()
@@ -330,7 +330,7 @@ pub(crate) struct ConfigApplyReport {
     pub(crate) changed: bool,
     pub(crate) root: String,
     pub(crate) access_mode: String,
-    pub(crate) agent_did: String,
+    pub(crate) node_did: String,
     /// Present when `<root>/schemas/` existed and was applied before config.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) schemas: Option<crate::commands::schema::PackSchemaPhase>,
@@ -343,12 +343,12 @@ pub(crate) struct ConfigApplyReport {
 /// The runtime observation (catalogs and probe status) of one backend row.
 pub(crate) async fn load_backend_observation(
     access: &gents::config_client::ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     backend_id: &str,
 ) -> anyhow::Result<gents::document_config::InferenceBackendObservation> {
     let query = format!(
-        "{{ InferenceBackend(filter: {{agent_did: {{_eq: \"{}\"}}, backend_id: {{_eq: \"{}\"}}}}, limit: 2) {{backend_id catalogs probe_status last_probe}} }}",
-        gents::graphql::escape_graphql_string(agent_did),
+        "{{ InferenceBackend(filter: {{node_did: {{_eq: \"{}\"}}, backend_id: {{_eq: \"{}\"}}}}, limit: 2) {{backend_id catalogs probe_status last_probe}} }}",
+        gents::graphql::escape_graphql_string(node_did),
         gents::graphql::escape_graphql_string(backend_id),
     );
     let rows = crate::graphql_rows(access, "InferenceBackend", &query).await?;

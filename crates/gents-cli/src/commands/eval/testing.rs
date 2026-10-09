@@ -2,7 +2,7 @@
 //! tests. `gents::eval::runner::freeze::tests::Launching` and the optimizer's
 //! matrix `Harness` are `#[cfg(test)] pub(crate)` inside `gents`, so this
 //! crate builds its own from the same public pieces: an embedded home, the
-//! documents a run and a job read, and a directory pack whose behavior's
+//! documents a run and a job read, and a directory pack whose agent's
 //! prompt matches the installed context (the optimizer's freeze checks that).
 //!
 //! This file duplicates `write_fixture_pack` and `Launching` in
@@ -54,7 +54,7 @@ impl Fixture {
     pub(crate) async fn new() -> Self {
         let home = EmbeddedHome::create_temp("cli-eval").await.unwrap();
         let owner = home.did().to_string();
-        gents::ensure_agent_principal(home.node.as_ref(), &owner)
+        gents::ensure_node(home.node.as_ref(), &owner)
             .await
             .unwrap();
         let dirs = tempfile::tempdir().unwrap();
@@ -93,7 +93,7 @@ impl Fixture {
                     cell_id: cell_id.into(),
                     label: cell_id.into(),
                     source: CellSource::Directory(self.pack.clone()),
-                    behavior_id: "monitor".into(),
+                    agent_id: "monitor".into(),
                     inference_profile_id: "local".into(),
                 })
                 .collect(),
@@ -252,16 +252,16 @@ fn documents(owner: &str) -> Vec<(Collection, Value)> {
             Collection::EvalDefinition,
             json!({
                 "definition_id": DEFINITION,
-                "agent_did": owner,
+                "node_did": owner,
                 "comparability_version": 1,
-                "subject": {"kind": "behavior", "inference_slots": ["primary"]},
+                "subject": {"kind": "agent", "inference_slots": ["primary"]},
                 "cases": cases,
             }),
         ),
         (
             Collection::InferenceBackend,
             json!({
-                "agent_did": owner,
+                "node_did": owner,
                 "backend_id": "backend",
                 "name": "Workstation",
                 "provider_kind": "OpenAiCompatible",
@@ -271,12 +271,12 @@ fn documents(owner: &str) -> Vec<(Collection, Value)> {
         ),
         (
             Collection::InferenceSampling,
-            json!({"agent_did": owner, "sampling_id": "sampling", "temperature": 0.0}),
+            json!({"node_did": owner, "sampling_id": "sampling", "temperature": 0.0}),
         ),
         (
             Collection::InferenceProfile,
             json!({
-                "agent_did": owner,
+                "node_did": owner,
                 "profile_id": "local",
                 "backend_id": "backend",
                 "model_name": "test-model",
@@ -289,7 +289,7 @@ fn documents(owner: &str) -> Vec<(Collection, Value)> {
             Collection::Tools,
             json!({
                 "tools_id": "monitor-tools",
-                "agent_did": owner,
+                "node_did": owner,
                 "display_name": "Monitor tools",
                 "host": {"bash": {"mode": "Off"}},
             }),
@@ -298,17 +298,17 @@ fn documents(owner: &str) -> Vec<(Collection, Value)> {
             Collection::AgentContext,
             json!({
                 "context_id": "monitor-context",
-                "agent_did": owner,
+                "node_did": owner,
                 "display_name": "Monitor",
                 "system_prompt": BASELINE_PROMPT,
                 "tools_id": "monitor-tools",
             }),
         ),
         (
-            Collection::AgentBehavior,
+            Collection::Agent,
             json!({
-                "behavior_id": "monitor",
-                "agent_did": owner,
+                "agent_id": "monitor",
+                "node_did": owner,
                 "display_name": "Monitor",
                 "context_id": "monitor-context",
                 "inference_profile_id": "local",
@@ -339,12 +339,12 @@ async fn install(access: &ConfigAccess, documents: Vec<(Collection, Value)>) {
 }
 
 /// The shape of `gents::eval::runner::freeze::tests::write_fixture_pack`:
-/// one `monitor` behavior whose context prompt is [`BASELINE_PROMPT`].
+/// one `monitor` agent whose context prompt is [`BASELINE_PROMPT`].
 fn write_pack(root: &Path) {
-    std::fs::create_dir_all(root.join("agent_behaviors/monitor")).unwrap();
+    std::fs::create_dir_all(root.join("agents/monitor")).unwrap();
     std::fs::write(root.join("README.md"), "# monitor fixture\n").unwrap();
     std::fs::write(
-        root.join("agent_behaviors/monitor/system_prompt.md"),
+        root.join("agents/monitor/system_prompt.md"),
         BASELINE_PROMPT,
     )
     .unwrap();
@@ -352,19 +352,19 @@ fn write_pack(root: &Path) {
         "manifest_version": 1,
         "name": "monitor_fixture",
         "version": "1.0.0",
-        "description": "CLI eval fixture: one monitor behavior.",
+        "description": "CLI eval fixture: one monitor agent.",
         "authors": ["gents-ai contributors"],
         "kind": "documents",
         "assets": [
             "README.md",
-            "agent_behaviors/monitor/system_prompt.md",
+            "agents/monitor/system_prompt.md",
             "pack_config.json",
         ],
         "config": "pack_config.json",
         "inference_slots": [{
             "name": "primary",
-            "description": "Runs the monitor behavior.",
-            "behaviors": ["monitor"],
+            "description": "Runs the monitor agent.",
+            "agents": ["monitor"],
         }],
     });
     std::fs::write(
@@ -373,9 +373,9 @@ fn write_pack(root: &Path) {
     )
     .unwrap();
     let config = json!({
-        "agent_principal": {},
-        "agent_behaviors": [{
-            "behavior_id": "monitor",
+        "node": {},
+        "agents": [{
+            "agent_id": "monitor",
             "display_name": "Monitor",
             "context_id": "monitor-context",
             "inference_profile_id": "gents:inference-slot:primary",
@@ -383,7 +383,7 @@ fn write_pack(root: &Path) {
         "contexts": [{
             "context_id": "monitor-context",
             "display_name": "Monitor",
-            "system_prompt": "./agent_behaviors/monitor/system_prompt.md",
+            "system_prompt": "./agents/monitor/system_prompt.md",
             "tools_id": "monitor-tools",
         }],
         "tools": [{

@@ -1,6 +1,6 @@
 use super::{
-    DesiredAgentPrincipal, DesiredStateCollectionDiff, DesiredStateDiffCollections,
-    DesiredStateDiffReport, DesiredStateManifest,
+    DesiredNode, DesiredStateCollectionDiff, DesiredStateDiffCollections, DesiredStateDiffReport,
+    DesiredStateManifest,
 };
 use anyhow::{Context, Result};
 use gents::{config_client::DesiredStateApplyPlan, Collection};
@@ -12,7 +12,7 @@ pub(crate) fn diff_manifests(
     root: &Path,
     access_mode: &str,
     desired: &DesiredStateManifest,
-    live_principal: Option<&DesiredAgentPrincipal>,
+    live_principal: Option<&DesiredNode>,
     live: &DesiredStateManifest,
     prune: bool,
 ) -> DesiredStateDiffReport {
@@ -34,7 +34,7 @@ pub(crate) fn diff_manifests(
         ok: errors.is_empty() && counts.is_exact_match(),
         root: root.display().to_string(),
         access_mode: access_mode.into(),
-        agent_did: desired.agent_principal.agent_did.clone(),
+        node_did: desired.node.node_did.clone(),
         live_validation_errors: errors,
         counts,
         collections,
@@ -49,8 +49,7 @@ pub(super) fn canonical_records(
         .iter()
         .map(|document| {
             anyhow::ensure!(
-                document.update["agent_did"].as_str()
-                    == Some(config.agent_principal.agent_did.as_str()),
+                document.update["node_did"].as_str() == Some(config.node.node_did.as_str()),
                 "configuration document belongs to another principal"
             );
             let id = document.update[document.collection.unique_field()]
@@ -64,24 +63,24 @@ pub(super) fn canonical_records(
 
 fn compare_manifests(
     desired: &DesiredStateManifest,
-    live_principal: Option<&DesiredAgentPrincipal>,
+    live_principal: Option<&DesiredNode>,
     live: &DesiredStateManifest,
     prune: bool,
 ) -> Result<DesiredStateDiffCollections> {
     anyhow::ensure!(
-        desired.agent_principal.agent_did == live.agent_principal.agent_did,
-        "desired and live config belong to different principals"
+        desired.node.node_did == live.node.node_did,
+        "desired and live config belong to different nodes"
     );
     if let Some(principal) = live_principal {
         anyhow::ensure!(
-            principal.agent_did == live.agent_principal.agent_did,
+            principal.node_did == live.node.node_did,
             "live principal does not match config scope"
         );
     }
     let desired_docs = canonical_records(desired)?;
     let mut live_docs = canonical_records(live)?;
     if live_principal.is_none() {
-        live_docs.retain(|(collection, _), _| *collection != Collection::AgentPrincipal);
+        live_docs.retain(|(collection, _), _| *collection != Collection::Node);
     }
     let mut collections = DesiredStateDiffCollections::default();
     for collection in Collection::ALL {
@@ -195,10 +194,10 @@ mod canonical_tests {
 
     fn fixture(prompt: &str) -> DesiredStateManifest {
         serde_json::from_value(json!({
-            "agent_principal": {"agent_did": "did:key:owner"},
-            "contexts": [{"agent_did": "did:key:owner", "context_id": "context", "system_prompt": prompt, "tools_id": "kept"}],
-            "tools": [{"agent_did": "did:key:owner", "tools_id": "kept"},
-                      {"agent_did": "did:key:owner", "tools_id": "unused"}]
+            "node": {"node_did": "did:key:owner"},
+            "contexts": [{"node_did": "did:key:owner", "context_id": "context", "system_prompt": prompt, "tools_id": "kept"}],
+            "tools": [{"node_did": "did:key:owner", "tools_id": "kept"},
+                      {"node_did": "did:key:owner", "tools_id": "unused"}]
         })).unwrap()
     }
 
@@ -210,7 +209,7 @@ mod canonical_tests {
             Path::new("."),
             "local",
             &desired,
-            Some(&live.agent_principal),
+            Some(&live.node),
             &live,
             false,
         );
@@ -239,7 +238,7 @@ mod canonical_tests {
             }]
         );
         let mut foreign = desired;
-        foreign.agent_principal.agent_did = "did:key:foreign".into();
+        foreign.node.node_did = "did:key:foreign".into();
         assert!(super::super::prune::prune_safe_deletes(&foreign, &live).is_err());
     }
 }

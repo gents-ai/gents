@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 
 use crate::cli::args::CodexLoginArgs;
 use crate::config_writes::ConfigAccess;
-use crate::{print_json, resolve_agent_did, resolve_config_access};
+use crate::{print_json, resolve_config_access, resolve_node_did};
 
 pub(crate) struct CodexLoginOptions {
     pub(crate) provider: String,
@@ -24,10 +24,10 @@ pub(crate) struct CodexLoginOutcome {
 pub(crate) async fn codex_login(args: CodexLoginArgs) -> Result<()> {
     let (access, home_dir) =
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
-    let agent_did = resolve_agent_did(Some(&home_dir), args.agent_did.as_deref())?;
+    let node_did = resolve_node_did(Some(&home_dir), args.node_did.as_deref())?;
     let outcome = run_codex_login(
         &access,
-        &agent_did,
+        &node_did,
         &CodexLoginOptions {
             provider: args.provider,
             label: args.label,
@@ -43,7 +43,7 @@ pub(crate) async fn codex_login(args: CodexLoginArgs) -> Result<()> {
 
 pub(crate) async fn run_codex_login(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     opts: &CodexLoginOptions,
 ) -> Result<CodexLoginOutcome> {
     let provider = gents::chatgpt_codex::normalize_provider(&opts.provider);
@@ -88,7 +88,7 @@ pub(crate) async fn run_codex_login(
     };
 
     let credential = gents::oauth_credential::OAuthCredential::from_login_tokens(
-        agent_did,
+        node_did,
         &provider,
         &tokens.id_token,
         tokens.access_token,
@@ -114,7 +114,7 @@ pub(crate) fn codex_login_result_json(outcome: &CodexLoginOutcome) -> Value {
         "result": outcome.sign_in.result,
         "profiles": outcome.sign_in.profiles,
         "credential_id": credential.credential_id,
-        "agent_did": credential.agent_did,
+        "node_did": credential.node_did,
         "provider": credential.provider,
         "account_id": credential.account_id,
         "chatgpt_plan_type": credential.chatgpt_plan_type,

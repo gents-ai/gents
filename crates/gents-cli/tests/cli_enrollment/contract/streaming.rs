@@ -1,5 +1,43 @@
 use super::*;
 
+/// Title generation embeds the conversation prompt in a different user message;
+/// only the actual conversation turn may hold this fixture's streaming barrier.
+pub(super) fn latest_user_text(request: &Value) -> Option<String> {
+    let content = request
+        .get("messages")?
+        .as_array()?
+        .iter()
+        .rev()
+        .find(|message| message["role"] == "user")?
+        .get("content")?;
+    match content {
+        Value::String(text) => Some(text.clone()),
+        Value::Array(parts) => parts
+            .iter()
+            .map(|part| part.get("text")?.as_str().map(str::to_owned))
+            .collect::<Option<Vec<_>>>()
+            .map(|parts| parts.concat()),
+        _ => None,
+    }
+}
+
+#[test]
+fn conversation_barriers_match_exact_turns_without_gating_title_prompts() {
+    for prompt in ["First conversation turn", FOLLOWUP_PROMPT, OFFLINE_PROMPT] {
+        let direct = serde_json::json!({"messages":[{"role":"user","content":prompt}]});
+        assert_eq!(latest_user_text(&direct).as_deref(), Some(prompt));
+        let blocks = serde_json::json!({"messages":[{"role":"user","content":[{"type":"text","text":prompt}]}]});
+        assert_eq!(latest_user_text(&blocks).as_deref(), Some(prompt));
+        let title = serde_json::json!({"messages":[{"role":"user","content":format!("Generate a concise session title for this conversation.\nFirst user request:\n{prompt}")}]});
+        assert_ne!(latest_user_text(&title).as_deref(), Some(prompt));
+        let followup = serde_json::json!({"messages":[{"role":"user","content":prompt},{"role":"assistant","content":"prior reply"},{"role":"user","content":"different turn"}]});
+        assert_eq!(
+            latest_user_text(&followup).as_deref(),
+            Some("different turn")
+        );
+    }
+}
+
 #[tokio::test]
 async fn offline_barrier_stays_open_for_later_provider_attempts() -> Result<()> {
     let gate = Arc::new(tokio::sync::Semaphore::new(0));
@@ -38,6 +76,11 @@ pub(super) async fn wait_for_visible_content(
     visibility_budget: Duration,
 ) -> Result<()> {
     let started = Instant::now();
+    tracing::info!(
+        request,
+        budget_ms = visibility_budget.as_millis(),
+        "canonical live visibility deadline started"
+    );
     // The caller selects either the strict first-visible budget or the paced
     // cadence budget. In both cases the provider completion gate remains
     // closed, so terminal persistence cannot satisfy this observation.
@@ -82,10 +125,10 @@ async fn canonical_live_content(core: &ClientCore, request_id: &str) -> Result<O
     else {
         return Ok(None);
     };
-    let (Some(request_doc_id), Some(session_id), Some(agent_did), Some(generation)) = (
+    let (Some(request_doc_id), Some(session_id), Some(node_did), Some(generation)) = (
         request.doc_id.as_deref(),
         request.session_id.as_deref(),
-        request.agent_did.as_deref(),
+        request.node_did.as_deref(),
         request.execution_generation.as_deref(),
     ) else {
         return Ok(None);
@@ -93,7 +136,7 @@ async fn canonical_live_content(core: &ClientCore, request_id: &str) -> Result<O
     let canonical = gents_desktop_core::client::load_session_context_store(
         core.node(),
         session_id,
-        Some(agent_did),
+        Some(node_did),
         request.requester_did.as_deref(),
     )
     .await?;
@@ -128,7 +171,7 @@ async fn canonical_live_content(core: &ClientCore, request_id: &str) -> Result<O
         &source,
         &writer,
         message_id.as_deref(),
-        agent_did,
+        node_did,
         request.requester_did.as_deref(),
         &canonical.transcript_messages,
         &canonical.output_segments,

@@ -24,7 +24,7 @@ async fn request_submit_waits_for_response_by_default() -> Result<()> {
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             &agent_name,
             "--model-name",
             &model_name,
@@ -32,10 +32,10 @@ async fn request_submit_waits_for_response_by_default() -> Result<()> {
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
     let submit = spawn_cli(
         &home_dir,
@@ -44,8 +44,8 @@ async fn request_submit_waits_for_response_by_default() -> Result<()> {
             "submit",
             "--graphql",
             &graphql,
-            "--agent-did",
-            &agent_did,
+            "--node-did",
+            &node_did,
             "--content",
             &request_content,
             "--timeout-secs",
@@ -109,7 +109,7 @@ async fn request_submit_supports_content_file_and_output_file() -> Result<()> {
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             &agent_name,
             "--model-name",
             &model_name,
@@ -117,10 +117,10 @@ async fn request_submit_supports_content_file_and_output_file() -> Result<()> {
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
     let submit = spawn_cli(
         &home_dir,
@@ -129,8 +129,8 @@ async fn request_submit_supports_content_file_and_output_file() -> Result<()> {
             "submit",
             "--graphql",
             &graphql,
-            "--agent-did",
-            &agent_did,
+            "--node-did",
+            &node_did,
             "--content-file",
             content_path
                 .to_str()
@@ -187,7 +187,7 @@ async fn request_interrupt_waits_until_running_request_is_terminal() -> Result<(
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             &agent_name,
             "--model-name",
             &model_name,
@@ -195,10 +195,10 @@ async fn request_interrupt_waits_until_running_request_is_terminal() -> Result<(
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
     let submitted = run_cli_json(
         &home_dir,
@@ -207,8 +207,8 @@ async fn request_interrupt_waits_until_running_request_is_terminal() -> Result<(
             "submit",
             "--graphql",
             &graphql,
-            "--agent-did",
-            &agent_did,
+            "--node-did",
+            &node_did,
             "--content",
             &request_content,
             "--no-wait",
@@ -317,7 +317,7 @@ async fn request_interrupt_does_not_latch_completed_request() -> Result<()> {
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             &agent_name,
             "--model-name",
             &model_name,
@@ -325,10 +325,10 @@ async fn request_interrupt_does_not_latch_completed_request() -> Result<()> {
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
     let submitted = run_cli_json(
         &home_dir,
@@ -337,8 +337,8 @@ async fn request_interrupt_does_not_latch_completed_request() -> Result<()> {
             "submit",
             "--graphql",
             &graphql,
-            "--agent-did",
-            &agent_did,
+            "--node-did",
+            &node_did,
             "--content",
             &request_content,
             "--timeout-secs",
@@ -439,7 +439,7 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             &agent_name,
             "--model-name",
             &model_name,
@@ -447,10 +447,10 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
     let session_id = format!("show-session-{}", Uuid::new_v4().simple());
     let parent_request_id = format!("show-parent-{}", Uuid::new_v4().simple());
@@ -464,8 +464,8 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
             r#"mutation {{
                 create_AgentRequest(input: {{purpose: "normal", 
                     request_id: "{parent_request_id}",
-                    agent_did: "{agent_did}",
-                    behavior_id: "parent-behavior",
+                    node_did: "{node_did}",
+                    agent_id: "parent-agent",
                     session_id: "{session_id}",
                     content: "parent request that started a session",
                     lifecycle_state: "processing",
@@ -475,7 +475,7 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
                     claimed_at: "2026-05-20T10:00:01Z",
                     deadline: "2026-05-20T10:05:00Z",
                     retry_count: 0,
-                    subagent_depth: 0
+                    request_hop: 0
                 }}) {{ _docID }}
             }}"#
         ),
@@ -488,7 +488,7 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
             r#"mutation {{
                 create_AgentToolCall(input: {{
                     tool_call_key: "{tool_call_key}",
-                    agent_did: "{agent_did}",
+                    node_did: "{node_did}",
                     request_id: "{parent_request_id}",
                     request_doc_id: "{parent_doc_id}",
                     session_id: "{session_id}",
@@ -513,16 +513,16 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
             r#"mutation {{
                 create_AgentRequest(input: {{purpose: "normal", 
                     request_id: "{child_request_id}",
-                    agent_did: "{agent_did}",
-                    requester_did: "{agent_did}",
-                    behavior_id: "child-behavior",
+                    node_did: "{node_did}",
+                    requester_did: "{node_did}",
+                    agent_id: "child-agent",
                     session_id: "{child_session_id}",
                     content: "request caused by the agent_new tool call",
                     lifecycle_state: "processing",
                     created_at: "2026-05-20T10:00:03Z",
                     claimed_at: "2026-05-20T10:00:04Z",
                     retry_count: 0,
-                    subagent_depth: 1,
+                    request_hop: 1,
                     caused_by_parent_request_id: "{parent_request_id}",
                     caused_by_parent_request_doc_id: "{parent_doc_id}",
                     caused_by_parent_tool_call_id: "{tool_call_id}",
@@ -541,15 +541,15 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
             r#"mutation {{
                 create_AgentSession(input: {{
                     session_id: "{child_session_id}",
-                    agent_did: "{agent_did}",
-                    requester_did: "{agent_did}",
-                    behavior_id: "child-behavior",
+                    node_did: "{node_did}",
+                    requester_did: "{node_did}",
+                    agent_id: "child-agent",
                     created_at: "2026-05-20T10:00:03Z",
                     provenance: {{parent_request_doc_id: "{parent_doc_id}"}}
                 }}) {{ _docID }}
             }}"#,
             child_session_id = escape_graphql_string(&child_session_id),
-            agent_did = escape_graphql_string(&agent_did),
+            node_did = escape_graphql_string(&node_did),
             parent_doc_id = escape_graphql_string(&parent_doc_id),
         ),
     )
@@ -607,9 +607,9 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
     );
     assert_eq!(
         json_output
-            .pointer("/child_requests/0/behavior_id")
+            .pointer("/child_requests/0/agent_id")
             .and_then(Value::as_str),
-        Some("child-behavior")
+        Some("child-agent")
     );
     assert_eq!(
         json_output
@@ -641,15 +641,15 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
         &format!(
             r#"mutation {{
                 create_AgentRequest(input: {{purpose: "normal",
-                    request_id: "{limited_request_id}", agent_did: "{agent_did}",
-                    behavior_id: "parent-behavior", session_id: "{session_id}",
+                    request_id: "{limited_request_id}", node_did: "{node_did}",
+                    agent_id: "parent-agent", session_id: "{session_id}",
                     content: "limited", lifecycle_state: "failed",
                     failure_reason: "{failure}", created_at: "2026-05-20T10:01:00Z"
                 }}) {{ _docID }}
                 create_InferenceCall(input: {{
                     call_id: "{limited_request_id}-call", request_id: "{limited_request_id}",
-                    call_seq: 1, backend_id: "studios-cluster", behavior_id: "parent-behavior",
-                    agent_did: "{agent_did}", call_kind: "inference", attempt: 1,
+                    call_seq: 1, backend_id: "studios-cluster", agent_id: "parent-agent",
+                    node_did: "{node_did}", call_kind: "inference", attempt: 1,
                     call_state: "failed", failure_reason: "{failure}",
                     queued_at: "2026-05-20T10:01:00Z", started_at: "2026-05-20T10:01:00Z",
                     ended_at: "2026-05-20T10:01:01Z"

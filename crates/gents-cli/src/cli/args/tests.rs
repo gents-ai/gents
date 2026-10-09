@@ -247,8 +247,8 @@ fn init_tool_package_shorthands_parse() {
     assert!(!yolo.write_tools);
     assert!(!parse_init(&[]).write_tools);
     assert!(!parse_init(&[]).yolo);
-    assert!(!parse_init(&[]).setup_steward);
-    assert!(parse_init(&["--setup-steward"]).setup_steward);
+    assert!(!parse_init(&[]).engineer);
+    assert!(parse_init(&["--engineer"]).engineer);
     assert!(
         Cli::try_parse_from(["gents", "init", "--write", "--yolo"]).is_err(),
         "--write and --yolo conflict"
@@ -578,13 +578,13 @@ fn p2p_pairing_front_door_rejects_removed_scope_flags() {
 fn p2p_replicator_add_filter_parses() {
     let args = parse_p2p_replicator_add(&[
         "--filter",
-        "AgentRequest:agent_did=did:key:alice",
+        "AgentRequest:node_did=did:key:alice",
         "--filter",
-        "AgentMessage:agent_did=did:key:bob",
+        "AgentMessage:node_did=did:key:bob",
     ]);
     assert_eq!(args.filters.len(), 2);
-    assert_eq!(args.filters[0], "AgentRequest:agent_did=did:key:alice");
-    assert_eq!(args.filters[1], "AgentMessage:agent_did=did:key:bob");
+    assert_eq!(args.filters[0], "AgentRequest:node_did=did:key:alice");
+    assert_eq!(args.filters[1], "AgentMessage:node_did=did:key:bob");
 }
 
 #[test]
@@ -1118,7 +1118,7 @@ fn goal_resume_request_rejects_caller_supplied_lineage_flags() {
         "--workspace-owner-deployment-id",
         "--workspace-seal-hash",
         "--execution-origin",
-        "--subagent-depth",
+        "--request-hop",
     ] {
         let error = match Cli::try_parse_from([
             "gents",
@@ -1147,7 +1147,7 @@ fn claude_login_parses_oauth_flags_and_rejects_seat_flags() {
     let cli = Cli::try_parse_from([
         "gents",
         "claude-login",
-        "--agent-did",
+        "--node-did",
         "did:key:z6MkTest",
         "--manual",
         "--no-browser",
@@ -1156,7 +1156,7 @@ fn claude_login_parses_oauth_flags_and_rejects_seat_flags() {
     let Command::ClaudeLogin(args) = cli.command else {
         panic!("expected claude-login")
     };
-    assert_eq!(args.agent_did.as_deref(), Some("did:key:z6MkTest"));
+    assert_eq!(args.node_did.as_deref(), Some("did:key:z6MkTest"));
     assert!(args.manual && args.no_browser);
     assert_eq!(args.provider, "claude-subscription");
     for removed in [
@@ -1182,7 +1182,7 @@ fn cloud_login_parses_the_host_and_keeps_room_for_sibling_subcommands() {
         "login",
         "--cloud",
         "app.dev.gents.xyz",
-        "--agent-did",
+        "--node-did",
         "did:key:z6MkTest",
     ])
     .expect("parse");
@@ -1193,7 +1193,7 @@ fn cloud_login_parses_the_host_and_keeps_room_for_sibling_subcommands() {
         panic!("expected cloud login")
     };
     assert_eq!(args.cloud, "app.dev.gents.xyz");
-    assert_eq!(args.agent_did.as_deref(), Some("did:key:z6MkTest"));
+    assert_eq!(args.node_did.as_deref(), Some("did:key:z6MkTest"));
     assert_eq!(args.provider, "gents-cloud");
 
     assert!(
@@ -1259,21 +1259,21 @@ fn tools_set_accepts_canonical_document_and_rejects_retired_flat_flags() {
 }
 
 #[test]
-fn subagent_target_entry_distinguishes_owner_from_destination() {
+fn agent_target_entry_distinguishes_owner_from_destination() {
     let cli = Cli::try_parse_from([
         "gents",
         "config",
         "tools",
-        "subagent-target-entry",
+        "agent-target-entry",
         "--target-id",
         "worker",
-        "--agent-did",
+        "--node-did",
         "caller",
-        "--target-agent-did",
+        "--target-node-did",
         "remote",
         "--name",
         "worker",
-        "--behavior-id",
+        "--agent-id",
         "research",
     ])
     .unwrap();
@@ -1281,11 +1281,11 @@ fn subagent_target_entry_distinguishes_owner_from_destination() {
         Command::Config {
             command:
                 ConfigCommand::Tools {
-                    command: ToolsConfigCommand::SubagentTargetEntry(args),
+                    command: ToolsConfigCommand::AgentTargetEntry(args),
                 },
         } => {
-            assert_eq!(args.agent_did, "caller");
-            assert_eq!(args.target_agent_did, "remote");
+            assert_eq!(args.node_did, "caller");
+            assert_eq!(args.target_node_did, "remote");
             assert_eq!(args.target_id, "worker");
         }
         _ => panic!("expected target document builder"),
@@ -1328,37 +1328,28 @@ fn parse_target_accepts_context_and_a_named_task_and_rejects_the_rest() {
 }
 
 #[test]
-fn parse_proposer_accepts_scripted_and_behavior_forms_and_rejects_the_rest() {
+fn parse_proposer_accepts_scripted_and_agent_forms_and_rejects_the_rest() {
     assert_eq!(
         parse_proposer("scripted:proposals.json").unwrap(),
         ProposerArg::Scripted(PathBuf::from("proposals.json"))
     );
     assert_eq!(
-        parse_proposer("behavior:prompt_proposer").unwrap(),
-        ProposerArg::Behavior {
+        parse_proposer("agent:prompt_proposer").unwrap(),
+        ProposerArg::Agent {
             pack: "prompt_proposer".into(),
-            behavior: None
+            agent: None
         }
     );
     assert_eq!(
-        parse_proposer("behavior:prompt_proposer:prompt-proposer").unwrap(),
-        ProposerArg::Behavior {
+        parse_proposer("agent:prompt_proposer:prompt-proposer").unwrap(),
+        ProposerArg::Agent {
             pack: "prompt_proposer".into(),
-            behavior: Some("prompt-proposer".into())
+            agent: Some("prompt-proposer".into())
         }
     );
-    for bad in [
-        "garbage",
-        "scripted:",
-        "behavior:",
-        "behavior::x",
-        "llm:foo",
-    ] {
+    for bad in ["garbage", "scripted:", "agent:", "agent::x", "llm:foo"] {
         let error = parse_proposer(bad).unwrap_err();
-        assert!(
-            error.contains("behavior:<pack>[:<behavior>]"),
-            "{bad}: {error}"
-        );
+        assert!(error.contains("agent:<pack>[:<agent>]"), "{bad}: {error}");
         assert!(!error.contains("no model-driven"), "{bad}: {error}");
     }
 }
@@ -1373,7 +1364,7 @@ fn optimization_run_takes_a_proposer_profile() {
         "--subject",
         "pipeline",
         "--proposer",
-        "behavior:prompt_proposer",
+        "agent:prompt_proposer",
         "--proposer-profile",
         "fast",
     ])
@@ -1398,7 +1389,7 @@ fn optimization_run_takes_a_proposer_timeout() {
             "--subject",
             "pipeline",
             "--proposer",
-            "behavior:prompt_proposer",
+            "agent:prompt_proposer",
         ];
         argv.extend_from_slice(extra);
         let Command::Optimization {

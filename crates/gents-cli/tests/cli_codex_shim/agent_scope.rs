@@ -1,28 +1,28 @@
 use super::*;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn codex_shim_does_not_clobber_session_behavior_id() -> Result<()> {
+async fn codex_shim_does_not_clobber_session_agent_id() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
     let model_name = format!("mock-codex-shim-model-{}", Uuid::new_v4().simple());
     let mock_endpoint = MockChatEndpoint::start(&model_name, "irrelevant")?;
     let server_port = allocate_port()?;
-    let agent_name = format!("cli-codex-shim-{}", Uuid::new_v4().simple());
+    let node_name = format!("cli-codex-shim-{}", Uuid::new_v4().simple());
 
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
-            &agent_name,
+            "--node-name",
+            &node_name,
             "--model-name",
             &model_name,
             "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
-    let default_behavior_id = format!("{agent_did}:default");
+    let node_did = node_did_from_init(&init)?;
+    let default_agent_id = format!("{node_did}:default");
     let session_id = format!("test-session-{}", Uuid::new_v4().simple());
 
     let shim_port = allocate_port()?;
@@ -38,7 +38,7 @@ async fn codex_shim_does_not_clobber_session_behavior_id() -> Result<()> {
     serve
         .capturing(wait_for_runtime_ready(
             &graphql,
-            &agent_did,
+            &node_did,
             Duration::from_secs(30),
         ))
         .await?;
@@ -50,15 +50,15 @@ async fn codex_shim_does_not_clobber_session_behavior_id() -> Result<()> {
                 r#"mutation {{
                 create_AgentSession(input: {{
                     session_id: "{session_id}",
-                    agent_did: "{agent_did}",
-                    requester_did: "{agent_did}",
-                    behavior_id: "{default_behavior_id}",
+                    node_did: "{node_did}",
+                    requester_did: "{node_did}",
+                    agent_id: "{default_agent_id}",
                     created_at: "2026-01-01T00:00:00Z"
                 }}) {{ _docID }}
             }}"#,
                 session_id = escape_graphql_string(&session_id),
-                agent_did = escape_graphql_string(&agent_did),
-                default_behavior_id = escape_graphql_string(&default_behavior_id),
+                node_did = escape_graphql_string(&node_did),
+                default_agent_id = escape_graphql_string(&default_agent_id),
             ),
         ))
         .await?;
@@ -111,53 +111,53 @@ async fn codex_shim_does_not_clobber_session_behavior_id() -> Result<()> {
                 AgentSession(
                     filter: {{
                         session_id: {{ _eq: "{session_id}" }},
-                        agent_did: {{ _eq: "{agent_did}" }},
-                        requester_did: {{ _eq: "{agent_did}" }}
+                        node_did: {{ _eq: "{node_did}" }},
+                        requester_did: {{ _eq: "{node_did}" }}
                     }},
                     limit: 1
-                ) {{ behavior_id }}
+                ) {{ agent_id }}
             }}"#,
                 session_id = escape_graphql_string(&session_id),
-                agent_did = escape_graphql_string(&agent_did),
+                node_did = escape_graphql_string(&node_did),
             ),
         ))
         .await?;
-    let preserved_behavior_id = resp
-        .pointer("/data/AgentSession/0/behavior_id")
+    let preserved_agent_id = resp
+        .pointer("/data/AgentSession/0/agent_id")
         .and_then(|v| v.as_str())
         .unwrap_or_default()
         .to_string();
     assert_eq!(
-        preserved_behavior_id, default_behavior_id,
-        "behavior_id must remain pinned to its create-time value"
+        preserved_agent_id, default_agent_id,
+        "agent_id must remain pinned to its create-time value"
     );
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn codex_shim_does_not_adopt_a_session_from_another_behavior() -> Result<()> {
+async fn codex_shim_does_not_adopt_a_session_from_another_agent() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
     let model_name = format!("mock-codex-shim-model-{}", Uuid::new_v4().simple());
     let mock_endpoint = MockChatEndpoint::start(&model_name, "irrelevant")?;
     let server_port = allocate_port()?;
-    let agent_name = format!("cli-codex-shim-{}", Uuid::new_v4().simple());
+    let node_name = format!("cli-codex-shim-{}", Uuid::new_v4().simple());
 
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
-            &agent_name,
+            "--node-name",
+            &node_name,
             "--model-name",
             &model_name,
             "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     let session_id = format!("test-session-{}", Uuid::new_v4().simple());
-    let foreign_behavior_id = "some-other-behavior".to_string();
+    let foreign_agent_id = "some-other-agent".to_string();
 
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
@@ -172,7 +172,7 @@ async fn codex_shim_does_not_adopt_a_session_from_another_behavior() -> Result<(
     serve
         .capturing(wait_for_runtime_ready(
             &graphql,
-            &agent_did,
+            &node_did,
             Duration::from_secs(30),
         ))
         .await?;
@@ -184,15 +184,15 @@ async fn codex_shim_does_not_adopt_a_session_from_another_behavior() -> Result<(
                 r#"mutation {{
                 create_AgentSession(input: {{
                     session_id: "{session_id}",
-                    agent_did: "{agent_did}",
-                    requester_did: "{agent_did}",
-                    behavior_id: "{foreign_behavior_id}",
+                    node_did: "{node_did}",
+                    requester_did: "{node_did}",
+                    agent_id: "{foreign_agent_id}",
                     created_at: "2026-01-01T00:00:00Z"
                 }}) {{ _docID }}
             }}"#,
                 session_id = escape_graphql_string(&session_id),
-                agent_did = escape_graphql_string(&agent_did),
-                foreign_behavior_id = escape_graphql_string(&foreign_behavior_id),
+                node_did = escape_graphql_string(&node_did),
+                foreign_agent_id = escape_graphql_string(&foreign_agent_id),
             ),
         ))
         .await?;
@@ -238,7 +238,7 @@ async fn codex_shim_does_not_adopt_a_session_from_another_behavior() -> Result<(
     let error = read_error_response(&mut ws, request_id(2)).await?;
     assert!(
         error.message.contains("unknown Codex thread"),
-        "a session outside the bound behavior must not enter the projection: {}",
+        "a session outside the bound agent must not enter the projection: {}",
         error.message
     );
 
@@ -255,7 +255,7 @@ async fn codex_shim_does_not_adopt_a_session_from_another_behavior() -> Result<(
     let error = read_error_response(&mut ws, request_id(3)).await?;
     assert!(
         error.message.contains("unknown Codex thread"),
-        "archiving a session outside the bound behavior must fail explicitly: {}",
+        "archiving a session outside the bound agent must fail explicitly: {}",
         error.message
     );
     Ok(())

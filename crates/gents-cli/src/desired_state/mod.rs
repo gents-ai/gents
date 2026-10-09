@@ -19,9 +19,7 @@ pub(crate) use document_handle::document_handle;
 use gents::Collection;
 use serde::Serialize;
 
-pub(crate) use gents::document_config::{
-    AgentPrincipal as DesiredAgentPrincipal, PackConfig as DesiredStateManifest,
-};
+pub(crate) use gents::document_config::{Node as DesiredNode, PackConfig as DesiredStateManifest};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DocRef {
@@ -72,10 +70,7 @@ impl Default for DesiredStateDiffCollections {
                 .into_iter()
                 .map(|collection| {
                     (
-                        collection
-                            .dir_name()
-                            .unwrap_or("agent_principal")
-                            .to_owned(),
+                        collection.dir_name().unwrap_or("node").to_owned(),
                         DesiredStateCollectionDiff::default(),
                     )
                 })
@@ -86,12 +81,12 @@ impl Default for DesiredStateDiffCollections {
 
 impl DesiredStateDiffCollections {
     pub(crate) fn get(&self, collection: Collection) -> &DesiredStateCollectionDiff {
-        &self.0[collection.dir_name().unwrap_or("agent_principal")]
+        &self.0[collection.dir_name().unwrap_or("node")]
     }
 
     fn get_mut(&mut self, collection: Collection) -> &mut DesiredStateCollectionDiff {
         self.0
-            .get_mut(collection.dir_name().unwrap_or("agent_principal"))
+            .get_mut(collection.dir_name().unwrap_or("node"))
             .expect("all canonical collection reports are initialized")
     }
     pub(crate) fn record_prune_deletes(&mut self, deletes: &[DocRef]) {
@@ -126,7 +121,7 @@ impl DesiredStateDiffCollectionsCounts {
 
     #[cfg(test)]
     pub(crate) fn get(&self, collection: Collection) -> &DesiredStateDiffCounts {
-        &self.0[collection.dir_name().unwrap_or("agent_principal")]
+        &self.0[collection.dir_name().unwrap_or("node")]
     }
 
     pub(crate) fn is_exact_match(&self) -> bool {
@@ -147,7 +142,7 @@ pub(crate) struct DesiredStateDiffReport {
     pub(crate) ok: bool,
     pub(crate) root: String,
     pub(crate) access_mode: String,
-    pub(crate) agent_did: String,
+    pub(crate) node_did: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) live_validation_errors: Vec<String>,
     pub(crate) counts: DesiredStateDiffCollectionsCounts,
@@ -161,7 +156,7 @@ pub(crate) struct DesiredStateValidationReport {
     pub(crate) validation_scope: &'static str,
     pub(crate) ok: bool,
     pub(crate) root: String,
-    pub(crate) agent_did: Option<String>,
+    pub(crate) node_did: Option<String>,
     pub(crate) counts: crate::shared::ConfigApplyCounts,
     pub(crate) errors: Vec<String>,
 }

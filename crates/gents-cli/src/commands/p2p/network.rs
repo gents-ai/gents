@@ -20,7 +20,7 @@ use super::output::load_live_http_p2p_status;
 struct PeerRegistryRow {
     peer_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    agent_did: Option<String>,
+    node_did: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     display_name: Option<String>,
     network_id: String,
@@ -68,8 +68,8 @@ pub(super) async fn p2p_network_register(args: P2pNetworkRegisterArgs) -> Result
         })
         .unwrap_or_default();
 
-    let agent_did = crate::resolve_agent_did(args.home.as_deref(), None)
-        .context("resolving local agent DID")?;
+    let node_did =
+        crate::resolve_node_did(args.home.as_deref(), None).context("resolving local node DID")?;
 
     let templates = validate_offered_templates(args.templates.iter().map(String::as_str))?;
     let network_id = args.network_id.as_deref().unwrap_or("default").to_string();
@@ -82,7 +82,7 @@ pub(super) async fn p2p_network_register(args: P2pNetworkRegisterArgs) -> Result
 
     let entry = RegistryEntry {
         peer_id: peer_id.clone(),
-        agent_did: agent_did.clone(),
+        node_did: node_did.clone(),
         addresses: addresses.clone(),
         templates: templates.clone(),
         display_name: display_name.clone(),
@@ -98,7 +98,7 @@ pub(super) async fn p2p_network_register(args: P2pNetworkRegisterArgs) -> Result
 
     tracing::debug!(
         peer_id = %peer_id,
-        agent_did = %agent_did,
+        node_did = %node_did,
         network_id = %network_id,
         "p2p network register: self-registration written"
     );
@@ -107,7 +107,7 @@ pub(super) async fn p2p_network_register(args: P2pNetworkRegisterArgs) -> Result
         "status": "registered",
         "home": home_dir,
         "peer_id": peer_id,
-        "agent_did": agent_did,
+        "node_did": node_did,
         "display_name": display_name,
         "templates": templates,
         "network_id": network_id,
@@ -203,7 +203,7 @@ fn registry_list_query() -> &'static str {
     r#"query {
         PeerRegistry {
             peer_id
-            agent_did
+            node_did
             display_name
             network_id
             templates
@@ -263,7 +263,7 @@ fn parse_registry_rows(
 
             Some(PeerRegistryRow {
                 peer_id,
-                agent_did: optional_string(&row, "agent_did"),
+                node_did: optional_string(&row, "node_did"),
                 display_name: optional_string(&row, "display_name"),
                 network_id: optional_string(&row, "network_id")
                     .unwrap_or_else(|| "default".to_string()),
@@ -336,7 +336,7 @@ fn print_network_table(rows: &[PeerRegistryRow]) -> Result<()> {
         .map(|row| {
             [
                 row.peer_id.clone(),
-                row.agent_did.clone().unwrap_or_else(|| "-".to_string()),
+                row.node_did.clone().unwrap_or_else(|| "-".to_string()),
                 row.display_name.clone().unwrap_or_else(|| "-".to_string()),
                 row.network_id.clone(),
                 yes_no(row.online),
@@ -519,7 +519,7 @@ mod tests {
     ) -> serde_json::Value {
         json!({
             "peer_id": peer_id,
-            "agent_did": "did:key:test",
+            "node_did": "did:key:test",
             "display_name": serde_json::Value::Null,
             "network_id": "default",
             "templates": serde_json::Value::Null,
@@ -626,7 +626,7 @@ mod tests {
     fn registry_upsert_mutation_fields_are_correct() {
         let entry = RegistryEntry {
             peer_id: "test-peer-1".to_string(),
-            agent_did: "did:key:test".to_string(),
+            node_did: "did:key:test".to_string(),
             addresses: vec!["/ip4/127.0.0.1/tcp/4001/p2p/test-peer-1".to_string()],
             templates: vec!["conversation".to_string()],
             display_name: Some("my-node".to_string()),
@@ -637,7 +637,7 @@ mod tests {
         let mutation = registry_upsert_mutation(&entry, now, UpsertKind::Full);
 
         assert!(mutation.contains(r#"peer_id: { _eq: "test-peer-1" }"#));
-        assert!(mutation.contains(r#"agent_did: "did:key:test""#));
+        assert!(mutation.contains(r#"node_did: "did:key:test""#));
         assert!(mutation.contains(r#"status: "online""#));
         assert!(mutation.contains(r#"network_id: "default""#));
         assert!(mutation.contains(r#"display_name: "my-node""#));
