@@ -11,4 +11,12 @@ export type RenderedTimelineItem = { "kind": "userMessage", itemKey: string, req
  * not let those replace or retire the turn's other stand-ins
  * (pending turn, the app's own copy of a sent message).
  */
-ownsTurn: boolean, sequence: number | null, content: string | null, timestamp: string | null, reconstruction: MessageReconstructionView, } | { "kind": "assistantMessage", itemKey: string, sequence: number | null, content: string | null, reasoning: string | null, timestamp: string | null, reconstruction: MessageReconstructionView, } | { "kind": "toolGroup", itemKey: string, messageSequence: number | null, tools: Array<RenderedToolCallView>, } | { "kind": "pendingUserTurn", itemKey: string, requestId: string, content: string, selectedSkillIds: Array<string>, lifecycleState: string | null, createdAt: string | null, } | { "kind": "liveAssistant", itemKey: string, content: string | null, reasoning: string | null, };
+ownsTurn: boolean,
+/**
+ * The request whose input this is; dedups its pending projection.
+ */
+inputRequestId?: string | null, sequence: number | null, content: string | null, timestamp: string | null, reconstruction: MessageReconstructionView, } | { "kind": "assistantMessage", itemKey: string, sequence: number | null, content: string | null, reasoning: string | null, timestamp: string | null, reconstruction: MessageReconstructionView, } | { "kind": "toolGroup", itemKey: string, messageSequence: number | null, tools: Array<RenderedToolCallView>, } | { "kind": "pendingUserTurn", itemKey: string, requestId: string, content: string, selectedSkillIds: Array<string>, lifecycleState: string | null, foldedIntoRequestId: string | null, origin: RequestOriginView | null, createdAt: string | null, } | { "kind": "automatedInput", itemKey: string, requestId?: string | null,
+/**
+ * The request whose input this is; dedups its pending projection.
+ */
+inputRequestId?: string | null, sequence: number | null, origin: RequestOriginView, content: string | null, timestamp: string | null, reconstruction: MessageReconstructionView, } | { "kind": "liveAssistant", itemKey: string, content: string | null, reasoning: string | null, };

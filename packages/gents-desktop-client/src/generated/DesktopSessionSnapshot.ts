@@ -15,4 +15,15 @@ export type DesktopSessionSnapshot = {
  * Ephemeral identity of the canonical live source. Full reads still own
  * historical reconciliation; this cursor carries no history coverage.
  */
-liveCursor?: string | null, sessionId: string, agentDid: string | null, behaviorId: string | null, title: string | null, previewText: string | null, status: string | null, goal: GoalView | null, turnState: string | null, latestRequestId: string | null, retryEligibility: RetryEligibilityView, latestRequestOutcome: RequestOutcomeView | null, pendingTurn: PendingTurnView | null, context: SessionContextView, timelineItems: Array<RenderedTimelineItem>, hydration?: SessionHydrationView | null, timelinePage?: SessionTimelinePageView | null, projectionRevision?: SessionProjectionRevisionView | null, };
+liveCursor?: string | null, sessionId: string, agentDid: string | null, behaviorId: string | null, title: string | null, previewText: string | null, status: string | null, goal: GoalView | null, turnState: string | null, latestRequestId: string | null, retryEligibility: RetryEligibilityView, latestRequestOutcome: RequestOutcomeView | null, pendingTurn: PendingTurnView | null,
+/**
+ * Unclaimed messages waiting behind the session's turn, in queue order.
+ * They have not entered the transcript: a claim either folds them into
+ * the claimed turn as its own user entries or makes one the next turn.
+ */
+queuedTurns: Array<PendingTurnView>,
+/**
+ * Requests a claim folded, each with the request that answered it. The
+ * requests are control-plane rows, so this does not depend on the page.
+ */
+foldedInputs: Array<FoldedInputView>, context: SessionContextView, timelineItems: Array<RenderedTimelineItem>, hydration?: SessionHydrationView | null, timelinePage?: SessionTimelinePageView | null, projectionRevision?: SessionProjectionRevisionView | null, };
