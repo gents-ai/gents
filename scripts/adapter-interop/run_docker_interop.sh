@@ -2,7 +2,7 @@
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-repo_root="$(cd "${script_dir}/../../../.." && pwd)"
+repo_root="$(cd "${script_dir}/../.." && pwd)"
 out_dir="${1:-${GENTS_DOCKER_INTEROP_OUT:-/tmp/gents-adapter-interop-fixtures}}"
 
 if ! command -v docker >/dev/null 2>&1; then
