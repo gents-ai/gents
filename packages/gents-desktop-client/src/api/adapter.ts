@@ -88,6 +88,8 @@ export function createDesktopApiAdapter(
         disableAutoStart,
       }),
     openDbExplorer: () => invokeDesktop<string>("desktop_open_db_explorer"),
+    openExternalUrl: (url) =>
+      invokeDesktop<void>("desktop_open_external_url", { url }),
     setManagedServerAutoStart: (enabled) =>
       invokeDesktop<ManagedServerStatus>("desktop_managed_server_set_auto_start", {
         enabled,

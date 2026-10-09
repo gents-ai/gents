@@ -6,12 +6,12 @@ import {
 import { providerSignInState } from "../src/ui/screens/setup/inferenceSetupForm";
 import { ceilingFromInit } from "../src/ui/screens/setup/OnboardingWizard";
 
-const { listen, openExternalUrl } = vi.hoisted(() => ({
+const { listen, openUrl } = vi.hoisted(() => ({
   listen: vi.fn(),
-  openExternalUrl: vi.fn(),
+  openUrl: vi.fn(),
 }));
 vi.mock("@tauri-apps/api/event", () => ({ listen }));
-vi.mock("../src/lib/externalLinks", () => ({ openExternalUrl }));
+vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl }));
 afterEach(() => {
   Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
   vi.clearAllMocks();
@@ -31,13 +31,15 @@ it.each([
     const unlisten = vi.fn();
     listen.mockResolvedValue(unlisten);
     const onUrl = vi.fn();
+    const windowOpen = vi.spyOn(window, "open").mockReturnValue(null);
     const api = createDesktopApiAdapter(tauriTransport());
     expect(await api.watchProviderLoginUrl?.(provider, onUrl)).toBe(unlisten);
     const [name, handler] = listen.mock.calls[0]!;
     expect(name).toBe(event);
     handler({ payload: { url: "https://example.test/sign-in" } });
     expect(onUrl).toHaveBeenCalledWith("https://example.test/sign-in");
-    expect(openExternalUrl).not.toHaveBeenCalled();
+    expect(openUrl).not.toHaveBeenCalled();
+    expect(windowOpen).not.toHaveBeenCalled();
   },
 );
 

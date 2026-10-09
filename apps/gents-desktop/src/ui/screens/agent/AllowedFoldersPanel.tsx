@@ -11,7 +11,7 @@ import type {
   AllowedFolders,
 } from "@source-inc/gents-desktop-client";
 import { useApp } from "@/app/AppContext";
-import { canPickDirectory, pickDirectory } from "../../lib/pickDirectory";
+import { canPickDirectory, pickDirectory } from "../../../lib/nativeShell";
 import { Group, Row } from "./rows";
 
 const ACCESS_LABEL: Record<AllowedFolderAccess, string> = {

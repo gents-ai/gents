@@ -17,7 +17,7 @@ import {
   SelectValue,
 } from "@gents/ui/components/select";
 import { Spinner } from "@gents/ui/components/spinner";
-import { openExternalUrl } from "../../../lib/externalLinks";
+import { useApp } from "@/app/AppContext";
 import { Field } from "./parts";
 import {
   oauthProviderFor,
@@ -65,6 +65,7 @@ export function ConnectionFields({
     discover: () => void;
   };
 }) {
+  const { openExternalUrl } = useApp().actions;
   const busy = form.op !== null;
   const accountOp = form.op === "signIn" || form.op === "retrySave" ? form.op : null;
   const { accountLabel, signInHint, authUrl } = form;

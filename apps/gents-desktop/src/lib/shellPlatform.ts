@@ -1,11 +1,9 @@
-import { getCurrentWindow } from "@tauri-apps/api/window";
-
-const inTauri = () => "__TAURI_INTERNALS__" in window;
+import { inNativeShell as inTauri, windowLabel } from "./nativeShell";
 
 // On macOS main stays alive while a runtime or sibling view still needs it.
 // It is the sole automatic startup/recovery owner for the shared backend.
 export function ownsAutomaticRecovery(): boolean {
-  return !isMacTauriShell() || getCurrentWindow().label === "main";
+  return !isMacTauriShell() || windowLabel() === "main";
 }
 
 /// iPadOS also reports MacIntel, so a touch screen rules macOS out.
@@ -60,9 +58,4 @@ export function revealInFolderLabel(): string | null {
   if (isWindowsTauriShell()) return "Show in Explorer";
   if (isLinuxTauriShell()) return "Show in folder";
   return null;
-}
-
-export async function revealInFolder(path: string): Promise<void> {
-  const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
-  await revealItemInDir(path);
 }

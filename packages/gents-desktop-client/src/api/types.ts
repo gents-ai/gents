@@ -127,6 +127,10 @@ export type DesktopApiAdapter = {
   ) => Promise<ManagedServerStatus>;
   /** Opens the managed runtime's DB explorer window; resolves to its URL. */
   openDbExplorer?: () => Promise<string>;
+  /** Opens a URL in the person's browser. The bridge strips the packaged
+   *  build's own libraries and display backend from the environment the
+   *  browser inherits, which the OS opener cannot. */
+  openExternalUrl?: (url: string) => Promise<void>;
   setManagedServerAutoStart?: (enabled: boolean) => Promise<ManagedServerStatus>;
   setSelectedAgent: (agentDid: string | null) => Promise<void>;
   removePeer: (peerId: string) => Promise<DesktopClientSnapshot>;

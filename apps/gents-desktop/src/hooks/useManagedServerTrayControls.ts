@@ -1,5 +1,4 @@
 import { useEffect } from "react";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { toast } from "sonner";
 
 import { describeManagedServerWait } from "../lib/managedServerStartup";
@@ -8,6 +7,7 @@ import {
   type TrayServer,
 } from "../lib/managedServerTray";
 import type { DesktopApp } from "./desktopApp";
+import { inNativeShell, listenToWindow, showAndFocusWindow } from "../lib/nativeShell";
 import {
   ownsAutomaticRecovery,
   supportsLocalManagedServer,
@@ -22,20 +22,18 @@ export function useManagedServerTrayControls({ actions, stores }: DesktopApp) {
       !ownsAutomaticRecovery() ||
       !supportsLocalManagedServer() ||
       !actions.localServerOffers.status ||
-      !("__TAURI_INTERNALS__" in window)
+      !inNativeShell()
     )
       return;
 
     const server = trayServerFor({ actions, stores });
-    const view = getCurrentWindow();
     return installManagedServerTrayListeners(
       server,
-      (event, handler) => view.listen(event, handler),
+      (event, handler) => listenToWindow(event, handler),
       (message) => {
         void (async () => {
           try {
-            await view.show();
-            await view.setFocus();
+            await showAndFocusWindow();
           } catch {
             // The command error remains actionable even if the OS cannot reveal
             // the owner window; never replace it with a secondary focus error.
@@ -47,10 +45,7 @@ export function useManagedServerTrayControls({ actions, stores }: DesktopApp) {
           }
         })();
       },
-      async () => {
-        await view.show();
-        await view.setFocus();
-      },
+      showAndFocusWindow,
       (wait) => {
         try {
           if (!wait) toast.dismiss(TRAY_WAIT_TOAST);

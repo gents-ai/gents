@@ -77,7 +77,7 @@ describe("managed server tray control ownership", () => {
       ([event]) => event === MANAGED_SERVER_TRAY_STOP_EVENT,
     );
     await act(async () => {
-      stop?.[1]();
+      stop?.[1]({ payload: null });
     });
     expect(api.managedServerStatus).toHaveBeenCalledOnce();
     expect(api.stopManagedServer).toHaveBeenCalledExactlyOnceWith(false);
@@ -97,7 +97,7 @@ describe("managed server tray control ownership", () => {
     );
 
     await act(async () => {
-      stop?.[1]();
+      stop?.[1]({ payload: null });
     });
     await vi.waitFor(() => expect(view.show).toHaveBeenCalledOnce());
     expect(view.setFocus).toHaveBeenCalledOnce();

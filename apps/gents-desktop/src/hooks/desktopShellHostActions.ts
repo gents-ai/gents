@@ -6,6 +6,9 @@ import type {
   PluginApprovalDecision,
 } from "@source-inc/gents-desktop-client";
 
+import { openInBrowser } from "../lib/externalLinks";
+import { inNativeShell } from "../lib/nativeShell";
+
 /**
  * Packs, the host folders the agent's tools may use, and plugin calls asking
  * for more. Only the panel that asks shows each result, so these are plain
@@ -32,5 +35,19 @@ export function createDesktopShellHostActions({ api }: { api: DesktopApiAdapter 
     listPendingPluginApprovals: () => api.listPendingPluginApprovals(),
     decidePluginApproval: (id: string, decision: PluginApprovalDecision) =>
       api.decidePluginApproval(id, decision),
+    /** Opens a URL in the person's browser: through the bridge in the shell,
+        so the browser starts without the shell's environment, else the way
+        a page would. */
+    async openExternalUrl(url: string) {
+      if (inNativeShell() && api.openExternalUrl) {
+        try {
+          await api.openExternalUrl(url);
+          return;
+        } catch (error) {
+          console.warn("bridge could not open the link", error);
+        }
+      }
+      await openInBrowser(url);
+    },
   };
 }

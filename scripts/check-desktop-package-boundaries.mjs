@@ -644,15 +644,7 @@ for (const [path, maximumLines] of [
 
 /* Screens read stores and call named actions; only the app's owners (in
    src/hooks and src/lib) reach the native bridge. A component that imports
-   Tauri or holds the bridge's API fails, except the files listed here, which
-   still do and are moving to owners. The list only shrinks: a listed file
-   that no longer reaches the bridge must leave it. */
-const componentsReachingBridge = new Set([
-  "src/ui/app/platform.ts",
-  "src/ui/lib/pickDirectory.ts",
-  "src/ui/lib/swipe-nav.ts",
-  "src/ui/theme.ts",
-]);
+   Tauri or holds the bridge's API fails. */
 const desktopRoot = join(root, "apps/gents-desktop");
 /* whether a `{ … } = useApp()` destructuring, nested braces and all, names
    `api` */
@@ -697,22 +689,28 @@ for (const file of [
   const reasons = bridgeAccess
     .filter(([reaches]) => reaches(source))
     .map(([, reason]) => reason);
-  if (componentsReachingBridge.has(path)) {
-    if (reasons.length === 0) {
-      failures.push(
-        `${path} no longer reaches the native bridge; remove it from componentsReachingBridge`,
-      );
-    }
-  } else if (reasons.length > 0) {
+  if (reasons.length > 0) {
     failures.push(
       `${path} ${reasons.join(" and ")}; a component calls actions or an owner in src/hooks or src/lib instead`,
     );
   }
 }
-for (const path of componentsReachingBridge) {
-  if (!statSync(join(desktopRoot, path), { throwIfNoEntry: false })) {
+/* Tauri is the shell's native side: the app reaches it through one module,
+   and the bridge through the client package. The end-to-end boot modules
+   drive the shell directly; they are test scaffolding, not app code. */
+const reachesTauri = new Set([
+  "src/lib/nativeShell.ts",
+  "src/lib/nativeLocalE2e.ts",
+  "src/lib/nativeSimulatorE2e.ts",
+]);
+for (const file of filesUnder(join(desktopRoot, "src"), (path) =>
+  /(?<!\.test)\.tsx?$/.test(path),
+)) {
+  const path = relative(desktopRoot, file);
+  if (reachesTauri.has(path)) continue;
+  if (bridgeAccess[0][0](readFileSync(file, "utf8"))) {
     failures.push(
-      `${path} is listed in componentsReachingBridge but does not exist`,
+      `${path} imports @tauri-apps; the app reaches the shell through src/lib/nativeShell.ts`,
     );
   }
 }
