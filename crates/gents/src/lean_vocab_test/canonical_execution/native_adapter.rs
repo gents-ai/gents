@@ -2388,6 +2388,7 @@ impl NativeCanonicalExecution {
                 expected: Arc::new(expected),
                 tool_deadline_at,
                 background_calls,
+                consumes_folded: None,
             },
             self.fixture_time(now)?,
         )

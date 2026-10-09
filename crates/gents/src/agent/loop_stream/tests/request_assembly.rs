@@ -1148,3 +1148,231 @@ fn generated_repair_cases_drive_tool_argument_repair() {
         }
     }
 }
+
+/// Insert the pending folded requests of a generated turn under the owned test
+/// request's principal and session.
+async fn insert_folded_requests(
+    node: &defra_node::EmbeddedNode,
+    head: &crate::watcher::AgentRequest,
+    case: &crate::lean_vocab_test::LeanFoldTurnInputCase,
+) -> std::collections::HashMap<u64, String> {
+    let mut docs = std::collections::HashMap::new();
+    for folded in &case.folded {
+        let request_id = format!("{}-folded-{}", head.request_id, folded.request_id);
+        let created = crate::config_client::ConfigAccess::write_local_response(
+            node,
+            "test.folded_request",
+            &format!(
+                r#"mutation {{ create_AgentRequest(input: {{ request_id: "{}", purpose: "normal", agent_did: "{}", behavior_id: "general", session_id: "{}", subagent_depth: 0, retry_parent_request: "", retry_root_request: "{}", superseded_by_request: "", content: "{}", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", created_at: "{}", retry_count: 0, max_retries: 3 }}) {{ _docID }} }}"#,
+                crate::graphql::escape_graphql_string(&request_id),
+                crate::graphql::escape_graphql_string(&head.agent_did),
+                crate::graphql::escape_graphql_string(&head.session_id),
+                crate::graphql::escape_graphql_string(&request_id),
+                crate::graphql::escape_graphql_string(&folded.content),
+                crate::graphql::escape_graphql_string(&head.created_at),
+            ),
+        )
+        .await
+        .unwrap();
+        docs.insert(
+            folded.request_id,
+            crate::graphql::created_doc_id(&serde_json::json!({ "data": created.data }), "AgentRequest").unwrap(),
+        );
+    }
+    docs
+}
+
+fn generated_authored_key(
+    key: &crate::lean_vocab_test::LeanFoldAuthoredKey,
+    docs: &std::collections::HashMap<u64, String>,
+) -> String {
+    use crate::lean_vocab_test::LeanFoldAuthoredKey as Key;
+    match key {
+        Key::Context => "context".to_owned(),
+        Key::Prompt => "prompt".to_owned(),
+        Key::Folded { request_id } => crate::lifecycle::queue::folded_input_key(&docs[request_id]),
+    }
+}
+
+/// Drive one generated `SessionQueue.TurnInput` through the owned loop, with
+/// or without first-turn compaction, and bind its authored entries and
+/// pre-reduction provider order to the model.
+async fn drive_generated_turn_input(
+    case: &crate::lean_vocab_test::LeanFoldTurnInputCase,
+    first_turn_compaction: bool,
+) {
+    let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let head = lifecycle.request().clone();
+    let docs = insert_folded_requests(&node, &head, case).await;
+    let model = ScriptedModel::new(vec![
+        RawStreamingChoice::Message("answered".to_string()),
+        RawStreamingChoice::FinalResponse(()),
+    ]);
+    let mut config = owned_config(0);
+    config.context_message = case.context.clone().map(Message::user);
+    config.folded_prompts = case
+        .folded
+        .iter()
+        .map(|folded| crate::agent::loop_stream::FoldedPrompt {
+            key: crate::lifecycle::queue::folded_input_key(&docs[&folded.request_id]),
+            message: Message::user(folded.content.clone()),
+        })
+        .collect();
+    let compactor_saw = Arc::new(std::sync::Mutex::new(Vec::<Message>::new()));
+    let published_before_reduction = Arc::new(std::sync::Mutex::new(0_usize));
+    if first_turn_compaction {
+        config.max_tokens = Some(6_000);
+        config.context_window = 6_500;
+        config.compaction_threshold = 0.25;
+        let saw = compactor_saw.clone();
+        let published_before_reduction = published_before_reduction.clone();
+        let compaction_node = node.clone();
+        let request_doc_id = head.doc_id.clone();
+        config.turn_compactor = Some(Arc::new(move |request| {
+            *saw.lock().unwrap() = request.messages.iter().map(|row| row.message.clone()).collect();
+            let published_before_reduction = published_before_reduction.clone();
+            let node = compaction_node.clone();
+            let request_doc_id = request_doc_id.clone();
+            Box::pin(async move {
+                let observed = node
+                    .execute(&format!(
+                        r#"{{ AgentMessage(filter: {{ request_doc_id: {{ _eq: "{}" }}, role: {{ _eq: "user" }} }}) {{ _docID }} }}"#,
+                        crate::graphql::escape_graphql_string(&request_doc_id)
+                    ))
+                    .await;
+                *published_before_reduction.lock().unwrap() = observed.data.unwrap()
+                    ["AgentMessage"]
+                    .as_array()
+                    .unwrap()
+                    .len();
+                Ok(TurnCompactionOutcome::Reduced {
+                    messages: vec![TaggedMessage::unassociated(Message::user("compacted prompt"))],
+                    reduction_key: "folded-first-turn".to_string(),
+                })
+            })
+        }));
+    }
+    let collected = collect_owned_scripted_stream(
+        run_loop_stream(
+            model.clone(),
+            Some(hook.clone()),
+            TaggedMessage::unassociated(Message::user(case.head.clone())),
+            if first_turn_compaction {
+                // A large session: the history alone exceeds the threshold.
+                vec![
+                    TaggedMessage::unassociated(Message::user("x".repeat(8_000))),
+                    TaggedMessage::unassociated(Message::assistant("noted")),
+                ]
+            } else {
+                Vec::new()
+            },
+            Arc::new(Vec::new()),
+            config,
+        ),
+        &hook,
+        &writer,
+        &mut lifecycle,
+        gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
+    )
+    .await;
+    assert_eq!(collected.error, None, "{}", case.name);
+
+    let expected_input = case.provider_input.iter().cloned().map(Message::user).collect::<Vec<_>>();
+    let histories = model.seen_histories().await;
+    assert_eq!(histories.len(), 1, "{}: one inference answers every message", case.name);
+    if first_turn_compaction {
+        let saw = compactor_saw.lock().unwrap().clone();
+        assert!(saw.ends_with(&expected_input), "{}: compaction input", case.name);
+        assert_eq!(
+            *published_before_reduction.lock().unwrap(),
+            case.authored.len(),
+            "{}: the admitted input is accepted before any reduction",
+            case.name
+        );
+        assert_eq!(histories[0].last(), Some(&Message::user("compacted prompt")));
+    } else {
+        assert!(histories[0].ends_with(&expected_input), "{}: provider order", case.name);
+    }
+
+    let scoped_doc_id = crate::graphql::escape_graphql_string(&head.doc_id);
+    let observed = node
+        .execute(&format!(
+            r#"{{ AgentMessage(filter: {{ request_doc_id: {{ _eq: "{scoped_doc_id}" }}, role: {{ _eq: "user" }} }}, order: {{ sequence: ASC }}) {{ _docID message_key }} }}"#
+        ))
+        .await;
+    assert!(!observed.has_errors(), "{:?}", observed.errors);
+    let observed = observed.data.unwrap();
+    let headers = observed["AgentMessage"].as_array().unwrap();
+    assert_eq!(headers.len(), case.authored.len(), "{}: authored entries", case.name);
+    for (header, authored) in headers.iter().zip(&case.authored) {
+        assert_eq!(
+            header["message_key"],
+            crate::session::canonical_rows::authored_message_key(
+                &head.doc_id,
+                &generated_authored_key(&authored.key, &docs)
+            ),
+            "{}",
+            case.name
+        );
+        let (_, native) = crate::session::load_canonical_message_from_node(
+            &node,
+            header["_docID"].as_str().unwrap(),
+            &head.agent_did,
+            head.requester_did.as_deref(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(native, Message::user(authored.content.clone()), "{}", case.name);
+    }
+    for doc in docs.values() {
+        let response = crate::graphql::graphql_with_transaction_retry(
+            &node,
+            &format!(
+                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state superseded_by_request_doc_id }} }}"#,
+                crate::graphql::escape_graphql_string(doc)
+            ),
+            "folded request",
+        )
+        .await
+        .unwrap();
+        let row = &response.data.unwrap()["AgentRequest"][0];
+        assert_eq!(row["lifecycle_state"], "superseded", "{}", case.name);
+        assert_eq!(row["superseded_by_request_doc_id"], head.doc_id.as_str(), "{}", case.name);
+    }
+
+    // A redrive of the same request rebuilds its input: every authored
+    // input of the request leaves its provider history.
+    let history = crate::session::load_sequenced_history_for_request(
+        &node,
+        lifecycle.request(),
+        None,
+        None,
+        gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
+    )
+    .await
+    .unwrap();
+    assert!(history
+        .iter()
+        .all(|row| !matches!(&row.message, Message::User { .. })));
+}
+
+/// Lean `SessionQueue.TurnInput.providerInput_eq_authored`: each generated
+/// turn publishes its authored entries before the first inference and sends
+/// them in that order as distinct user messages.
+#[tokio::test]
+async fn folded_prompts_publish_and_send_in_queue_order() {
+    let cases = crate::lean_vocab_test::lean_fold_turn_input_cases();
+    assert!(!cases.is_empty());
+    for case in cases {
+        drive_generated_turn_input(case, false).await;
+    }
+}
+
+/// First-turn compaction reduces the provider projection but never the
+/// admitted input the turn publishes.
+#[tokio::test]
+async fn first_turn_compaction_keeps_folded_authored_input() {
+    for case in crate::lean_vocab_test::lean_fold_turn_input_cases() {
+        drive_generated_turn_input(case, true).await;
+    }
+}

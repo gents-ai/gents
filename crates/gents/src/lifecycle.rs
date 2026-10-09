@@ -61,6 +61,7 @@ pub(crate) use materialize::{
     write_trigger_delivery, SessionMessageCause, SessionMessageTarget,
 };
 pub use queue::enqueue_local_steering_request;
+pub use queue::FOLDED_REASON;
 pub(crate) use task_title::task_goal_session_title;
 pub use task_title::task_session_title;
 
@@ -127,6 +128,18 @@ pub fn request_content_owns_user_projection(
             queue::QueueSource::User | queue::QueueSource::Steering
         )
     })
+}
+
+/// The logical request a message was folded into, when its claim answered it
+/// (Lean `SessionQueue.claimFolding`). Its content is presented by that
+/// request's authored transcript entry, not by its own row.
+pub fn folded_into(row: &gents_protocol::row::AgentRequestRow) -> Option<&str> {
+    (row.lifecycle_state
+        == Some(gents_protocol::request_lifecycle::RequestLifecycleState::Superseded)
+        && row.failure_reason.as_deref() == Some(queue::FOLDED_REASON))
+    .then_some(row.superseded_by_request.as_deref())
+    .flatten()
+    .filter(|head| !head.trim().is_empty())
 }
 
 /// Whether the request represents a logical user turn.
@@ -428,9 +441,29 @@ pub struct RequestLifecycle {
     execution_lease: Option<RequestExecutionLease>,
     execution_lease_duration_secs: u64,
     renewal_task: Option<execution_renewal::RenewalTask>,
+    fold_admitted: Vec<String>,
+    folded_selection: Vec<queue::FoldedInput>,
 }
 
 impl RequestLifecycle {
+    /// Pending requests whose signed admission the caller verified for this
+    /// claim. The claim selects the contiguous run of them directly behind
+    /// it (Lean `SessionQueue.claimFolding`); empty claims only this request.
+    pub(crate) fn set_fold_admitted(&mut self, admitted: Vec<String>) {
+        assert_eq!(
+            self.state,
+            LocalLifecycleState::Pending,
+            "verify folded admissions before claim"
+        );
+        self.fold_admitted = admitted;
+    }
+
+    /// The still-queued messages this claim selected to answer, in queue
+    /// order. The turn consumes each when it publishes it.
+    pub(crate) fn folded_selection(&self) -> &[queue::FoldedInput] {
+        &self.folded_selection
+    }
+
     /// Configuration supplied by the runtime, never by request input. Only the
     /// first claim pins it; resumed physical requests retain their durable limit.
     pub(crate) fn set_configured_max_total_tokens(&mut self, limit: Option<u64>) {

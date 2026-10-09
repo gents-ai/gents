@@ -2,6 +2,7 @@
 
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 #[cfg(test)]
 use serde::Deserialize;
@@ -18,6 +19,7 @@ mod atomic_inputs;
 mod coalescing;
 mod draining;
 mod enqueue;
+mod folding;
 mod goal_continuation;
 mod input;
 mod mutation;
@@ -41,6 +43,11 @@ pub(crate) use draining::drain_automated_wakeups_in_txn;
 pub use enqueue::enqueue_local_steering_request;
 #[cfg(test)]
 pub(crate) use enqueue::enqueue_steering_request;
+pub use folding::FOLDED_REASON;
+pub(crate) use folding::{
+    consume_folded_in_txn, ensure_folded_consumed_in_txn, fold_candidates, folded_input_key,
+    load_consumed_folded_inputs, select_fold_in_claim_txn, FoldedConsumption, FoldedInput,
+};
 pub use gents_protocol::request_input::{
     GoalContinuationInput, QueuePolicy, QueueSource, RequestInput, RequestQueue,
 };

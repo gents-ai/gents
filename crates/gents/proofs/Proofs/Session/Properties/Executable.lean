@@ -13,7 +13,7 @@ theorem step?_sound
         entry.policy = .append ∧
           entry.appendWellFormed ∧
           RequestIdFresh pre entry ∧
-          canAppendAfter pre.pending entry = true
+          canAppendAfter (pre.folding ++ pre.pending) entry = true
       · simp [step?, h_guard] at h_step
         cases h_step
         exact Transition.append_pending h_guard.1 h_guard.2.1 h_guard.2.2.1 h_guard.2.2.2 rfl
@@ -24,16 +24,16 @@ theorem step?_sound
           simp [step?, h_key] at h_step
       | some key =>
           by_cases h_guard : entry.coalesceWellFormed key
-          · by_cases h_contains : containsCoalescedQueueKey pre.pending entry.source key = true
+          · by_cases h_contains : containsCoalescedQueueKey (pre.folding ++ pre.pending) entry.source key = true
             · simp [step?, h_key, h_guard, h_contains] at h_step
               cases h_step
               exact Transition.coalesce_pending_existing h_guard h_contains rfl
-            · have h_missing : containsCoalescedQueueKey pre.pending entry.source key = false := by
-                cases h_value : containsCoalescedQueueKey pre.pending entry.source key
+            · have h_missing : containsCoalescedQueueKey (pre.folding ++ pre.pending) entry.source key = false := by
+                cases h_value : containsCoalescedQueueKey (pre.folding ++ pre.pending) entry.source key
                 · rfl
                 · exact absurd h_value h_contains
               by_cases h_fresh_after :
-                RequestIdFresh pre entry ∧ canAppendAfter pre.pending entry = true
+                RequestIdFresh pre entry ∧ canAppendAfter (pre.folding ++ pre.pending) entry = true
               · simp [step?, h_key, h_guard, h_contains, h_fresh_after] at h_step
                 cases h_step
                 exact Transition.coalesce_pending_new h_guard h_fresh_after.1 h_missing h_fresh_after.2 rfl
@@ -51,6 +51,30 @@ theorem step?_sound
               exact Transition.claim_next h_active h_pending rfl
       | some requestId =>
           simp [step?, h_active] at h_step
+  | claimFolding admitted =>
+      cases h_active : pre.active with
+      | none =>
+          cases h_pending : pre.pending with
+          | nil =>
+              simp [step?, h_active, h_pending] at h_step
+          | cons entry rest =>
+              simp [step?, h_active, h_pending] at h_step
+              cases h_step
+              exact Transition.claim_folding h_active h_pending rfl
+      | some requestId =>
+          simp [step?, h_active] at h_step
+  | consumeFolded =>
+      cases h_active : pre.active with
+      | none =>
+          simp [step?, h_active] at h_step
+      | some requestId =>
+          cases h_folding : pre.folding with
+          | nil =>
+              simp [step?, h_active, h_folding] at h_step
+          | cons entry rest =>
+              simp [step?, h_active, h_folding] at h_step
+              cases h_step
+              exact Transition.consume_folded (by simp [h_active]) h_folding rfl
   | finishActive =>
       cases h_active : pre.active with
       | none =>
@@ -90,6 +114,13 @@ theorem transition_complete
         simp [step?, h_key, h_well_formed, h_contains, h_post]⟩
   | Transition.claim_next h_active h_pending h_post =>
       exact ⟨.claimNext, by simp [step?, h_active, h_pending, h_post]⟩
+  | Transition.claim_folding (admitted := admitted) h_active h_pending h_post =>
+      exact ⟨.claimFolding admitted, by simp [step?, h_active, h_pending, h_post]⟩
+  | Transition.consume_folded h_active h_folding h_post =>
+      exact ⟨.consumeFolded, by
+        cases h_some : pre.active with
+        | none => simp [h_some] at h_active
+        | some requestId => simp [step?, h_some, h_folding, h_post]⟩
   | Transition.finish_active h_active h_post =>
       exact ⟨.finishActive, by simp [step?, h_active, h_post]⟩
   | Transition.drain_automated (source := source) (queueKey := queueKey) h_source h_post =>

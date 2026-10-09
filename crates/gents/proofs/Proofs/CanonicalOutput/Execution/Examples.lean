@@ -433,4 +433,23 @@ theorem exact_duplicate_terminal_envelopes_are_idempotent :
     terminalSelectionValid duplicateHeaderOnlyWorld (.message 200) = true := by
   native_decide
 
+/-- Generation 7 publishes its authored input, then its lease expires and the
+same physical request is reclaimed as generation 8. -/
+def reclaimedAfterAuthored : Option World := do
+  let published ← (publishAuthored (world 5) 7 authored authoredMessage).toOption
+  let expired := { published with lease := { published.lease with now := 20 } }
+  (recoverExpiredBatch expired 7 8 5 30 []).toOption
+
+theorem reclaimed_generation_reuses_accepted_authored_input :
+    (match reclaimedAfterAuthored with
+      | some reclaimed =>
+          (match reuseAuthored reclaimed 8 authored authoredMessage with
+            | .ok after => after == reclaimed
+            | .error _ => false) &&
+          !succeeds (reuseAuthored reclaimed 7 authored authoredMessage) &&
+          !succeeds (publishAuthored reclaimed 7 { authored with id := 310 }
+            { authoredMessage with header := { authoredMessage.header with id := 311 } })
+      | none => false) = true := by
+  native_decide
+
 end CanonicalOutput.Execution.Examples

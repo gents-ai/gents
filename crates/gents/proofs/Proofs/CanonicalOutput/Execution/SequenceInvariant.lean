@@ -435,8 +435,13 @@ theorem Gate.evaluate_preserves_sequenceBound
       exact acceptAndPublish_preserves_sequenceBound before after generation closing message
         admissions hbound (mapError_success Error.execution _ _ h)
   | authored generation closing message =>
-      exact publishAuthored_preserves_sequenceBound before after generation closing message hbound
-        (mapError_success Error.execution _ _ h)
+      rcases publishAuthoredComposed_success before after generation closing message
+        (mapError_success Error.execution _ _ h) with rfl | ⟨published, hp, rfl | ⟨_, rfl⟩⟩
+      · exact hbound
+      · exact publishAuthored_preserves_sequenceBound before _ generation closing message
+          hbound hp
+      · exact publishAuthored_preserves_sequenceBound before published generation closing
+          message hbound hp
   | headerOnly generation message admissions =>
       exact publishHeaderOnly_preserves_sequenceBound before after generation message admissions
         hbound (mapError_success Error.execution _ _ h)

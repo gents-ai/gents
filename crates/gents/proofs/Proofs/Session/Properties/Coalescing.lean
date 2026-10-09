@@ -1,4 +1,4 @@
-import Proofs.Session.Properties.Drain
+import Proofs.Session.Properties.Ordering
 
 namespace SessionQueue
 
@@ -101,6 +101,18 @@ theorem uniqueCoalescedQueueKeys_tail
     UniqueCoalescedQueueKeys rest := by
   simpa [UniqueCoalescedQueueKeys] using h_unique.2
 
+theorem uniqueCoalescedQueueKeys_drop
+    {entries : List QueueEntry} (count : Nat)
+    (h_unique : UniqueCoalescedQueueKeys entries) :
+    UniqueCoalescedQueueKeys (entries.drop count) := by
+  induction entries generalizing count with
+  | nil => simpa using h_unique
+  | cons head tail ih =>
+      cases count with
+      | zero => simpa using h_unique
+      | succ count =>
+          simpa using ih count (uniqueCoalescedQueueKeys_tail h_unique)
+
 theorem pendingAfterDrain_preserves_uniqueCoalescedQueueKeys
     {source : QueueSource}
     {queueKey : Option QueueKey}
@@ -142,39 +154,66 @@ theorem pendingAfterDrainMatching_preserves_uniqueCoalescedQueueKeys
             (pendingAfterDrainMatching_mem_original h_other)
         · exact ih h_unique.2
 
+theorem uniqueCoalescedQueueKeys_sublist
+    {entries smaller : List QueueEntry}
+    (h_sub : smaller.Sublist entries)
+    (h_unique : UniqueCoalescedQueueKeys entries) :
+    UniqueCoalescedQueueKeys smaller := by
+  induction h_sub with
+  | slnil => exact h_unique
+  | cons head _ ih => exact ih (uniqueCoalescedQueueKeys_tail h_unique)
+  | cons₂ head h_rest ih =>
+      simp only [UniqueCoalescedQueueKeys] at h_unique ⊢
+      exact ⟨fun source key h_source h_policy h_key other h_mem =>
+        h_unique.1 source key h_source h_policy h_key other (h_rest.subset h_mem),
+        ih h_unique.2⟩
+
 theorem transition_preserves_uniqueCoalescedQueueKeys
     {pre post : SessionQueueState}
     (h_trans : Transition pre post)
-    (h_unique : UniqueCoalescedQueueKeys pre.pending) :
-    UniqueCoalescedQueueKeys post.pending := by
+    (h_unique : UniqueCoalescedQueueKeys (pre.folding ++ pre.pending)) :
+    UniqueCoalescedQueueKeys (post.folding ++ post.pending) := by
   cases h_trans with
   | append_pending h_policy _ _ _ h_post =>
-      rw [h_post, SessionQueueState.appendPending]
+      rw [h_post, SessionQueueState.appendPending, ← List.append_assoc]
       exact uniqueCoalescedQueueKeys_append_append h_unique h_policy
   | coalesce_pending_new h_well_formed _ h_missing _ h_post =>
-      rw [h_post, SessionQueueState.appendPending]
+      rw [h_post, SessionQueueState.appendPending, ← List.append_assoc]
       exact uniqueCoalescedQueueKeys_append_fresh h_unique h_well_formed.2.2 h_missing
   | coalesce_pending_existing _ _ h_post =>
       simpa [h_post] using h_unique
   | claim_next _ h_pending h_post =>
       rw [h_pending] at h_unique
       rw [h_post, SessionQueueState.claimHead]
+      exact uniqueCoalescedQueueKeys_sublist
+        (List.Sublist.append_left ((List.sublist_cons_self _ _)) _) h_unique
+  | claim_folding _ h_pending h_post =>
+      rw [h_pending] at h_unique
+      rw [h_post, SessionQueueState.claimFolding]
+      simp only [foldRun_append_drop]
+      exact uniqueCoalescedQueueKeys_sublist
+        ((List.sublist_cons_self _ _).trans (List.sublist_append_right _ _)) h_unique
+  | consume_folded _ h_folding h_post =>
+      rw [h_folding] at h_unique
+      rw [h_post, SessionQueueState.consumeFolded]
       exact uniqueCoalescedQueueKeys_tail h_unique
   | finish_active _ h_post =>
       rw [h_post, SessionQueueState.finishActive]
-      exact h_unique
+      simpa using h_unique
   | drain_automated _ h_post =>
       rw [h_post, SessionQueueState.drainAutomatedWakeups]
-      exact pendingAfterDrain_preserves_uniqueCoalescedQueueKeys h_unique
+      exact uniqueCoalescedQueueKeys_sublist
+        (List.Sublist.append_left (pendingAfterDrainMatching_sublist _ _ _ _) _) h_unique
   | drain_observed_automated _ h_post =>
       rw [h_post, SessionQueueState.drainObservedAutomatedWakeups]
-      exact pendingAfterDrainMatching_preserves_uniqueCoalescedQueueKeys h_unique
+      exact uniqueCoalescedQueueKeys_sublist
+        (List.Sublist.append_left (pendingAfterDrainMatching_sublist _ _ _ _) _) h_unique
 
 theorem trace_preserves_uniqueCoalescedQueueKeys
     {pre post : SessionQueueState}
     (h_trace : Trace pre post)
-    (h_unique : UniqueCoalescedQueueKeys pre.pending) :
-    UniqueCoalescedQueueKeys post.pending := by
+    (h_unique : UniqueCoalescedQueueKeys (pre.folding ++ pre.pending)) :
+    UniqueCoalescedQueueKeys (post.folding ++ post.pending) := by
   induction h_trace with
   | refl =>
       exact h_unique
@@ -184,7 +223,7 @@ theorem trace_preserves_uniqueCoalescedQueueKeys
 /-- Goal continuations share queue coalescing, but never collide with a
 background-completion key or participate in its notification drain. -/
 theorem goal_queue_is_separate_from_background :
-    let entry : QueueEntry := ⟨1, 0, .goal, .coalesce, some 7, none, .scheduled⟩
+    let entry : QueueEntry := ⟨1, 0, .goal, .coalesce, some 7, none, .scheduled, none, 0⟩
     entry.coalesceWellFormed 7 ∧
     containsCoalescedQueueKey [entry] .goal 7 = true ∧
     containsCoalescedQueueKey [entry] .backgroundCompletion 7 = false ∧

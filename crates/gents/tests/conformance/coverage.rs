@@ -1048,6 +1048,33 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "RecoverySweepCases".to_string(),
         ));
     }
+    if !snapshot.fold_queue_cases.is_empty() {
+        emitted.insert(("fold_queue_cases".to_string(), "FoldQueueCases".to_string()));
+    }
+    if !snapshot.fold_turn_input_cases.is_empty() {
+        emitted.insert((
+            "fold_turn_input_cases".to_string(),
+            "FoldTurnInputCases".to_string(),
+        ));
+    }
+    if !snapshot.retry_selection_cases.is_empty() {
+        emitted.insert((
+            "retry_selection_cases".to_string(),
+            "RetrySelectionCases".to_string(),
+        ));
+    }
+    if !snapshot.fold_publication_cases.is_empty() {
+        emitted.insert((
+            "fold_publication_cases".to_string(),
+            "FoldPublicationCases".to_string(),
+        ));
+    }
+    if !snapshot.handover_fold_cases.is_empty() {
+        emitted.insert((
+            "handover_fold_cases".to_string(),
+            "HandoverFoldCases".to_string(),
+        ));
+    }
     if !snapshot.interrupt_queue_cases.is_empty() {
         for domain in ["InterruptQueueCases", "InterruptQueueHttpOverlapCases"] {
             emitted.insert(("interrupt_queue_cases".to_string(), domain.to_string()));

@@ -156,7 +156,7 @@ theorem successful_commit_is_actual_gate_commit
   | none => simp [hg] at h
   | some gate =>
       have hretry := (CanonicalOutput.Execution.Gate.commit_preserves_composed_control
-        before gate actor now (gateOperation operation) hg).2.2
+        before gate actor now (gateOperation operation) hg).2.2.2.2
       simp [hg] at h
       cases h
       congr 1

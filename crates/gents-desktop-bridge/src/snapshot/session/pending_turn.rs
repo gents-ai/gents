@@ -58,7 +58,9 @@ pub(super) fn build_pending_turn(
             && agent_did.is_none_or(|agent_did| request_matches_agent(row, agent_did))
     })?;
     let request_input = request.input.clone().unwrap_or_default();
-    if !gents::lifecycle::request_content_owns_user_projection(&request_input) {
+    if !gents::lifecycle::request_content_owns_user_projection(&request_input)
+        || gents::lifecycle::folded_into(request).is_some()
+    {
         return None;
     }
 

@@ -266,7 +266,11 @@ where
                 self.stream_writer.reset_tail(self.doc_id).await?;
                 Ok(StreamAction::Continue)
             }
-            Ok(LoopStreamItem::AuthoredInputReady { context, prompt }) => {
+            Ok(LoopStreamItem::AuthoredInputReady {
+                context,
+                prompt,
+                folded,
+            }) => {
                 if let Some(context) = context.as_ref() {
                     self.stream_writer
                         .publish_authored_message(self.lifecycle, "context", context)
@@ -275,6 +279,11 @@ where
                 self.stream_writer
                     .publish_authored_message(self.lifecycle, "prompt", &prompt)
                     .await?;
+                for (key, message) in &folded {
+                    self.stream_writer
+                        .publish_authored_message(self.lifecycle, key, message)
+                        .await?;
+                }
                 Ok(StreamAction::Continue)
             }
             Ok(LoopStreamItem::OutputObligationPending { reminder }) => {
