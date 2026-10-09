@@ -1,5 +1,5 @@
 //! Contract-section deserialization targets shared by the trigger, apply
-//! publication, runtime-reconcile, client-behavior-readiness, and
+//! publication, runtime-reconcile, client-agent-readiness, and
 //! startup-readiness conformance consumers. Every struct mirrors the JSON
 //! emitted by the Lean owners:
 //!
@@ -47,7 +47,7 @@ pub(crate) struct LeanTriggerDispatchCase {
 /// The shared trigger/callback key, including its owner and config identity.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanEventGroupKeyContract {
-    pub(crate) agent_did: String,
+    pub(crate) node_did: String,
     pub(crate) consumer: serde_json::Value,
     pub(crate) consumer_config_key: String,
     pub(crate) correlation: String,
@@ -70,9 +70,9 @@ pub(crate) struct LeanEventGroupCase {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct LeanRuntimeReconcileCase {
-    pub(crate) requested_behavior: Option<usize>,
-    pub(crate) pre_default_behavior: usize,
-    pub(crate) pre_session_behavior: Option<usize>,
+    pub(crate) requested_agent: Option<usize>,
+    pub(crate) pre_default_agent: usize,
+    pub(crate) pre_session_agent: Option<usize>,
     pub(crate) pre_runnable: Vec<usize>,
     pub(crate) name: String,
     pub(crate) action: String,
@@ -93,12 +93,12 @@ pub(crate) struct LeanRuntimeReconcileCase {
     pub(crate) tracked_session_id: usize,
     pub(crate) tracked_request_generation: usize,
     pub(crate) tracked_request_session: usize,
-    pub(crate) tracked_request_behavior: usize,
-    pub(crate) tracked_session_behavior: usize,
+    pub(crate) tracked_request_agent: usize,
+    pub(crate) tracked_session_agent: usize,
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct LeanClientBehaviorReadinessCase {
+pub(crate) struct LeanClientAgentReadinessCase {
     pub(crate) name: String,
     pub(crate) observation_present: bool,
     pub(crate) observation_kind: String,
@@ -117,12 +117,12 @@ pub(crate) struct LeanClientBehaviorReadinessCase {
 /// A document key (`{collection, id}`) as referenced inside publication rows.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanApplyDocRef {
-    pub(crate) agent_did: String,
+    pub(crate) node_did: String,
     pub(crate) collection: String,
     pub(crate) id: String,
 }
 
-/// A desired-state row of a publication candidate: its key, owning agent DID,
+/// A desired-state row of a publication candidate: its key, owning node DID,
 /// content, and the references that must close inside the candidate.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanApplyDesiredRow {

@@ -39,15 +39,15 @@ pub(crate) struct LeanCodexShimThreadStatusCase {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct LeanCodexShimBehaviorSelectionCase {
+pub(crate) struct LeanCodexShimAgentSelectionCase {
     pub(crate) witness: String,
     pub(crate) lean_theorems: Vec<String>,
-    pub(crate) root_behavior_id: String,
-    pub(crate) thread_behavior_id: Option<String>,
-    pub(crate) projected_behavior_id: String,
+    pub(crate) root_agent_id: String,
+    pub(crate) thread_agent_id: Option<String>,
+    pub(crate) projected_agent_id: String,
     pub(crate) selected_owner: String,
     pub(crate) actual_owner: String,
-    pub(crate) actual_behavior: String,
+    pub(crate) actual_agent: String,
     pub(crate) resolved_model: Option<String>,
     pub(crate) projected_model: Option<String>,
 }
@@ -119,7 +119,7 @@ pub(crate) struct LeanCodexShimBindingCase {
     pub(crate) lean_theorems: Vec<String>,
     pub(crate) pre_state: String,
     pub(crate) unbound_reason: Option<String>,
-    pub(crate) bound_behavior_runnable: bool,
+    pub(crate) bound_agent_runnable: bool,
     pub(crate) host_can_listen: bool,
     pub(crate) post_state: String,
     pub(crate) post_unbound_reason: Option<String>,

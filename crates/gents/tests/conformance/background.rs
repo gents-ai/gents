@@ -41,7 +41,7 @@ pub(super) async fn generated_r6_backgrounding_case_metadata_matches_export() {
             "restart_before_claim_preserves_pending_notification",
             "live_inference_retains_snapshot_without_ack_or_redrive",
             "acknowledgement_projection_restart_is_atomic",
-            "noncanonical_subagent_completion_source_is_rejected",
+            "noncanonical_completion_source_is_rejected",
             "list_processes_same_requester_next_turn_authorized",
             "read_process_same_requester_next_turn_authorized",
             "wait_process_same_requester_next_turn_authorized",
@@ -130,11 +130,10 @@ pub(super) async fn generated_r6_backgrounding_case_metadata_matches_export() {
         Some("background_completion:900")
     );
 
-    let noncanonical =
-        lean_r6_backgrounding_case("noncanonical_subagent_completion_source_is_rejected");
+    let noncanonical = lean_r6_backgrounding_case("noncanonical_completion_source_is_rejected");
     assert_eq!(
         noncanonical.queue_source.as_deref(),
-        Some("subagent_completion")
+        Some("unrecognized_completion_source")
     );
     assert_eq!(noncanonical.queue_key, None);
 
@@ -250,7 +249,7 @@ pub(super) async fn generated_r6_backgrounding_case_metadata_matches_export() {
                     && case.action == action
                     && case.reason.as_deref() == Some("same_requester_next_turn")
             })
-            .unwrap_or_else(|| panic!("missing same-principal process control case for {action}"));
+            .unwrap_or_else(|| panic!("missing same-requester process control case for {action}"));
         assert!(case.legal, "{} must remain authorized", case.name);
     }
 

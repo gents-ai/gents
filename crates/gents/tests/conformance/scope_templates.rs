@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use gents::agent::p2p_reconcile::templates::{
     admit_app_collections, builtin_templates, equality_filter, filter_conditions, resolve_template,
     scope_filter, single_string_eq, Delivery, FilterPredicate, Scope, ScopeTemplate,
-    AGENT_DIRECTORY_COLLECTION,
+    NODE_DIRECTORY_COLLECTION,
 };
 use gents::agent::p2p_reconcile::{
     client_route_collections, resolve_template_filters, PairingDirection, CLIENT_COLLECTIONS,
@@ -146,8 +146,8 @@ fn resolve_template_is_total_over_catalog_and_id_faithful() {
             "client",
             "agent-config",
             "backup",
-            "subagent-coordinator",
-            "subagent-host",
+            "agent-target-caller",
+            "agent-target-host",
             "app-collections",
             "client-index",
         ],
@@ -185,11 +185,11 @@ fn client_route_is_directional_destination_scoped_and_control_plane_bounded() {
         .collect::<Vec<_>>();
     let client_to_runtime = client_to_runtime.as_slice();
     const RETURN_CONTROL_PLANE: &[&str] = &[
-        "AgentBehavior",
+        "Agent",
         "AgentContext",
         "CompactionConfig",
         "Tools",
-        "SubagentTarget",
+        "AgentTarget",
         "InferenceProfile",
         "InferenceSampling",
         "InferenceExecution",
@@ -204,7 +204,7 @@ fn client_route_is_directional_destination_scoped_and_control_plane_bounded() {
         "Trigger",
         "EventSource",
     ];
-    const OWNER_PROJECTION: &[&str] = &["AgentBehaviorReadiness"];
+    const OWNER_PROJECTION: &[&str] = &["NodeReadiness"];
     let runtime_to_client = client_to_runtime
         .iter()
         .copied()
@@ -254,7 +254,7 @@ fn client_route_is_directional_destination_scoped_and_control_plane_bounded() {
     for collection in transcript {
         assert_and_eq_filter(
             outbound.get(*collection).expect("transcript filter"),
-            &[("requester_did", requester), ("agent_did", owner)],
+            &[("requester_did", requester), ("node_did", owner)],
         );
         let encoded = serde_json::to_string(outbound.get(*collection).unwrap()).unwrap();
         assert!(
@@ -262,46 +262,6 @@ fn client_route_is_directional_destination_scoped_and_control_plane_bounded() {
             "{collection} must not admit the non-owning destination"
         );
     }
-    assert_and_eq_filter(
-        outbound
-            .get("PersonaConfigRequest")
-            .expect("persona request filter"),
-        &[("requester_did", requester), ("agent_did", owner)],
-    );
-    let other_requester = resolve_template_filters(
-        template,
-        PairingDirection::ClientToRuntime,
-        non_owner,
-        owner,
-    );
-    let other_destination = resolve_template_filters(
-        template,
-        PairingDirection::ClientToRuntime,
-        requester,
-        non_owner,
-    );
-    assert_and_eq_filter(
-        other_requester
-            .get("PersonaConfigRequest")
-            .expect("other requester persona filter"),
-        &[("requester_did", non_owner), ("agent_did", owner)],
-    );
-    assert_and_eq_filter(
-        other_destination
-            .get("PersonaConfigRequest")
-            .expect("other destination persona filter"),
-        &[("requester_did", requester), ("agent_did", non_owner)],
-    );
-    assert_ne!(
-        outbound.get("PersonaConfigRequest"),
-        other_requester.get("PersonaConfigRequest"),
-        "a different requester must not share the enrolled persona-request route"
-    );
-    assert_ne!(
-        outbound.get("PersonaConfigRequest"),
-        other_destination.get("PersonaConfigRequest"),
-        "a different destination agent must not share the enrolled persona-request route"
-    );
     assert_eq_filter(
         outbound
             .get("PeerEndpoint")
@@ -313,7 +273,7 @@ fn client_route_is_directional_destination_scoped_and_control_plane_bounded() {
         outbound
             .get("SessionHydrationRequest")
             .expect("hydration request filter"),
-        &[("requester_did", requester), ("agent_did", owner)],
+        &[("requester_did", requester), ("node_did", owner)],
     );
     for collection in RETURN_CONTROL_PLANE {
         assert!(!outbound.contains_key(*collection));
@@ -346,12 +306,12 @@ fn client_route_is_directional_destination_scoped_and_control_plane_bounded() {
     }
     assert_eq_filter(
         returning
-            .get("AgentBehaviorReadiness")
+            .get("NodeReadiness")
             .expect("readiness owner filter"),
-        "agent_did",
+        "node_did",
         owner,
     );
-    assert!(!outbound.contains_key("AgentBehaviorReadiness"));
+    assert!(!outbound.contains_key("NodeReadiness"));
     for excluded in gents_protocol::schemas::CREDENTIAL_COLLECTION_NAMES
         .iter()
         .chain(&["PeerPairingDesired", "DataPlanePairingDesired"])
@@ -390,11 +350,11 @@ fn conversation_scope_filters_transcript_and_grants_unfiltered_config() {
         assert_eq_filter(pred, "requester_did", "did:key:bob");
     }
     for col in [
-        "AgentBehavior",
+        "Agent",
         "AgentContext",
         "CompactionConfig",
         "Tools",
-        "SubagentTarget",
+        "AgentTarget",
         "InferenceProfile",
         "InferenceSampling",
         "InferenceExecution",
@@ -454,7 +414,7 @@ fn client_index_scope_is_exactly_the_requester_scoped_literal_index() {
 }
 
 #[test]
-fn machine_scope_covers_conversation_and_home_owned_directory() {
+fn machine_filters_transcript_and_directory() {
     let template = resolve_template("machine").expect("machine in catalog");
     let filters = scope_filter(
         &template.scope,
@@ -470,7 +430,7 @@ fn machine_scope_covers_conversation_and_home_owned_directory() {
         assert_eq_filter(predicate, "requester_did", "did:key:phone");
     }
     assert_eq!(
-        filters.get(AGENT_DIRECTORY_COLLECTION),
+        filters.get(NODE_DIRECTORY_COLLECTION),
         Some(&equality_filter("source_did", "did:key:issuer"))
     );
 }
@@ -488,28 +448,28 @@ fn unscoped_scope_resolves_to_no_filter() {
 }
 
 #[test]
-fn subagent_templates_resolve_to_exact_directional_filters() {
+fn agent_target_templates_resolve_to_exact_directional_filters() {
     let caller = "did:key:coord";
     let host_did = "did:key:host";
     for (template_id, collections_def, rules_def, peer_did, local_did) in [
         (
-            "subagent-coordinator",
-            "subagentCoordinatorCollections",
-            "subagentCoordinatorRules",
+            "agent-target-caller",
+            "agentTargetCallerCollections",
+            "agentTargetCallerRules",
             host_did,
             caller,
         ),
         (
-            "subagent-host",
-            "subagentHostCollections",
-            "subagentHostRules",
+            "agent-target-host",
+            "agentTargetHostCollections",
+            "agentTargetHostRules",
             caller,
             host_did,
         ),
     ] {
         let collections = lean_string_list(collections_def);
         let rules = lean_collection_rules(rules_def);
-        let template = resolve_template(template_id).expect("subagent template");
+        let template = resolve_template(template_id).expect("agent-target template");
         assert_eq!(template.delivery, Delivery::Push);
         assert_eq!(
             template.collections,
@@ -538,16 +498,16 @@ fn subagent_templates_resolve_to_exact_directional_filters() {
         assert!(!filter.contains_key("AgentToolCall"));
     }
 
-    let coordinator_rules = lean_collection_rules("subagentCoordinatorRules");
+    let coordinator_rules = lean_collection_rules("agentTargetCallerRules");
     assert_eq!(
         coordinator_rules
             .iter()
             .map(|(c, f, _)| (c.as_str(), f.as_str()))
             .collect::<Vec<_>>(),
-        [("AgentRequest", "agent_did")],
+        [("AgentRequest", "node_did")],
         "caller -> host carries exactly the Peer AgentRequest, scoped by its target"
     );
-    let host_rules = lean_collection_rules("subagentHostRules");
+    let host_rules = lean_collection_rules("agentTargetHostRules");
     assert!(
         host_rules
             .iter()
@@ -565,8 +525,8 @@ fn subagent_templates_resolve_to_exact_directional_filters() {
 }
 
 #[test]
-fn subagent_host_message_filter_excludes_unrelated_host_history() {
-    let host = resolve_template("subagent-host").expect("host template");
+fn agent_target_host_message_filter_excludes_unrelated_host_history() {
+    let host = resolve_template("agent-target-host").expect("host template");
     let filter = scope_filter(
         &host.scope,
         host.collections,
@@ -587,8 +547,8 @@ async fn sixteen_peer_request_wave_is_reduced_to_one_target() {
             .map(|(_, field, _)| field)
             .unwrap_or_else(|| panic!("Lean {rules_def} carries AgentRequest"))
     };
-    let target_field = request_field("subagentCoordinatorRules");
-    let requester_field = request_field("subagentHostRules");
+    let target_field = request_field("agentTargetCallerRules");
+    let requester_field = request_field("agentTargetHostRules");
     let caller = "did:key:coordinator-07";
     let target = "did:key:host-07";
 
@@ -605,7 +565,7 @@ async fn sixteen_peer_request_wave_is_reduced_to_one_target() {
     )
     .await;
 
-    let coordinator = resolve_template("subagent-coordinator").expect("coordinator template");
+    let coordinator = resolve_template("agent-target-caller").expect("coordinator template");
     let mut routed_to = Vec::new();
     for index in 0..16 {
         let host_did = format!("did:key:host-{index:02}");
@@ -615,7 +575,7 @@ async fn sixteen_peer_request_wave_is_reduced_to_one_target() {
     }
     assert_eq!(routed_to, [target]);
 
-    let host = resolve_template("subagent-host").expect("host template");
+    let host = resolve_template("agent-target-host").expect("host template");
     let mut returned_to = Vec::new();
     for index in 0..16 {
         let peer_did = format!("did:key:coordinator-{index:02}");
@@ -680,8 +640,8 @@ fn ordinary_routes_exclude_credentials_and_operator_selection_remains_explicit()
         "conversation",
         "machine",
         "client-index",
-        "subagent-host",
-        "subagent-coordinator",
+        "agent-target-host",
+        "agent-target-caller",
     ] {
         let template = resolve_template(id).expect("builtin route");
         for credential in gents_protocol::schemas::CREDENTIAL_COLLECTION_NAMES {

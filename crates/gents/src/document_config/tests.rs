@@ -1639,11 +1639,11 @@ fn behavior_and_context_share_canonical_reference_closure() {
 }
 
 #[test]
-fn default_behavior_publication_matches_lean() {
+fn default_agent_publication_matches_lean() {
     use crate::Collection;
     use serde_json::json;
     let snapshot = crate::lean_vocab_test::lean_contract_snapshot();
-    let cases = snapshot.configuration_scope_cases["default_behavior"]
+    let cases = snapshot.configuration_scope_cases["default_agent"]
         .as_array()
         .unwrap();
     assert_eq!(cases.len(), 8);
@@ -1652,25 +1652,25 @@ fn default_behavior_publication_matches_lean() {
         let documents = vec![
             (
                 Collection::InferenceBackend,
-                json!({"agent_did":scope,"backend_id":"backend","name":"Local","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}),
+                json!({"node_did":scope,"backend_id":"backend","name":"Local","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}),
             ),
             (
                 Collection::InferenceProfile,
-                json!({"agent_did":scope,"profile_id":"profile","backend_id":"backend","model_name":"model"}),
+                json!({"node_did":scope,"profile_id":"profile","backend_id":"backend","model_name":"model"}),
             ),
             (
                 Collection::AgentContext,
-                json!({"agent_did":scope,"context_id":"context"}),
+                json!({"node_did":scope,"context_id":"context"}),
             ),
             (
-                Collection::AgentBehavior,
-                json!({"agent_did":case["behavior_owner"],"behavior_id":case["behavior_id"],
+                Collection::Agent,
+                json!({"node_did":case["agent_owner"],"agent_id":case["agent_id"],
                     "context_id":case["context_id"],"inference_profile_id":"profile",
                     "enabled":case["enabled"]}),
             ),
             (
-                Collection::AgentPrincipal,
-                json!({"agent_did":scope,"default_behavior_id":case["default_behavior_id"]}),
+                Collection::Node,
+                json!({"node_did":scope,"default_agent_id":case["default_agent_id"]}),
             ),
         ];
         let accepted = ConfigReferences::from_documents(scope, documents)

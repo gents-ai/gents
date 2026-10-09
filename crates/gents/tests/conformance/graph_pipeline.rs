@@ -28,7 +28,7 @@ fn valid_fixture() -> (GraphIntent, Vec<StageCapability>) {
         required: false,
     };
     let intent = GraphIntent {
-        agent_did: CALLER_DID.to_owned(),
+        node_did: CALLER_DID.to_owned(),
         graph_id: "lean-validation-fixture".to_owned(),
         nodes: vec![GraphNode {
             session: None,
@@ -69,7 +69,7 @@ fn valid_fixture() -> (GraphIntent, Vec<StageCapability>) {
         tags: Vec::new(),
     };
     let capability = StageCapability {
-        agent_did: CALLER_DID.to_owned(),
+        node_did: CALLER_DID.to_owned(),
         capability_id: "approved-worker".to_owned(),
         revision: "v1".to_owned(),
         target: gents::graph_pipeline::StageTarget::Task {

@@ -138,7 +138,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) request_lifecycle_operator_ui_cases: Vec<LeanClientShellCase>,
     pub(crate) client_live_delta_cases: Vec<serde_json::Value>,
     pub(crate) runtime_reconcile_cases: Vec<LeanRuntimeReconcileCase>,
-    pub(crate) client_behavior_readiness_cases: Vec<LeanClientBehaviorReadinessCase>,
+    pub(crate) client_agent_readiness_cases: Vec<LeanClientAgentReadinessCase>,
     pub(crate) startup_readiness_cases: Vec<LeanStartupReadinessCase>,
     pub(crate) readiness_publication_cases: Vec<LeanReadinessPublicationCase>,
     pub(crate) apply_reconcile_cases: Vec<LeanApplyReconcileCase>,
@@ -154,6 +154,10 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) lsp_action_cases: Vec<LeanLspActionCase>,
     pub(crate) self_config_field_tables: Vec<LeanSelfConfigFieldTable>,
     pub(crate) self_config_cases: Vec<LeanSelfConfigCase>,
+    pub(crate) agent_decision_cases: Vec<LeanAgentDecisionCase>,
+    pub(crate) agent_materialization_cases: Vec<LeanAgentMaterializationCase>,
+    pub(crate) sibling_tools_cases: Vec<LeanSiblingToolsCase>,
+    pub(crate) self_config_selection_cases: LeanSelfConfigSelectionCases,
     pub(crate) session_recovery_cases: Vec<LeanSessionRecoveryCase>,
     pub(crate) inference_slot_accounting_cases: Vec<LeanInferenceSlotAccountingCase>,
     pub(crate) fleet_slot_accounting_cases: Vec<LeanFleetSlotAccountingCase>,
@@ -203,7 +207,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) codex_shim_projection_cases: Vec<LeanCodexShimProjectionCase>,
     pub(crate) codex_shim_reasoning_projection_cases: Vec<LeanCodexShimReasoningProjectionCase>,
     pub(crate) codex_shim_thread_status_cases: Vec<LeanCodexShimThreadStatusCase>,
-    pub(crate) codex_shim_behavior_selection_cases: Vec<LeanCodexShimBehaviorSelectionCase>,
+    pub(crate) codex_shim_agent_selection_cases: Vec<LeanCodexShimAgentSelectionCase>,
     pub(crate) codex_shim_tool_metadata_cases: Vec<LeanCodexShimToolMetadataCase>,
     pub(crate) codex_shim_context_usage_cases: Vec<LeanCodexShimContextUsageCase>,
     pub(crate) codex_shim_compaction_projection_cases: Vec<LeanCodexShimCompactionProjectionCase>,
@@ -302,9 +306,9 @@ pub(crate) struct LeanMailboxHandoffCase {
     pub(crate) request_id: u64,
     pub(crate) producer_request_id: u64,
     pub(crate) tool_request_id: u64,
-    pub(crate) producer_agent_did: String,
+    pub(crate) producer_node_did: String,
     pub(crate) producer_requester_did: String,
-    pub(crate) question_agent_did: String,
+    pub(crate) question_node_did: String,
     pub(crate) question_requester_did: String,
     pub(crate) session_id: String,
     pub(crate) request_doc_id: String,
@@ -332,7 +336,6 @@ pub(crate) struct LeanRootAdmissionCase {
     pub(crate) published: Vec<LeanCanonicalPath>,
     pub(crate) candidate: Option<LeanCanonicalPath>,
     pub(crate) expected: bool,
-    pub(crate) stored_requires_root: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -479,7 +482,7 @@ pub(crate) struct LeanWorkspaceBindingRef {
     pub(crate) workspace_id: String,
     pub(crate) request_id: String,
     pub(crate) authority: String,
-    pub(crate) agent_did: String,
+    pub(crate) node_did: String,
     pub(crate) seal_hash: Option<String>,
     pub(crate) state: String,
 }
@@ -490,12 +493,12 @@ pub(crate) struct LeanWorkspaceBindingCase {
     pub(crate) workspace_id: String,
     pub(crate) workspace_state: String,
     pub(crate) workspace_seal_hash: Option<String>,
-    pub(crate) owner_agent_did: String,
+    pub(crate) owner_node_did: String,
     pub(crate) creation_policy: String,
     pub(crate) existing: Vec<LeanWorkspaceBindingRef>,
     pub(crate) candidate: LeanWorkspaceBindingRef,
     pub(crate) git_metadata_write: bool,
-    pub(crate) behavior_command_mode: String,
+    pub(crate) agent_command_mode: String,
     pub(crate) legal: bool,
 }
 
@@ -504,7 +507,7 @@ pub(crate) struct LeanCallbackCase {
     pub(crate) journal_prefix_legal: bool,
     pub(crate) name: String,
     pub(crate) invocation_id: String,
-    pub(crate) owner_agent_did: String,
+    pub(crate) owner_node_did: String,
     pub(crate) state: String,
     pub(crate) journal: Vec<String>,
     pub(crate) result_emitted: bool,
@@ -696,7 +699,7 @@ pub(crate) struct LeanGoalCreateCase {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanTaskGoalPublicationCase {
     pub(crate) name: String,
-    pub(crate) agent_did: String,
+    pub(crate) node_did: String,
     pub(crate) task_id: String,
     pub(crate) fire_key: String,
     pub(crate) goal_objective: Option<String>,
@@ -714,14 +717,14 @@ pub(crate) struct LeanTaskGoalPublicationCase {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanTaskGoalRecoveryCase {
     pub(crate) name: String,
-    pub(crate) agent_did: String,
-    pub(crate) behavior_id: String,
+    pub(crate) node_did: String,
+    pub(crate) agent_id: String,
     pub(crate) task_id: String,
     pub(crate) fire_key: String,
     pub(crate) request_present: bool,
     pub(crate) request_binding_matches: bool,
-    pub(crate) observed_agent_did: Option<String>,
-    pub(crate) observed_behavior_id: Option<String>,
+    pub(crate) observed_node_did: Option<String>,
+    pub(crate) observed_agent_id: Option<String>,
     pub(crate) observed_session_id: Option<String>,
     pub(crate) observed_request_id: Option<String>,
     pub(crate) observed_retry_key: Option<String>,
@@ -759,7 +762,7 @@ pub(crate) struct LeanSessionHydrationDecisionCase {
     pub(crate) name: String,
     pub(crate) paired: bool,
     pub(crate) pairing_requester_matches: bool,
-    pub(crate) pairing_agent_matches: bool,
+    pub(crate) pairing_node_matches: bool,
     pub(crate) active_member: bool,
     pub(crate) membership_network_matches: bool,
     pub(crate) owns_session: bool,
@@ -818,7 +821,7 @@ pub(crate) struct LeanSessionHydrationAccess {
     pub(crate) state: String,
     pub(crate) peer: String,
     pub(crate) requester: String,
-    pub(crate) agent: String,
+    pub(crate) node: String,
     pub(crate) session: String,
     pub(crate) native_session: u64,
 }
@@ -828,7 +831,7 @@ pub(crate) struct LeanSessionHydrationRequest {
     pub(crate) key: String,
     pub(crate) peer: String,
     pub(crate) requester: String,
-    pub(crate) agent: String,
+    pub(crate) node: String,
     pub(crate) session: String,
     pub(crate) native_session: u64,
 }
@@ -873,9 +876,9 @@ pub(crate) struct LeanSessionHydrationApplyCase {
 pub(crate) struct LeanSessionHydrationProgressCase {
     pub(crate) name: String,
     pub(crate) prev_session: String,
-    pub(crate) prev_agent: String,
+    pub(crate) prev_node: String,
     pub(crate) session: String,
-    pub(crate) agent: String,
+    pub(crate) node: String,
     pub(crate) prev_phase: String,
     pub(crate) prev_merged: usize,
     pub(crate) prev_served: Option<usize>,
@@ -936,7 +939,7 @@ pub(crate) struct LeanEnrollmentTraceStep {
     pub(crate) offer_network_id: String,
     pub(crate) offer_admin_did: String,
     pub(crate) offer_server_peer: String,
-    pub(crate) offer_owner_agent: String,
+    pub(crate) offer_owner_node: String,
     pub(crate) offer_profile: String,
     pub(crate) challenge: String,
     pub(crate) request_id: String,
@@ -956,7 +959,7 @@ pub(crate) struct LeanEnrollmentTraceStep {
     pub(crate) observed_candidate_peer: String,
     pub(crate) resolved_candidate_did: String,
     pub(crate) candidate_ticket_peer: String,
-    pub(crate) owner_agent: String,
+    pub(crate) owner_node: String,
     pub(crate) client_nonce: String,
     pub(crate) issued_at: String,
     pub(crate) expires_at: String,
@@ -972,7 +975,7 @@ pub(crate) struct LeanEnrollmentTraceStep {
     pub(crate) decision_admin_did: String,
     pub(crate) decision_candidate_did: String,
     pub(crate) decision_candidate_peer: String,
-    pub(crate) decision_owner_agent: String,
+    pub(crate) decision_owner_node: String,
     pub(crate) decision_admin_signed: bool,
     pub(crate) decision_fresh: bool,
     pub(crate) revision_kind: String,
@@ -985,7 +988,7 @@ pub(crate) struct LeanEnrollmentTraceStep {
     pub(crate) revision_admin_did: String,
     pub(crate) revision_member_did: String,
     pub(crate) revision_member_peer: String,
-    pub(crate) revision_owner_agent: String,
+    pub(crate) revision_owner_node: String,
     pub(crate) revision_admin_signed: bool,
     pub(crate) receipt_request_id: String,
     pub(crate) receipt_request_digest: String,
@@ -994,7 +997,7 @@ pub(crate) struct LeanEnrollmentTraceStep {
     pub(crate) receipt_member_did: String,
     pub(crate) receipt_member_peer: String,
     pub(crate) receipt_server_peer: String,
-    pub(crate) receipt_owner_agent: String,
+    pub(crate) receipt_owner_node: String,
     pub(crate) receipt_authorization_sequence: usize,
     pub(crate) receipt_authorization_expires_at: String,
     pub(crate) receipt_direction: String,
@@ -1384,8 +1387,8 @@ pub(crate) fn lean_runtime_reconcile_cases() -> &'static [LeanRuntimeReconcileCa
     &lean_contract_snapshot().runtime_reconcile_cases
 }
 
-pub(crate) fn lean_client_behavior_readiness_cases() -> &'static [LeanClientBehaviorReadinessCase] {
-    &lean_contract_snapshot().client_behavior_readiness_cases
+pub(crate) fn lean_client_agent_readiness_cases() -> &'static [LeanClientAgentReadinessCase] {
+    &lean_contract_snapshot().client_agent_readiness_cases
 }
 
 pub(crate) fn lean_runtime_reconcile_case(name: &str) -> &'static LeanRuntimeReconcileCase {
@@ -1443,6 +1446,22 @@ pub(crate) fn lean_self_config_field_tables() -> &'static [LeanSelfConfigFieldTa
 
 pub(crate) fn lean_self_config_cases() -> &'static [LeanSelfConfigCase] {
     &lean_contract_snapshot().self_config_cases
+}
+
+pub(crate) fn lean_agent_decision_cases() -> &'static [LeanAgentDecisionCase] {
+    &lean_contract_snapshot().agent_decision_cases
+}
+
+pub(crate) fn lean_agent_materialization_cases() -> &'static [LeanAgentMaterializationCase] {
+    &lean_contract_snapshot().agent_materialization_cases
+}
+
+pub(crate) fn lean_self_config_selection_cases() -> &'static LeanSelfConfigSelectionCases {
+    &lean_contract_snapshot().self_config_selection_cases
+}
+
+pub(crate) fn lean_sibling_tools_cases() -> &'static [LeanSiblingToolsCase] {
+    &lean_contract_snapshot().sibling_tools_cases
 }
 
 pub(crate) fn lean_tool_policy_case(name: &str) -> &'static LeanToolPolicyCase {
@@ -1636,9 +1655,9 @@ pub(crate) fn lean_codex_shim_thread_status_cases() -> &'static [LeanCodexShimTh
     &lean_contract_snapshot().codex_shim_thread_status_cases
 }
 
-pub(crate) fn lean_codex_shim_behavior_selection_cases(
-) -> &'static [LeanCodexShimBehaviorSelectionCase] {
-    &lean_contract_snapshot().codex_shim_behavior_selection_cases
+pub(crate) fn lean_codex_shim_agent_selection_cases() -> &'static [LeanCodexShimAgentSelectionCase]
+{
+    &lean_contract_snapshot().codex_shim_agent_selection_cases
 }
 
 pub(crate) fn lean_codex_shim_tool_metadata_cases() -> &'static [LeanCodexShimToolMetadataCase] {
@@ -1772,7 +1791,7 @@ pub(crate) fn lean_interrupt_queue_cases() -> &'static [LeanInterruptQueueCase] 
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanInterruptQueueCase {
     pub(crate) name: String,
-    pub(crate) agent_id: u64,
+    pub(crate) node_id: u64,
     pub(crate) requester_id: Option<u64>,
     pub(crate) session_id: u64,
     pub(crate) active_request_id: Option<u64>,

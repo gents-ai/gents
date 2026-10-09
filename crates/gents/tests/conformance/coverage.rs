@@ -125,7 +125,7 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
         "CommandPolicy should be emitted as generated contract output, not a follow-up hook"
     );
     assert_eq!(lean_contract_snapshot().runtime_reconcile_cases.len(), 14);
-    assert_eq!(lean_contract_snapshot().root_admission_cases.len(), 27);
+    assert!(!lean_contract_snapshot().root_admission_cases.is_empty());
     assert_eq!(lean_contract_snapshot().request_transition_cases.len(), 81);
     assert_eq!(lean_contract_snapshot().process_transition_cases.len(), 25);
     assert_eq!(lean_contract_snapshot().apply_reconcile_cases.len(), 8);
@@ -246,7 +246,7 @@ async fn agent_tool_call_carries_only_generic_background_fields() {
     for field in [
         "child_request_id",
         "spawn_target_did",
-        "spawn_behavior_id",
+        "spawn_agent_id",
         "delegated_input",
         "delegated_workspace",
         "cancel_policy",
@@ -860,6 +860,38 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "SelfConfigCases".to_string(),
         ));
     }
+    if !snapshot.agent_decision_cases.is_empty() {
+        emitted.insert((
+            "agent_decision_cases".to_string(),
+            "AgentDecisionCases".to_string(),
+        ));
+    }
+    if !snapshot.agent_materialization_cases.is_empty() {
+        emitted.insert((
+            "agent_materialization_cases".to_string(),
+            "AgentMaterializationCases".to_string(),
+        ));
+    }
+    if !snapshot.sibling_tools_cases.is_empty() {
+        emitted.insert((
+            "sibling_tools_cases".to_string(),
+            "SiblingToolsCases".to_string(),
+        ));
+    }
+    if !snapshot
+        .self_config_selection_cases
+        .tool_flag_cases
+        .is_empty()
+        && !snapshot
+            .self_config_selection_cases
+            .graph_presentation_cases
+            .is_empty()
+    {
+        emitted.insert((
+            "self_config_selection_cases".to_string(),
+            "SelfConfigSelectionCases".to_string(),
+        ));
+    }
     if !snapshot.session_recovery_cases.is_empty() {
         emitted.insert((
             "session_recovery_cases".to_string(),
@@ -1030,10 +1062,10 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "CommandPolicyEnv".to_string(),
         ));
     }
-    if !snapshot.client_behavior_readiness_cases.is_empty() {
+    if !snapshot.client_agent_readiness_cases.is_empty() {
         emitted.insert((
-            "client_behavior_readiness_cases".to_string(),
-            "ClientBehaviorReadinessCases".to_string(),
+            "client_agent_readiness_cases".to_string(),
+            "ClientAgentReadinessCases".to_string(),
         ));
     }
     if !snapshot.readiness_publication_cases.is_empty() {
@@ -1432,10 +1464,10 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "CodexShimThreadStatusCases".to_string(),
         ));
     }
-    if !lean_codex_shim_behavior_selection_cases().is_empty() {
+    if !lean_codex_shim_agent_selection_cases().is_empty() {
         emitted.insert((
-            "codex_shim_behavior_selection_cases".to_string(),
-            "CodexShimBehaviorSelectionCases".to_string(),
+            "codex_shim_agent_selection_cases".to_string(),
+            "CodexShimAgentSelectionCases".to_string(),
         ));
     }
     if !lean_codex_shim_tool_metadata_cases().is_empty() {

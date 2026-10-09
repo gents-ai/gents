@@ -121,7 +121,7 @@ fn lean_workspace_references_preserve_exact_owner_and_attenuate_authority() {
         let field = |name: &str| value[name].as_str().map(str::to_owned);
         gents::lifecycle::WorkspaceLineage {
             workspace_id: field("workspace_id"),
-            workspace_owner_agent_did: field("workspace_owner_agent_did"),
+            workspace_owner_node_did: field("workspace_owner_node_did"),
             workspace_authority: field("workspace_authority"),
             workspace_seal_hash: field("workspace_seal_hash"),
         }

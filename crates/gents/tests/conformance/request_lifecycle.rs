@@ -236,7 +236,7 @@ fn request_lifecycle_for_case(
     RequestLifecycle::new_with_execution_binding(
         db.node.clone(),
         AGENT_NAME,
-        AGENT_DID,
+        NODE_DID,
         request,
         DEADLINE_SECS,
         ExecutionOrigin::Interactive,
@@ -315,7 +315,7 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
             gents::__test_internals::reconcile_coalesced_pending_request(
                 &db.node,
                 &session_id,
-                AGENT_DID,
+                NODE_DID,
                 gents::__test_internals::QueueSource::User,
                 &key,
             )
@@ -769,13 +769,13 @@ async fn production_request_writers_only_reach_contracted_edges() {
                         .await;
                 }
                 "repair_terminal_requests" => {
-                    let _ = RequestLifecycle::repair_terminal_requests(&db.node, AGENT_DID).await;
+                    let _ = RequestLifecycle::repair_terminal_requests(&db.node, NODE_DID).await;
                 }
                 "coalesce_pending" => {
                     let _ = gents::__test_internals::reconcile_coalesced_pending_request(
                         &db.node,
                         &session_id,
-                        AGENT_DID,
+                        NODE_DID,
                         gents::__test_internals::QueueSource::User,
                         "conformance-key",
                     )
@@ -954,7 +954,7 @@ async fn terminal_persisted_requests_reject_request_mutating_lifecycle_writers()
                         .await;
                 }
                 "repair_terminal_requests" => {
-                    let report = RequestLifecycle::repair_terminal_requests(&db.node, AGENT_DID)
+                    let report = RequestLifecycle::repair_terminal_requests(&db.node, NODE_DID)
                         .await
                         .expect("terminal repair sweep must succeed");
                     assert_eq!(
@@ -993,7 +993,7 @@ async fn interactive_claim_snapshot_matches_claimed_waiting() {
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         db.node.clone(),
         AGENT_NAME,
-        AGENT_DID,
+        NODE_DID,
         request,
         DEADLINE_SECS,
         ExecutionOrigin::Interactive,
@@ -1007,7 +1007,7 @@ async fn interactive_claim_snapshot_matches_claimed_waiting() {
         fetch_request_snapshot(&db.node, &doc_id).await,
         RequestSnapshot {
             lifecycle_state: RequestLifecycleState::Claimed,
-            behavior_id: AGENT_NAME.into(),
+            agent_id: AGENT_NAME.into(),
             backend_id: BACKEND_ID.into(),
             execution_origin: "interactive".into(),
             retry_parent_request: "".into(),
@@ -1023,7 +1023,7 @@ async fn interactive_claim_snapshot_matches_claimed_waiting() {
 }
 
 #[tokio::test]
-async fn interactive_claim_atomically_pins_session_behavior() {
+async fn interactive_claim_atomically_pins_session_agent() {
     let db = test_db("interactive-claim-session-projection").await;
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
@@ -1039,7 +1039,7 @@ async fn interactive_claim_atomically_pins_session_behavior() {
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         db.node.clone(),
         AGENT_NAME,
-        AGENT_DID,
+        NODE_DID,
         request,
         DEADLINE_SECS,
         ExecutionOrigin::Interactive,
@@ -1074,7 +1074,7 @@ async fn interactive_admission_and_progress_snapshots_match_execution_flow() {
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         db.node.clone(),
         AGENT_NAME,
-        AGENT_DID,
+        NODE_DID,
         request,
         DEADLINE_SECS,
         ExecutionOrigin::Interactive,
@@ -1092,7 +1092,7 @@ async fn interactive_admission_and_progress_snapshots_match_execution_flow() {
         fetch_request_snapshot(&db.node, &doc_id).await,
         RequestSnapshot {
             lifecycle_state: RequestLifecycleState::Processing,
-            behavior_id: AGENT_NAME.into(),
+            agent_id: AGENT_NAME.into(),
             backend_id: BACKEND_ID.into(),
             execution_origin: "interactive".into(),
             retry_parent_request: "".into(),
@@ -1137,7 +1137,7 @@ async fn interactive_fail_before_stream_snapshot_matches_failed_released() {
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         db.node.clone(),
         AGENT_NAME,
-        AGENT_DID,
+        NODE_DID,
         request,
         DEADLINE_SECS,
         ExecutionOrigin::Interactive,
@@ -1159,7 +1159,7 @@ async fn interactive_fail_before_stream_snapshot_matches_failed_released() {
         fetch_request_snapshot(&db.node, &doc_id).await,
         RequestSnapshot {
             lifecycle_state: RequestLifecycleState::Failed,
-            behavior_id: AGENT_NAME.into(),
+            agent_id: AGENT_NAME.into(),
             backend_id: BACKEND_ID.into(),
             execution_origin: "interactive".into(),
             retry_parent_request: "".into(),
@@ -1184,9 +1184,9 @@ async fn interactive_fail_before_stream_snapshot_matches_failed_released() {
 #[tokio::test]
 async fn scheduled_materialization_snapshot_matches_claimed_waiting() {
     let db = test_db("scheduled-materialize").await;
-    crate::support::fixtures::configure_subagent_behavior(
+    crate::support::fixtures::configure_child_agent(
         &db.node,
-        AGENT_DID,
+        NODE_DID,
         AGENT_NAME,
         "scheduled-materialize-tools",
         Vec::new(),
@@ -1210,7 +1210,7 @@ async fn scheduled_materialization_snapshot_matches_claimed_waiting() {
         fetch_request_snapshot(&db.node, &lifecycle.request().doc_id).await,
         RequestSnapshot {
             lifecycle_state: RequestLifecycleState::Claimed,
-            behavior_id: AGENT_NAME.into(),
+            agent_id: AGENT_NAME.into(),
             backend_id: BACKEND_ID.into(),
             execution_origin: "scheduled".into(),
             retry_parent_request: "".into(),
@@ -1236,9 +1236,9 @@ async fn scheduled_materialization_snapshot_matches_claimed_waiting() {
 #[tokio::test]
 async fn scheduled_materialization_persists_trigger_lineage() {
     let db = test_db("scheduled-materialize-lineage").await;
-    crate::support::fixtures::configure_subagent_behavior(
+    crate::support::fixtures::configure_child_agent(
         &db.node,
-        AGENT_DID,
+        NODE_DID,
         AGENT_NAME,
         "scheduled-materialize-lineage-tools",
         Vec::new(),
@@ -1292,7 +1292,7 @@ async fn scheduled_materialization_persists_trigger_lineage() {
     assert!(!response.has_errors(), "{:?}", response.errors);
     let row = &response.data.as_ref().unwrap()["AgentRequest"][0];
     assert_eq!(row["admission_kind"], "local-self");
-    assert_eq!(row["admission_signer_did"], AGENT_DID);
+    assert_eq!(row["admission_signer_did"], NODE_DID);
     assert!(row["admission_signature"]
         .as_str()
         .is_some_and(|signature| !signature.is_empty()));
@@ -1522,10 +1522,10 @@ fn lifecycle_for(
     request: gents::AgentRequest,
     deadline_duration_secs: u64,
 ) -> RequestLifecycle {
-    RequestLifecycle::new_with_agent_did(
+    RequestLifecycle::new_with_node_did(
         node.clone(),
         AGENT_NAME,
-        AGENT_DID,
+        NODE_DID,
         request,
         deadline_duration_secs,
     )
@@ -1816,7 +1816,7 @@ async fn create_queue_request(
     execution_origin: &str,
     input: Option<&str>,
     deadline: Option<&str>,
-    agent_did: Option<&str>,
+    node_did: Option<&str>,
 ) -> String {
     let lifecycle_state = match status {
         "pending" => "pending",
@@ -1832,7 +1832,7 @@ async fn create_queue_request(
     let escaped_session_id = escape_graphql_string(session_id);
     let escaped_created_at = escape_graphql_string(created_at);
     let escaped_execution_origin = escape_graphql_string(execution_origin);
-    let agent_did = escape_graphql_string(agent_did.unwrap_or(AGENT_DID));
+    let node_did = escape_graphql_string(node_did.unwrap_or(NODE_DID));
     let input_field = input
         .map(|input| serde_json::from_str::<serde_json::Value>(input).expect("request input JSON"))
         .map(|input| {
@@ -1848,8 +1848,8 @@ async fn create_queue_request(
             create_AgentRequest(input: {{
                 request_id: "{escaped_request_id}",
                 purpose: "normal",
-                agent_did: "{agent_did}",
-                behavior_id: "{AGENT_NAME}",
+                node_did: "{node_did}",
+                agent_id: "{AGENT_NAME}",
                 session_id: "{escaped_session_id}",
                 retry_parent_request: "",
                 retry_root_request: "{escaped_request_id}",
@@ -1862,7 +1862,7 @@ async fn create_queue_request(
                 created_at: "{escaped_created_at}",
                 retry_count: 0,
                 max_retries: {max_retries},
-                subagent_depth: 0{input_field}{deadline_field}
+                request_hop: 0{input_field}{deadline_field}
             }}) {{ _docID }}
         }}"#,
         max_retries = gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
@@ -1922,15 +1922,15 @@ async fn fetch_deadline_runtime_row(node: &EmbeddedNode, request_id: usize) -> D
     support::first_row::<DeadlineRuntimeRow>(&node.execute(&query).await, "AgentRequest")
 }
 
-// Both the persisted request and the in-memory claim must carry this principal.
-// build_request defaults to AGENT_DID; the lifecycle constructor does not replace it.
-async fn create_scoped_claim(db: &support::TestDb, agent_did: &str) -> (String, String, String) {
+// Both the persisted request and the in-memory claim must carry this node DID.
+// build_request defaults to NODE_DID; the lifecycle constructor does not replace it.
+async fn create_scoped_claim(db: &support::TestDb, node_did: &str) -> (String, String, String) {
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
     let created_at = chrono::Utc::now().to_rfc3339();
     let doc_id = support::create_request_for_agent_with_signed_fields(
         &db.node,
-        agent_did,
+        node_did,
         &request_id,
         &session_id,
         "pending",
@@ -1947,11 +1947,11 @@ async fn create_scoped_claim(db: &support::TestDb, agent_did: &str) -> (String, 
         session_id.clone(),
         created_at,
     );
-    request.agent_did = agent_did.to_string();
-    let mut lifecycle = RequestLifecycle::new_with_agent_did(
+    request.node_did = node_did.to_string();
+    let mut lifecycle = RequestLifecycle::new_with_node_did(
         db.node.clone(),
         AGENT_NAME,
-        agent_did,
+        node_did,
         request,
         DEADLINE_SECS,
     );
@@ -1965,8 +1965,8 @@ async fn terminal_repair_sweep_ignores_foreign_did_claims() {
     let mut claims = Vec::new();
     let expired =
         escape_graphql_string(&(chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339());
-    for agent_did in [AGENT_DID, "did:test:foreign-scope-owner"] {
-        let (request_id, doc_id, session_id) = create_scoped_claim(&db, agent_did).await;
+    for node_did in [NODE_DID, "did:test:foreign-scope-owner"] {
+        let (request_id, doc_id, session_id) = create_scoped_claim(&db, node_did).await;
         let escaped_doc = escape_graphql_string(&doc_id);
         let mutation = format!(
             r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_doc}" }} }}, input: {{ execution_lease_expires_at: "{expired}" }}) {{ _docID }} }}"#,
@@ -1989,7 +1989,7 @@ async fn terminal_repair_sweep_ignores_foreign_did_claims() {
         claims.push(doc_id);
     }
     let foreign_before = fetch_request_snapshot(&db.node, &claims[1]).await;
-    let report = RequestLifecycle::repair_terminal_requests(&db.node, AGENT_DID)
+    let report = RequestLifecycle::repair_terminal_requests(&db.node, NODE_DID)
         .await
         .unwrap();
     assert_eq!(report.repaired, 1);
@@ -2028,8 +2028,8 @@ async fn assert_session_observes_request_with_authoritative_state(
         .await
         .expect("canonical session");
     assert_eq!(session.session_id, session_id);
-    assert_eq!(session.agent_did, AGENT_DID);
-    assert_eq!(session.behavior_id, AGENT_NAME);
+    assert_eq!(session.node_did, NODE_DID);
+    assert_eq!(session.agent_id, AGENT_NAME);
     assert!(
         session.closed_at.is_none(),
         "request terminality does not close the session"
@@ -2047,7 +2047,7 @@ async fn assert_session_observes_request_with_authoritative_state(
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{
         request_id: {{_eq: "{request_id}"}}, session_id: {{_eq: "{session_id}"}}
-    }}) {{ _docID agent_did requester_did behavior_id lifecycle_state }} }}"#
+    }}) {{ _docID node_did requester_did agent_id lifecycle_state }} }}"#
         ))
         .await;
     assert!(
@@ -2071,8 +2071,8 @@ async fn assert_session_observes_request_with_authoritative_state(
         Some(expected_authoritative.as_str())
     );
     assert_eq!(
-        rows[0]["agent_did"].as_str(),
-        Some(session.agent_did.as_str()),
+        rows[0]["node_did"].as_str(),
+        Some(session.node_did.as_str()),
         "session observation must reference its owner's request"
     );
     assert_eq!(
@@ -2081,7 +2081,7 @@ async fn assert_session_observes_request_with_authoritative_state(
         "absent requester scope is exact, not a wildcard"
     );
     assert_eq!(
-        rows[0]["behavior_id"].as_str(),
-        Some(session.behavior_id.as_str())
+        rows[0]["agent_id"].as_str(),
+        Some(session.agent_id.as_str())
     );
 }

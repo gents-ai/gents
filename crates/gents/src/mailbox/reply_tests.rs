@@ -1,6 +1,6 @@
 use super::*;
 use crate::config_client::ConfigAccess;
-use crate::identity::{AgentIdentity, KeyIdentity};
+use crate::identity::{KeyIdentity, NodeIdentity};
 use crate::watcher::AgentRequest;
 
 async fn signed_reply(
@@ -94,7 +94,7 @@ async fn signed_reply_claim_rolls_back_and_rejects_replay_and_dismissal() {
     let temp = tempfile::tempdir().unwrap();
     let identity = KeyIdentity::load_or_create(temp.path().join("reply.key"), None).unwrap();
     let mut context = tests::context(identity.did());
-    context.agent_did = identity.did().into();
+    context.node_did = identity.did().into();
     let item = stamp_create(
         &node,
         &context,
@@ -215,7 +215,7 @@ async fn modeled_handoff_positive_sequence_maps_to_native_owners() {
         modeled.reply_bound_session_id.as_deref(),
         Some(modeled.session_id.as_str())
     );
-    assert_eq!(modeled.producer_agent_did, modeled.question_agent_did);
+    assert_eq!(modeled.producer_node_did, modeled.question_node_did);
     assert_eq!(
         modeled.producer_requester_did,
         modeled.question_requester_did
@@ -223,7 +223,7 @@ async fn modeled_handoff_positive_sequence_maps_to_native_owners() {
     let node = tests::test_node().await;
     let temp = tempfile::tempdir().unwrap();
     let identity = KeyIdentity::load_or_create(temp.path().join("handoff.key"), None).unwrap();
-    crate::test_support::install_test_behavior(&node, identity.did(), "operator").await;
+    crate::test_support::install_test_agent(&node, identity.did(), "operator").await;
     let producer = persisted_request(&node, &identity, None, "producer-request", false).await;
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
@@ -361,11 +361,11 @@ fn generated_reply_cases_drive_claim_validation() {
         let text = |key: &str| case[key].as_str().unwrap();
         let item: MailboxItem = serde_json::from_value(json!({
             "_docID": text("mailbox_doc_id"), "item_key": "notice",
-            "requester_did": "owner", "agent_did": "agent", "status": text("status"),
+            "requester_did": "owner", "node_did": "agent", "status": text("status"),
             "kind": "gate", "action": text("handling"), "title": "Repair",
             "source_kind": "session", "source_id": "source",
-            "target_agent_did": text("target_agent_did"),
-            "target_behavior_id": text("target_behavior_id"),
+            "target_node_did": text("target_node_did"),
+            "target_agent_id": text("target_agent_id"),
             "session_id": case["bound_session_id"],
             "resolved_doc_id": text("resolved_doc_id"), "created_at": "2026-01-01T00:00:00Z"
         }))
@@ -374,8 +374,8 @@ fn generated_reply_cases_drive_claim_validation() {
             serde_json::from_value::<gents_protocol::row::AgentRequestRow>(json!({
                 "_docID": text("request_doc_id"), "request_id": "request",
                 "purpose": "normal",
-                "agent_did": text("agent_did"), "requester_did": text("requester_did"),
-                "behavior_id": text("behavior_id"), "session_id": text("session_id"),
+                "node_did": text("node_did"), "requester_did": text("requester_did"),
+                "agent_id": text("agent_id"), "session_id": text("session_id"),
                 "caused_by_source_doc_id": text("source_doc_id"),
                 "execution_origin": if case["interactive"] == true { "interactive" } else { "event" },
                 "content": "Approved", "created_at": "2026-01-01T00:00:00Z"

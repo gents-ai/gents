@@ -55,8 +55,8 @@ pub(crate) struct LeanToolPolicySurfaceView {
     pub(crate) p2p_collections_keys: Vec<String>,
     pub(crate) self_config_categories_scope_kind: String,
     pub(crate) self_config_categories_keys: Vec<String>,
-    pub(crate) subagent_targets_scope_kind: String,
-    pub(crate) subagent_targets_keys: Vec<String>,
+    pub(crate) agent_targets_scope_kind: String,
+    pub(crate) agent_targets_keys: Vec<String>,
     pub(crate) background_tools_scope_kind: String,
     pub(crate) background_tools_keys: Vec<String>,
     pub(crate) write_probe_tool: String,
@@ -80,7 +80,7 @@ pub(crate) struct LeanToolPolicySurfaceView {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanToolPolicyCase {
     pub(crate) name: String,
-    pub(crate) behavior: LeanToolPolicySurfaceView,
+    pub(crate) agent: LeanToolPolicySurfaceView,
     pub(crate) ceiling: LeanToolPolicySurfaceView,
     pub(crate) runtime: LeanToolPolicySurfaceView,
     pub(crate) expected: LeanToolPolicySurfaceView,

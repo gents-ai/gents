@@ -1073,14 +1073,14 @@ mod tests {
     }
 
     #[test]
-    fn generated_plugin_model_slots_require_optional_behavior_free_declarations() {
+    fn generated_plugin_model_slots_require_optional_agent_free_declarations() {
         let cases = &crate::lean_vocab_test::lean_contract_snapshot().plugin_resource_cases;
         for case in cases["model_slots"].as_array().unwrap() {
             let slots = if case["declared"].as_bool().unwrap() {
                 serde_json::json!([{
                     "name": "remote_ocr", "description": "d",
                     "optional": case["optional"],
-                    "behaviors": if case["behavior_free"].as_bool().unwrap() { vec![] } else { vec!["scan"] },
+                    "behaviors": if case["agent_free"].as_bool().unwrap() { vec![] } else { vec!["scan"] },
                 }])
             } else {
                 serde_json::json!([])
