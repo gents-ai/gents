@@ -1823,6 +1823,14 @@ pub(crate) struct ServeArgs {
     )]
     pub(crate) mcp_write_collections: Vec<String>,
     #[arg(
+        long = "mcp-graph-tools",
+        requires = "enable_mcp",
+        conflicts_with = "mcp_query_collections",
+        default_value_t = false,
+        help = "With --enable-mcp, expose the read-only list_graphs, get_graph_run and get_graph_result at /mcp. Each call must forward a caller-signed DefraDB bearer, whose DID selects whose graphs are listed and observed. The graph collections carry no per-caller policy, so this restricts no access: the flag is refused with --mcp-query-collection and offered only where /mcp already reads every collection"
+    )]
+    pub(crate) mcp_graph_tools: bool,
+    #[arg(
         long,
         help = "Root directory for readonly/readwrite tool ceilings. Readonly defaults to the current working directory when unset"
     )]

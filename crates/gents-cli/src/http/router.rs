@@ -25,7 +25,6 @@ use crate::http::self_view::{load_self_view, ContextBudget, SelfBehavior};
 use crate::http::sessions::{load_session_history_snapshot, SessionHistoryParams};
 use crate::http::version::version_response;
 use crate::shared::P2pAdmissionState;
-use gents::defra_query::CollectionScope;
 
 const PROMETHEUS_CONTENT_TYPE: &str = "text/plain; version=0.0.4; charset=utf-8";
 const P2P_METRICS_FETCH_BUDGET: Duration = Duration::from_millis(750);
@@ -129,11 +128,11 @@ pub(crate) fn runtime_contract_router(
     tool_ceiling: String,
     tool_root: Option<String>,
     home: Option<String>,
-    // `Some(scope)` mounts the read-only `defra_query` MCP tool at `/mcp`;
-    // `None` leaves it off. It is opt-in because it is an unauthenticated read
-    // surface (same listener exposure as the GraphQL endpoint).
-    defra_query_mcp_scope: Option<CollectionScope>,
-    mcp_write_collections: Vec<String>,
+    // `Some` mounts `/mcp`: the read-only `defra_query` tool always (an
+    // unauthenticated read surface, same exposure as the GraphQL endpoint),
+    // `write` for granted collections, and, with `graph_reads`, the read-only graph
+    // tools.
+    mcp: Option<crate::http::mcp_server::McpServiceOptions>,
     backend_health: Option<gents::BackendHealthMap>,
     p2p_admission: Option<P2pAdmissionState>,
     codex_shim_health: Option<crate::shared::CodexShimHealthHandle>,
@@ -186,14 +185,10 @@ pub(crate) fn runtime_contract_router(
             post(crate::http::identity_decide::identity_decide_handler),
         );
 
-    if let Some(scope) = defra_query_mcp_scope {
+    if let Some(options) = mcp {
         router = router.nest_service(
             "/mcp",
-            crate::http::mcp_server::defra_query_mcp_service(
-                graphql_for_mcp,
-                scope,
-                mcp_write_collections.into_iter().collect(),
-            ),
+            crate::http::mcp_server::defra_query_mcp_service(graphql_for_mcp, options),
         );
     }
 

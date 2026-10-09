@@ -179,6 +179,14 @@ source consistency checks, not a separate runtime compatibility version.
 - Self-configuration no longer refuses edits of Tools that already carry
   `self_config.enable_pack_install`; a write may still raise the grant only
   when the invoking agent holds it.
+### Added
+
+- `gents server --enable-mcp --mcp-graph-tools` exposes the read-only
+  `list_graphs`, `get_graph_run` and `get_graph_result` at `/mcp`. Each call
+  must forward a caller-signed DefraDB bearer, whose DID selects whose graphs
+  are listed and observed. The graph collections carry no per-caller policy,
+  so this restricts no access, and the flag cannot be combined with
+  `--mcp-query-collection`.
 
 ## 0.20.0 - 2026-10-05
 

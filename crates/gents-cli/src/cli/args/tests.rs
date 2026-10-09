@@ -96,6 +96,32 @@ fn parse_server(extra: &[&str]) -> ServeArgs {
 }
 
 #[test]
+fn mcp_graph_tools_require_enable_mcp_and_an_unrestricted_scope() {
+    assert!(
+        Cli::try_parse_from(["gents", "server", "--mcp-graph-tools"]).is_err(),
+        "--mcp-graph-tools needs --enable-mcp"
+    );
+    assert!(
+        Cli::try_parse_from([
+            "gents",
+            "server",
+            "--enable-mcp",
+            "--mcp-graph-tools",
+            "--mcp-query-collection",
+            "AgentRequest",
+        ])
+        .is_err(),
+        "graph reads are offered only with the unrestricted read scope"
+    );
+    let args = parse_server(&["--enable-mcp", "--mcp-graph-tools"]);
+    assert!(args.enable_mcp && args.mcp_graph_tools);
+    assert!(
+        !parse_server(&["--enable-mcp"]).mcp_graph_tools,
+        "graph reads are off by default"
+    );
+}
+
+#[test]
 fn native_service_commands_keep_install_and_start_separate() {
     let install = Cli::try_parse_from([
         "gents",

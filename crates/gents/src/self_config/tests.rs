@@ -1230,6 +1230,90 @@ async fn run_graph_description_makes_entry_optional_for_every_selection() {
     );
 }
 
+/// The in-session `list_graphs` reply is the text of `list_graphs_value`
+/// with the run tool; without one, as on `/mcp`, no listed graph names a
+/// run tool.
+#[tokio::test]
+async fn list_graphs_value_is_the_in_session_reply_and_names_no_run_tool_without_one() {
+    let node = build_persona_node().await;
+    let identity = persona_identity("list-graphs-value");
+    let agent_did = identity.did().to_string();
+    crate::test_support::install_test_behavior(&node, &agent_did, "setup").await;
+    let mut tool_config = config(&["tools"]);
+    tool_config.behavior_id = "setup".to_owned();
+    tool_config.enable_pack_install = true;
+    tool_config.enable_graph_tools = true;
+    let (_home, plugins) = crate::test_support::home_with_fixture_pack("review_graph");
+    let tools = build_self_config_tools(
+        node.clone(),
+        agent_did.clone(),
+        Some(identity),
+        &tool_config,
+        plugins,
+    );
+    let call = |name: &str, args: Value| {
+        let tool = tools
+            .iter()
+            .find(|tool| tool.name() == name)
+            .unwrap_or_else(|| panic!("missing tool {name}"));
+        tool.call(args.to_string())
+    };
+    let slots = [
+        "--inference-slot",
+        "coordinator=setup:inference",
+        "--inference-slot",
+        "worker=setup:inference",
+        "--inference-slot",
+        "verifier=setup:inference",
+    ];
+    let mut preview = vec!["pack", "preview", "install", "fixture/review_graph"];
+    preview.extend(slots);
+    let previewed = call(CONFIG_TOOL_NAME, json!({ "argv": preview }))
+        .await
+        .expect("review_graph previews");
+    let previewed: Value = serde_json::from_str(&previewed).unwrap();
+    let digest = previewed["artifact_digest"].as_str().unwrap().to_owned();
+    let mut install = vec![
+        "pack",
+        "install",
+        "fixture/review_graph",
+        "--digest",
+        digest.as_str(),
+    ];
+    install.extend(slots);
+    call(CONFIG_TOOL_NAME, json!({ "argv": install }))
+        .await
+        .expect("review_graph installs");
+
+    let in_session: Value =
+        serde_json::from_str(&call(LIST_GRAPHS_TOOL_NAME, json!({})).await.unwrap()).unwrap();
+    let access = graph_access(&node);
+    let shared: Value = serde_json::from_str(
+        &list_graphs_value(&access, &agent_did, Some(RUN_GRAPH_TOOL_NAME))
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(in_session, shared);
+    let graphs = shared["graphs"].as_array().unwrap();
+    assert!(!graphs.is_empty(), "{shared}");
+    assert!(
+        graphs
+            .iter()
+            .all(|graph| graph["run_with"]["tool"] == RUN_GRAPH_TOOL_NAME),
+        "{shared}"
+    );
+
+    let read_only: Value =
+        serde_json::from_str(&list_graphs_value(&access, &agent_did, None).await.unwrap()).unwrap();
+    let listed = read_only["graphs"].as_array().unwrap();
+    assert_eq!(listed.len(), graphs.len());
+    assert!(
+        listed.iter().all(|graph| graph.get("run_with").is_none()),
+        "a surface without a run tool names none: {read_only}"
+    );
+}
+
 /// `RunGraphTool`'s host-ceiling gate for an entry whose `prepare` declares a
 /// `git_diff` host step: refused when the current behavior has no effective
 /// read authority, and refused again once it does but the named repository
