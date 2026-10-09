@@ -293,6 +293,25 @@ describe("subagents of a session", () => {
   });
 });
 
+describe("the provenance owner", () => {
+  it("asks once for every screen showing the session, and afresh after they all leave", async () => {
+    const api = apiWith(async () => view([]));
+    const app = appFor(api, [group(call("req-1", "call-1"))]);
+    const first = app.actions.watchSessionProvenance();
+    const second = app.actions.watchSessionProvenance();
+    await waitFor(() => expect(app.stores.provenance.getState().shown).not.toBeNull());
+    expect(api.sessionProvenance).toHaveBeenCalledTimes(1);
+
+    first();
+    second();
+    const again = app.actions.watchSessionProvenance();
+    /* the last answer shows at once while the new ask is out */
+    expect(app.stores.provenance.getState().shown).not.toBeNull();
+    await waitFor(() => expect(api.sessionProvenance).toHaveBeenCalledTimes(2));
+    again();
+  });
+});
+
 describe("subagent lineage freshness", () => {
   it("asks again on a session-list change and keeps the last view on a failed ask", async () => {
     let state = "processing";

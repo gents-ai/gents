@@ -2,7 +2,6 @@ import type {
   DesktopApiAdapter,
   DesktopClientSnapshot,
   DesktopOperationsSnapshotRequest,
-  DesktopSessionProvenanceRequest,
 } from "@source-inc/gents-desktop-client";
 
 import { createDesktopShellChatActions } from "./desktopShellChatActions";
@@ -59,8 +58,6 @@ export function createShellActions({
     /* Read for the screen that shows each answer, which keeps it: no store. */
     fetchOperationsSnapshot: (request: DesktopOperationsSnapshotRequest) =>
       api.fetchOperationsSnapshot(request),
-    readSessionProvenance: (request: DesktopSessionProvenanceRequest) =>
-      api.sessionProvenance(request),
     /** Whether this host has a DB explorer window to open. */
     canOpenDbExplorer: Boolean(api.openDbExplorer),
     /** Opens the managed runtime's DB explorer window. */

@@ -6,7 +6,7 @@
    for who each session is, and to this transcript's rows by the call. Every
    fact here has a field in the bridge contract; where the contract is silent
    the state says so instead of guessing. */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type {
   BackgroundedToolView,
   CausedRequestView,
@@ -19,12 +19,7 @@ import type {
 import { useShallow } from "zustand/react/shallow";
 import { useApp } from "@/app/AppContext";
 import { NO_SESSIONS, useFleet } from "@/hooks/useFleet";
-import { isLive } from "@/lib/live";
-import {
-  selectedIn,
-  useSelectedSessionValue,
-  useSessionFacts,
-} from "../hooks/useSelectedSession";
+import { useSessionFacts } from "../hooks/useSelectedSession";
 
 export type Subagent = {
   sessionId: string;
@@ -85,19 +80,6 @@ export function useListedScopes(
   );
 }
 
-/* The listed session with this agent and label. Two listed scopes under one
-   label are ambiguous, and neither is picked. */
-export function listedSession(
-  sessions: readonly SessionSummary[] | undefined,
-  agentDid: string | null,
-  sessionId: string | null,
-): SessionSummary | null {
-  const matches = (sessions ?? []).filter(
-    (s) => s.agentDid === agentDid && s.sessionId === sessionId,
-  );
-  return matches.length === 1 ? matches[0]! : null;
-}
-
 /* The subagents in a provenance view: the lineage owner's `started`. */
 export function subagentsOf(
   provenance: Pick<SessionProvenanceView, "started">,
@@ -117,104 +99,13 @@ const isBackgroundProcess = (t: RenderedToolCallView) =>
 
 type Held<T> = { scope: string; value: T };
 
-/* The selected session's provenance. Its scope is exact: the session's
-   agent, label and requester, as the session list reports them. It is asked
-   again when the transcript's rows change (rowsRevision, which a streamed
-   chunk to the live reply does not move), or the session list does. While a request it caused is live it is also asked
-   whenever the client store's observation moves
-   (projectionRevision.storeVersion), so a caused request settling anywhere
-   this desktop observes refreshes it; there is no timer of its own. Every
-   applied live delta advances storeVersion, so a settled lineage must not
-   follow it: that would be one bridge call per streamed chunk. */
+/** The selected session's provenance, read while this is shown (see
+    `createProvenance`). */
 export function useSessionProvenance(): SessionProvenanceView | null {
-  const {
-    stores,
-    actions: { readSessionProvenance },
-  } = useApp();
-  const sessionId = useSelectedSessionValue((s) => s?.sessionId ?? null);
-  const rowsRevision = useSessionFacts()?.rowsRevision ?? 0;
-  const agentDid = stores.selection.use.agentDid();
-  const summary = useFleet((s) =>
-    listedSession(agentDid ? s.sessionsOf[agentDid] : undefined, agentDid, sessionId),
-  );
-  const listed = summary !== null;
-  const requesterDid = summary?.requesterDid ?? null;
-  const scope = `${agentDid ?? ""}\u0000${sessionId ?? ""}\u0000${requesterDid ?? ""}`;
-  const [held, setHeld] = useState<Held<SessionProvenanceView> | null>(null);
-  const provenance = held?.scope === scope ? held.value : null;
-  const awaitsCaused =
-    provenance?.calls.some((c) => isLive(c.caused.lifecycleState)) ?? false;
-  /* the store version moves with every streamed chunk, so it is followed,
-     and re-renders this, only while a caused request is live */
-  const storeVersion = useSelectedSessionValue((s) =>
-    awaitsCaused ? (s?.projectionRevision?.storeVersion ?? null) : null,
-  );
-  const sessionsCue = useFleet((s) =>
-    ((agentDid && s.sessionsOf[agentDid]) || NO_SESSIONS)
-      .map((x) => `${x.sessionId}:${x.turnState ?? ""}:${x.updatedAt ?? ""}`)
-      .join(),
-  );
-  /* what the last ask observed: a live lineage arriving starts following the
-     store version without asking again for the one it was read at */
-  const asked = useRef<{ cues: string; version: number | null } | null>(null);
-  /* one ask out at a time: while the stream moves faster than a lineage read,
-     a newer ask would outdate every answer before it lands. A cue that came
-     while one was out is asked once that one lands. */
-  const out = useRef(false);
-  const missed = useRef(false);
-  const [landed, setLanded] = useState(0);
-  useEffect(() => {
-    /* without the session's summary its exact scope is unknown */
-    if (!agentDid || !sessionId || !listed) return;
-    const cues = `${scope}\u0002${rowsRevision}\u0002${sessionsCue}`;
-    const last = asked.current;
-    if (
-      last?.cues === cues &&
-      (storeVersion === null || last.version === storeVersion)
-    ) {
-      return;
-    }
-    if (out.current) {
-      missed.current = true;
-      return;
-    }
-    asked.current = {
-      cues,
-      version:
-        selectedIn(stores.session.getState(), {
-          selectedSessionId: sessionId,
-          selectedAgentDid: agentDid,
-        })?.projectionRevision?.storeVersion ?? null,
-    };
-    out.current = true;
-    void readSessionProvenance({ sessionId, agentDid, requesterDid })
-      .then(
-        (value) => setHeld({ scope, value }),
-        () => {
-          /* the last known lineage stays; the next cue asks again */
-          asked.current = null;
-        },
-      )
-      .finally(() => {
-        out.current = false;
-        if (!missed.current) return;
-        missed.current = false;
-        setLanded((n) => n + 1);
-      });
-  }, [
-    readSessionProvenance,
-    stores,
-    agentDid,
-    sessionId,
-    requesterDid,
-    listed,
-    scope,
-    storeVersion,
-    rowsRevision,
-    sessionsCue,
-    landed,
-  ]);
-  return provenance;
+  const { stores, actions } = useApp();
+  const { watchSessionProvenance } = actions;
+  useEffect(() => watchSessionProvenance(), [watchSessionProvenance]);
+  return stores.provenance.use.shown();
 }
 
 export function useWorkers(provenance: SessionProvenanceView | null): Workers {

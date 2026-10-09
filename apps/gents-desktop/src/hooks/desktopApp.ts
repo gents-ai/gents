@@ -15,6 +15,11 @@ import { createProviderStore, type ProviderStore } from "./providerStore";
 import { createProviders } from "./providers";
 import { createLocalServer } from "./localServer";
 import { createLocalServerStore, type LocalServerStore } from "./localServerStore";
+import {
+  createProvenance,
+  createProvenanceStore,
+  type ProvenanceStore,
+} from "./provenance";
 import { createShellActions } from "./shellActions";
 import { createDraftStore } from "./draftStore";
 import type { ShellStores } from "./shellProjection";
@@ -45,6 +50,7 @@ export function createDesktopApp({
   const stores: ShellStores & {
     providers: ProviderStore;
     localServer: LocalServerStore;
+    provenance: ProvenanceStore;
   } = {
     selection: createSelectionStore(),
     session: createSessionStore(),
@@ -55,6 +61,7 @@ export function createDesktopApp({
     chat: createChatStore(),
     providers: createProviderStore(),
     localServer: createLocalServerStore(),
+    provenance: createProvenanceStore(),
   };
   /** what the shell decides, kept in step with the stores */
   const view = createShellView(stores);
@@ -99,6 +106,7 @@ export function createDesktopApp({
     }),
     ...createProviders({ api, store: stores.providers, client: stores.client }),
     ...localServer,
+    ...createProvenance({ api, stores }),
   };
   reconcileSelection(stores, actions.selectAgent);
   /* the composer's drafts, kept apart so a keystroke reaches only it */
