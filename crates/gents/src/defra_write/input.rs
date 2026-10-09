@@ -30,34 +30,21 @@ pub(super) fn parameters(schema: &str) -> Result<Value> {
     Ok(shape)
 }
 
-/// The single owner of which declared field type can carry a canonical count.
-/// Every config-time rule about that question resolves here rather than
-/// restating a type list of its own.
+/// Count-carrier admission shared by completed-write obligations and event
+/// groups, as modeled by `CompletionRetry.CountCarrier`. It asks whether some
+/// successful native write can supply a canonical positive count, not whether
+/// every value of the field type is a count. The two readers use durable call
+/// arguments and stored documents respectively.
 ///
-/// Two runtime readers ask it, from different provenances. A write tool's
-/// output obligation reads its expected count from the durable arguments of a
-/// completed call; an event source's group reads its own from the stored source
-/// document. Both parse the value with `graphql::canonical_positive_count`,
-/// which accepts a JSON number or its canonical decimal spelling, so for both a
-/// field can carry a count only when the argument schema generated for its type
-/// admits a number or a string.
-///
-/// `schema` is a GraphQL type spelling from either vocabulary that names one:
-/// `FieldKind::graphql_type_name`, as `BoundedWriteTool::field_types` resolves
-/// it, or `defra_query::schema::SchemaField`, as introspection reports it —
-/// with or without the non-nillable marker that type re-renders, which only
-/// adds `null` to the admitted set and so never changes the answer. They agree
-/// on every scalar; introspection reports a list as its `LIST` kind and a
-/// relation as the target collection's name, neither of which [`parameters`]
-/// accepts.
-///
-/// Admitting a type is not a claim that a count reaches the field. `DateTime`
-/// admits a string, but no all-digit string is RFC3339, so DefraDB rejects any
-/// write that would place one there and no count ever arrives. `JSON` admits
-/// any value, so the reader can still fail on the value it finds for the reason
-/// it would have without this rule. `Float32`/`Float64` carry a count only when
-/// the value is a bare integer, since `as_u64` rejects a float-parsed `3.0`.
+/// `schema` is a native or introspected GraphQL spelling, optionally suffixed
+/// with `!`. Nullability does not change whether a count witness exists.
+/// DateTime arguments are strings, but a canonical decimal string is not
+/// RFC3339 and cannot complete a DateTime write. Whole-valued floating fields
+/// have an integer witness; this does not promise arbitrary integer precision.
 pub fn can_hold_canonical_count(schema: &str) -> bool {
+    if schema.trim_end_matches('!') == "DateTime" {
+        return false;
+    }
     parameters(schema).is_ok_and(|shape| match shape.get("type") {
         Some(Value::Array(kinds)) => kinds.iter().any(admits_count),
         Some(kind) => admits_count(kind),
