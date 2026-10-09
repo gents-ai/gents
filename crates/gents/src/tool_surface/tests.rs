@@ -1276,6 +1276,53 @@ async fn write_tool_whose_count_field_resolves_no_schema_is_refused_at_registrat
 }
 
 #[tokio::test]
+async fn plugin_only_bindings_are_captured_for_trigger_execution() {
+    use crate::document_config::{PluginToolRef, WriteToolField, WriteToolFieldFill};
+
+    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let selected = BehaviorToolConfig::from_selection(
+        "evidence",
+        ResolvedToolSelection {
+            plugin_tools: vec![PluginToolRef {
+                plugin: "team/page_reader".into(),
+                digest: None,
+                input_fields: vec![
+                    WriteToolField {
+                        name: "command".into(),
+                        required: false,
+                        fill: Some(WriteToolFieldFill::SourceField("page_command".into())),
+                    },
+                    WriteToolField {
+                        name: "path".into(),
+                        required: false,
+                        fill: Some(WriteToolFieldFill::SourceField("book_path".into())),
+                    },
+                    WriteToolField {
+                        name: "run_id".into(),
+                        required: false,
+                        fill: Some(WriteToolFieldFill::Correlation),
+                    },
+                ],
+            }],
+            ..Default::default()
+        },
+        &ToolCeiling::meta_only(),
+        Vec::new(),
+    )
+    .unwrap()
+    .resolve(&node, "did:key:z-test-agent")
+    .await
+    .unwrap();
+    assert_eq!(
+        selected.source_fill_fields(),
+        ["book_path".to_string(), "page_command".to_string()]
+            .into_iter()
+            .collect()
+    );
+}
+
+#[tokio::test]
 async fn mailbox_surface_registers_stamped_tool_and_captures_owner_lineage() {
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
     crate::ensure_runtime_schemas(&node).await.unwrap();
