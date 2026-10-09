@@ -1125,15 +1125,21 @@ async fn replay_resolution_reads_shared_request_once_and_keeps_every_physical_ca
         commits: std::sync::atomic::AtomicUsize::new(0),
     };
     for resolution in 1..=2 {
-        let candidates = super::output::load_canonical_assistant_candidates_with(
-            &fixture.node,
-            &requests,
-            fixture.scope(),
-            &fixture.boundary,
-            None,
+        let (candidates, segment_scans) = crate::session::count_request_output_scans(
+            super::output::load_canonical_assistant_candidates_with(
+                &fixture.node,
+                &requests,
+                fixture.scope(),
+                &fixture.boundary,
+                None,
+            ),
         )
-        .await
-        .unwrap();
+        .await;
+        let candidates = candidates.unwrap();
+        assert_eq!(
+            segment_scans, 1,
+            "one pass scans a shared request's output once"
+        );
         assert_eq!(candidates.len(), 2);
         assert_ne!(candidates[0].header_doc_id, candidates[1].header_doc_id);
         assert!(candidates.iter().all(|candidate| candidate.has_capture()));
@@ -1359,4 +1365,155 @@ async fn historical_request_store_faults_propagate_instead_of_dropping_reasoning
             "{fault:?} is not a replay violation: {error:#}"
         );
     }
+}
+
+async fn stored_agent_request(fixture: &ReplayFixture) -> crate::watcher::AgentRequest {
+    let response = fixture
+        .node
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
+            crate::graphql::escape_graphql_string(&fixture.request_doc_id),
+            crate::watcher::AGENT_REQUEST_FIELDS,
+        ))
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let row = response.data.unwrap()["AgentRequest"][0].clone();
+    crate::watcher::AgentRequest::try_from(
+        serde_json::from_value::<gents_protocol::row::AgentRequestRow>(row).unwrap(),
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn replay_resolution_observes_capture_arriving_for_existing_header() {
+    let fixture = signed_fixture().await;
+    let candidate = fixture.candidates().await.unwrap().remove(0);
+    let tag = ReplayTag {
+        request_doc_id: candidate.request_doc_id.clone(),
+        source: OutputSource::ProviderTurn {
+            scope: candidate.coordinate.scope,
+            turn_index: candidate.coordinate.turn_index,
+            attempt: candidate.coordinate.attempt,
+        },
+    };
+    let replay = crate::provider_input::replay::owned_replay_input(
+        fixture.node.clone(),
+        stored_agent_request(&fixture).await,
+        fixture.request_commit_cid.clone(),
+        fixture.scope_kind,
+        None,
+        crate::provider_input::ProviderInputProfile::ClaudeMessages,
+    );
+    let resolve = replay.resolve.expect("canonical resolver");
+    assert!(resolve(vec![tag.clone()]).await.unwrap().is_empty());
+    fixture
+        .insert_capture(RenderedRequestSource::ClaudeCliSubscription)
+        .await
+        .unwrap();
+    assert_eq!(
+        resolve(vec![tag]).await.unwrap().len(),
+        1,
+        "a capture arriving for the same physical header must become replay evidence"
+    );
+}
+
+#[tokio::test]
+async fn replay_resolution_observes_conflicting_capture_for_existing_header() {
+    let fixture = signed_fixture().await;
+    fixture
+        .insert_capture(RenderedRequestSource::ClaudeCliSubscription)
+        .await
+        .unwrap();
+    let candidate = fixture.candidates().await.unwrap().remove(0);
+    let tag = ReplayTag {
+        request_doc_id: candidate.request_doc_id.clone(),
+        source: OutputSource::ProviderTurn {
+            scope: candidate.coordinate.scope,
+            turn_index: candidate.coordinate.turn_index,
+            attempt: candidate.coordinate.attempt,
+        },
+    };
+    let replay = crate::provider_input::replay::owned_replay_input(
+        fixture.node.clone(),
+        stored_agent_request(&fixture).await,
+        fixture.request_commit_cid.clone(),
+        fixture.scope_kind,
+        None,
+        crate::provider_input::ProviderInputProfile::ClaudeMessages,
+    );
+    let resolve = replay.resolve.expect("canonical resolver");
+    assert_eq!(resolve(vec![tag.clone()]).await.unwrap().len(), 1);
+    fixture
+        .insert_capture(RenderedRequestSource::OpenAiResponses)
+        .await
+        .unwrap();
+    assert!(
+        resolve(vec![tag]).await.unwrap().is_empty(),
+        "conflicting captures invalidate existing replay evidence"
+    );
+}
+
+#[tokio::test]
+async fn replay_resolution_observes_a_header_replicated_before_dispatch() {
+    let fixture = signed_fixture().await;
+    fixture
+        .insert_capture(RenderedRequestSource::ClaudeCliSubscription)
+        .await
+        .unwrap();
+    let candidate = fixture.candidates().await.unwrap().remove(0);
+    let tag = ReplayTag {
+        request_doc_id: candidate.request_doc_id.clone(),
+        source: OutputSource::ProviderTurn {
+            scope: candidate.coordinate.scope,
+            turn_index: candidate.coordinate.turn_index,
+            attempt: candidate.coordinate.attempt,
+        },
+    };
+    let replay = crate::provider_input::replay::owned_replay_input(
+        fixture.node.clone(),
+        stored_agent_request(&fixture).await,
+        fixture.request_commit_cid.clone(),
+        fixture.scope_kind,
+        None,
+        crate::provider_input::ProviderInputProfile::ClaudeMessages,
+    );
+    let resolve = replay.resolve.expect("canonical resolver");
+    let estimate = resolve(vec![tag.clone()]).await.unwrap();
+    assert_eq!(estimate.len(), 1);
+    let (unchanged, scans) =
+        crate::session::count_request_output_scans(resolve(vec![tag.clone()])).await;
+    assert_eq!(
+        unchanged.unwrap().len(),
+        1,
+        "an unchanged view resolves the same evidence"
+    );
+    assert_eq!(
+        scans, 1,
+        "each dispatch lookup revalidates canonical evidence"
+    );
+    assert_eq!(resolve(vec![tag.clone()]).await.unwrap().len(), 1);
+
+    let mut duplicate = fixture.header.clone();
+    duplicate.sequence += 1;
+    duplicate.message_key.push_str("-replicated-twin");
+    let created = fixture
+        .node
+        .execute_request_with_retry(
+            defra_node::QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
+                .with_variables(transcript_message_create_variables(&duplicate).unwrap()),
+            defra_node::ExecuteRetryPolicy::default(),
+        )
+        .await;
+    assert!(!created.has_errors(), "{:?}", created.errors);
+
+    let dispatch = resolve(vec![tag]).await.unwrap();
+    assert_eq!(
+        dispatch.len(),
+        2,
+        "the dispatch lookup sees the replicated physical twin"
+    );
+    assert_ne!(
+        dispatch[0].evidence.physical_header,
+        dispatch[1].evidence.physical_header
+    );
 }
