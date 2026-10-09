@@ -76,6 +76,45 @@ async fn provider_history_excludes_current_input_but_keeps_its_tool_results() {
 }
 
 #[tokio::test]
+async fn history_reconstruction_scans_a_shared_request_once() {
+    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(&node).await.unwrap();
+    let session_id = "session-shared-request-scan";
+    for sequence in 1..=3 {
+        let key = format!("prompt-{sequence}");
+        import_history_observation(
+            &node,
+            "doc-shared",
+            session_id,
+            "did:test:test",
+            None,
+            &format!("message {sequence}"),
+            &canonical_rows::authored_message_key("doc-shared", &key),
+            sequence,
+            None,
+        )
+        .await;
+    }
+
+    let (history, scans) = count_request_output_scans(history::load_history_projection(
+        &node,
+        session_id,
+        "did:test:test",
+        None,
+        None,
+        None,
+    ))
+    .await;
+
+    assert_eq!(history.unwrap().len(), 3);
+    assert_eq!(
+        scans, 1,
+        "one history pass scans a shared request's output once"
+    );
+    node.shutdown().await;
+}
+
+#[tokio::test]
 async fn compaction_entries_track_files_cumulatively() {
     let data_path = std::env::temp_dir().join(format!("gents-compaction-{}", uuid::Uuid::new_v4()));
     let node = defra_node::EmbeddedNode::builder()

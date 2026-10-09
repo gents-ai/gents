@@ -136,6 +136,10 @@ struct ReadCache {
     observed: BTreeMap<String, super::canonical_rows::TranscriptMessageRow>,
     /// Bulk readers cache scoped session headers; single-header readers query twins only.
     sessions: Option<BTreeMap<String, Vec<serde_json::Value>>>,
+    /// One bounded bulk pass reconstructs every message of a request
+    /// against the same scan. A reused scan that lacks a referenced close is
+    /// dropped and re-read, so replication filling that gap is still observed.
+    reuse_node_scans: bool,
 }
 
 impl ReadAccess<'_, '_> {
@@ -709,6 +713,15 @@ async fn load_referenced_segments(
                 .collect::<Result<Vec<_>>>()?,
         );
     }
+    for closure in &closures {
+        if cache
+            .requests
+            .get(&closure.segment.request_doc_id)
+            .is_some_and(|rows| !rows.iter().any(|row| row.doc_id == closure.doc_id))
+        {
+            cache.requests.remove(&closure.segment.request_doc_id);
+        }
+    }
     let mut sources = Vec::new();
     for closure in &closures {
         if !sources.iter().any(
@@ -739,8 +752,8 @@ async fn load_referenced_segments(
         records.extend(rows.into_iter().filter(|row| row.segment.source == source));
     }
     // A transaction has a fixed view; a node read may still be receiving
-    // additional facts, so never reuse its potentially incomplete scan.
-    if matches!(access, ReadAccess::Txn(_)) {
+    // additional facts, so reuse its scan only within one opted-in pass.
+    if matches!(access, ReadAccess::Txn(_)) || cache.reuse_node_scans {
         cache.requests.extend(local);
     }
     Ok(records)
@@ -777,7 +790,40 @@ async fn reconstruct_scoped_message_with_facts(
     let header = load_header(access, header_doc_id, agent_did, requester_did, cache).await?;
     let origin = validate_origin_chain(access, &header, agent_did, requester_did, cache).await?;
     let request_hint = origin.message.request_doc_id.clone();
-    let segments = load_referenced_segments(
+    let reconstruct = |segments: &[super::canonical_rows::OutputSegmentRow]| {
+        let observed = segments
+            .iter()
+            .map(|row| ObservedSegment {
+                doc_id: &row.doc_id,
+                segment: &row.segment,
+            })
+            .collect::<Vec<_>>();
+        if origin.doc_id != header.doc_id {
+            // Fork equality alone is insufficient: the origin's publication/source
+            // constraints must hold too. Fork publication deliberately relaxes those
+            // constraints on the child, not on the original authored message.
+            reconstruct_message(&observed, &[], &[], &origin.message).map_err(|error| {
+                (
+                    error,
+                    format!("reconstructing fork origin {}", origin.doc_id),
+                )
+            })?;
+        }
+        reconstruct_message(&observed, &[], &[], &header.message).map_err(|error| {
+            (
+                error,
+                format!("reconstructing exact canonical message {header_doc_id}"),
+            )
+        })
+    };
+    // A node scan reused from an earlier message may predate this message's
+    // payload segments; an incomplete result from it is re-read once.
+    let reused = if cache.reuse_node_scans && !matches!(access, ReadAccess::Txn(_)) {
+        cache.requests.keys().cloned().collect::<BTreeSet<_>>()
+    } else {
+        BTreeSet::new()
+    };
+    let mut segments = load_referenced_segments(
         access,
         &header,
         request_hint.as_deref(),
@@ -786,24 +832,33 @@ async fn reconstruct_scoped_message_with_facts(
         cache,
     )
     .await?;
-    let observed = segments
-        .iter()
-        .map(|row| ObservedSegment {
-            doc_id: &row.doc_id,
-            segment: &row.segment,
-        })
-        .collect::<Vec<_>>();
-    if origin.doc_id != header.doc_id {
-        // Fork equality alone is insufficient: the origin's publication/source
-        // constraints must hold too. Fork publication deliberately relaxes those
-        // constraints on the child, not on the original authored message.
-        reconstruct_message(&observed, &[], &[], &origin.message)
-            .map_err(anyhow::Error::new)
-            .with_context(|| format!("reconstructing fork origin {}", origin.doc_id))?;
+    let mut reconstructed = reconstruct(&segments);
+    if let Err((error, _)) = &reconstructed {
+        let stale = segments
+            .iter()
+            .map(|row| &row.segment.request_doc_id)
+            .chain(request_hint.as_ref())
+            .filter(|request| reused.contains(*request))
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        if error.is_incomplete() && !stale.is_empty() {
+            for request in &stale {
+                cache.requests.remove(request);
+            }
+            segments = load_referenced_segments(
+                access,
+                &header,
+                request_hint.as_deref(),
+                agent_did,
+                requester_did,
+                cache,
+            )
+            .await?;
+            reconstructed = reconstruct(&segments);
+        }
     }
-    let message = reconstruct_message(&observed, &[], &[], &header.message)
-        .map_err(anyhow::Error::new)
-        .with_context(|| format!("reconstructing exact canonical message {header_doc_id}"))?;
+    let message =
+        reconstructed.map_err(|(error, context)| anyhow::Error::new(error).context(context))?;
     Ok(ReconstructedScopedMessage {
         header,
         origin,
@@ -869,7 +924,10 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
     let Some(high_water) = high_water else {
         return Ok(Vec::new());
     };
-    let mut cache = ReadCache::default();
+    let mut cache = ReadCache {
+        reuse_node_scans: true,
+        ..ReadCache::default()
+    };
     let mut request_facts = BTreeMap::from([(
         (
             scope.request_doc_id.to_owned(),
@@ -1199,6 +1257,27 @@ pub(crate) async fn resolve_canonical_replay_tags(
                 .collect::<Result<Vec<_>>>()?;
             Ok((tag.clone(), evidence))
         })
+        .collect()
+}
+
+/// Physical header IDs of the session, the facts the twin and ambiguity checks
+/// of [`resolve_canonical_replay_tags`] range over. Headers are create-only, so
+/// an unchanged set means no header that could add a candidate has arrived.
+pub(crate) async fn canonical_replay_header_ids(
+    node: &EmbeddedNode,
+    scope: CanonicalReplayScope<'_>,
+) -> Result<BTreeSet<String>> {
+    let session_filter =
+        session_scope_filter(scope.agent_did, scope.session_id, scope.requester_did);
+    let response = ReadAccess::Node(node)
+        .query(
+            &format!(r#"{{ AgentMessage(filter: {{ {session_filter} }}) {{ _docID }} }}"#),
+            "load_canonical_replay_header_ids",
+        )
+        .await?;
+    rows_value(&response, "AgentMessage")?
+        .iter()
+        .map(|row| Ok(required_row_str(row, "_docID")?.to_owned()))
         .collect()
 }
 
@@ -1658,7 +1737,10 @@ pub(super) async fn load_sequenced_messages(
         .iter()
         .map(decode_transcript_message_row)
         .collect::<Result<Vec<_>>>()?;
-    let mut cache = ReadCache::default();
+    let mut cache = ReadCache {
+        reuse_node_scans: true,
+        ..ReadCache::default()
+    };
     let mut sequences = BTreeSet::new();
     let mut keys = BTreeSet::new();
     for row in &headers {
@@ -1847,5 +1929,169 @@ mod tests {
         let mut request_bound = child;
         request_bound.message.request_doc_id = Some("child-request".into());
         assert!(validate_fork(&request_bound, &origin).is_err());
+    }
+
+    async fn create_doc(
+        node: &EmbeddedNode,
+        mutation: &str,
+        variables: serde_json::Value,
+        field: &str,
+    ) -> String {
+        let response = node
+            .execute_request_with_retry(
+                defra_node::QueryRequest::new(mutation).with_variables(variables),
+                defra_node::ExecuteRetryPolicy::default(),
+            )
+            .await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        crate::graphql::single_mutation_document(&response, field)
+            .unwrap()
+            .unwrap()["_docID"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    }
+
+    /// `parts` as the ordered segments of one authored text stream; the last
+    /// closes the source.
+    fn authored_segments(
+        request_doc_id: &str,
+        key: &str,
+        parts: &[&str],
+    ) -> Vec<gents_protocol::output::OutputSegment> {
+        use gents_protocol::output::*;
+        let total = parts.iter().map(|part| part.len() as u64).sum::<u64>();
+        parts
+            .iter()
+            .enumerate()
+            .map(|(ordinal, part)| OutputSegment {
+                agent_did: "did:test:test".into(),
+                requester_did: None,
+                session_id: "session-scan-gap".into(),
+                request_doc_id: request_doc_id.into(),
+                source: OutputSource::Authored { key: key.into() },
+                writer: OutputWriter::RequestExecution {
+                    execution_generation: "observed-generation".into(),
+                },
+                ordinal: Some(ordinal as u32),
+                runs: vec![SegmentRun {
+                    stream: 0,
+                    bytes: part.len() as u32,
+                    declaration: (ordinal == 0).then_some(StreamDeclaration {
+                        block_index: 0,
+                        part_index: 0,
+                        payload: StreamPayload::Text,
+                    }),
+                }],
+                payload: (*part).into(),
+                close: (ordinal + 1 == parts.len()).then(|| SourceClose::Closed {
+                    outcome: OutputOutcome::Complete,
+                    segments: parts.len() as u32,
+                    stream_bytes: vec![total],
+                }),
+                created_at: chrono::Utc::now().to_rfc3339(),
+            })
+            .collect()
+    }
+
+    async fn create_authored_header(
+        node: &EmbeddedNode,
+        request_doc_id: &str,
+        key: &str,
+        sequence: u32,
+        close_doc_id: String,
+    ) -> String {
+        use gents_protocol::output::*;
+        let header = TranscriptMessage {
+            message_key: key.into(),
+            session_id: "session-scan-gap".into(),
+            agent_did: "did:test:test".into(),
+            requester_did: None,
+            request_doc_id: Some(request_doc_id.into()),
+            publication: MessagePublication::RequestExecution {
+                execution_generation: "observed-generation".into(),
+            },
+            outcome: OutputOutcome::Complete,
+            sequence,
+            role: MessageRole::User,
+            native_id: None,
+            blocks: vec![MessageBlock::Text {
+                text: PresentedPayload {
+                    output: PayloadRef {
+                        close_doc_id,
+                        stream: 0,
+                    },
+                    presentation: PayloadPresentation::Full,
+                },
+            }],
+            created_at: chrono::Utc::now().to_rfc3339(),
+        };
+        create_doc(
+            node,
+            super::super::canonical_rows::CREATE_AGENT_MESSAGE_MUTATION,
+            super::super::canonical_rows::transcript_message_create_variables(&header).unwrap(),
+            "create_AgentMessage",
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn reused_scan_observes_payload_segments_replicated_after_their_close() {
+        use super::super::canonical_rows::{
+            output_segment_create_variables, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+        };
+        let node = EmbeddedNode::builder().build().await.unwrap();
+        crate::ensure_runtime_schemas(&node).await.unwrap();
+        let request = "doc-scan-gap";
+        let create_segment = |segment: gents_protocol::output::OutputSegment| {
+            let node = &node;
+            async move {
+                create_doc(
+                    node,
+                    CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+                    output_segment_create_variables(&segment).unwrap(),
+                    "create_AgentOutputSegment",
+                )
+                .await
+            }
+        };
+        let [a] = authored_segments(request, "a", &["first"])
+            .try_into()
+            .unwrap();
+        let a_close = create_segment(a).await;
+        let a_header = create_authored_header(&node, request, "a", 1, a_close).await;
+        // B's close is visible before its payload segment replicates.
+        let [b_payload, b_close] = authored_segments(request, "b", &["hel", "lo"])
+            .try_into()
+            .unwrap();
+        let b_close = create_segment(b_close).await;
+        let b_header = create_authored_header(&node, request, "b", 2, b_close).await;
+
+        let mut cache = ReadCache {
+            reuse_node_scans: true,
+            ..ReadCache::default()
+        };
+        let a = reconstruct_scoped_message(
+            ReadAccess::Node(&node),
+            &a_header,
+            "did:test:test",
+            None,
+            &mut cache,
+        )
+        .await
+        .unwrap();
+        assert_eq!(a.1, gents_protocol::message::Message::user("first"));
+
+        create_segment(b_payload).await;
+        let b = reconstruct_scoped_message(
+            ReadAccess::Node(&node),
+            &b_header,
+            "did:test:test",
+            None,
+            &mut cache,
+        )
+        .await
+        .unwrap();
+        assert_eq!(b.1, gents_protocol::message::Message::user("hello"));
     }
 }
