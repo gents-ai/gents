@@ -5,7 +5,7 @@ import type {
   ToolServiceTestResult,
 } from "@source-inc/gents-desktop-client";
 
-import { actionFailure, shownFailure } from "./desktopShellRuntime";
+import { actionFailure, shownFailure } from "./actionFailure";
 
 /** Each configuration change the bridge takes, as a failure names it. */
 const CHANGES = {
@@ -46,7 +46,7 @@ type ConfigActionParams = {
   mutateSnapshot: <T>(operation: () => Promise<T>) => Promise<T>;
 };
 
-export function createDesktopShellConfigActions({
+export function createConfigActions({
   api,
   reportFailure,
   mutateSnapshot,

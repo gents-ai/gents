@@ -4,7 +4,7 @@ import {
   MOBILE_PERFORMANCE_FIXTURE,
   createDesktopUiHarness,
 } from "./ui-harness/desktopHarness";
-import { sessionLiveDeltaRequest } from "../src/hooks/desktopShellRuntime";
+import { sessionLiveDeltaRequest } from "../src/hooks/liveDelta";
 
 function serializedBytes(value: unknown) {
   return new TextEncoder().encode(JSON.stringify(value)).byteLength;

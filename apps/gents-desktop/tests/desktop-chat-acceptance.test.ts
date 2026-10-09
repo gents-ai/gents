@@ -5,7 +5,7 @@ import {
 } from "@source-inc/gents-desktop-chat";
 import { projectDeploymentOperationalState } from "@source-inc/gents-desktop-client";
 import { releaseOwnedSubmissionWorkflow } from "../src/hooks/chatStore";
-import { createDesktopShellChatActions } from "../src/hooks/desktopShellChatActions";
+import { createChatActions } from "../src/hooks/chatActions";
 import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 import { selection } from "../src/hooks/selectionStore";
 import { admittingProjection, historyOf, shellStores } from "./shell-fixture";
@@ -30,7 +30,7 @@ function fixture(
     }),
   };
   const sending = historyOf(stores, "sending");
-  const actions = createDesktopShellChatActions({
+  const actions = createChatActions({
     ...effects,
     api: { sendChatMessage: send, retryRequest: retry } as unknown as DesktopApiAdapter,
     stores,

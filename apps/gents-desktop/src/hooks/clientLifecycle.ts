@@ -13,19 +13,48 @@ import {
 import { ManagedServerStartupError } from "../lib/managedServerStartup";
 import { singleFlight } from "../lib/reads";
 import { isMobileTauriShell, ownsAutomaticRecovery } from "../lib/shellPlatform";
-import {
-  delay,
-  logShellEvent,
-  shouldAutoRestartP2P,
-  timingConfig,
-} from "./desktopShellRuntime";
-import { createSnapshotPublicationOwner } from "./desktopSnapshotPublication";
+import { timingConfig } from "./timing";
+import { createSnapshotPublicationOwner } from "./snapshotPublication";
 import { applyFleetSnapshot, equal, shareUnchanged } from "./fleetStore";
 import type { LocalServerActions } from "./localServer";
 import { writeSession } from "./sessionStore";
 import type { ShellStores } from "./shellProjection";
 import { createIncompatibleHomeOps } from "./useIncompatibleHome";
 import { clientStatus } from "./clientStore";
+
+function shouldAutoRestartP2P(
+  previous: P2PHealth | null,
+  next: P2PHealth | null,
+  lastAttemptAt: number | null,
+  now: number,
+  cooldownMs: number,
+) {
+  if (!next || next.status !== "wedged") {
+    return false;
+  }
+
+  if (lastAttemptAt !== null && now - lastAttemptAt < cooldownMs) {
+    return false;
+  }
+
+  if (!previous) {
+    return true;
+  }
+
+  return (
+    previous.status !== "wedged" ||
+    previous.consecutiveFailures !== next.consecutiveFailures ||
+    previous.lastError !== next.lastError
+  );
+}
+
+async function delay(ms: number) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export function logShellEvent(message: string) {
+  console.info(`[live-tauri-shell] ${message}`);
+}
 
 type ClientLifecycleParams = {
   api: DesktopApiAdapter;

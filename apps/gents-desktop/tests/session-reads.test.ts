@@ -5,7 +5,7 @@ import type {
   DesktopSessionSnapshot,
   SessionLiveDeltaView,
 } from "@source-inc/gents-desktop-client";
-import { setDesktopShellTimingConfigForTests } from "../src/hooks/desktopShellRuntime";
+import { setTimingForTests } from "../src/hooks/timing";
 import { createSessionReads } from "../src/hooks/sessionReads";
 import { createSelectionStore } from "../src/hooks/selectionStore";
 import { createSessionStore, readSession } from "../src/hooks/sessionStore";
@@ -514,7 +514,7 @@ describe("createSessionReads", () => {
 
   it("keeps applying live reads when periodic reconciliation is disabled", async () => {
     const clock = vi.spyOn(performance, "now").mockReturnValue(0);
-    setDesktopShellTimingConfigForTests({ activeSessionPollMs: null });
+    setTimingForTests({ activeSessionPollMs: null });
     try {
       const tip = session([], {
         totalItems: 0,
@@ -547,7 +547,7 @@ describe("createSessionReads", () => {
       expect(await reads.refreshSessionLiveDelta()).toBe(true);
       expect(fetchSessionLiveDelta).toHaveBeenCalledTimes(1);
     } finally {
-      setDesktopShellTimingConfigForTests(null);
+      setTimingForTests(null);
       clock.mockRestore();
     }
   });

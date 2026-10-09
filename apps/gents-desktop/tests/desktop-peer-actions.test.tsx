@@ -6,8 +6,8 @@ import type {
   DesktopApiAdapter,
   DesktopClientSnapshot,
 } from "@source-inc/gents-desktop-client";
-import { createDesktopShellPeerActions } from "../src/hooks/desktopShellPeerActions";
-import { createDesktopShellSelectionActions } from "../src/hooks/desktopShellSelectionActions";
+import { createPeerActions } from "../src/hooks/peerActions";
+import { createSelectionActions } from "../src/hooks/selectionActions";
 import { useSelection } from "../src/hooks/selectionStore";
 import { shellStores } from "./shell-fixture";
 
@@ -33,9 +33,9 @@ function usePeerRoute(
     }),
   );
   const current = useSelection(stores.selection);
-  const [route] = useState(() => createDesktopShellSelectionActions({ stores }));
+  const [route] = useState(() => createSelectionActions({ stores }));
   const [actions] = useState(() =>
-    createDesktopShellPeerActions({
+    createPeerActions({
       api,
       stores,
       ensureDesktopClientStarted,
@@ -119,7 +119,7 @@ describe("enrolment and peer status leave failures to the screen", () => {
   it("throws an enrolment failure in the peer's words without reporting it", async () => {
     const reportFailure = vi.fn();
     const refreshSnapshot = vi.fn(async () => {});
-    const actions = createDesktopShellPeerActions({
+    const actions = createPeerActions({
       api: {
         requestStatusEnrollment: vi.fn().mockRejectedValue(new Error("server refused")),
       } as unknown as DesktopApiAdapter,

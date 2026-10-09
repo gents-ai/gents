@@ -5,12 +5,10 @@ import { isMacTauriShell } from "../lib/shellPlatform";
 import { clientRunning } from "./clientStore";
 import { readSession } from "./sessionStore";
 import type { DesktopApp } from "./desktopApp";
-import { createDesktopProjectionController } from "./desktopProjectionController";
-import {
-  desktopUpdateRefreshScope,
-  logShellEvent,
-  timingConfig,
-} from "./desktopShellRuntime";
+import { createProjectionController } from "./projectionController";
+import { logShellEvent } from "./clientLifecycle";
+import { desktopUpdateRefreshScope } from "./projectionController";
+import { timingConfig } from "./timing";
 
 /**
  * How the desktop follows the client while it runs, as reactions to the
@@ -42,7 +40,7 @@ export function startClientObservation(
       logShellEvent(`desktop update listener failed: ${message}`);
       lifecycle.setError(message);
     };
-    const controller = createDesktopProjectionController({
+    const controller = createProjectionController({
       currentSessionId: () => selection.getState().sessionId,
       refreshSnapshot,
       refreshSession,

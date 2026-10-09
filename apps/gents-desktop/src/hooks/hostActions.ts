@@ -14,7 +14,7 @@ import { inNativeShell } from "../lib/nativeShell";
  * for more. Only the panel that asks shows each result, so these are plain
  * commands with no store: the panel keeps what it read and says what failed.
  */
-export function createDesktopShellHostActions({ api }: { api: DesktopApiAdapter }) {
+export function createHostActions({ api }: { api: DesktopApiAdapter }) {
   return {
     listInstalledPacks: () => api.listInstalledPacks(),
     listPackPluginSlots: () => api.listPackPluginSlots(),

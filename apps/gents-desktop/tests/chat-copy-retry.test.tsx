@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ChatTranscriptPanel } from "@source-inc/gents-desktop-chat";
 import { MessageList } from "@source-inc/gents-desktop-chat";
-import { createDesktopShellChatActions } from "../src/hooks/desktopShellChatActions";
+import { createChatActions } from "../src/hooks/chatActions";
 import {
   projectDeploymentOperationalState,
   type BehaviorReadinessDecision,
@@ -31,7 +31,7 @@ function chatActions(
     deployments: [deployment],
     selection: { agentDid: deployment.agentDid, sessionId: "s1" },
   });
-  const actions = createDesktopShellChatActions({
+  const actions = createChatActions({
     api,
     stores,
     project: () => projection as unknown as ShellProjection,

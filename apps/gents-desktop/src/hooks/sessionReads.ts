@@ -2,17 +2,13 @@ import type {
   DesktopApiAdapter,
   DesktopSessionSnapshot,
 } from "@source-inc/gents-desktop-client";
-import {
-  applySessionLiveDelta,
-  acceptsAsyncResult,
-  sessionLiveDeltaRequest,
-  timingConfig,
-  SESSION_TIMELINE_PAGE_SIZE,
-} from "./desktopShellRuntime";
+import { applySessionLiveDelta, sessionLiveDeltaRequest } from "./liveDelta";
+import { acceptsAsyncResult } from "./observationOrdering";
+import { timingConfig } from "./timing";
 import {
   mergeOlderSessionTimelinePage,
   mergeSessionTipSnapshot,
-} from "./desktopTimelinePaging";
+} from "./timelinePaging";
 import type { SessionLoadState } from "../lib/loadingStatus";
 import type { SelectionStore } from "./selectionStore";
 import {
@@ -22,6 +18,8 @@ import {
   writeSessionLoad,
   type SessionStore,
 } from "./sessionStore";
+
+export const SESSION_TIMELINE_PAGE_SIZE = 40;
 
 type SessionReadParams = {
   api: DesktopApiAdapter;

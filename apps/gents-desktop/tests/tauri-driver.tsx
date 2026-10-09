@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { expect } from "vitest";
 
 import App from "../src/App";
-import { setDesktopShellTimingConfigForTests } from "../src/hooks/desktopShellRuntime";
+import { setTimingForTests } from "../src/hooks/timing";
 import { navigate } from "../src/ui/lib/router";
 import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 import { type DesktopClientUpdatedListenerFactory } from "@source-inc/gents-desktop-client";
@@ -34,7 +34,7 @@ export function renderTauriAppDriverWithBridge(
   firstPeerId: string | null = null,
   timingConfig: TauriDriverTimingConfig | null = null,
 ) {
-  setDesktopShellTimingConfigForTests(timingConfig);
+  setTimingForTests(timingConfig);
   if (typeof globalThis.IntersectionObserver === "undefined") {
     globalThis.IntersectionObserver = class IntersectionObserver {
       readonly root = null;
@@ -249,7 +249,7 @@ export function renderTauriAppDriverWithBridge(
       try {
         rendered.unmount();
       } finally {
-        setDesktopShellTimingConfigForTests(null);
+        setTimingForTests(null);
       }
       await bridge.dispose?.();
     },

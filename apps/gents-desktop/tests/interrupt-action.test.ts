@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { wasShown } from "../src/hooks/desktopShellRuntime";
+import { wasShown } from "../src/hooks/actionFailure";
 import { testApp } from "./app-fixture";
 
 describe("stopping a request", () => {

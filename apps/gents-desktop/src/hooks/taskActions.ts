@@ -4,7 +4,7 @@ import type {
   TaskRunRequest,
   TaskRunResult,
 } from "@source-inc/gents-desktop-client";
-import { actionFailure, shownFailure } from "./desktopShellRuntime";
+import { actionFailure, shownFailure } from "./actionFailure";
 import { selection, type SelectionStore } from "./selectionStore";
 
 type TaskActionParams = {
@@ -16,7 +16,7 @@ type TaskActionParams = {
   reportFailure: (message: string) => void;
 };
 
-export function createDesktopShellTaskActions({
+export function createTaskActions({
   api,
   store,
   refreshSnapshot,

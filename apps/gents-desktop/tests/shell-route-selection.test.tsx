@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { DeploymentView } from "@source-inc/gents-desktop-client";
-import { createDesktopShellSelectionActions } from "../src/hooks/desktopShellSelectionActions";
+import { createSelectionActions } from "../src/hooks/selectionActions";
 import { selection } from "../src/hooks/selectionStore";
 import { shellStores } from "./shell-fixture";
 
@@ -20,7 +20,7 @@ function routeOwner(initial = { agentDid: "a", sessionId: "a-1" as string | null
     deployments: [node("a", ["a-1"]), node("b", ["b-1"])],
     selection: initial,
   });
-  const route = createDesktopShellSelectionActions({ stores });
+  const route = createSelectionActions({ stores });
   return { store: stores.selection, route };
 }
 

@@ -1,28 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
-import {
-  applySessionLiveDelta,
-  desktopUpdateRefreshScope,
-  sessionLiveDeltaRequest,
-} from "../src/hooks/desktopShellRuntime";
+import { applySessionLiveDelta, sessionLiveDeltaRequest } from "../src/hooks/liveDelta";
 import {
   mergeOlderSessionTimelinePage,
   mergeSessionTipSnapshot,
-} from "../src/hooks/desktopTimelinePaging";
-
-describe("desktopUpdateRefreshScope", () => {
-  it("uses ordinary store wakes to probe the canonical live cursor", () => {
-    expect(desktopUpdateRefreshScope("health", "session-1", "request-1")).toBe(
-      "snapshot",
-    );
-    expect(desktopUpdateRefreshScope("store", "session-1", "request-1")).toBe(
-      "sessionDelta",
-    );
-    expect(desktopUpdateRefreshScope("store", "session-1", null)).toBe("full");
-    expect(desktopUpdateRefreshScope("config", null, null)).toBe("full");
-  });
-});
+} from "../src/hooks/timelinePaging";
 
 describe("live session deltas", () => {
   it("applies a verified suffix while preserving historical row identity", () => {

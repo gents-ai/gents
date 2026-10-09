@@ -3,7 +3,7 @@ import type {
   MailboxItemView,
   MailboxQuestionAnswer,
 } from "@source-inc/gents-desktop-client";
-import { actionFailure, shownFailure } from "./desktopShellRuntime";
+import { actionFailure, shownFailure } from "./actionFailure";
 import { selection } from "./selectionStore";
 import { writeSession } from "./sessionStore";
 import type { ShellStores } from "./shellProjection";
@@ -18,7 +18,7 @@ type MailboxActionParams = {
 
 /** Opening, dismissing and answering mailbox items. An opened item routes
     the next message to it while the selection is the one it set up. */
-export function createDesktopShellMailboxActions({
+export function createMailboxActions({
   api,
   stores,
   refreshSnapshot,

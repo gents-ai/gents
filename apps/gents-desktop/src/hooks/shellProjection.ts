@@ -12,7 +12,6 @@ import {
 
 import type { ChatStore } from "./chatStore";
 import { clientRunning, syncHealthOf, type ClientStore } from "./clientStore";
-import { trackedRequestIdForSession } from "./desktopShellRuntime";
 import { listedSession, nodeOf, type FleetStore, type NodeView } from "./fleetStore";
 import type { Selection, SelectionStore } from "./selectionStore";
 import {
@@ -21,6 +20,21 @@ import {
   type SessionHeader,
   type SessionStore,
 } from "./sessionStore";
+
+function trackedRequestIdForSession(
+  sessionId: string | null,
+  workflow: ChatWorkflowState,
+) {
+  if (!sessionId) {
+    return null;
+  }
+
+  if (workflow.kind === "awaitingObservation" || workflow.kind === "turnInProgress") {
+    return workflow.sessionId === sessionId ? (workflow.requestId ?? null) : null;
+  }
+
+  return null;
+}
 
 /** Every store the shell is projected from. */
 export type ShellStores = {

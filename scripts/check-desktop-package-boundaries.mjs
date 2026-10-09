@@ -474,7 +474,7 @@ const hostInjectsOneBridge =
   /useState\(\(\) =>\s*createDesktopApp\(\{[^}]*\.\.\.bridge\s*\}\)/m.test(
     desktopApp,
   ) &&
-  /useDesktopRuntime\(app,\s*bridge\.listenToUpdates\)/.test(desktopApp);
+  /useClientRuntime\(app,\s*bridge\.listenToUpdates\)/.test(desktopApp);
 if (
   !desktopApp.includes("const client = createDesktopClient();") ||
   !hostInjectsOneBridge ||
@@ -534,10 +534,10 @@ for (const sourceRoot of [
   }
 }
 for (const path of [
-  "apps/gents-desktop/src/hooks/desktopShellChatActions.ts",
-  "apps/gents-desktop/src/hooks/desktopShellConfigActions.ts",
-  "apps/gents-desktop/src/hooks/desktopShellPeerActions.ts",
-  "apps/gents-desktop/src/hooks/desktopShellTaskActions.ts",
+  "apps/gents-desktop/src/hooks/chatActions.ts",
+  "apps/gents-desktop/src/hooks/configActions.ts",
+  "apps/gents-desktop/src/hooks/peerActions.ts",
+  "apps/gents-desktop/src/hooks/taskActions.ts",
 ]) {
   if (
     !readFileSync(join(root, path), "utf8").includes("api: DesktopApiAdapter")

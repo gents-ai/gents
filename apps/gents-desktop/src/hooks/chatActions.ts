@@ -15,7 +15,7 @@ import {
 } from "./chatFolders";
 import { chat } from "./chatStore";
 import { firstNode, nodeOf } from "./fleetStore";
-import { actionFailure, shownFailure } from "./desktopShellRuntime";
+import { actionFailure, shownFailure } from "./actionFailure";
 import { selection } from "./selectionStore";
 import { heldFor, readSession } from "./sessionStore";
 import type { ShellProjection, ShellStores } from "./shellProjection";
@@ -37,7 +37,7 @@ type ChatActionParams = {
  * Sending, retrying and renaming in the selected chat. Each reads the
  * selection, the node and the shell projection when it runs.
  */
-export function createDesktopShellChatActions({
+export function createChatActions({
   api,
   stores,
   project,

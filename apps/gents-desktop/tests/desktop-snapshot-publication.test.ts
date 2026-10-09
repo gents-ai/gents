@@ -6,7 +6,7 @@ import type {
   DesktopApiAdapter,
   DesktopClientSnapshot,
 } from "@source-inc/gents-desktop-client";
-import { createDesktopShellConfigActions } from "../src/hooks/desktopShellConfigActions";
+import { createConfigActions } from "../src/hooks/configActions";
 import { lifecycleFor } from "./shell-fixture";
 
 function deferred<T>() {
@@ -31,7 +31,7 @@ function configActions(
   api: DesktopApiAdapter,
   mutateSnapshot: <T>(operation: () => Promise<T>) => Promise<T>,
 ) {
-  return createDesktopShellConfigActions({
+  return createConfigActions({
     api,
     mutateSnapshot,
     reportFailure: vi.fn(),

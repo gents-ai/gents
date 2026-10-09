@@ -5,7 +5,7 @@ import {
   withFolder,
 } from "../src/hooks/chatFolders";
 import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
-import { createDesktopShellChatActions } from "../src/hooks/desktopShellChatActions";
+import { createChatActions } from "../src/hooks/chatActions";
 import { admittingProjection, shellStores } from "./shell-fixture";
 import { folderLabel } from "../src/ui/screens/ChatFolderPicker";
 
@@ -62,7 +62,7 @@ describe("sending with a chat folder", () => {
       deployments: [{ agentDid: "agent", sessions: [], mailboxItems: [] }],
       selection: { agentDid: "agent" },
     });
-    const actions = createDesktopShellChatActions({
+    const actions = createChatActions({
       api: { sendChatMessage } as unknown as DesktopApiAdapter,
       stores,
       project: () => admittingProjection(),

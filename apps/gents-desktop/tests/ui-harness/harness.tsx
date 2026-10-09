@@ -2,7 +2,7 @@ import React, { Profiler } from "react";
 import ReactDOM from "react-dom/client";
 
 import App from "../../src/App";
-import { setDesktopShellTimingConfigForTests } from "../../src/hooks/desktopShellRuntime";
+import { setTimingForTests } from "../../src/hooks/timing";
 import { createDesktopUiHarness } from "./desktopHarness";
 import { createLiveDesktopUiHarness } from "./liveBridgeHarness";
 
@@ -50,7 +50,7 @@ if ("sessionSync" in harness && harness.sessionSync) {
   window.__GENTS_SESSION_SYNC__ = harness.sessionSync;
 }
 
-setDesktopShellTimingConfigForTests({
+setTimingForTests({
   clientRestartBackoffMs: 1,
   clientRestartMaxAttempts: 2,
   p2pAutoRestartCooldownMs: 10,

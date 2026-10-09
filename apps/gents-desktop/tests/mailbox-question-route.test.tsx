@@ -4,7 +4,7 @@ import type {
   DesktopApiAdapter,
   MailboxItemView,
 } from "@source-inc/gents-desktop-client";
-import { createDesktopShellMailboxActions } from "../src/hooks/desktopShellMailboxActions";
+import { createMailboxActions } from "../src/hooks/mailboxActions";
 import { shellStores } from "./shell-fixture";
 
 const item = {
@@ -18,7 +18,7 @@ const item = {
 
 function mailbox(api: DesktopApiAdapter) {
   const stores = shellStores();
-  const actions = createDesktopShellMailboxActions({
+  const actions = createMailboxActions({
     api,
     stores,
     refreshSnapshot: async () => {},

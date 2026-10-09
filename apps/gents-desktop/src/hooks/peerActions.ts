@@ -3,7 +3,7 @@ import type {
   DesktopApiAdapter,
   DesktopClientSnapshot,
 } from "@source-inc/gents-desktop-client";
-import { shownFailure } from "./desktopShellRuntime";
+import { shownFailure } from "./actionFailure";
 import type { ShellStores } from "./shellProjection";
 import { clientStatus } from "./clientStore";
 
@@ -19,7 +19,7 @@ type PeerActionParams = {
   selectAgent: (agentDid: string | null) => void;
 };
 
-export function createDesktopShellPeerActions({
+export function createPeerActions({
   api,
   stores,
   ensureDesktopClientStarted,
