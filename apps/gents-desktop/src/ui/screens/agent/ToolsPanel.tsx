@@ -22,6 +22,7 @@ import {
 import { RowMenu } from "./RowMenu";
 import { useCallback, useState } from "react";
 import { useApp } from "@/app/AppContext";
+import { Disclosure } from "../../components/Disclosure";
 
 /* the document a draft starts from: read-only files, no commands */
 export function newToolsDocument(deployment: NodeView): Tools {
@@ -388,10 +389,7 @@ export function ToolsEditor({
       <Group title="Advanced tool groups">
         {/* the whole document as JSON: an escape hatch, closed by default; open, it
             shows in full so the page is the only thing that scrolls */}
-        <details>
-          <summary className="cursor-pointer px-5 py-4 text-sm text-muted-foreground">
-            Canonical JSON
-          </summary>
+        <Disclosure summary="Canonical JSON" summaryClassName="px-5 py-4">
           <AreaRow
             id={id("advanced")}
             label="Canonical JSON"
@@ -404,7 +402,7 @@ export function ToolsEditor({
             rows={12}
             mono
           />
-        </details>
+        </Disclosure>
       </Group>
       <DraftActions
         draft={d}

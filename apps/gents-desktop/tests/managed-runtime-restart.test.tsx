@@ -95,10 +95,8 @@ describe("managed runtime restart settings", () => {
     expect(screen.queryByText(/Start with the app/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Supervised by the desktop/i)).not.toBeInTheDocument();
     await user.click(await screen.findByRole("button", { name: "Change access…" }));
-    await user.selectOptions(
-      screen.getByRole("combobox", { name: "Tool ceiling" }),
-      "meta-only",
-    );
+    await user.click(screen.getByRole("combobox", { name: "Tool ceiling" }));
+    await user.click(await screen.findByRole("option", { name: "Metatools only" }));
     await user.click(screen.getByRole("button", { name: "Review complete — restart" }));
 
     expect(await screen.findByText("meta-only")).toBeInTheDocument();

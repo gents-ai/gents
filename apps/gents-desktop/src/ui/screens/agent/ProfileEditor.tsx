@@ -46,6 +46,7 @@ import {
 } from "../inference/InferenceModelControls";
 import { useApp } from "@/app/AppContext";
 import { useModelRecommendation } from "./useModelRecommendation";
+import { Disclosure } from "../../components/Disclosure";
 
 /* behaviors named in Used by before the rest are counted */
 const USERS_SHOWN = 3;
@@ -432,10 +433,7 @@ export function ProfileEditor({
           value={d.draft.displayName}
           onChange={(v) => d.set("displayName", v)}
         />
-        <details>
-          <summary className="cursor-pointer px-4 py-3 text-sm text-muted-foreground">
-            Description
-          </summary>
+        <Disclosure summary="Description" summaryClassName="px-4 py-3">
           <AreaRow
             id={id("description")}
             label="Description"
@@ -443,7 +441,7 @@ export function ProfileEditor({
             onChange={(v) => d.set("description", v)}
             rows={2}
           />
-        </details>
+        </Disclosure>
         <RefRow
           id={id("backend")}
           label="Backend"
