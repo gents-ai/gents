@@ -127,7 +127,7 @@ describe("enrolment and peer status leave failures to the screen", () => {
       ensureDesktopClientStarted: async () => ({ client: {} }) as DesktopClientSnapshot,
       mutateSnapshot: async <T,>(operation: () => Promise<T>) => operation(),
       refreshSnapshot,
-      selectAgent: vi.fn(),
+      selectNode: vi.fn(),
       reportFailure,
     });
 

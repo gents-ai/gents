@@ -34,7 +34,6 @@ describeLive("Tauri app live fleet add flow", () => {
           expect(
             screen.getByRole("link", {
               name: `${deployment?.node.displayName ?? deployment?.label} sessions`,
-              exact: true,
             }),
           ).toHaveAttribute(
             "href",
