@@ -372,7 +372,7 @@ fn collect_plan_observations(plan: &Value, out: &mut Vec<String>) {
 
 pub fn render_result(value: Value) -> Result<String> {
     Ok(serde_json::to_string(
-        &crate::self_config::Ordered::reading_order(
+        &crate::tool_output::Ordered::reading_order(
             value,
             &[
                 "findings",

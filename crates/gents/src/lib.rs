@@ -638,3 +638,5 @@ mod public_api_tests {
         let _oneshot = run_openai_oneshot_with_tools;
     }
 }
+
+pub(crate) mod tool_output;
