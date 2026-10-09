@@ -1,3 +1,5 @@
+use crate::identity::NodeIdentity;
+
 use super::support::*;
 use super::*;
 
