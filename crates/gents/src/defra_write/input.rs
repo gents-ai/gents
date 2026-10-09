@@ -57,7 +57,7 @@ fn admits_count(kind: &Value) -> bool {
     matches!(kind.as_str(), Some("integer" | "number" | "string"))
 }
 
-pub(super) fn validate_input(
+pub(crate) fn validate_input(
     schema: &str,
     required: bool,
     filled: bool,

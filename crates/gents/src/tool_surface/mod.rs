@@ -140,6 +140,11 @@ impl ToolSurface {
                     .iter()
                     .flat_map(|decl| decl.filter_fields.iter()),
             )
+            .chain(
+                self.plugin_tools
+                    .iter()
+                    .flat_map(|plugin| plugin.input_fields.iter()),
+            )
             .filter_map(|field| match &field.fill {
                 Some(crate::document_config::WriteToolFieldFill::SourceField(source)) => {
                     Some(source.clone())

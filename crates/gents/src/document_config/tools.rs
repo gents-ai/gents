@@ -503,6 +503,12 @@ pub struct PluginToolRef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub digest: Option<String>,
+    /// Trigger-owned String inputs hidden from the model. Resolution uses the
+    /// same correlation/source-field owner as bounded datastore tools; a caller
+    /// cannot supply or replace one of these fields.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<super::WriteToolField>>", optional = nullable))]
+    pub input_fields: Vec<super::WriteToolField>,
 }
 
 impl PluginToolRef {
@@ -837,6 +843,19 @@ impl Tools {
         if let Some(integrations) = &self.integrations {
             let mut plugin_tool_names = std::collections::BTreeSet::new();
             for plugin in integrations.plugins.iter().flatten() {
+                let mut inputs = std::collections::BTreeSet::new();
+                for field in &plugin.input_fields {
+                    if crate::graphql::validate_graphql_name(&field.name).is_err()
+                        || field.fill.is_none()
+                        || field.required
+                        || !inputs.insert(&field.name)
+                    {
+                        errors.push(format!(
+                            "integrations.plugins: {:?} input_fields must be distinct runtime-filled fields with required omitted",
+                            plugin.plugin
+                        ));
+                    }
+                }
                 if let Err(error) = crate::plugin::store::parse_coordinate(&plugin.plugin) {
                     errors.push(format!("integrations.plugins: {error}"));
                 } else if !plugin_tool_names.insert(plugin.tool_name()) {
