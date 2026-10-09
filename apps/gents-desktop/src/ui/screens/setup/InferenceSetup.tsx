@@ -2,9 +2,10 @@
    and its defaults, and save them in one operator transaction. Shared by
    first run, setup re-entry and adding a backend from the agent screen.
    Provider/model guidance comes from the versioned Rust contract. */
-import { useEffect, useMemo, useReducer, useRef } from "react";
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { KeyRound, Orbit, Server, Sparkles } from "lucide-react";
 import type { DesktopClientSnapshot } from "@source-inc/gents-desktop-client";
+import { newestWins } from "../../../lib/reads";
 import { Button } from "@gents/ui/components/button";
 import { Spinner } from "@gents/ui/components/spinner";
 import { ManagedServerWaitNotice } from "./SetupProgress";
@@ -108,7 +109,7 @@ export function InferenceSetup({
   );
   /* reads that answer for another agent, or before a sign-in that changed
      what they would say, are dropped */
-  const accountRevision = useRef(0);
+  const [accountReads] = useState(newestWins);
   const setupAgentDid = agentDid ?? selectedNode?.agentDid;
   const setupAgentDidRef = useRef(setupAgentDid);
   setupAgentDidRef.current = setupAgentDid;
@@ -147,21 +148,20 @@ export function InferenceSetup({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [requiresManagedRuntime, runtimeGate]);
   const observeAccounts = (agentDid: string) => {
-    const revision = ++accountRevision.current;
+    const current = accountReads.begin();
     const seedSignedIn = purpose !== "add-backend";
     return actions.loadProviderAccounts(agentDid).then((accounts) => {
       /* Sign-in remains available if account lookup fails, but only a
          click starts it: an unknown account may already be connected. */
       if (!accounts) return;
-      if (accountRevision.current !== revision || setupAgentDidRef.current !== agentDid)
-        return;
+      if (!current() || setupAgentDidRef.current !== agentDid) return;
       dispatch({ type: "accountsRead", accounts, seedSignedIn });
     });
   };
   useEffect(() => {
     dispatch({ type: "accountsCleared" });
     if (!setupAgentDid) {
-      accountRevision.current += 1;
+      accountReads.supersede();
       return;
     }
     void observeAccounts(setupAgentDid);
@@ -199,7 +199,7 @@ export function InferenceSetup({
         onUrl: (url) => dispatch({ type: "authUrl", url }),
       });
       if (setupAgentDidRef.current !== agentDid) return;
-      accountRevision.current += 1;
+      accountReads.supersede();
       dispatch({ type: "pendingSaveCleared", provider });
       dispatch({ type: "authUrl", url: null });
       const outcome = result.signIn;
@@ -247,7 +247,7 @@ export function InferenceSetup({
         PROVIDER_CREDENTIAL_KIND[oauthProvider],
       );
       if (setupAgentDidRef.current !== agentDid) return;
-      accountRevision.current += 1;
+      accountReads.supersede();
       if (purpose === "add-backend" && account.accountRef !== null) {
         onDone(await actions.readSnapshot());
         return;

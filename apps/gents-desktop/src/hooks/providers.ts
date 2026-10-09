@@ -7,6 +7,7 @@ import type {
   ProviderAccountView,
 } from "@source-inc/gents-desktop-client";
 
+import { newestWinsBy, singleFlight } from "../lib/reads";
 import type { ClientStore } from "./clientStore";
 import { providers, type ProviderStore } from "./providerStore";
 
@@ -26,19 +27,16 @@ type ProviderParams = {
  * again once it settles, whether or not it succeeded.
  */
 export function createProviders({ api, store, client }: ProviderParams) {
-  /* per agent, the newest read asked for: only it is shown, so an older
-     answer, or a failure, landing after it changes nothing */
-  const accountReads = new Map<string, number>();
+  /* per agent, only the newest read is shown, so an older answer, or a
+     failure, landing after it changes nothing */
+  const accountReads = newestWinsBy<string>();
   const watching = new Map<string, number>();
-  const usageReads = new Map<string, number>();
-  let catalogRead: Promise<void> | null = null;
+  const usageReads = newestWinsBy<string>();
 
   function loadProviderAccounts(
     agentDid: string,
   ): Promise<ProviderAccountView[] | null> {
-    const read = (accountReads.get(agentDid) ?? 0) + 1;
-    accountReads.set(agentDid, read);
-    const current = () => accountReads.get(agentDid) === read;
+    const current = accountReads.begin(agentDid);
     return (api.listProviderAccounts?.(agentDid) ?? Promise.resolve([])).then(
       (views) => {
         if (current()) providers.accountsRead(store, agentDid, views);
@@ -74,28 +72,26 @@ export function createProviders({ api, store, client }: ProviderParams) {
   });
 
   function readUsage(agentDid: string, force: boolean, provider: string | null) {
-    const read = (usageReads.get(agentDid) ?? 0) + 1;
-    usageReads.set(agentDid, read);
+    const current = usageReads.begin(agentDid);
     return api.readProviderUsage?.(agentDid, force, provider).then((views) => {
-      if (usageReads.get(agentDid) === read)
-        providers.usageRead(store, agentDid, views);
+      if (current()) providers.usageRead(store, agentDid, views);
     });
   }
 
-  function loadSetupCatalog(): Promise<void> {
-    if (store.getState().catalog) return Promise.resolve();
-    catalogRead ??= Promise.resolve()
+  const readCatalog = singleFlight(() =>
+    Promise.resolve()
       .then(() => api.getInferenceSetupCatalog?.())
       .then(
         (catalog) => {
           if (catalog) providers.catalogRead(store, catalog);
         },
         (cause: unknown) => providers.catalogFailed(store, { cause }),
-      )
-      .finally(() => {
-        catalogRead = null;
-      });
-    return catalogRead;
+      ),
+  );
+
+  function loadSetupCatalog(): Promise<void> {
+    if (store.getState().catalog) return Promise.resolve();
+    return readCatalog();
   }
 
   return {

@@ -11,6 +11,7 @@ import {
   type DesktopStartupPhase,
 } from "../lib/loadingStatus";
 import { ManagedServerStartupError } from "../lib/managedServerStartup";
+import { singleFlight } from "../lib/reads";
 import { isMobileTauriShell, ownsAutomaticRecovery } from "../lib/shellPlatform";
 import {
   delay,
@@ -73,8 +74,6 @@ export function createClientLifecycle({
     lastObservedP2PHealth: null,
   };
   let localServerAvailable: boolean | null = null;
-  let startClientInFlight: Promise<DesktopClientSnapshot> | null = null;
-  let initializationInFlight: Promise<void> | null = null;
   let managedServerWaitAbort: AbortController | null = null;
 
   function clientAutostarts(next: DesktopClientSnapshot) {
@@ -147,31 +146,25 @@ export function createClientLifecycle({
     return accepted;
   }
 
-  async function ensureDesktopClientStarted(): Promise<DesktopClientSnapshot> {
-    if (startClientInFlight) return startClientInFlight;
+  const ensureDesktopClientStarted = singleFlight(async () => {
     setStarting(true);
     setError(null);
-    const pending = (async () => {
-      const isCurrent = publication.checkpoint();
-      try {
-        return await mutateSnapshot(() => api.startDesktopClient());
-      } catch (error) {
-        if (isCurrent() || !publication.snapshot?.client) {
-          setError(String(error));
-          if (client.getState().startupPhase === "starting-client") {
-            setStartupPhase("client-error");
-          }
-          await home.adopt(error);
+    const isCurrent = publication.checkpoint();
+    try {
+      return await mutateSnapshot(() => api.startDesktopClient());
+    } catch (error) {
+      if (isCurrent() || !publication.snapshot?.client) {
+        setError(String(error));
+        if (client.getState().startupPhase === "starting-client") {
+          setStartupPhase("client-error");
         }
-        throw error;
-      } finally {
-        startClientInFlight = null;
-        setStarting(false);
+        await home.adopt(error);
       }
-    })();
-    startClientInFlight = pending;
-    return pending;
-  }
+      throw error;
+    } finally {
+      setStarting(false);
+    }
+  });
 
   /* Automatic recovery, where this window owns it: asked after every read, a
      repeated one included (startup run again reads the same stopped client),
@@ -235,46 +228,37 @@ export function createClientLifecycle({
     }
   }
 
-  function initializeDesktop(): Promise<void> {
-    if (initializationInFlight) return initializationInFlight;
-    const pending = (async () => {
-      recovery.autostartAttempted = false;
-      if (supportsManagedServer && ownsAutomaticRecovery()) {
-        setStartupPhase("checking-managed-server");
-        const abort = new AbortController();
-        managedServerWaitAbort = abort;
-        setManagedServerFailure(null);
-        try {
-          localServerAvailable = await localServer.restoreLocalServer(abort.signal);
-        } catch (error) {
-          // A legacy or broken ~/.gents must not block first-run setup or
-          // already-saved remote peers. Surface the error after the app is up.
-          localServerAvailable = false;
-          setError(error instanceof Error ? error.message : String(error));
-          if (await home.adopt(error)) {
-            setStartupPhase("managed-server-error");
-            return;
-          }
-          if (error instanceof ManagedServerStartupError) {
-            setManagedServerFailure(error);
-            setStartupPhase("managed-server-error");
-            return;
-          }
+  const initializeDesktop = singleFlight(async (): Promise<void> => {
+    recovery.autostartAttempted = false;
+    if (supportsManagedServer && ownsAutomaticRecovery()) {
+      setStartupPhase("checking-managed-server");
+      const abort = new AbortController();
+      managedServerWaitAbort = abort;
+      setManagedServerFailure(null);
+      try {
+        localServerAvailable = await localServer.restoreLocalServer(abort.signal);
+      } catch (error) {
+        // A legacy or broken ~/.gents must not block first-run setup or
+        // already-saved remote peers. Surface the error after the app is up.
+        localServerAvailable = false;
+        setError(error instanceof Error ? error.message : String(error));
+        if (await home.adopt(error)) {
+          setStartupPhase("managed-server-error");
+          return;
+        }
+        if (error instanceof ManagedServerStartupError) {
+          setManagedServerFailure(error);
+          setStartupPhase("managed-server-error");
+          return;
         }
       }
-      setStartupPhase("loading-configuration");
-      await refreshSnapshot();
-    })().finally(() => {
-      if (initializationInFlight === pending) {
-        initializationInFlight = null;
-      }
-    });
-    initializationInFlight = pending;
-    return pending;
-  }
+    }
+    setStartupPhase("loading-configuration");
+    await refreshSnapshot();
+  });
 
   function skipManagedServerWait() {
-    if (initializationInFlight) {
+    if (initializeDesktop.running) {
       managedServerWaitAbort?.abort();
       return;
     }

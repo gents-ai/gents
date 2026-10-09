@@ -2,8 +2,9 @@
    subscription runs on, and its models and usage. */
 import type { NodeView } from "../../../hooks/fleetStore";
 import { dependentsWarning } from "./dependents";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { newestWins } from "../../../lib/reads";
 import type {
   BackendProviderKind,
   BackendSaveRequest,
@@ -202,11 +203,11 @@ export function BackendEditor({
   );
   const [probe, setProbe] = useState<string | null>(null);
   const [discoveredModels, setDiscoveredModels] = useState<string[] | null>(null);
-  const discoveryRevision = useRef(0);
+  const [discoveries] = useState(newestWins);
   const id = (f: string) => `${backend.backendId}-${f}`;
   const subscription = d.draft.providerKind in SUBSCRIPTION;
   useEffect(() => {
-    discoveryRevision.current += 1;
+    discoveries.supersede();
     setDiscoveredModels(null);
     setProbe(null);
   }, [d.draft.providerKind, d.draft.endpoint]);
@@ -248,7 +249,7 @@ export function BackendEditor({
               size="sm"
               variant="outline"
               onClick={async () => {
-                const revision = ++discoveryRevision.current;
+                const current = discoveries.begin();
                 try {
                   if (subscription) {
                     setProbe("Discovering models…");
@@ -264,7 +265,7 @@ export function BackendEditor({
                     });
                     if (!result.reachable)
                       throw new Error(result.failure?.message ?? "Discovery failed");
-                    if (discoveryRevision.current !== revision) return;
+                    if (!current()) return;
                     setDiscoveredModels(
                       result.models.map((option) => option.advertised.model_name),
                     );
@@ -274,7 +275,7 @@ export function BackendEditor({
                   const endpoint = requiredHttpUrl("Endpoint", d.draft.endpoint);
                   setProbe("probing…");
                   const r = await probeInferenceEndpoint(endpoint);
-                  if (discoveryRevision.current !== revision) return;
+                  if (!current()) return;
                   setProbe(
                     r.reachable
                       ? `reachable · ${r.models.length} models`
@@ -282,7 +283,7 @@ export function BackendEditor({
                   );
                   toast(r.reachable ? "Endpoint reachable" : "Endpoint unreachable");
                 } catch (error) {
-                  if (discoveryRevision.current !== revision) return;
+                  if (!current()) return;
                   setProbe("probe failed");
                   toast(
                     `Probe failed: ${error instanceof Error ? error.message : String(error)}`,

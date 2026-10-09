@@ -13,6 +13,7 @@ import {
   observeManagedServerOperation,
   type ManagedServerWait,
 } from "../lib/managedServerStartup";
+import { newestWins } from "../lib/reads";
 import type { ClientStore } from "./clientStore";
 import {
   localServer,
@@ -36,9 +37,9 @@ type LocalServerParams = {
  * service over each other.
  */
 export function createLocalServer({ api, store, client }: LocalServerParams) {
-  /* only the newest read asked for is shown: a read begun before an
-     operation may answer after it with the status it replaced */
-  let asked = 0;
+  /* only the newest read is shown: a read begun before an operation may
+     answer after it with the status it replaced */
+  const reads = newestWins();
   let watchers = 0;
   let running: { operation: LocalServerOperation; done: Promise<unknown> } | null =
     null;
@@ -46,22 +47,22 @@ export function createLocalServer({ api, store, client }: LocalServerParams) {
   const publishWait = (wait: ManagedServerWait | null) =>
     localServer.waiting(store, wait);
   const settled = (status: ManagedServerStatus) => {
-    asked += 1;
+    reads.supersede();
     localServer.read(store, status);
     return status;
   };
 
   function refreshLocalServer(): Promise<ManagedServerStatus | null> {
     if (!api.managedServerStatus) return Promise.resolve(null);
-    const read = ++asked;
+    const current = reads.begin();
     return Promise.resolve(api.managedServerStatus()).then(
       (status) => {
         if (!status) return null;
-        if (read === asked) localServer.read(store, status);
+        if (current()) localServer.read(store, status);
         return status;
       },
       (error: unknown) => {
-        if (read === asked) localServer.readFailed(store, String(error));
+        if (current()) localServer.readFailed(store, String(error));
         return null;
       },
     );
@@ -83,7 +84,7 @@ export function createLocalServer({ api, store, client }: LocalServerParams) {
       .catch(() => {})
       .then(async () => {
         localServer.operating(store, operation);
-        asked += 1;
+        reads.supersede();
         try {
           return await run();
         } finally {

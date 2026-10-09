@@ -11,6 +11,7 @@ import {
   DialogTitle,
 } from "@gents/ui/components/dialog";
 import { toast } from "sonner";
+import { newestWins } from "../../lib/reads";
 import type {
   PluginApprovalDecision,
   PluginApprovalRequest,
@@ -27,19 +28,19 @@ export function PluginAccessPrompt() {
   /* one poll out at a time; an answer outdates the one out, which may have
      read the queue before the answer reached the host */
   const polling = useRef(false);
-  const asked = useRef(0);
+  const [asks] = useState(newestWins);
 
   const refresh = useCallback(async () => {
     if (answering.current || polling.current) return;
     polling.current = true;
-    const ask = ++asked.current;
+    const current = asks.begin();
     try {
       const { requests } = await actions.listPendingPluginApprovals();
-      if (ask !== asked.current) return;
+      if (!current()) return;
       failed.current = null;
       setQuestion(requests[0] ?? null);
     } catch (error) {
-      if (ask !== asked.current) return;
+      if (!current()) return;
       const text = error instanceof Error ? error.message : String(error);
       if (failed.current !== text) toast.error(text);
       failed.current = text;
@@ -57,7 +58,7 @@ export function PluginAccessPrompt() {
   async function answer(decision: PluginApprovalDecision) {
     if (!question) return;
     answering.current = true;
-    asked.current += 1;
+    asks.supersede();
     try {
       await actions.decidePluginApproval(question.id, decision);
       setQuestion(null);
