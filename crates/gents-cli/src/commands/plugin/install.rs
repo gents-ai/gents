@@ -218,6 +218,7 @@ mod instruction_tests {
             &gents::document_config::PluginToolRef {
                 plugin: "team/echo".into(),
                 digest: None,
+                input_fields: Vec::new(),
             },
             None,
         )

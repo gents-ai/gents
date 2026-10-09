@@ -580,6 +580,7 @@ fn plugin_image_tool(image_bytes: usize) -> (tempfile::TempDir, Box<dyn ToolDyn>
         &crate::document_config::PluginToolRef {
             plugin: "team/plugin".into(),
             digest: Some(record.digest.clone()),
+            input_fields: Vec::new(),
         },
         None,
     )
