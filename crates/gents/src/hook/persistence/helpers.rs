@@ -259,8 +259,9 @@ pub(super) fn json_string(value: serde_json::Value) -> String {
             "sessions",
             "agents",
             "message",
-            "error",
             "status",
+            "process",
+            "error",
             "next_call",
             "next_offset",
             "ok",
@@ -448,6 +449,19 @@ mod tests {
         let value = json!({"ok":true,"status":"idle","result":null,"session_id":"session"});
         let rendered = json_string(value.clone());
         assert!(rendered.starts_with("{\n  \"result\": null,"));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&rendered).unwrap(),
+            value
+        );
+    }
+
+    #[test]
+    fn successful_process_stop_leads_with_the_observed_outcome() {
+        let value = json!({"ok":true,"status":"cancelled","process":"stopped","error":null,"tool_call_id":"call"});
+        let rendered = json_string(value.clone());
+        assert!(
+            rendered.starts_with("{\n  \"status\": \"cancelled\",\n  \"process\": \"stopped\",")
+        );
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&rendered).unwrap(),
             value
