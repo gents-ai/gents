@@ -620,7 +620,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::PACK_INSTALLATION_NAME,
         gents_protocol::schemas::PACK_INSTALLATION,
-        "bafyreiar7bvkggoujwskpj4xxvstr4q7i2ul4pcjcmqnl4amaxv6u4l3ki"
+        "bafyreid74trtjvnquhtehlqi2on37cdd7q77jvpwxadbudn6t3k2bx7ety"
     ),
     baseline_entry!(
         gents_protocol::schemas::PROVIDER_ACCOUNT_USAGE_NAME,
