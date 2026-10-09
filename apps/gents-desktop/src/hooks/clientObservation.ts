@@ -3,6 +3,7 @@ import { listenToDesktopClientUpdates } from "@source-inc/gents-desktop-client";
 
 import { isMacTauriShell } from "../lib/shellPlatform";
 import { clientRunning } from "./clientStore";
+import { readSession } from "./sessionStore";
 import type { DesktopApp } from "./desktopApp";
 import { createDesktopProjectionController } from "./desktopProjectionController";
 import {
@@ -93,11 +94,13 @@ export function startClientObservation(
       clearTimeout(pollTimer);
       pollTimer = undefined;
       if (key === null || pollMs === null) return;
+      const nextPollMs = () =>
+        readSession(stores.session)?.liveCursor ? Math.min(250, pollMs) : pollMs;
       const poll = async () => {
         await controller.request("sessionDelta");
-        if (!stopped && polled === key) pollTimer = setTimeout(poll, pollMs);
+        if (!stopped && polled === key) pollTimer = setTimeout(poll, nextPollMs());
       };
-      pollTimer = setTimeout(poll, pollMs);
+      pollTimer = setTimeout(poll, nextPollMs());
     };
 
     publishSelection();
@@ -132,6 +135,7 @@ export function startClientObservation(
     return () => {
       stopped = true;
       controller.dispose();
+      actions.invalidateSessionReads();
       clearTimeout(pollTimer);
       unsubscribeSelection();
       unsubscribeTracked();

@@ -84,6 +84,20 @@ pub struct ToolSurface {
     pub(super) eth_queries: Vec<crate::eth::ResolvedEthQuery>,
     pub(super) eth_calls: Vec<crate::eth::ResolvedEthCall>,
     pub(super) plugin_tools: Vec<crate::document_config::PluginToolRef>,
+    /// The plugin tools above resolved against the host plugin store when the
+    /// surface was resolved. It exists so that installing or removing a named
+    /// plugin is a behavior change the reconciler sees (it feeds the runtime
+    /// configuration fingerprint and the slot comparison through this struct's
+    /// Debug), re-admitting a behavior whose build failed on the missing tool.
+    /// The whole installed record is kept, so a same-artifact reinstall that
+    /// changes what the built tool renders or enforces (instructions,
+    /// declaration, grant, model binding) refreshes the slot too. `None`
+    /// records a not-installed or pin-mismatched plugin and never makes a
+    /// behavior unavailable: building tools stays the fail-closed gate.
+    pub(super) plugin_resolutions: Vec<(
+        crate::document_config::PluginToolRef,
+        Option<crate::plugin::store::InstalledPlugin>,
+    )>,
     pub(super) enable_skills: bool,
     pub(super) self_config: SelfConfigToolConfig,
     pub(super) lsp: Option<crate::toolset::lsp::LspToolConfig>,
@@ -185,6 +199,16 @@ impl ToolSurface {
 
     pub fn allowed_mcp_service_ids(&self) -> &[String] {
         &self.allowed_mcp_service_ids
+    }
+
+    #[cfg(test)]
+    pub(crate) fn plugin_resolutions(
+        &self,
+    ) -> &[(
+        crate::document_config::PluginToolRef,
+        Option<crate::plugin::store::InstalledPlugin>,
+    )] {
+        &self.plugin_resolutions
     }
 
     #[allow(dead_code)]
@@ -527,6 +551,7 @@ impl std::fmt::Debug for ToolSurface {
             .field("query_tools", &self.query_tools)
             .field("eth_queries", &self.eth_queries)
             .field("plugin_tools", &self.plugin_tools)
+            .field("plugin_resolutions", &self.plugin_resolutions)
             .field("enable_skills", &self.enable_skills)
             .field("self_config", &self.self_config)
             .field(

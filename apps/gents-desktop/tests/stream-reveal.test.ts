@@ -12,6 +12,8 @@ import {
   initialReveal,
   noDrawKeys,
   revealedText,
+  withSentTurns,
+  type LocalTurn,
   stepReveal,
 } from "@/screens/stream-reveal";
 import {
@@ -244,28 +246,26 @@ describe("the keys replies are drawn under", () => {
     expect(drawKey(twice, message("One"))).toBe(drawKey(once, message("One")));
   });
 
-  it("draws a saved message under the key of the pending turn it replaces", () => {
+  it("draws the app's copy and the pending turn under the request they share", () => {
+    const local = pendingUserTurn({
+      itemKey: "local:r2",
+      requestId: "r2",
+      content: "again",
+    });
     const pending = pendingUserTurn({
       itemKey: "pending-r2",
       requestId: "r2",
       content: "again",
     });
-    const saved = userMessage({
-      kind: "userMessage",
-      itemKey: "u2",
-      requestId: "r2",
-      sequence: 3,
-      content: "again",
-      timestamp: null,
-    });
-    const sent = drawKeys(noDrawKeys("s"), [person, pending], undefined, "s");
-    const settled = drawKeys(sent, [person, saved], undefined, "s");
-    expect(drawKey(settled, saved)).toBe(drawKey(sent, pending));
+    const keys = noDrawKeys("s");
+    expect(drawKey(keys, local)).toBe("turn:r2");
+    expect(drawKey(keys, pending)).toBe("turn:r2");
   });
 
-  it("keeps a saved message's own key while its pending turn is still shown", () => {
-    const pending = pendingUserTurn({
-      itemKey: "pending-r2",
+  it("draws a saved message under the request it shares with the app's copy", () => {
+    const keys = noDrawKeys("s");
+    const local = pendingUserTurn({
+      itemKey: "local:r2",
       requestId: "r2",
       content: "again",
     });
@@ -277,11 +277,21 @@ describe("the keys replies are drawn under", () => {
       content: "again",
       timestamp: null,
     });
-    const sent = drawKeys(noDrawKeys("s"), [pending], undefined, "s");
-    const both = drawKeys(sent, [pending, saved], undefined, "s");
-    const after = drawKeys(both, [saved], undefined, "s");
-    expect(drawKey(both, saved)).toBe("u2");
-    expect(drawKey(after, saved)).toBe("u2");
+    expect(drawKey(keys, saved)).toBe("turn:r2");
+    expect(drawKey(keys, saved)).toBe(drawKey(keys, local));
+  });
+
+  it("draws a row the request authors beside its prompt under the row's own key", () => {
+    const context = userMessage({
+      kind: "userMessage",
+      itemKey: "authored:doc-r2:context",
+      requestId: "r2",
+      ownsTurn: false,
+      sequence: 2,
+      content: "<context>\nworkspace instructions\n</context>",
+      timestamp: null,
+    });
+    expect(drawKey(noDrawKeys("s"), context)).toBe("authored:doc-r2:context");
   });
 
   it("starts again for another session", () => {
@@ -289,5 +299,101 @@ describe("the keys replies are drawn under", () => {
     const saved = drawKeys(streaming, [message("One")], "a-r1", "a");
     const other = drawKeys(saved, [message("One")], undefined, "b");
     expect(drawKey(other, message("One"))).toBe("a-r1");
+  });
+});
+
+describe("the rows drawn for sent messages", () => {
+  const local: LocalTurn = {
+    sessionId: "s",
+    requestId: "r2",
+    content: "again",
+    selectedSkillIds: [],
+    lifecycleState: "pending",
+    createdAt: null,
+  };
+  const pending = pendingUserTurn({
+    itemKey: "pending-r2",
+    requestId: "r2",
+    content: "again",
+  });
+
+  it("draws the app's own copy of a message the moment it is sent", () => {
+    const rows = withSentTurns([person], local, "s");
+    expect(rows.map((row) => row.itemKey)).toEqual(["u1", "local:r2"]);
+  });
+
+  it("puts the copy before the live reply that follows it", () => {
+    const rows = withSentTurns([person, live("On it")], local, "s");
+    expect(rows.map((row) => row.kind)).toEqual([
+      "userMessage",
+      "pendingUserTurn",
+      "liveAssistant",
+    ]);
+  });
+
+  it("shows the bridge's pending turn in place of the copy", () => {
+    expect(
+      withSentTurns([person, pending], local, "s").map((row) => row.itemKey),
+    ).toEqual(["u1", "pending-r2"]);
+  });
+
+  it("shows the saved message alone once it names the request it shares", () => {
+    const saved = userMessage({
+      kind: "userMessage",
+      itemKey: "u2",
+      requestId: "r2",
+      sequence: 3,
+      content: "again",
+      timestamp: null,
+    });
+    expect(
+      withSentTurns([person, saved], local, "s").map((row) => row.itemKey),
+    ).toEqual(["u1", "u2"]);
+  });
+
+  /* A read can land between the request publishing its workspace
+     instructions and its prompt: the context row is saved, the person's
+     message is not yet. The instructions are a row of their own, never the
+     turn, so the pending turn keeps standing in for the message. */
+  it("keeps the pending turn while only the request's context row is saved", () => {
+    const context = userMessage({
+      kind: "userMessage",
+      itemKey: "authored:doc-r2:context",
+      requestId: "r2",
+      ownsTurn: false,
+      sequence: 2,
+      content: "<context>\nworkspace instructions\n</context>",
+      timestamp: null,
+    });
+    expect(
+      withSentTurns([person, context, pending], local, "s").map((row) => row.itemKey),
+    ).toEqual(["u1", "authored:doc-r2:context", "pending-r2"]);
+  });
+
+  it("collapses the turn once the request's prompt row is saved", () => {
+    const context = userMessage({
+      kind: "userMessage",
+      itemKey: "authored:doc-r2:context",
+      requestId: "r2",
+      ownsTurn: false,
+      sequence: 2,
+      content: "<context>\nworkspace instructions\n</context>",
+      timestamp: null,
+    });
+    const prompt = userMessage({
+      kind: "userMessage",
+      itemKey: "authored:doc-r2:prompt",
+      requestId: "r2",
+      sequence: 3,
+      content: "again",
+      timestamp: null,
+    });
+    expect(
+      withSentTurns([person, context, prompt], local, "s").map((row) => row.itemKey),
+    ).toEqual(["u1", "authored:doc-r2:context", "authored:doc-r2:prompt"]);
+  });
+
+  it("never shows one session's message in another", () => {
+    expect(withSentTurns([person], local, "other")).toEqual([person]);
   });
 });

@@ -4,13 +4,26 @@ import type {
   DesktopSessionSnapshot,
   RenderedTimelineItem,
 } from "@source-inc/gents-desktop-client";
-import { createSessionStore, writeSession } from "../src/hooks/sessionStore";
+import {
+  createSessionStore,
+  holdsRequest,
+  writeSession,
+} from "../src/hooks/sessionStore";
 
 const user = (requestId: string) =>
   ({
     kind: "userMessage",
     itemKey: `u-${requestId}`,
     requestId,
+    ownsTurn: true,
+  }) as RenderedTimelineItem;
+/* a row the request authors beside its prompt: saved, but not the turn */
+const context = (requestId: string) =>
+  ({
+    kind: "userMessage",
+    itemKey: `authored:doc-${requestId}:context`,
+    requestId,
+    ownsTurn: false,
   }) as RenderedTimelineItem;
 const tools = (key: string, status: string) =>
   ({
@@ -57,5 +70,59 @@ describe("session facts", () => {
     expect(second.rowsRevision).toBe(first.rowsRevision + 1);
     expect(second.toolsRevision).toBe(first.toolsRevision);
     expect(second.tools).toBe(first.tools);
+  });
+
+  it("leave a request's context row out: saved, but not a turn", () => {
+    const store = createSessionStore(session([user("r1"), context("r2")]));
+    expect(store.getState().facts.userRequestIds).toEqual(new Set(["r1"]));
+  });
+});
+
+/* A request the app sent, known by its id on every row the bridge draws
+   for it; the rows that stand for its turn — its pending turn, its saved
+   prompt — are the ones that hold it. */
+describe("whether the bridge holds a sent request", () => {
+  const pending = (requestId: string) =>
+    ({
+      kind: "pendingUserTurn",
+      itemKey: `pending-${requestId}`,
+      requestId,
+    }) as RenderedTimelineItem;
+  const read = (latestRequestId: string | null, items: RenderedTimelineItem[]) =>
+    createSessionStore({
+      sessionId: "s",
+      latestRequestId,
+      timelineItems: items,
+    } as unknown as DesktopSessionSnapshot).getState();
+  const sent = { sessionId: "s", requestId: "r2", latestWhenSent: "r1" };
+
+  it("not before any read shows it", () => {
+    expect(holdsRequest(read("r1", [user("r1")]), sent)).toBe(false);
+  });
+
+  it("once its pending turn is in the transcript", () => {
+    expect(holdsRequest(read("r1", [pending("r2")]), sent)).toBe(true);
+  });
+
+  it("once its saved message is in the transcript", () => {
+    expect(holdsRequest(read("r1", [user("r2")]), sent)).toBe(true);
+  });
+
+  it("not while only the context row it authors is in the transcript", () => {
+    expect(holdsRequest(read("r1", [context("r2")]), sent)).toBe(false);
+  });
+
+  it("once it is the session's latest request, its row outside the window", () => {
+    expect(holdsRequest(read("r2", [user("r1")]), sent)).toBe(true);
+  });
+
+  it("once the latest request has moved past the one there when it was sent", () => {
+    expect(holdsRequest(read("r3", [user("r1")]), sent)).toBe(true);
+  });
+
+  it("never in another session", () => {
+    expect(holdsRequest(read("r2", [pending("r2")]), { ...sent, sessionId: "t" })).toBe(
+      false,
+    );
   });
 });

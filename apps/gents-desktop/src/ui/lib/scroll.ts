@@ -98,10 +98,21 @@ export function useScroller(): [
   return [scroller, owner];
 }
 
+/* the position this module last set or read a reader's place at, per scroller */
+const settled = new WeakMap<Element, number>();
+/* every write this module makes to a transcript's position */
+function setScroll(el: HTMLElement, top: number) {
+  el.scrollTop = top;
+  settled.set(el, el.scrollTop);
+}
+
 /* a reader who brings the view this close to the foot is following again */
 const REPIN_PX = 24;
 /* how long after a wheel, touch or key a scroll still counts as the reader's */
 const INTENT_MS = 300;
+/* how long an animated scroll of the reader's may stall between frames and
+   still be theirs when it moves on (WebKitGTK under load) */
+const TAIL_MS = 1000;
 /* the line a reader's eye is on, this far below the scroller's top */
 const READING_LINE_PX = 72;
 const NAV_KEYS = new Set([
@@ -171,12 +182,21 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
      the moment the view stops coming to the reader */
   const [atBottom, setAtBottom] = useState(true);
   const settleRef = useRef<(() => void) | null>(null);
+  /* The reader's last move was up the page. Near the foot, following
+     resumes only for a reader coming down to it: a scroll that leaves the
+     foot gently (WebKit eases a held arrow key in a few pixels at a time)
+     is still within reach of it for its first frames, and pinning it back
+     there would cancel the scroll the reader is making. */
+  const leaving = useRef(false);
 
   useLayoutEffect(() => {
     following.current = true;
     setAtBottom(true);
     if (!scroller || !subject) return;
     scroller.style.overflowAnchor = "none";
+    /* no bounce at the ends: WebKit drops a write to the position made
+       during one, and stops drawing the scroll area until a later write takes */
+    scroller.style.overscrollBehaviorY = "none";
     let anchor: { el: Element; key: string | null; offset: number } | null = null;
     const setFollowing = (next: boolean) => {
       following.current = next;
@@ -187,7 +207,7 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
     const top = () => scroller.getBoundingClientRect().top;
     const pin = () => {
       const foot = scroller.scrollHeight - scroller.clientHeight;
-      if (Math.abs(scroller.scrollTop - foot) >= 0.5) scroller.scrollTop = foot;
+      if (Math.abs(scroller.scrollTop - foot) >= 0.5) setScroll(scroller, foot);
     };
     /* A row inside a nested scroller (a group's own box) moves as that box
        scrolls; holding it would move the whole transcript after it. Inside
@@ -214,6 +234,7 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
       anchor = el
         ? { el, key: keyOf(el), offset: el.getBoundingClientRect().top - box.top }
         : null;
+      settled.set(scroller, scroller.scrollTop);
     };
     const hold = () => {
       if (!anchor) return capture();
@@ -226,10 +247,49 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
       }
       if (!el) return capture();
       anchor.el = el;
+      /* Moved since the row was taken, by nothing this module did, while
+         the reader is scrolling: their scroll is under way and its event
+         has not come yet. That move is theirs, not a shift to undo (WebKit
+         stops a held arrow key's scroll at any write). Without the reader's
+         input, it is the browser clamping, and is undone. */
+      const since = readerMoved();
+      if (since !== 0) {
+        anchor.offset -= since;
+        settled.set(scroller, scroller.scrollTop);
+      }
       const delta = el.getBoundingClientRect().top - top() - anchor.offset;
-      if (Math.abs(delta) >= 0.5) scroller.scrollTop += delta;
+      if (Math.abs(delta) >= 0.5) setScroll(scroller, scroller.scrollTop + delta);
     };
     let intentUntil = 0;
+    /* when and which way (+1 down, -1 up) the reader's own scroll last moved the view */
+    let tailAt = -Infinity;
+    let tailWay = 0;
+    /* How far the view has moved since this module last set or read it, if
+       the reader moved it, else 0; a reader's move carries their intent on.
+       An animated scroll (WebKitGTK eases one wheel over 400-600 ms, and
+       under load stalls between frames) goes on moving the view after its
+       input's window ends, so past the window a move that carries on the
+       reader's last direction is theirs too; one going up onto the foot is
+       the browser clamping, which an upward scroll never lands on. Asked
+       both by a scroll event and by a content change that comes before it. */
+    const readerMoved = () => {
+      const since = scroller.scrollTop - (settled.get(scroller) ?? scroller.scrollTop);
+      const way = Math.sign(since);
+      const now = performance.now();
+      if (
+        way === 0 ||
+        (now > intentUntil &&
+          (now - tailAt > TAIL_MS ||
+            way !== tailWay ||
+            (way < 0 && distanceFromFoot(scroller) < 0.5)))
+      )
+        return 0;
+      intend();
+      tailAt = now;
+      tailWay = way;
+      return since;
+    };
+    leaving.current = false;
     /* holding the scrollbar, the reader is placing the view themselves */
     let dragging = false;
     const reconcile = () => {
@@ -266,6 +326,7 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
        itself, before a content change can pin the view back down ahead of
        the scroll the input is about to make. */
     const release = () => {
+      leaving.current = true;
       if (following.current) {
         anchor = null;
         setFollowing(false);
@@ -274,6 +335,7 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
     const onWheel = (event: WheelEvent) => {
       intend();
       if (event.deltaY < 0) release();
+      else if (event.deltaY > 0) leaving.current = false;
     };
     let touchY: number | undefined;
     const onTouchStart = (event: TouchEvent) => {
@@ -283,6 +345,8 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
       intend();
       const y = event.touches[0]?.clientY;
       if (touchY !== undefined && y !== undefined && y > touchY) release();
+      else if (touchY !== undefined && y !== undefined && y < touchY)
+        leaving.current = false;
       touchY = y;
     };
     const onKey = (event: KeyboardEvent) => {
@@ -291,21 +355,26 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
       if (!NAV_KEYS.has(event.key)) return;
       intend();
       if (UP_KEYS.has(event.key)) release();
+      else leaving.current = false;
     };
     const area = scroller.parentElement;
     const onPointerDown = (event: PointerEvent) => {
       if (
         (event.target as Element | null)?.closest?.("[data-slot=scroll-area-scrollbar]")
-      )
+      ) {
+        /* a drag has no direction to read: where it lets go decides */
         dragging = true;
+        leaving.current = false;
+      }
     };
     const onPointerUp = () => {
       if (dragging) intend();
       dragging = false;
     };
     const onScroll = () => {
+      readerMoved();
       if (!dragging && performance.now() > intentUntil) return;
-      setFollowing(distanceFromFoot(scroller) <= REPIN_PX);
+      setFollowing(!leaving.current && distanceFromFoot(scroller) <= REPIN_PX);
       if (!following.current) capture();
     };
     /* A row the reader opens or closes says so first. It is held while the
@@ -320,10 +389,11 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
       const inset = insetAt(el);
       let offset = el.getBoundingClientRect().top - top();
       if (offset < inset) {
-        scroller.scrollTop -= inset - offset;
+        setScroll(scroller, scroller.scrollTop - (inset - offset));
         offset = inset;
       }
       anchor = { el, key: keyOf(el), offset };
+      settled.set(scroller, scroller.scrollTop);
     };
     scroller.addEventListener("wheel", onWheel, { passive: true });
     scroller.addEventListener("touchstart", onTouchStart, { passive: true });
@@ -353,9 +423,10 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
   const toBottom = useCallback(() => {
     if (!scroller) return;
     following.current = true;
+    leaving.current = false;
     scroller.dataset.following = "true";
     setAtBottom(true);
-    scroller.scrollTop = scroller.scrollHeight - scroller.clientHeight;
+    setScroll(scroller, scroller.scrollHeight - scroller.clientHeight);
   }, [scroller]);
 
   /* for a change the content box does not show (the room kept for the
@@ -364,6 +435,28 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
 
   return { atBottom, toBottom, settle };
 }
+
+/* An older page is asked for while the reader is this many views from the
+   top, so it lands above them before they reach it; a page read takes a
+   bridge round trip. */
+const OLDER_AHEAD_VIEWS = 3;
+/* and never less than this, for a pane only a few lines tall */
+const OLDER_AHEAD_PX = 160;
+/* moving up this recently, the next page follows the one that landed */
+const OLDER_INTENT_MS = 1000;
+/* A page that lands while the view is moving is not put back with a write
+   to the position: WebKit drops a write made while its own scrolling (a
+   fling's momentum, a held key's glide) is under way, and stops drawing the
+   scroll area until a later write takes. Its rows are kept out of sight
+   above the content's top instead, the content pulled up by their height,
+   and that becomes one write once the view has rested this long, or once
+   the reader reaches the top, where the view has stopped against the end
+   (there is no bounce) and a write takes. Resting is no scroll, no wheel
+   event and no finger on a touchscreen: a trackpad's momentum goes on
+   sending wheel events after it is too slow to move the view a pixel, a
+   finger held still is still scrolling, and WebKit reports `scrollend` as
+   the fingers lift, before the momentum. */
+const OLDER_STILL_MS = 150;
 
 /* the row under the reader when an older page was asked for, and where it was */
 type Hold = {
@@ -379,15 +472,18 @@ type Hold = {
   settled: boolean;
 };
 
-/* puts the held row back where the reader had it, allowing for their own
-   scrolling since; a row that left the DOM falls back to the added height */
-function restore(viewport: HTMLElement, hold: Hold) {
-  if (hold.row?.isConnected && hold.top !== undefined) {
-    const movement = viewport.scrollTop - hold.scrollTop;
-    viewport.scrollTop += hold.row.getBoundingClientRect().top - hold.top + movement;
-  } else {
-    viewport.scrollTop += viewport.scrollHeight - hold.height;
-  }
+/* how far the held row has moved from where the reader had it, allowing for
+   their own scrolling since; a row that left the DOM falls back to the added
+   height */
+function shiftOf(viewport: HTMLElement, hold: Hold) {
+  if (hold.row?.isConnected && hold.top !== undefined)
+    return (
+      hold.row.getBoundingClientRect().top -
+      hold.top +
+      viewport.scrollTop -
+      hold.scrollTop
+    );
+  return viewport.scrollHeight - hold.height;
 }
 
 /**
@@ -400,6 +496,8 @@ function restore(viewport: HTMLElement, hold: Hold) {
  */
 export function useOlderPages(
   scroller: HTMLElement | null,
+  /** the scroller's content, pulled up over rows landing mid-scroll */
+  content: HTMLElement | null,
   subject: string | null,
   hasOlder: boolean,
   load: () => Promise<boolean>,
@@ -412,30 +510,81 @@ export function useOlderPages(
      React batched the start and end of a quick load into one */
   const [settles, setSettles] = useState(0);
   const hold = useRef<Hold | null>(null);
+  /* asks for the next page if the reader is still moving up near the top */
+  const again = useRef<() => void>(() => {});
+  /* puts the reader's row back by this much */
+  const land = useRef<(shift: number) => void>(() => {});
 
   useLayoutEffect(() => {
     const held = hold.current;
     if (!held || !scroller) return;
     if (!held.landed && oldestKey !== held.oldestKey) {
-      restore(scroller, held);
+      land.current(shiftOf(scroller, held));
       held.landed = true;
     }
-    if (held.settled) hold.current = null;
+    if (held.settled) {
+      hold.current = null;
+      /* only after rows landed above the reader: a load that added nothing
+         would ask again at once, for as long as their last upward move counts */
+      if (held.landed && scroller.scrollHeight > held.height)
+        queueMicrotask(() => again.current());
+    }
   }, [oldestKey, scroller, settles]);
 
-  useEffect(() => {
+  /* A layout effect: a subject's cleanup takes the content's offset off
+     before the next subject's first layout, where the view is put at its
+     foot. */
+  useLayoutEffect(() => {
     const viewport = scroller;
     if (!viewport || !subject) return;
     let disposed = false;
     let lastTop = viewport.scrollTop;
+    let movedUpAt = -Infinity;
+    let movedAt = -Infinity;
+    let touching = false;
+    const resting = () => !touching && performance.now() - movedAt >= OLDER_STILL_MS;
+    /* the height of rows kept out of sight above the content's top */
+    let hidden = 0;
+    let unhideTimer = 0;
+    const unhide = () => {
+      window.clearTimeout(unhideTimer);
+      unhideTimer = 0;
+      if (!hidden || !content) return;
+      if (!resting() && viewport.scrollTop > 0) {
+        /* a finger on the screen: its lift asks again */
+        if (!touching)
+          unhideTimer = window.setTimeout(
+            unhide,
+            OLDER_STILL_MS - (performance.now() - movedAt),
+          );
+        return;
+      }
+      const top = viewport.scrollTop;
+      content.style.removeProperty("margin-top");
+      setScroll(viewport, top + hidden);
+      hidden = 0;
+      again.current();
+    };
+    land.current = (shift) => {
+      if (Math.abs(shift) < 0.5) return;
+      if (!content || viewport.scrollTop <= 0 || resting()) {
+        setScroll(viewport, viewport.scrollTop + shift);
+        return;
+      }
+      hidden += shift;
+      content.style.marginTop = `${-hidden}px`;
+      if (!unhideTimer) unhideTimer = window.setTimeout(unhide, OLDER_STILL_MS);
+    };
     hold.current = null;
     setLoading(false);
     const fetchOlder = async () => {
       if (
         disposed ||
         hold.current ||
+        hidden !== 0 ||
         !latest.current.hasOlder ||
-        viewport.scrollTop > 160
+        viewport.scrollTop >
+          Math.max(OLDER_AHEAD_PX, OLDER_AHEAD_VIEWS * viewport.clientHeight)
       )
         return;
       const viewportTop = viewport.getBoundingClientRect().top;
@@ -463,41 +612,68 @@ export function useOlderPages(
       setLoading(false);
       setSettles((count) => count + 1);
     };
+    const up = () => {
+      movedUpAt = performance.now();
+      void fetchOlder();
+    };
+    again.current = () => {
+      if (performance.now() - movedUpAt < OLDER_INTENT_MS) void fetchOlder();
+    };
     const onScroll = () => {
+      movedAt = performance.now();
+      if (hidden && viewport.scrollTop <= 0) unhide();
       const upward = viewport.scrollTop < lastTop;
       lastTop = viewport.scrollTop;
-      if (upward) void fetchOlder();
+      if (upward) up();
     };
     const onWheel = (event: WheelEvent) => {
-      if (event.deltaY < 0) void fetchOlder();
+      movedAt = performance.now();
+      if (event.deltaY < 0) up();
     };
     let touchY: number | undefined;
     const onTouchStart = (event: TouchEvent) => {
+      touching = true;
+      movedAt = performance.now();
       touchY = event.touches[0]?.clientY;
     };
+    const onTouchEnd = (event: TouchEvent) => {
+      if (event.touches.length) return;
+      touching = false;
+      movedAt = performance.now();
+      if (hidden && !unhideTimer)
+        unhideTimer = window.setTimeout(unhide, OLDER_STILL_MS);
+    };
     const onTouchMove = (event: TouchEvent) => {
+      movedAt = performance.now();
       const nextY = event.touches[0]?.clientY;
-      if (touchY !== undefined && nextY !== undefined && nextY > touchY)
-        void fetchOlder();
+      if (touchY !== undefined && nextY !== undefined && nextY > touchY) up();
       touchY = nextY;
     };
     const onKeyDown = (event: KeyboardEvent) => {
-      if (["ArrowUp", "PageUp", "Home"].includes(event.key)) void fetchOlder();
+      if (["ArrowUp", "PageUp", "Home"].includes(event.key)) up();
     };
     viewport.addEventListener("scroll", onScroll, { passive: true });
     viewport.addEventListener("wheel", onWheel, { passive: true });
     viewport.addEventListener("touchstart", onTouchStart, { passive: true });
     viewport.addEventListener("touchmove", onTouchMove, { passive: true });
+    viewport.addEventListener("touchend", onTouchEnd, { passive: true });
+    viewport.addEventListener("touchcancel", onTouchEnd, { passive: true });
     viewport.addEventListener("keydown", onKeyDown);
     return () => {
       disposed = true;
+      again.current = () => {};
+      land.current = () => {};
+      window.clearTimeout(unhideTimer);
+      if (hidden) content?.style.removeProperty("margin-top");
       hold.current = null;
       viewport.removeEventListener("scroll", onScroll);
       viewport.removeEventListener("wheel", onWheel);
       viewport.removeEventListener("touchstart", onTouchStart);
       viewport.removeEventListener("touchmove", onTouchMove);
+      viewport.removeEventListener("touchend", onTouchEnd);
+      viewport.removeEventListener("touchcancel", onTouchEnd);
       viewport.removeEventListener("keydown", onKeyDown);
     };
-  }, [scroller, subject]);
+  }, [scroller, content, subject]);
   return loading;
 }

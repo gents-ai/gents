@@ -30,6 +30,7 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
         !manifest.metadata.plugins.is_empty(),
         "{namespace}/{name} carries no plugins; install the whole pack with gents pack install"
     );
+    let rollback = crate::commands::pack::snapshot_pack_plugin_records(&home, manifest);
     let installed = crate::commands::pack::install_pack_plugins(
         &home,
         manifest,
@@ -37,6 +38,24 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
         |path| pack.archive.asset(path),
         args.grant_authority,
     )?;
+    let identity = gents::pack::PackIdentity::new(
+        manifest,
+        &pack.digest,
+        installed
+            .iter()
+            .map(|plugin| gents::pack::InstalledPackPlugin {
+                name: plugin.name.clone(),
+                digest: plugin.digest.clone(),
+            })
+            .collect(),
+    );
+    let coordinate = format!("{namespace}/{name}");
+    if let Err(error) =
+        crate::commands::pack::record_plugin_store_change(&home, &coordinate, Some(&identity)).await
+    {
+        crate::commands::pack::rollback_pack_plugin_records(&home, &rollback);
+        return Err(error);
+    }
 
     crate::print_json(&json!({
         "pack": format!("{namespace}/{name}"),
@@ -104,6 +123,61 @@ mod tests {
         let hex = record.digest.strip_prefix("sha256:").unwrap();
         assert!(store::read_bytes(home.path(), hex).is_ok());
         assert_eq!(store::list_records(home.path()).unwrap().len(), 1);
+    }
+
+    /// #2338: against an initialized home, install writes the plugin-store
+    /// record that wakes a running runtime, and remove deletes it again.
+    #[tokio::test]
+    async fn install_and_remove_record_the_plugin_store_change_in_the_node() {
+        use clap::Parser;
+        let (bytes, digest) = echo_pack();
+        let archive = gents::pack_archive::PackArchive::from_bytes(&bytes).unwrap();
+        let (namespace, version) = (
+            archive.manifest().metadata.namespace.clone(),
+            archive.manifest().version.clone(),
+        );
+        let (base_url, _state) = serve_fake_pack("echo", &version, bytes, digest).await;
+        let home = tempfile::tempdir().unwrap();
+        let cli = crate::cli::Cli::try_parse_from([
+            "gents",
+            "init",
+            "--store-key-custody",
+            "file",
+            "--agent-name",
+            "pluginner",
+            "--home",
+            home.path().to_str().unwrap(),
+        ])
+        .unwrap();
+        let crate::cli::Command::Init(init_args) = cli.command else {
+            panic!("expected init")
+        };
+        crate::commands::init::init(init_args).await.unwrap();
+        let records = || async {
+            let (access, _) = crate::resolve_config_access(Some(home.path()), None)
+                .await
+                .unwrap();
+            access
+                .execute("{ PackInstallation { coordinate } }")
+                .await
+                .unwrap()["data"]["PackInstallation"]
+                .clone()
+        };
+
+        install(args(&format!("{namespace}/echo"), base_url, home.path()))
+            .await
+            .unwrap();
+        assert_eq!(
+            records().await,
+            serde_json::json!([{ "coordinate": format!("{namespace}/echo") }])
+        );
+        super::super::remove(crate::cli::args::PluginRemoveArgs {
+            name: format!("{namespace}/echo"),
+            home: Some(home.path().to_owned()),
+        })
+        .await
+        .unwrap();
+        assert_eq!(records().await, serde_json::json!([]));
     }
 
     #[tokio::test]

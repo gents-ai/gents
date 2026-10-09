@@ -17,6 +17,7 @@ type Given<K extends RenderedTimelineItem["kind"]> = Partial<Of<K>> & {
 const READY = { state: "ready" } as const;
 
 export const userMessage = (item: Given<"userMessage">): Of<"userMessage"> => ({
+  ownsTurn: true,
   sequence: null,
   content: null,
   timestamp: null,

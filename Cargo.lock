@@ -4850,6 +4850,7 @@ dependencies = [
  "ts-rs",
  "uuid",
  "webbrowser",
+ "wiremock",
 ]
 
 [[package]]

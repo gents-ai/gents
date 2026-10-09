@@ -146,6 +146,8 @@ export type MobilePerformanceHarnessController = {
   streamBurst(count: number): number;
   /** appends `text` to the live reply, as one update */
   streamText(text: string): void;
+  /** how long a read of an older timeline page takes, as the bridge's do */
+  setOlderPageDelay(ms: number): void;
   /**
    * One snapshot of a turn ending the way the bridge can deliver it: the
    * live tail kept or dropped, the saved reply present (under its own key,
@@ -154,9 +156,18 @@ export type MobilePerformanceHarnessController = {
   endReply(step: { live: "keep" | "drop"; saved: boolean; completed: boolean }): void;
   /**
    * A message the person sent, as the bridge shows it: first the pending
-   * turn, then the saved message under its own key, before the live tail.
+   * turn, then the saved prompt row, before the live tail. Every stand-in
+   * names the request by its id, as a send returns it, so the row is one
+   * from pending to saved.
    */
   userTurn(stage: "pending" | "saved"): void;
+  /**
+   * From now on a send to the large session is accepted, under the request
+   * id `userTurn` uses, but the transcript does not show it until
+   * `userTurn` does: the moment between the bridge accepting a message and
+   * its read holding it.
+   */
+  holdSends(): void;
   /** a step the reply takes, after the live tail: running, then done */
   liveTool(state: "running" | "done"): void;
 };
@@ -176,6 +187,9 @@ type DesktopUiHarness = {
   performance: MobilePerformanceHarnessController | null;
   sessionSync: SessionSyncHarnessController;
 };
+
+/* the request a held send to the large session is accepted under */
+const LARGE_SENT_REQUEST_ID = "6f1c2a7e-large-request-sent";
 
 export const MOBILE_PERFORMANCE_FIXTURE = {
   id: "mobile-interactions-v1",
@@ -210,6 +224,7 @@ export function createDesktopUiHarness(
   const scenario = normalizeScenario(options.scenario);
   const listeners = new Set<DesktopClientUpdatedHandler>();
   const sessions = new Map<string, DesktopSessionSnapshot>();
+  let sendsHeld = false;
   const sessionLineage = new Map<
     string,
     {
@@ -309,7 +324,8 @@ export function createDesktopUiHarness(
   let hydrationRetryCalls = 0;
   let updateEvents = 0;
   let storeVersion = 1;
-  let reconcileVersion = 1;
+  let liveSourceEpoch = 1;
+  let olderPageDelayMs = 0;
   let streamSequence = 0;
   let bridgeCalls: MobilePerformanceBridgeCall[] = [];
   let commits: MobilePerformanceCommit[] = [];
@@ -523,6 +539,7 @@ export function createDesktopUiHarness(
         {
           kind: "userMessage",
           itemKey: "remote-user",
+          ownsTurn: true,
           sequence: 1,
           content: "hello from desktop",
           timestamp: THIRTY_DAYS_AGO,
@@ -575,14 +592,13 @@ export function createDesktopUiHarness(
     updateEvents += 1;
     if (reason === "store") {
       storeVersion += 1;
-      if (!responseOnly) reconcileVersion += 1;
+      if (!responseOnly) liveSourceEpoch += 1;
     }
     window.setTimeout(() => {
       for (const listener of listeners) {
         void listener({
           reason,
           storeVersion,
-          reconcileVersion,
         });
       }
     }, 0);
@@ -594,13 +610,12 @@ export function createDesktopUiHarness(
       for (let index = 0; index < count; index += 1) {
         if (reason === "store") {
           storeVersion += 1;
-          if (!responseOnly) reconcileVersion += 1;
+          if (!responseOnly) liveSourceEpoch += 1;
         }
         for (const listener of listeners) {
           void listener({
             reason,
             storeVersion,
-            reconcileVersion,
           });
         }
       }
@@ -779,6 +794,7 @@ export function createDesktopUiHarness(
         {
           kind: "userMessage",
           itemKey: `${requestId}-user`,
+          ownsTurn: true,
           sequence: 1,
           content: prompt,
           timestamp: now,
@@ -1117,8 +1133,15 @@ export function createDesktopUiHarness(
       const sessionId = _sessionId;
       const session = sessions.get(sessionId);
       if (!session) return null;
+      if (timelinePage?.beforeItemKey && olderPageDelayMs > 0)
+        await wait(olderPageDelayMs);
       const snapshot = clone(session);
-      snapshot.projectionRevision = { storeVersion, reconcileVersion };
+      snapshot.projectionRevision = { storeVersion };
+      snapshot.liveCursor = session.timelineItems.some(
+        (item) => item.kind === "liveAssistant",
+      )
+        ? `${session.agentDid}:${sessionId}:${session.latestRequestId}:${liveSourceEpoch}`
+        : null;
       if (!timelinePage) return snapshot;
 
       const totalItems = snapshot.timelineItems.length;
@@ -1172,8 +1195,9 @@ export function createDesktopUiHarness(
     async fetchSessionLiveDelta(request) {
       const session = sessions.get(request.sessionId);
       if (!session || session.latestRequestId !== request.requestId) return null;
-      const revision = { storeVersion, reconcileVersion };
-      if (request.baseReconcileVersion !== reconcileVersion) {
+      const revision = { storeVersion };
+      const liveCursor = `${session.agentDid}:${request.sessionId}:${session.latestRequestId}:${liveSourceEpoch}`;
+      if (request.baseLiveCursor !== liveCursor) {
         return {
           outcome: "snapshotRequired",
           revision,
@@ -1204,6 +1228,7 @@ export function createDesktopUiHarness(
             ? "unchanged"
             : "delta",
         revision,
+        liveCursor,
         requestId: request.requestId,
         turnState: session.turnState,
         status: session.status,
@@ -1217,6 +1242,14 @@ export function createDesktopUiHarness(
         throw new Error("message content is required");
       }
 
+      if (sendsHeld && request.sessionId === "session-large") {
+        return {
+          sessionId: request.sessionId,
+          requestId: LARGE_SENT_REQUEST_ID,
+          agentDid: request.agentDid,
+          behaviorId: request.behaviorId ?? null,
+        };
+      }
       if (request.sessionId && sessions.has(request.sessionId)) {
         const existing = sessions.get(request.sessionId)!;
         const nextSequence = existing.timelineItems.length + 1;
@@ -1237,6 +1270,7 @@ export function createDesktopUiHarness(
             {
               kind: "userMessage",
               itemKey: `${requestId}-user`,
+              ownsTurn: true,
               sequence: nextSequence,
               content,
               timestamp: new Date().toISOString(),
@@ -2461,6 +2495,9 @@ export function createDesktopUiHarness(
             notify("store", true);
             return sequence;
           },
+          setOlderPageDelay(ms) {
+            olderPageDelayMs = ms;
+          },
           streamText(text) {
             const session = sessions.get("session-large");
             if (!session) {
@@ -2523,7 +2560,7 @@ export function createDesktopUiHarness(
             if (!session) {
               throw new Error("mobile performance fixture lost session-large");
             }
-            const requestId = "large-request-sent";
+            const requestId = LARGE_SENT_REQUEST_ID;
             const turn =
               stage === "pending"
                 ? {
@@ -2539,6 +2576,7 @@ export function createDesktopUiHarness(
                     kind: "userMessage" as const,
                     itemKey: "large-user-sent",
                     requestId,
+                    ownsTurn: true,
                     sequence: session.timelineItems.length,
                     content: "again",
                     timestamp: STARTED_AT,
@@ -2552,9 +2590,16 @@ export function createDesktopUiHarness(
               tailAt < 0
                 ? [...without, turn]
                 : [...without.slice(0, tailAt), turn, ...without.slice(tailAt)];
-            sessions.set("session-large", { ...session, timelineItems });
+            sessions.set("session-large", {
+              ...session,
+              latestRequestId: requestId,
+              timelineItems,
+            });
             syncSessions();
             notify("store");
+          },
+          holdSends() {
+            sendsHeld = true;
           },
           liveTool(state) {
             const session = sessions.get("session-large");
@@ -2737,6 +2782,7 @@ function createLargePerformanceSession(): DesktopSessionSnapshot {
             kind: "userMessage" as const,
             itemKey: `large-user-${index}`,
             requestId: `large-request-${index}`,
+            ownsTurn: true,
             sequence: index,
             content: `User fixture row ${index}: ${filler}`,
             timestamp: STARTED_AT,

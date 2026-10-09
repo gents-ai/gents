@@ -200,20 +200,23 @@ export function holdLive(
   };
 }
 
-/* The keys a transcript draws its turns under. Two items stand in for
-   one another as a turn settles, each under its own key: the live tail and
-   the message that replaces it, and the pending turn and the person's saved
-   message. Drawn under their own keys, React removes one's rows and inserts
-   the other's, and the browser lays the page out between the two. Each is
-   drawn under the key of the item it replaces instead. The bridge names
-   every turn's live tail alike, so each tail gets a key of its own. */
+/* The keys a transcript draws its turns under. Items stand in for one
+   another as a turn settles, each under its own key: the person's message
+   is the app's own copy, then the bridge's pending turn, then the saved
+   message; the reply is the live tail, then the saved message. Drawn under
+   their own keys, React removes one's rows and inserts the other's, and the
+   browser lays the page out between the two. So a person's message is drawn
+   under its request, whatever stands for it, and the saved reply under the
+   key its live tail was drawn under. The bridge names every stand-in for a
+   person's message by its request id and marks the saved one that owns the
+   turn, so they are all drawn under one key while the rows a request
+   authors besides the prompt keep keys of their own. The bridge names every
+   turn's live tail alike, so each tail gets a key of its own. */
 export type DrawKeys = {
   sessionId: string | null;
   tail: string | null;
   inherited: ReadonlyMap<string, string>;
   tails: number;
-  /** pending turns seen, by request, until their saved message is */
-  pending: ReadonlyMap<string, string>;
 };
 
 export const noDrawKeys = (sessionId: string | null): DrawKeys => ({
@@ -221,7 +224,6 @@ export const noDrawKeys = (sessionId: string | null): DrawKeys => ({
   tail: null,
   inherited: new Map(),
   tails: 0,
-  pending: new Map(),
 });
 
 /* `replacedBy` is the message that just ended the hold (`holdLive`). */
@@ -242,33 +244,83 @@ export function drawKeys(
   if (!next.tail && items.some((i) => i.kind === "liveAssistant")) {
     next = { ...next, tail: `reply-${next.tails + 1}`, tails: next.tails + 1 };
   }
-  for (const item of items) {
-    if (item.kind === "pendingUserTurn" && !next.pending.has(item.requestId)) {
-      next = {
-        ...next,
-        pending: new Map(next.pending).set(item.requestId, item.itemKey),
-      };
-    }
-    const requestId = item.kind === "userMessage" ? item.requestId : null;
-    const pendingKey = requestId ? next.pending.get(requestId) : undefined;
-    if (!requestId || pendingKey === undefined) continue;
-    /* decided once, when the saved message first shows: it takes the
-       pending turn's key only if that turn has gone, so two rows never
-       share one key and a row's key never changes after it is drawn */
-    const pending = new Map(next.pending);
-    pending.delete(requestId);
-    const replaced = !items.some((i) => i.itemKey === pendingKey);
-    next = {
-      ...next,
-      pending,
-      inherited: replaced
-        ? new Map(next.inherited).set(item.itemKey, pendingKey)
-        : next.inherited,
-    };
-  }
   return next;
 }
 
-export const drawKey = (keys: DrawKeys, item: RenderedTimelineItem): string =>
-  keys.inherited.get(item.itemKey) ??
-  (item.kind === "liveAssistant" && keys.tail ? keys.tail : item.itemKey);
+/* The request a row stands in for, as the turn of the person's message.
+   A saved row stands in only when it owns the turn — the request's prompt,
+   as the bridge marks it (`ownsTurn`); a request authors other user rows
+   (workspace instructions, tool delivery) that are rows of their own. */
+const requestOf = (item: RenderedTimelineItem): string | null => {
+  if (item.kind === "pendingUserTurn") return item.requestId;
+  if (item.kind === "userMessage" && item.ownsTurn) return item.requestId ?? null;
+  return null;
+};
+
+export const drawKey = (keys: DrawKeys, item: RenderedTimelineItem): string => {
+  const request = requestOf(item);
+  if (request) return `turn:${request}`;
+  return (
+    keys.inherited.get(item.itemKey) ??
+    (item.kind === "liveAssistant" && keys.tail ? keys.tail : item.itemKey)
+  );
+};
+
+/* The message a person sent, as the app holds it until the transcript does. */
+export type LocalTurn = {
+  sessionId: string;
+  requestId: string;
+  content: string;
+  selectedSkillIds: string[];
+  lifecycleState: string | null;
+  createdAt: string | null;
+};
+
+/* how settled a stand-in for a person's message is: the saved one wins */
+const settledness = (item: RenderedTimelineItem) =>
+  item.kind === "userMessage" ? 2 : item.itemKey.startsWith("local:") ? 0 : 1;
+
+/**
+ * The rows a transcript draws for its turns: one per message a person sent,
+ * the most settled of whatever stands for it, with the app's own copy of a
+ * message just sent drawn from the moment it is sent, before any live reply
+ * that follows it.
+ */
+export function withSentTurns(
+  items: RenderedTimelineItem[],
+  local: LocalTurn | null,
+  sessionId: string | null,
+): RenderedTimelineItem[] {
+  const shown =
+    local &&
+    local.sessionId === sessionId &&
+    !items.some((i) => requestOf(i) === local.requestId)
+      ? (() => {
+          const copy: RenderedTimelineItem = {
+            kind: "pendingUserTurn",
+            itemKey: `local:${local.requestId}`,
+            requestId: local.requestId,
+            content: local.content,
+            selectedSkillIds: local.selectedSkillIds,
+            lifecycleState: local.lifecycleState,
+            createdAt: local.createdAt,
+          };
+          const tailAt = items.findIndex((i) => i.kind === "liveAssistant");
+          return tailAt < 0
+            ? [...items, copy]
+            : [...items.slice(0, tailAt), copy, ...items.slice(tailAt)];
+        })()
+      : items;
+  const best = new Map<string, RenderedTimelineItem>();
+  for (const item of shown) {
+    const request = requestOf(item);
+    if (!request) continue;
+    const held = best.get(request);
+    if (!held || settledness(item) > settledness(held)) best.set(request, item);
+  }
+  if (best.size === shown.filter((i) => requestOf(i)).length) return shown;
+  return shown.filter((item) => {
+    const request = requestOf(item);
+    return !request || best.get(request) === item;
+  });
+}

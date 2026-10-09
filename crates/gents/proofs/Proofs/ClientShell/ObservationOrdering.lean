@@ -153,3 +153,31 @@ theorem client_observation_does_not_clear_managed_error (running autostartDeclin
     observeStartup .managedServerError running autostartDeclined = .managedServerError := by rfl
 
 end ClientSnapshotObservation
+
+namespace ClientLiveDelta
+
+/-- A live cursor names the exact authorized session, physical request,
+execution generation and provider source. Native encoding must bind all of
+these coordinates. Store revisions are observation notices, not this identity:
+an unrelated CRDT arrival cannot invalidate the live source.
+
+This permits updating only the live overlay. A bounded periodic session read
+still reconciles history, tools and metadata; a source change or terminal
+request requires that read immediately. No delta claims history coverage. -/
+def accepts (base current : Option Nat) (terminal : Bool) : Bool :=
+  !terminal && base.isSome && decide (base = current)
+
+theorem same_live_source_accepts (cursor : Nat) :
+    accepts (some cursor) (some cursor) false = true := by simp [accepts]
+
+theorem terminal_requires_snapshot (base current : Option Nat) :
+    accepts base current true = false := by simp [accepts]
+
+theorem missing_base_requires_snapshot (current : Option Nat) (terminal : Bool) :
+    accepts none current terminal = false := by simp [accepts]
+
+theorem changed_source_requires_snapshot (base current : Option Nat)
+    (terminal : Bool) (h : base ≠ current) :
+    accepts base current terminal = false := by simp [accepts, h]
+
+end ClientLiveDelta

@@ -141,7 +141,7 @@ export function createDesktopApiAdapter(
         sessionId: request.sessionId,
         agentDid: request.agentDid ?? null,
         requestId: request.requestId,
-        baseReconcileVersion: request.baseReconcileVersion,
+        baseLiveCursor: request.baseLiveCursor,
         baseContentByteLen: request.baseContentByteLen,
         baseContentHash: request.baseContentHash,
         baseReasoningByteLen: request.baseReasoningByteLen,

@@ -74,6 +74,23 @@ fn a_path_that_is_not_the_one_the_scope_checked_is_refused() {
     assert!(BoundDir::folder(&base.join("d"), BindAccess::Read).is_ok());
 }
 
+#[cfg(unix)]
+#[test]
+fn a_hard_linked_file_is_named_by_its_own_folder_and_a_symlink_is_not() {
+    let root = tempfile::tempdir().unwrap();
+    let base = root.path().canonicalize().unwrap();
+    std::fs::write(base.join("a.txt"), "a").unwrap();
+    std::fs::create_dir(base.join("other")).unwrap();
+    std::fs::hard_link(base.join("a.txt"), base.join("other/b.txt")).unwrap();
+    std::os::unix::fs::symlink(base.join("a.txt"), base.join("link.txt")).unwrap();
+    let identity = identity_of(&base.join("a.txt"));
+    assert!(named_in_pinned_folder(&base.join("a.txt"), identity));
+    assert!(named_in_pinned_folder(&base.join("other/b.txt"), identity));
+    assert!(!named_in_pinned_folder(&base.join("link.txt"), identity));
+    std::fs::write(base.join("c.txt"), "c").unwrap();
+    assert!(!named_in_pinned_folder(&base.join("c.txt"), identity));
+}
+
 #[test]
 fn a_file_bound_beside_exposes_its_folder_and_names_the_file() {
     let root = tempfile::tempdir().unwrap();

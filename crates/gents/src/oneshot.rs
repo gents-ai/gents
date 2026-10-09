@@ -46,7 +46,13 @@ pub async fn run_openai_oneshot_with_tools(
         ToolRuntimeContext::oneshot_with_agent_did(node.clone(), behavior.agent_did());
     let tool_surface = behavior
         .tools
-        .resolve(node.as_ref(), behavior.agent_did())
+        .resolve(
+            node.as_ref(),
+            behavior.agent_did(),
+            // The oneshot path has no host plugin store; a plugin tool it
+            // names resolves no identity and fails closed at build time.
+            &Default::default(),
+        )
         .await?;
     let allowed_targets = tool_surface::resolve_subagent_target_descriptions(&tool_surface);
     let prompt_builder = LayeredPromptBuilder::new(behavior, &tool_surface, &allowed_targets);

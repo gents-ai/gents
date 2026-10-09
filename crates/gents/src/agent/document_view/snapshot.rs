@@ -308,7 +308,12 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
     for behavior in behaviors {
         match behavior
             .tools
-            .resolve_with_available_subagent_targets(node, &own_agent_did, &candidate_behavior_ids)
+            .resolve_with_available_subagent_targets(
+                node,
+                &own_agent_did,
+                &candidate_behavior_ids,
+                &context.plugins,
+            )
             .await
         {
             Ok(tool_surface) => behavior_surfaces.push((behavior, tool_surface)),

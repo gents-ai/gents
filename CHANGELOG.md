@@ -6,6 +6,35 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- Installing or removing a plugin a behavior's Tools document names now
+  re-admits a behavior that was demoted for failing to build on the missing
+  tool (#2338). The resolved plugin identity (version and digest) joins the
+  runtime configuration fingerprint and the slot comparison. A plugins pack
+  install, `gents plugin install` and their removes now write or delete a
+  `PackInstallation` record marked by the new `plugin_store` field after
+  the plugin store changes, which wakes the reconciler. Each plugin call
+  re-reads its installed record, so a removed or replaced plugin fails
+  closed on its next call even when its artifact is cached, and a changed
+  grant or declaration is admitted again. Installed-pack listings and
+  `gents pack outdated`/`update` skip such records, and `gents pack remove`
+  refers them to `gents plugin remove`. An uninitialized home records
+  nothing. The demotion log names installing a missing plugin as the fix.
+  The `PackInstallation` schema changed: existing homes must be
+  re-initialized.
+- A scenario pack whose expected trigger's event source has no
+  correlation_field is now refused at load — by `gents pack check` and by
+  `gents pack scenario run`/`seed` — naming the trigger and event source
+  (#2339). A run awaits its stages by the seeded job id, which only a
+  correlation_field puts on the fired request, so such a pack previously
+  ran until its await timeout expired.
+- `gents config apply` and `gents server --apply-root` no longer refuse
+  configurations the runtime serves: the pre-flight's `{{ doc.* }}`
+  template-field check is now the publication owner's rule, so a
+  per-document `emit_outcome` delivery of `CallbackResult` or
+  `WorkspaceReceipt` accepts the `handoff_id`, `reply_session_id` and
+  `attempt` fields the trigger engine injects, and `goal_objective_template`
+  and `session_id_template` are judged by the same rule as the prompt
+  (#2341). Refusals now read the publication owner's message.
 - Per-document callback bindings no longer drop documents written before the
   callback engine starts (#2343). Like event triggers, each binding now
   checkpoints a receiving-node arrival cursor, seeded when its configuration
@@ -15,6 +44,17 @@ source consistency checks, not a separate runtime compatibility version.
   source version), so an edit after admission is never admitted again.
   `EventSourceCursor` now names its typed `consumer` in place of
   `trigger_id`. Existing homes must be re-initialized.
+- A saved message's `requestId` is the request's logical id, not its
+  document id (#2342). The session snapshot joins the request row the
+  message's `request_doc_id` names, so a pending turn and the message it
+  publishes carry the same id; a message whose request row is not observed
+  reports none. The desktop transcript collapses the app's own copy, the
+  bridge's pending turn and the saved message into one row under the request
+  they share, where the saved message was a row of its own. Only the
+  request's prompt row joins that collapse: a user row it authors beside the
+  prompt — the workspace instructions it carries — reports `ownsTurn: false`
+  and stays a row of its own, the same ownership the bridge's pending turn
+  already reconciles by.
 - A runtime that cannot start because a behavior is unavailable now logs each
   blocking behavior's diagnostic; a `--tool-root` that does not admit the
   live `Tools.host.root` names both roots (#2296).

@@ -115,7 +115,7 @@ export function createDesktopProjectionController({
           }
         } else if (sessionId && work & SESSION_DELTA) {
           if (!(await refreshSessionLiveDelta())) {
-            enqueue(SESSION);
+            enqueue(SESSION | INDEX_AFTER_TERMINAL);
           }
         }
       } catch (error) {

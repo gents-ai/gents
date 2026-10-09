@@ -22,6 +22,7 @@ import { Button } from "@gents/ui/components/button";
 import { cn } from "@gents/ui/lib/utils";
 import { AssistantMessage, UserMessage } from "@gents/ui/conversation";
 import { useOlderPages } from "@/lib/scroll";
+import { TranscriptWindowProvider, WindowedRow } from "@/lib/transcriptWindow";
 import {
   Collapsible,
   CollapsibleContent,
@@ -39,6 +40,7 @@ import {
   drawKeys,
   holdLive,
   noDrawKeys,
+  withSentTurns,
   type DrawKeys,
   type HeldLive,
 } from "./stream-reveal";
@@ -46,16 +48,20 @@ import { type Workers } from "./workers";
 import { type ParentWork } from "./parentWork";
 import { WorkerActionsContext, type WorkerActions } from "./WorkerActions";
 import { readableReasoning, reasoningWithheld } from "./tool-summary";
-import { groupTranscript } from "./transcript-groups";
+import { groupTranscript, type TranscriptEntry } from "./transcript-groups";
 import { useCopied } from "@/lib/clipboard";
 import { toastFailure } from "@/lib/failure";
-import { useApp } from "@/app/AppContext";
+import { useApp, useView } from "@/app/AppContext";
 import {
   ActivityGroup,
   GroupStateContext,
   Reasoning,
   useGroupState,
 } from "./ActivityGroup";
+/* the newest entries are always drawn: the turn in progress and the few
+   before it are where the reader is, and where the transcript grows */
+const ALWAYS_DRAWN = 8;
+
 function FailedEarlier({ message }: { message: string }) {
   return (
     <div className="rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3">
@@ -281,10 +287,55 @@ function ResponseActions({ text }: { text: string }) {
   );
 }
 
+/* A row in the transcript's window. Memoized on what it draws, so an update
+   that leaves a row alone (every streamed chunk, for all but the last)
+   renders neither the row nor its wrapper. */
+const ItemRow = memo(function ItemRow({
+  rowKey,
+  timelineKey,
+  item,
+  final,
+  drawn,
+}: {
+  rowKey: string;
+  timelineKey: string;
+  item: RenderedTimelineItem;
+  final: boolean;
+  drawn: boolean;
+}) {
+  return (
+    <WindowedRow
+      rowKey={rowKey}
+      drawn={drawn}
+      data-timeline-key={timelineKey}
+      className="group/response"
+    >
+      <TranscriptItem item={item} final={final} />
+    </WindowedRow>
+  );
+});
+
+const GroupRow = memo(function GroupRow({
+  entry,
+  workers,
+  drawn,
+}: {
+  entry: Extract<TranscriptEntry, { kind: "group" }>;
+  workers: Workers;
+  drawn: boolean;
+}) {
+  return (
+    <WindowedRow rowKey={entry.key} drawn={drawn}>
+      <ActivityGroup entry={entry} workers={workers} />
+    </WindowedRow>
+  );
+});
+
 export const TranscriptPanel = memo(function TranscriptPanel({
   inFlight,
   stopping = false,
   scroller,
+  content,
   session,
   workers,
   parentWork,
@@ -294,6 +345,8 @@ export const TranscriptPanel = memo(function TranscriptPanel({
   stopping?: boolean;
   /** the transcript's scroller, once mounted */
   scroller: HTMLElement | null;
+  /** everything the scroller scrolls, once mounted */
+  content: HTMLElement | null;
   session: DesktopSessionSnapshot | null;
   workers: Workers;
   parentWork: ParentWork;
@@ -302,6 +355,7 @@ export const TranscriptPanel = memo(function TranscriptPanel({
   const { actions } = useApp();
   const loadingOlder = useOlderPages(
     scroller,
+    content,
     session?.sessionId ?? null,
     session?.timelinePage?.hasOlder ?? false,
     () => actions.loadOlderSessionTimeline(),
@@ -365,13 +419,20 @@ export const TranscriptPanel = memo(function TranscriptPanel({
     }, 3_000);
     return () => clearTimeout(timer);
   }, [holding]);
+  /* the message just sent, drawn from the moment it is sent: one row per
+     message, whatever stands for it as it settles */
+  const localTurn = useView((view) => view.pendingTurn);
+  const turns = useMemo(
+    () => withSentTurns(held.items, localTurn, sessionKey),
+    [held.items, localTurn, sessionKey],
+  );
   const keysRef = useRef<DrawKeys>(noDrawKeys(sessionKey));
   const keys = useMemo(
-    () => drawKeys(keysRef.current, held.items, held.replacedBy, sessionKey),
-    [held, sessionKey],
+    () => drawKeys(keysRef.current, turns, held.replacedBy, sessionKey),
+    [turns, held.replacedBy, sessionKey],
   );
   keysRef.current = keys;
-  const rendered = held.items;
+  const rendered = turns;
   const entries = useMemo(() => groupTranscript(rendered), [rendered]);
   /* A turn's answer is the last thing it said before the person spoke
      again, or before the transcript ends once nothing is running. Only a
@@ -433,21 +494,29 @@ export const TranscriptPanel = memo(function TranscriptPanel({
       <WorkerActionsContext.Provider value={workerActions}>
         <ParentContext.Provider value={parentWork}>
           <GroupStateContext.Provider value={groupState}>
-            {entries.map((entry) =>
-              entry.kind === "item" ? (
-                /* keyed for the pager, which holds the reader's place
-                         by the row under their eye while older pages land */
-                <div
-                  key={drawKey(keys, entry.item)}
-                  data-timeline-key={entry.key}
-                  className="group/response"
-                >
-                  <TranscriptItem item={entry.item} final={finalKeys.has(entry.key)} />
-                </div>
-              ) : (
-                <ActivityGroup key={entry.key} entry={entry} workers={workers} />
-              ),
-            )}
+            <TranscriptWindowProvider scroller={scroller} session={sessionKey}>
+              {entries.map((entry, index) =>
+                entry.kind === "item" ? (
+                  /* keyed for the pager, which holds the reader's place
+                     by the row under their eye while older pages land */
+                  <ItemRow
+                    key={drawKey(keys, entry.item)}
+                    rowKey={drawKey(keys, entry.item)}
+                    timelineKey={entry.key}
+                    item={entry.item}
+                    final={finalKeys.has(entry.key)}
+                    drawn={entries.length - index <= ALWAYS_DRAWN}
+                  />
+                ) : (
+                  <GroupRow
+                    key={entry.key}
+                    entry={entry}
+                    workers={workers}
+                    drawn={entries.length - index <= ALWAYS_DRAWN}
+                  />
+                ),
+              )}
+            </TranscriptWindowProvider>
           </GroupStateContext.Provider>
           {continuing && showError && <FailedEarlier message={responseError} />}
           {continuing &&

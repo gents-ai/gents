@@ -79,7 +79,7 @@ describe("SessionScreen transcript render boundary", () => {
     };
     const app = testApp();
     const retry = vi.spyOn(app.actions, "retryMessage").mockResolvedValue(undefined);
-    const props = { ...UNRELATED, inFlight: false, scroller: null };
+    const props = { ...UNRELATED, inFlight: false, scroller: null, content: null };
     const view = renderIn(app, <TranscriptPanel {...props} session={failed} />);
     expect(screen.getByText("The assistant could not finish this turn.")).toBeVisible();
     await act(async () =>
@@ -96,7 +96,7 @@ describe("SessionScreen transcript render boundary", () => {
   it("keeps unchanged rows out of unrelated session projection renders", () => {
     markdownRender.mockClear();
     const original = session("stable markdown");
-    const props = { ...UNRELATED, inFlight: false, scroller: null };
+    const props = { ...UNRELATED, inFlight: false, scroller: null, content: null };
     const view = renderIn(testApp(), <TranscriptPanel {...props} session={original} />);
 
     expect(markdownRender).toHaveBeenCalledTimes(1);
@@ -152,6 +152,7 @@ describe("SessionScreen transcript render boundary", () => {
             {...UNRELATED}
             inFlight={false}
             scroller={viewport}
+            content={viewport.firstElementChild as HTMLElement | null}
             session={current}
           />
         );

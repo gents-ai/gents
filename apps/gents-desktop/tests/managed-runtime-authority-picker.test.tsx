@@ -39,12 +39,15 @@ describe("ManagedRuntimeAuthorityPicker", () => {
     const input = screen.getByLabelText("Tool root");
     const ceiling = screen.getByRole("combobox", { name: "Tool ceiling" });
     expect(input).toHaveValue("/Users/A Person");
-    expect(ceiling).toHaveValue("readwrite");
-    await user.selectOptions(ceiling, "readonly");
+    expect(ceiling).toHaveTextContent("Read / write");
+    await user.click(ceiling);
+    await user.click(await screen.findByRole("option", { name: "Read only" }));
     expect(input).toHaveValue("/Users/A Person");
-    await user.selectOptions(ceiling, "meta-only");
+    await user.click(ceiling);
+    await user.click(await screen.findByRole("option", { name: "Metatools only" }));
     expect(input).toBeDisabled();
-    await user.selectOptions(ceiling, "readwrite");
+    await user.click(ceiling);
+    await user.click(await screen.findByRole("option", { name: "Read / write" }));
     expect(input).toBeEnabled();
     expect(validate).not.toHaveBeenCalled();
   });
@@ -95,14 +98,12 @@ describe("ManagedRuntimeAuthorityPicker", () => {
     await user.clear(input);
     await user.type(input, "/project");
     await user.tab();
-    await user.selectOptions(
-      screen.getByRole("combobox", { name: "Tool ceiling" }),
-      "readonly",
-    );
+    await user.click(screen.getByRole("combobox", { name: "Tool ceiling" }));
+    await user.click(await screen.findByRole("option", { name: "Read only" }));
     finish("/canonical/project");
     await waitFor(() => expect(input).toHaveValue("/canonical/project"));
-    expect(screen.getByRole("combobox", { name: "Tool ceiling" })).toHaveValue(
-      "readonly",
+    expect(screen.getByRole("combobox", { name: "Tool ceiling" })).toHaveTextContent(
+      "Read only",
     );
     expect(screen.getByTestId("selected-directory")).toHaveTextContent(
       "/canonical/project",
