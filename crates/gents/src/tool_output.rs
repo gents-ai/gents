@@ -103,12 +103,40 @@ pub(crate) use ordered;
 
 /// Reorder only the model-facing envelope; payloads and explicit nulls retain
 /// their JSON meaning. Callers choose their own answer and continuation fields.
+/// Oversized envelopes retain their original ordering so moving a large answer
+/// cannot push recovery metadata beyond the provider's existing truncation cap.
 pub(crate) fn render(value: &impl serde::Serialize, first: &[&'static str]) -> Result<String> {
+    let original = serde_json::to_string_pretty(value)?;
     let value = serde_json::to_value(value)?;
     if !value.is_object() {
-        return Ok(serde_json::to_string_pretty(&value)?);
+        return Ok(original);
     }
-    Ordered::preserving_nulls(value, first).pretty()
+    render_value_or_original(value, original, first)
+}
+
+pub(crate) fn render_json_text(original: String, first: &[&'static str]) -> Result<String> {
+    let Ok(Value::Object(value)) = serde_json::from_str::<Value>(&original) else {
+        return Ok(original);
+    };
+    render_value_or_original(Value::Object(value), original, first)
+}
+
+fn render_value_or_original(
+    value: Value,
+    original: String,
+    first: &[&'static str],
+) -> Result<String> {
+    let ordered = Ordered::preserving_nulls(value, first).pretty()?;
+    if crate::truncation::truncate(
+        &ordered,
+        crate::truncation::TruncationMode::Head,
+        &crate::truncation::TruncationLimits::default(),
+    )
+    .truncated
+    {
+        return Ok(original);
+    }
+    Ok(ordered)
 }
 
 #[cfg(test)]
@@ -126,6 +154,46 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&value).unwrap(),
             r#"{"answer":{"a":null,"z":2},"metadata":1,"next_call":null}"#
+        );
+    }
+
+    #[test]
+    fn oversized_answers_keep_recovery_metadata_in_its_original_position() {
+        #[derive(serde::Serialize)]
+        struct FileResult {
+            path: &'static str,
+            content_hash: &'static str,
+            diff: String,
+        }
+        let value = FileResult {
+            path: "file",
+            content_hash: "hash",
+            diff: "x".repeat(crate::truncation::TruncationLimits::default().max_bytes),
+        };
+        let rendered = render(&value, &["diff"]).unwrap();
+        assert!(rendered.starts_with("{\n  \"path\":"));
+        assert_eq!(
+            serde_json::from_str::<Value>(&rendered).unwrap(),
+            serde_json::to_value(value).unwrap()
+        );
+    }
+
+    #[test]
+    fn oversized_native_results_keep_the_exact_metadata_first_json() {
+        let original = format!(
+            r#"{{"path":"root","truncated":true,"entries":["{}"]}}"#,
+            "x".repeat(crate::truncation::TruncationLimits::default().max_bytes)
+        );
+        assert_eq!(
+            render_json_text(original.clone(), &["entries"]).unwrap(),
+            original
+        );
+        let small = r#"{"path":"root","entries":["answer"]}"#.to_owned();
+        let rendered = render_json_text(small.clone(), &["entries"]).unwrap();
+        assert!(rendered.starts_with("{\n  \"entries\":"));
+        assert_eq!(
+            serde_json::from_str::<Value>(&rendered).unwrap(),
+            serde_json::from_str::<Value>(&small).unwrap()
         );
     }
 

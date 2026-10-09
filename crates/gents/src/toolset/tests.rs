@@ -856,7 +856,7 @@ async fn raw_json_escape_hatch_returns_structured_output() {
     .await
     .unwrap();
 
-    assert!(output.starts_with("{\"entries\":"));
+    assert!(output.starts_with("{\n  \"entries\":"));
     let value: serde_json::Value = serde_json::from_str(&output).unwrap();
     assert_eq!(value["ok"], true);
     assert_eq!(value["tool"], "list_files");

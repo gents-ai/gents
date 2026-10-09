@@ -109,9 +109,9 @@ pub(crate) struct ListFilesMetadata {
 
 #[derive(Serialize)]
 pub(crate) struct ListFilesOutput {
-    pub(crate) entries: Vec<FilesystemEntry>,
     #[serde(flatten)]
     pub(crate) metadata: ListFilesMetadata,
+    pub(crate) entries: Vec<FilesystemEntry>,
 }
 
 #[derive(Serialize)]
@@ -133,9 +133,9 @@ pub(crate) struct GlobMetadata {
 
 #[derive(Serialize)]
 pub(crate) struct GlobOutput {
-    pub(crate) matches: Vec<FilesystemEntry>,
     #[serde(flatten)]
     pub(crate) metadata: GlobMetadata,
+    pub(crate) matches: Vec<FilesystemEntry>,
 }
 
 #[derive(Serialize)]
@@ -161,9 +161,9 @@ pub(crate) struct GrepMetadata {
 
 #[derive(Serialize)]
 pub(crate) struct GrepOutput {
-    pub(crate) matches: Vec<GrepOutputMatch>,
     #[serde(flatten)]
     pub(crate) metadata: GrepMetadata,
+    pub(crate) matches: Vec<GrepOutputMatch>,
 }
 
 #[derive(Clone, Serialize)]
