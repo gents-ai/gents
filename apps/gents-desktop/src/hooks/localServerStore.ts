@@ -5,7 +5,8 @@ import type { ManagedServerStatus } from "@source-inc/gents-desktop-client";
 import type { ManagedServerWait } from "../lib/managedServerStartup";
 import { createSelectors, type WithSelectors } from "./createSelectors";
 
-export type LocalServerOperation = "start" | "stop" | "restart" | "autostart";
+export type LocalServerOperation =
+  "start" | "stop" | "restart" | "autostart" | "ensure" | "restore";
 
 /** The OS-managed local agent service as this window last saw it, held once
     for startup, the tray, setup and the agent screen. */

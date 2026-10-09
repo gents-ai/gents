@@ -32,17 +32,17 @@ type LocalServerParams = {
  * The one owner of the OS-managed local agent service in this window, shared
  * by startup, the tray, setup and the agent screen. Its status and the wait
  * an operation is in are held once in the store. Operations run one at a
- * time: one asked for while the same one is under way joins it, and any
- * other waits for it, so the tray and a screen cannot start or stop the
- * service over each other.
+ * time: matching commands share a result, while different inputs queue.
+ * Readiness and restore calls retain their individual wait options, so the
+ * tray and a screen cannot start or stop the service over each other.
  */
 export function createLocalServer({ api, store, client }: LocalServerParams) {
   /* only the newest read is shown: a read begun before an operation may
      answer after it with the status it replaced */
   const reads = newestWins();
+  const waits = newestWins();
   let watchers = 0;
-  let running: { operation: LocalServerOperation; done: Promise<unknown> } | null =
-    null;
+  let running: { key: string | symbol; done: Promise<unknown> } | null = null;
 
   const publishWait = (wait: ManagedServerWait | null) =>
     localServer.waiting(store, wait);
@@ -77,21 +77,24 @@ export function createLocalServer({ api, store, client }: LocalServerParams) {
   function operate<T>(
     operation: LocalServerOperation,
     run: () => Promise<T>,
+    key: string | symbol = operation,
   ): Promise<T> {
-    if (running?.operation === operation) return running.done as Promise<T>;
+    if (running?.key === key) return running.done as Promise<T>;
     const before = running?.done ?? Promise.resolve();
     const done: Promise<T> = before
       .catch(() => {})
       .then(async () => {
         localServer.operating(store, operation);
         reads.supersede();
+        waits.supersede();
+        publishWait(null);
         try {
           return await run();
         } finally {
           localServer.operating(store, null);
         }
       });
-    running = { operation, done };
+    running = { key, done };
     void done
       .catch(() => {})
       .finally(() => {
@@ -141,12 +144,20 @@ export function createLocalServer({ api, store, client }: LocalServerParams) {
     startLocalServer(agentName: string, authority?: ManagedServerAuthorityInput) {
       const start = api.startManagedServer;
       if (!start) return unavailable("Start Agent");
-      return operate("start", () =>
-        observeManagedServerOperation(
-          api,
-          () => start(agentName, authority),
-          publishWait,
-        ),
+      return operate(
+        "start",
+        () =>
+          observeManagedServerOperation(
+            api,
+            () => start(agentName, authority),
+            publishWait,
+          ),
+        JSON.stringify([
+          "start",
+          agentName,
+          authority?.toolCeiling,
+          authority?.toolRoot,
+        ]),
       ).then(settled);
     },
     /** Stops the service; it stays enabled at login. */
@@ -159,33 +170,49 @@ export function createLocalServer({ api, store, client }: LocalServerParams) {
     restartLocalServer(agentName: string, authority: ManagedServerAuthorityInput) {
       const restart = api.restartManagedServer;
       if (!restart) return unavailable("Restart Agent");
-      return operate("restart", () =>
-        observeManagedServerOperation(
-          api,
-          () => restart(agentName, authority),
-          publishWait,
-        ),
+      return operate(
+        "restart",
+        () =>
+          observeManagedServerOperation(
+            api,
+            () => restart(agentName, authority),
+            publishWait,
+          ),
+        JSON.stringify([
+          "restart",
+          agentName,
+          authority.toolCeiling,
+          authority.toolRoot,
+        ]),
       ).then(settled);
     },
     /** Turns starting the service at login on or off. */
     setLocalServerAutoStart(enabled: boolean) {
       const set = api.setManagedServerAutoStart;
       if (!set) return unavailable("Start at login");
-      return operate("autostart", () => set(enabled)).then(settled);
+      return operate("autostart", () => set(enabled), `autostart:${enabled}`).then(
+        settled,
+      );
     },
     /** Commits a new agent to starting at login, as first run does. */
     commitLocalServerAutoStart(agentName: string) {
       const commit = api.commitManagedServerAutoStart;
       if (!commit) return Promise.resolve(store.getState().status);
-      return operate("autostart", () => commit(agentName)).then(settled);
+      return operate(
+        "autostart",
+        () => commit(agentName),
+        `commit-autostart:${agentName}`,
+      ).then(settled);
     },
     /** Waits until the service reports secure background pairing ready. */
     awaitLocalServerPairing(
       options?: Parameters<typeof waitForManagedRuntimePairing>[1],
     ) {
-      return waitForManagedRuntimePairing(api, options).then((status) =>
-        status ? settled(status) : status,
-      );
+      const current = reads.begin();
+      return waitForManagedRuntimePairing(api, options).then((status) => {
+        if (status && current()) localServer.read(store, status);
+        return status;
+      });
     },
     /** Makes sure the service is serving before setup writes to it: waits
         out a boot or an approval, starts a stopped service, then waits for
@@ -194,21 +221,37 @@ export function createLocalServer({ api, store, client }: LocalServerParams) {
       fallbackAgentName: string,
       options: Omit<Parameters<typeof ensureManagedRuntimeServing>[2], "onWait"> = {},
     ) {
-      return ensureManagedRuntimeServing(api, fallbackAgentName, {
-        ...options,
-        onWait: publishWait,
-      }).finally(() => void refreshLocalServer());
+      return operate(
+        "ensure",
+        () =>
+          ensureManagedRuntimeServing(api, fallbackAgentName, {
+            ...options,
+            onWait: publishWait,
+          }),
+        Symbol("ensure"),
+      ).finally(() => void refreshLocalServer());
     },
     /** Waits while the service boots, updates its data or awaits macOS
         approval, within the bridge's bounds, publishing which wait it is
         in; resolves with the last status. */
     settleLocalServer(status: ManagedServerStatus) {
-      return awaitManagedServerSettled(api, status, publishWait).then(settled);
+      const current = reads.begin();
+      const currentWait = waits.begin();
+      return awaitManagedServerSettled(api, status, (wait) => {
+        if (currentWait()) publishWait(wait);
+      }).then((next) => {
+        if (current()) localServer.read(store, next);
+        return next;
+      });
     },
     /** Observes the service at launch (see `restoreManagedServer`),
         publishing which wait it is in. */
     restoreLocalServer(signal?: AbortSignal) {
-      return restoreManagedServer(api, { onWait: publishWait, signal });
+      return operate(
+        "restore",
+        () => restoreManagedServer(api, { onWait: publishWait, signal }),
+        Symbol("restore"),
+      );
     },
     /** Resolves a tool root as the service will use it, or rejects saying why. */
     validateLocalServerRoot(path: string) {
