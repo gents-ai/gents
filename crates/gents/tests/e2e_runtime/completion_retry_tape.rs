@@ -304,12 +304,20 @@ async fn deadline_tight_fails_cleanly() {
     .await;
 
     wait_for_request_lifecycle_state(db.node.as_ref(), &request_doc_id, "failed").await;
+    let observed_requests = backend.observed_requests(marker);
     assert!(
-        backend.observed_requests(marker) <= 1,
+        observed_requests <= 1,
         "deadline overshoot should prevent a second provider call"
     );
     let calls = fetch_inference_calls(db.node.as_ref(), request_id).await;
     assert!(calls.len() <= 1, "deadline must prevent a retry: {calls:?}");
+    if observed_requests == 1 {
+        assert_eq!(
+            calls.len(),
+            1,
+            "a dispatched provider request must retain its durable inference call"
+        );
+    }
     assert!(
         call_states(&calls).iter().all(|state| *state == "failed"),
         "deadline must fail every started inference call: {calls:?}"
