@@ -1180,7 +1180,7 @@ async fn obligation_node() -> Result<Arc<EmbeddedNode>> {
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     register_config_schemas(&node).await?;
     node.add_schema(
-        "type ObligationOutcome { text: String result: String expected_total: String total: Int ratio: Float32 amount: Float64 payload: JSON observed_at: DateTime attachment: Blob marker: ID flag: Boolean tags: [String] required_total: Int! required_label: String! required_tags: [String!] }",
+        "type ObligationOutcome { text: String result: String expected_total: String total: Int ratio: Float32 amount: Float64 payload: JSON observed_at: DateTime required_observed_at: DateTime! attachment: Blob marker: ID flag: Boolean tags: [String] required_total: Int! required_label: String! required_tags: [String!] }",
     )
     .await?;
     Ok(node)
@@ -1196,7 +1196,20 @@ async fn output_obligation_count_field_must_hold_a_count_on_the_target_collectio
         ("flag", "Boolean"),
         ("tags", "LIST"),
         ("required_tags", "LIST"),
+        ("observed_at", "DateTime"),
+        ("required_observed_at", "DateTime!"),
     ] {
+        let cases = &crate::lean_vocab_test::lean_contract_snapshot().count_carrier_cases["fields"];
+        let case = cases
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["schema"] == reported_type)
+            .unwrap();
+        assert_eq!(
+            case["accepted"], false,
+            "rejection agrees with the count model"
+        );
         let refused = apply(
             &access,
             vec![obligation_surface(
@@ -1275,7 +1288,6 @@ async fn output_obligation_accepts_every_count_field_the_runtime_can_parse() -> 
         ("float32-count", "ratio"),
         ("float64-count", "amount"),
         ("json-count", "payload"),
-        ("datetime-count", "observed_at"),
         ("blob-count", "attachment"),
         ("id-count", "marker"),
         ("non-null-int-count", "required_total"),
@@ -1498,7 +1510,7 @@ async fn event_source_node() -> Result<Arc<EmbeddedNode>> {
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     register_config_schemas(&node).await?;
     node.add_schema(
-        "type EventProbeSource { batch: String required_batch: String! result: String flag: Boolean tags: [String] total: Int expected_total: Int! ratio: Float32 amount: Float64 payload: JSON observed_at: DateTime attachment: Blob marker: ID }",
+        "type EventProbeSource { batch: String required_batch: String! result: String flag: Boolean tags: [String] total: Int expected_total: Int! ratio: Float32 amount: Float64 payload: JSON observed_at: DateTime required_observed_at: DateTime! attachment: Blob marker: ID }",
     )
     .await?;
     Ok(node)
@@ -1566,7 +1578,23 @@ async fn event_source_count_field_must_hold_a_count_on_the_source_collection() -
     let access = ConfigAccess::Local(node.clone());
     let owner = "did:key:event-source-owner";
 
-    for (count_field, reported_type) in [("flag", "Boolean"), ("tags", "LIST")] {
+    for (count_field, reported_type) in [
+        ("flag", "Boolean"),
+        ("tags", "LIST"),
+        ("observed_at", "DateTime"),
+        ("required_observed_at", "DateTime!"),
+    ] {
+        let cases = &crate::lean_vocab_test::lean_contract_snapshot().count_carrier_cases["fields"];
+        let case = cases
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["schema"] == reported_type)
+            .unwrap();
+        assert_eq!(
+            case["accepted"], false,
+            "rejection agrees with the count model"
+        );
         let refused = apply(
             &access,
             vec![grouped_event_source(
@@ -1645,7 +1673,6 @@ async fn event_source_accepts_every_count_field_the_runtime_can_parse() -> Resul
         ("float32-count", "ratio"),
         ("float64-count", "amount"),
         ("json-count", "payload"),
-        ("datetime-count", "observed_at"),
         ("blob-count", "attachment"),
         ("id-count", "marker"),
     ] {
