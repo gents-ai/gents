@@ -663,9 +663,11 @@ async fn read_file_rejects_paths_outside_root() {
 }
 
 #[tokio::test]
-async fn write_and_edit_file_work_under_root() {
+async fn write_and_edit_file_work_under_base_within_root() {
     let root = temp_root("gents-write-edit");
-    let context = ToolContext::new(root.clone(), true).unwrap();
+    let base = root.join("workspace");
+    std::fs::create_dir_all(&base).unwrap();
+    let context = ToolContext::new_with_base(root.clone(), Some(base.clone()), true).unwrap();
     let writer = WriteFileTool::new(context.clone());
     let editor = EditFileTool::new(context);
 
@@ -684,6 +686,11 @@ async fn write_and_edit_file_work_under_root() {
     let write_meta = compact_meta(&write_output);
     assert_eq!(write_meta["tool"], "write_file");
     assert_eq!(write_meta["path"], "nested/file.txt");
+    let resolved = base.join("nested/file.txt").canonicalize().unwrap();
+    assert_eq!(
+        write_meta["resolved_path"],
+        resolved.to_string_lossy().as_ref()
+    );
     assert_eq!(write_meta["bytes_written"], 11);
     assert_eq!(write_meta["created"], true);
     assert!(write_output.contains("write_file: wrote 11 bytes"));
@@ -707,11 +714,15 @@ async fn write_and_edit_file_work_under_root() {
     let edit_meta = compact_meta(&edit_output);
     assert_eq!(edit_meta["tool"], "edit_file");
     assert_eq!(edit_meta["path"], "nested/file.txt");
+    assert_eq!(
+        edit_meta["resolved_path"],
+        resolved.to_string_lossy().as_ref()
+    );
     assert_eq!(edit_meta["replacements_applied"], 1);
     assert_eq!(edit_meta["total_count"], 1);
     assert!(edit_output.contains("edit_file: edited nested/file.txt"));
 
-    let content = std::fs::read_to_string(root.join("nested/file.txt")).unwrap();
+    let content = std::fs::read_to_string(base.join("nested/file.txt")).unwrap();
     assert_eq!(content, "hello amy");
 }
 

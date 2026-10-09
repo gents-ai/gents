@@ -833,9 +833,9 @@ pub(crate) async fn collection_is_installed(
 }
 
 /// The runtime reads an obligation's expected count from the durable arguments
-/// of each completed write, not from the stored document, so whether a count it
-/// can parse could ever reach `expected_count_field` follows from that field's
-/// GraphQL type as `defra_query::schema` reports it;
+/// of each completed write, not from the stored document, so the count must
+/// both match the field's native input and permit the write to complete. The
+/// field's GraphQL type is reported by `defra_query::schema`;
 /// [`crate::defra_write::can_hold_canonical_count`] owns that question.
 /// Refusing at publication precedes the runtime failure, which differs by
 /// refused class: a `Boolean` or scalar-list field still resolves a write-tool

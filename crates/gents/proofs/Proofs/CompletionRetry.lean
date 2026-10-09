@@ -11,3 +11,5 @@ import Proofs.CompletionRetry.InvalidToolProgress
 import Proofs.CompletionRetry.RepeatedToolFailure
 
 import Proofs.CompletionRetry.LogicalOutputObligation
+
+import Proofs.CompletionRetry.CountCarrier

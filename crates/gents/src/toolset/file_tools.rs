@@ -642,6 +642,7 @@ impl Tool for WriteFileTool {
 
         let output = WriteFileOutput {
             metadata: WriteFileMetadata {
+                resolved_path: path.to_string_lossy().into_owned(),
                 ok: true,
                 status: "success",
                 tool: Self::NAME,
@@ -841,6 +842,7 @@ impl Tool for EditFileTool {
                 }
                 let output = EditFileOutput {
                     metadata: EditFileMetadata {
+                        resolved_path: path.to_string_lossy().into_owned(),
                         ok: true,
                         status: "success",
                         tool: Self::NAME,
@@ -963,6 +965,7 @@ struct WriteFileMetadata {
     status: &'static str,
     tool: &'static str,
     path: String,
+    resolved_path: String,
     returned_count: usize,
     total_count: Option<usize>,
     truncated: bool,
@@ -983,6 +986,7 @@ struct EditFileMetadata {
     status: &'static str,
     tool: &'static str,
     path: String,
+    resolved_path: String,
     returned_count: usize,
     total_count: Option<usize>,
     truncated: bool,

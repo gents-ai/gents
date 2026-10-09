@@ -476,6 +476,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "modeled_handoff_positive_sequence_maps_to_native_owners",
         },
         ConformanceConsumer::RustTest {
+            id: "defra_write::tests::generated_count_carriers_bind_admission_parser_and_storage",
+            package: "gents",
+            source_path: "crates/gents/src/defra_write/tests.rs",
+            module_path: "defra_write::tests",
+            function: "generated_count_carriers_bind_admission_parser_and_storage",
+        },
+        ConformanceConsumer::RustTest {
             id: "agent::output_obligation::logical_tests::generated_logical_output_obligation_cases_drive_signed_requests_and_durable_writes",
             package: "gents",
             source_path: "crates/gents/src/agent/output_obligation/logical_tests.rs",

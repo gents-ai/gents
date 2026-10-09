@@ -1,3 +1,4 @@
+import Proofs.Conformance.CountCarrier
 import Proofs.Conformance.ConfigurationScope
 import Proofs.Conformance.GraphWorkspaceLineage
 import Proofs.Conformance.OperatorBaseFreeze
@@ -369,6 +370,7 @@ def snapshotJson : String :=
     ++ "\"composed_invariant_witnesses\":"
       ++ jsonArray
         (composedInvariantWitnesses.map composedInvariantWitnessJson) ++ ","
+    ++ "\"count_carrier_cases\":" ++ Conformance.CountCarrier.casesJson ++ ","
     ++ "\"logical_output_obligation_cases\":"
       ++ Conformance.LogicalOutputObligationContracts.casesJson ++ ","
     ++ "\"mailbox_notification_cases\":"

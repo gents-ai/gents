@@ -929,6 +929,11 @@ def caseCoverage : List CoverageEntry :=
       "Only the fresh-linked positive case drives the stamped mailbox write, signed producer terminal owner, and linked reply admission in native storage. The other eleven generated handoff cases remain model-only; this consumer does not exercise AgentToolCall result publication, the owned completion loop, or atomic crash recovery across the separate mailbox and request transactions.")
       "mailbox" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "count_carrier_cases"
+      "CountCarrierCases"
+      "defra_write::tests::generated_count_carriers_bind_admission_parser_and_storage")
+      "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "logical_output_obligation_cases"
       "LogicalOutputObligationCases"
       "agent::output_obligation::logical_tests::generated_logical_output_obligation_cases_drive_signed_requests_and_durable_writes")

@@ -447,49 +447,6 @@ async fn native_schema_and_receipts_preserve_lists_json_and_null() {
     assert!(super::input::literal("JSON", &json!({"nested": [1, []]})).is_err());
 }
 
-#[test]
-fn can_hold_canonical_count_over_every_field_type_spelling() {
-    for schema in [
-        "Int",
-        "Int!",
-        "String",
-        "String!",
-        "ID",
-        "DateTime",
-        "DateTime!",
-        "Blob",
-        "Float32",
-        "Float64",
-        "Float64!",
-        "Float",
-        "JSON",
-        "JSON!",
-    ] {
-        assert!(
-            super::can_hold_canonical_count(schema),
-            "{schema} admits a number or a string"
-        );
-    }
-    for schema in [
-        "Boolean",
-        "Boolean!",
-        "[String]",
-        "[String!]",
-        "[Int]",
-        "LIST",
-        "NON_NULL",
-        "Object",
-        "[Object]",
-        "ObligationOutcome",
-        "",
-    ] {
-        assert!(
-            !super::can_hold_canonical_count(schema),
-            "{schema} cannot carry a canonical count"
-        );
-    }
-}
-
 /// Which runtime failure a count field refused at publication produces is
 /// decided here, not by the refusing rule: a type [`super::input::parameters`]
 /// accepts still resolves a write-tool argument schema, so the tool registers
@@ -574,4 +531,119 @@ async fn count_field_type_decides_whether_a_refused_obligation_can_register() {
         format!("{error:#}").contains("field `missing_total` is absent from `CountOwner`"),
         "{error:#}"
     );
+}
+
+#[tokio::test]
+async fn generated_count_carriers_bind_admission_parser_and_storage() {
+    let cases = &crate::lean_vocab_test::lean_contract_snapshot().count_carrier_cases;
+    let fields = cases["fields"].as_array().unwrap();
+    let values = cases["values"].as_array().unwrap();
+    assert!(!fields.is_empty() && !values.is_empty());
+    for case in values {
+        let maximum = case["maximum"].as_u64().unwrap() as usize;
+        assert_eq!(
+            crate::graphql::canonical_positive_count(&case["value"], maximum),
+            case["expected"].as_u64().map(|n| n as usize),
+            "parser: {case}"
+        );
+    }
+    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    for (index, case) in fields.iter().enumerate() {
+        let schema = case["schema"].as_str().unwrap();
+        let admitted = case["accepted"].as_bool().unwrap();
+        assert_eq!(super::can_hold_canonical_count(schema), admitted, "{case}");
+        let collection = format!("CountCarrier{index}");
+        if let Some(expected_error) = case["schema_error"].as_str() {
+            let error = node
+                .add_schema(&format!("type {collection} {{ count: {schema} }}"))
+                .await
+                .unwrap_err();
+            assert!(format!("{error:#}").contains(expected_error), "{error:#}");
+            continue;
+        }
+        if case["storage"] != true {
+            continue;
+        }
+        node.add_schema(&format!("type {collection} {{ count: {schema} }}"))
+            .await
+            .unwrap();
+        let declaration = WriteToolDecl {
+            notification: None,
+            tool_name: format!("write_count_{index}"),
+            collection: collection.clone(),
+            description: "Persist a count carrier".into(),
+            fields: vec![WriteToolField {
+                name: "count".into(),
+                required: true,
+                fill: None,
+            }],
+            output_obligation: None,
+        };
+        let tool = BoundedWriteTool::new(node.clone(), declaration);
+        let input = if admitted {
+            &case["witness"]
+        } else {
+            &case["probe"]
+        }
+        .clone();
+        Tool::call(
+            &tool,
+            serde_json::from_value(json!({"count": input})).unwrap(),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("{schema}: {error:#}"));
+        let query = format!("{{ {collection} {{ count }} }}");
+        let response =
+            crate::graphql::graphql_with_transaction_retry(&node, &query, "read count carrier")
+                .await
+                .unwrap();
+        assert!(!response.has_errors(), "{schema}: {:?}", response.errors);
+        let output = &response.data.as_ref().unwrap()[&collection][0]["count"];
+        let maximum = crate::runtime_snapshot::MAX_EVENT_TRIGGER_GROUP_DOCS;
+        let expected = case["probe_expected"].as_u64().map(|n| n as usize);
+        assert_eq!(
+            crate::graphql::canonical_positive_count(&input, maximum),
+            expected,
+            "durable call argument: {schema}, {input}"
+        );
+        assert_eq!(
+            crate::graphql::canonical_positive_count(output, maximum),
+            expected,
+            "stored document: {schema}, {input} -> {output}"
+        );
+        assert_eq!(
+            crate::graphql::canonical_positive_count(output, maximum).is_some(),
+            admitted
+        );
+        let introspection = crate::graphql::graphql_with_transaction_retry(
+            &node,
+            &crate::defra_query::introspection_query(&collection).unwrap(),
+            "introspect count carrier",
+        )
+        .await
+        .unwrap();
+        let decoded =
+            crate::defra_query::parse_collection_schema(introspection.data.as_ref()).unwrap();
+        let field = decoded
+            .fields
+            .iter()
+            .find(|field| field.name == "count")
+            .unwrap();
+        assert_eq!(
+            super::can_hold_canonical_count(field.named_type()),
+            admitted,
+            "introspection: {schema}"
+        );
+        if !admitted {
+            assert!(
+                Tool::call(
+                    &tool,
+                    serde_json::from_value(json!({"count":"10"})).unwrap()
+                )
+                .await
+                .is_err(),
+                "{schema} accepted a decimal count"
+            );
+        }
+    }
 }

@@ -203,7 +203,9 @@ export function ToolBody({ tool }: { tool: RenderedToolCallView }) {
               </ScrollArea>
             </div>
           )}
-          {p.path && tool.statusKind === "success" && <RevealFile path={p.path} />}
+          {(p.revealPath || p.path) && tool.statusKind === "success" && (
+            <RevealFile path={p.revealPath || p.path!} />
+          )}
           <Payload label="output" value={p.fallbackOutput} />
         </>
       )}
