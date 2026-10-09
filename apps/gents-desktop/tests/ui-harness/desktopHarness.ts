@@ -1178,7 +1178,10 @@ export function createDesktopUiHarness(
       if (timelinePage?.beforeItemKey && olderPageDelayMs > 0)
         await wait(olderPageDelayMs);
       const snapshot = clone(session);
-      snapshot.projectionRevision = { storeVersion };
+      snapshot.projectionRevision = {
+        storeVersion,
+        provenanceVersion: liveSourceEpoch,
+      };
       snapshot.liveCursor = session.timelineItems.some(
         (item) => item.kind === "liveAssistant",
       )
@@ -1237,7 +1240,7 @@ export function createDesktopUiHarness(
     async fetchSessionLiveDelta(request) {
       const session = sessions.get(request.sessionId);
       if (!session || session.latestRequestId !== request.requestId) return null;
-      const revision = { storeVersion };
+      const revision = { storeVersion, provenanceVersion: liveSourceEpoch };
       const liveCursor = `${session.agentDid}:${request.sessionId}:${session.latestRequestId}:${liveSourceEpoch}`;
       if (request.baseLiveCursor !== liveCursor) {
         return {

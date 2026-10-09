@@ -434,6 +434,8 @@ pub struct SessionTimelinePageView {
 #[serde(rename_all = "camelCase")]
 pub struct SessionProjectionRevisionView {
     pub store_version: u64,
+    /// The observed lineage inputs, excluding streamed transcript changes.
+    pub provenance_version: u64,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]

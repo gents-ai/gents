@@ -164,7 +164,7 @@ describe("createSessionReads", () => {
       oldestItemKey: null,
       newestItemKey: null,
     });
-    tip.projectionRevision = { storeVersion: 1 };
+    tip.projectionRevision = { storeVersion: 1, provenanceVersion: 1 };
     const fetchSessionSnapshot = vi.fn(async () => tip);
     const fetchSessionLiveDelta = vi.fn(async () => {
       throw new Error("operator restarted");
@@ -359,7 +359,7 @@ describe("createSessionReads", () => {
       oldestItemKey: "k8",
       newestItemKey: "k8",
     });
-    tip.projectionRevision = { storeVersion: 7 };
+    tip.projectionRevision = { storeVersion: 7, provenanceVersion: 1 };
     tip.timelineItems.push({
       kind: "liveAssistant",
       itemKey: "live-assistant",
@@ -394,7 +394,7 @@ describe("createSessionReads", () => {
     resolveDelta({
       outcome: "delta",
       liveCursor: "cursor",
-      revision: { storeVersion: 8 },
+      revision: { storeVersion: 8, provenanceVersion: 1 },
       requestId: "request-1",
       turnState: "running",
       status: null,
@@ -430,7 +430,7 @@ describe("createSessionReads", () => {
       oldestItemKey: null,
       newestItemKey: null,
     });
-    tip.projectionRevision = { storeVersion: 7 };
+    tip.projectionRevision = { storeVersion: 7, provenanceVersion: 1 };
     tip.timelineItems = [
       { kind: "liveAssistant", itemKey: "live", content: "hello", reasoning: null },
     ];
@@ -450,7 +450,7 @@ describe("createSessionReads", () => {
       outcome: "delta",
       liveCursor: "cursor",
       requestId: "request-1",
-      revision: { storeVersion: 8 },
+      revision: { storeVersion: 8, provenanceVersion: 1 },
       turnState: "running",
       status: null,
       content: { mode: "replace", value: "old", byteLen: 3, hash: "bd2b9bd6" },
@@ -481,7 +481,7 @@ describe("createSessionReads", () => {
         oldestItemKey: null,
         newestItemKey: null,
       });
-      tip.projectionRevision = { storeVersion: 1 };
+      tip.projectionRevision = { storeVersion: 1, provenanceVersion: 1 };
       tip.timelineItems = [
         { kind: "liveAssistant", itemKey: "live", content: "hello", reasoning: null },
       ];
@@ -489,7 +489,7 @@ describe("createSessionReads", () => {
         outcome: "unchanged",
         liveCursor: "cursor",
         requestId: "request-1",
-        revision: { storeVersion: 2 },
+        revision: { storeVersion: 2, provenanceVersion: 1 },
         turnState: "running",
         status: null,
         content: { mode: "unchanged", value: "", byteLen: 5, hash: "4f9f2cab" },
@@ -524,7 +524,7 @@ describe("createSessionReads", () => {
         oldestItemKey: null,
         newestItemKey: null,
       });
-      tip.projectionRevision = { storeVersion: 1 };
+      tip.projectionRevision = { storeVersion: 1, provenanceVersion: 1 };
       tip.timelineItems = [
         { kind: "liveAssistant", itemKey: "live", content: "hello", reasoning: null },
       ];
@@ -532,7 +532,7 @@ describe("createSessionReads", () => {
         outcome: "unchanged",
         liveCursor: "cursor",
         requestId: "request-1",
-        revision: { storeVersion: 2 },
+        revision: { storeVersion: 2, provenanceVersion: 1 },
         turnState: "running",
         status: null,
         content: { mode: "unchanged", value: "", byteLen: 5, hash: "4f9f2cab" },

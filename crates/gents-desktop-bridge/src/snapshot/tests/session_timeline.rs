@@ -276,7 +276,10 @@ fn session_snapshot_consumes_generated_live_overlay_cases() {
     let delta = build_session_live_delta_from_store(
         &store,
         &store,
-        gents_desktop_core::client::StoreProjectionRevision { store_version: 7 },
+        gents_desktop_core::client::StoreProjectionRevision {
+            store_version: 7,
+            provenance_version: 1,
+        },
         "sess-1",
         Some("did:test:amy"),
         "req-1",
@@ -340,7 +343,10 @@ fn queried_timeline_page_drops_old_orphans_below_the_selected_sequence_window() 
 #[test]
 fn live_delta_requires_a_canonical_source() {
     let store = active_store();
-    let revision = gents_desktop_core::client::StoreProjectionRevision { store_version: 9 };
+    let revision = gents_desktop_core::client::StoreProjectionRevision {
+        store_version: 9,
+        provenance_version: 1,
+    };
     let current = build_session_live_delta_from_store(
         &store,
         &store,

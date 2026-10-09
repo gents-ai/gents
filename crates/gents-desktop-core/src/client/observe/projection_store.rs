@@ -55,6 +55,9 @@ impl ObserverMetrics {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StoreProjectionRevision {
     pub store_version: u64,
+    /// Advances for observed request, session and tool-call lineage inputs, not
+    /// transcript invalidations. It is a refresh cue, never an authority check.
+    pub provenance_version: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,7 +85,10 @@ pub struct ObservedStore {
 impl ObservedStore {
     pub fn new(initial_snapshot: ClientStore) -> (Arc<Self>, watch::Receiver<u64>) {
         let (version_tx, version_rx) = watch::channel(1_u64);
-        let revision = StoreProjectionRevision { store_version: 1 };
+        let revision = StoreProjectionRevision {
+            store_version: 1,
+            provenance_version: 1,
+        };
         let (change_tx, _change_rx) = watch::channel(StoreUpdateNotice { revision });
         let store = Arc::new(Self {
             state: RwLock::new(ObservedState {
@@ -140,12 +146,14 @@ impl ObservedStore {
 
     pub fn replace_snapshot(&self, snapshot: ClientStore) -> u64 {
         let snapshot = snapshot.into_observer_projection();
-        self.update(|_| snapshot)
+        self.update(true, |_| snapshot)
     }
 
     pub fn merge_chat_patch(&self, patch: ClientStore) -> u64 {
         let patch = patch.into_observer_projection();
-        self.update(|snapshot| snapshot.merge_chat_patch(patch))
+        self.update(has_provenance_inputs(&patch), |snapshot| {
+            snapshot.merge_chat_patch(patch)
+        })
     }
 
     pub fn merge_snapshot(&self, incoming: ClientStore) -> u64 {
@@ -164,13 +172,17 @@ impl ObservedStore {
     ) -> StorePatchMergeOutcome {
         let incoming = incoming.into_observer_projection();
         StorePatchMergeOutcome {
-            store_version: self.update(|snapshot| snapshot.merge_snapshot(incoming)),
+            store_version: self.update(has_provenance_inputs(&incoming), |snapshot| {
+                snapshot.merge_snapshot(incoming)
+            }),
         }
     }
 
     pub fn replace_agent_snapshot(&self, agent_did: &str, incoming: ClientStore) -> u64 {
         let incoming = incoming.into_observer_projection();
-        self.update(|snapshot| snapshot.replace_agent_scope(agent_did, incoming))
+        self.update(true, |snapshot| {
+            snapshot.replace_agent_scope(agent_did, incoming)
+        })
     }
 
     /// A reload may await database reads while an explicit request refresh
@@ -183,7 +195,7 @@ impl ObservedStore {
         incoming: ClientStore,
     ) -> bool {
         let incoming = incoming.into_observer_projection();
-        self.update_at_revision(Some(captured), |snapshot| match agent_did {
+        self.update_at_revision(Some(captured), true, |snapshot| match agent_did {
             Some(agent_did) => snapshot.replace_agent_scope(agent_did, incoming),
             None => incoming,
         })
@@ -198,6 +210,7 @@ impl ObservedStore {
             let mut state = self.state.write().expect("store snapshot lock poisoned");
             state.revision = StoreProjectionRevision {
                 store_version: state.revision.store_version.saturating_add(1),
+                provenance_version: state.revision.provenance_version,
             };
             StoreUpdateNotice {
                 revision: state.revision,
@@ -208,14 +221,19 @@ impl ObservedStore {
         notice.revision.store_version
     }
 
-    fn update(&self, transform: impl FnOnce(&ClientStore) -> ClientStore) -> u64 {
-        self.update_at_revision(None, transform)
+    fn update(
+        &self,
+        provenance_may_change: bool,
+        transform: impl FnOnce(&ClientStore) -> ClientStore,
+    ) -> u64 {
+        self.update_at_revision(None, provenance_may_change, transform)
             .expect("unconditional store update")
     }
 
     fn update_at_revision(
         &self,
         captured: Option<StoreProjectionRevision>,
+        provenance_may_change: bool,
         transform: impl FnOnce(&ClientStore) -> ClientStore,
     ) -> Option<u64> {
         let notice = {
@@ -224,8 +242,15 @@ impl ObservedStore {
                 return None;
             }
             let store_version = state.revision.store_version.saturating_add(1);
-            state.snapshot = Arc::new(transform(state.snapshot.as_ref()));
-            state.revision = StoreProjectionRevision { store_version };
+            let next = transform(state.snapshot.as_ref());
+            let provenance_version = state.revision.provenance_version.saturating_add(u64::from(
+                provenance_may_change && !same_provenance_inputs(state.snapshot.as_ref(), &next),
+            ));
+            state.snapshot = Arc::new(next);
+            state.revision = StoreProjectionRevision {
+                store_version,
+                provenance_version,
+            };
             StoreUpdateNotice {
                 revision: state.revision,
             }
@@ -234,6 +259,49 @@ impl ObservedStore {
         self.change_tx.send_replace(notice);
         Some(notice.revision.store_version)
     }
+}
+
+fn has_provenance_inputs(patch: &ClientStore) -> bool {
+    !patch.requests.is_empty() || !patch.sessions.is_empty() || !patch.tool_calls.is_empty()
+}
+
+/// These are observations used by the lineage read, including the remote
+/// request's lifecycle. Lease renewal and streamed text cannot change them.
+fn same_provenance_inputs(before: &ClientStore, after: &ClientStore) -> bool {
+    before.requests.len() == after.requests.len()
+        && before.requests.iter().zip(&after.requests).all(|(a, b)| {
+            a.doc_id == b.doc_id
+                && a.request_id == b.request_id
+                && a.purpose == b.purpose
+                && a.agent_did == b.agent_did
+                && a.session_id == b.session_id
+                && a.requester_did == b.requester_did
+                && a.lifecycle_state == b.lifecycle_state
+                && a.created_at == b.created_at
+                && a.caused_by_parent_request_doc_id == b.caused_by_parent_request_doc_id
+                && a.caused_by_parent_tool_call_doc_id == b.caused_by_parent_tool_call_doc_id
+        })
+        && before.sessions.len() == after.sessions.len()
+        && before.sessions.iter().zip(&after.sessions).all(|(a, b)| {
+            a.agent_did == b.agent_did
+                && a.session_id == b.session_id
+                && a.requester_did == b.requester_did
+                && a.provenance == b.provenance
+        })
+        && before.tool_calls.len() == after.tool_calls.len()
+        && before
+            .tool_calls
+            .iter()
+            .zip(&after.tool_calls)
+            .all(|(a, b)| {
+                a.doc_id == b.doc_id
+                    && a.agent_did == b.agent_did
+                    && a.session_id == b.session_id
+                    && a.requester_did == b.requester_did
+                    && a.request_id == b.request_id
+                    && a.tool_call_id == b.tool_call_id
+                    && a.tool_name == b.tool_name
+            })
 }
 
 #[cfg(test)]
@@ -256,6 +324,49 @@ mod reload_tests {
                 .collect(),
             ..Default::default()
         })
+    }
+
+    #[test]
+    fn provenance_revision_ignores_transcript_and_lease_but_tracks_remote_completion() {
+        use gents_protocol::request_lifecycle::RequestLifecycleState;
+
+        let mut initial = requests(&["remote-child"]);
+        initial.requests[0].lifecycle_state = Some(RequestLifecycleState::Processing);
+        let (store, _) = ObservedStore::new(initial);
+        let original = store.projection_revision();
+        for _ in 0..50 {
+            store.invalidate_projection();
+        }
+        assert_eq!(
+            store.projection_revision().provenance_version,
+            original.provenance_version
+        );
+        assert_eq!(
+            store.projection_revision().store_version,
+            original.store_version + 50
+        );
+
+        let mut renewed = store.snapshot().as_ref().clone();
+        renewed.requests[0].execution_lease_expires_at = Some("later".into());
+        store.merge_observer_patch(renewed);
+        assert_eq!(
+            store.projection_revision().provenance_version,
+            original.provenance_version
+        );
+
+        let mut completed = store.snapshot().as_ref().clone();
+        completed.requests[0].lifecycle_state = Some(RequestLifecycleState::Completed);
+        store.merge_observer_patch(completed);
+        assert_eq!(
+            store.projection_revision().provenance_version,
+            original.provenance_version + 1
+        );
+        let settled = store.projection_revision();
+        store.merge_observer_patch(store.snapshot().as_ref().clone());
+        assert_eq!(
+            store.projection_revision().provenance_version,
+            settled.provenance_version
+        );
     }
 
     #[test]

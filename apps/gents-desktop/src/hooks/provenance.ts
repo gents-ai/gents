@@ -47,11 +47,10 @@ type ProvenanceParams = {
  * list reports them. It is asked again when the transcript's rows change
  * (a streamed chunk to the live reply does not move them) or the agent's
  * session list does. While a request it caused is live it is also asked
- * whenever the session store's observation moves (`storeVersion`), so a
- * caused request settling anywhere this desktop observes refreshes it;
- * there is no timer of its own. Every applied live delta advances
- * `storeVersion`, so a settled lineage must not follow it: that would be
- * one bridge call per streamed chunk.
+ * when the observed lineage inputs change (`provenanceVersion`), so a
+ * caused request settling anywhere this desktop observes refreshes it.
+ * Streamed transcript changes and lease renewals do not advance that cue;
+ * there is no timer of its own.
  *
  * One ask is out at a time: while the stream moves faster than a lineage
  * read, a newer ask would outdate every answer before it lands. A cue that
@@ -61,7 +60,7 @@ type ProvenanceParams = {
 export function createProvenance({ api, stores }: ProvenanceParams) {
   let held: { scope: string; value: SessionProvenanceView } | null = null;
   /* what the last ask observed: a live lineage arriving starts following the
-     store version without asking again for the one it was read at */
+     provenance version without asking again for the one it was read at */
   let asked: { cues: string; version: number | null } | null = null;
   let out = false;
   let missed = false;
@@ -101,8 +100,8 @@ export function createProvenance({ api, stores }: ProvenanceParams) {
 
     /* without the session's summary its exact scope is unknown */
     if (!agentDid || !sessionId || !summary) return;
-    const version = session?.projectionRevision?.storeVersion ?? null;
-    /* the store version is followed only while a request it caused is live */
+    const version = session?.projectionRevision?.provenanceVersion ?? null;
+    /* the provenance version is followed only while a request it caused is live */
     const followed = shown?.calls.some((c) => isLive(c.caused.lifecycleState))
       ? version
       : null;

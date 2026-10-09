@@ -53,7 +53,7 @@ describe("following the client while it runs", () => {
           turnState: "running",
           latestRequestId: "r-1",
           liveCursor: hasLive ? "source" : null,
-          projectionRevision: { storeVersion: 1 },
+          projectionRevision: { storeVersion: 1, provenanceVersion: 1 },
           timelineItems: hasLive
             ? [liveAssistant({ itemKey: "live", content: "hello" })]
             : [],
@@ -63,7 +63,7 @@ describe("following the client while it runs", () => {
           outcome: "unchanged",
           liveCursor: "source",
           requestId: "r-1",
-          revision: { storeVersion: 1 },
+          revision: { storeVersion: 1, provenanceVersion: 1 },
           turnState: "running",
           status: null,
           content: { mode: "unchanged", value: "", byteLen: 5, hash: "4f9f2cab" },
