@@ -989,7 +989,10 @@ fn render_tool_output(
     raw_json: bool,
 ) -> Result<String> {
     if raw_json {
-        return render_json(raw_value);
+        return crate::tool_output::render(
+            raw_value,
+            &["content", "entries", "matches", "diff", "status", "ok"],
+        );
     }
 
     let mut out = String::from(OUTPUT_META_PREFIX);

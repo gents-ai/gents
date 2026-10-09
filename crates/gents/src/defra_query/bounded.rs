@@ -402,8 +402,17 @@ impl Tool for BoundedQueryTool {
                 "Result set hit the {limit}-row cap; raise limit or narrow the filter if more rows exist."
             ));
         }
-        serde_json::to_string_pretty(&payload)
-            .map_err(|e| DefraBoundQueryError(anyhow!("failed to serialize query results: {e}")))
+        crate::tool_output::render(
+            &payload,
+            &[
+                "results",
+                "field_page",
+                "count",
+                "field_recovery",
+                "limit_note",
+            ],
+        )
+        .map_err(|e| DefraBoundQueryError(anyhow!("failed to serialize query results: {e}")))
     }
 }
 

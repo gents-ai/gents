@@ -104,13 +104,16 @@ pub fn run_graph_tool_result(
     let limits = crate::truncation::TruncationLimits::default();
     let mut reply = String::new();
     for observed in [full, without_input, summary] {
-        reply = serde_json::to_string_pretty(&json!({
-            "node_bound": true,
-            "principal": principal,
-            "receipt": receipt,
-            "observed": observed,
-            "next": next,
-        }))?;
+        reply = serde_json::to_string_pretty(&crate::tool_output::Ordered::preserving_nulls(
+            json!({
+                "node_bound": true,
+                "principal": principal,
+                "receipt": receipt,
+                "observed": observed,
+                "next": next,
+            }),
+            &["observed", "receipt", "next", "principal", "node_bound"],
+        ))?;
         if !crate::truncation::truncate(&reply, crate::truncation::TruncationMode::Head, &limits)
             .truncated
         {
@@ -1634,6 +1637,8 @@ mod tests {
         .unwrap();
         let result =
             run_graph_tool_result("did:test:owner", &receipt, &observed, json!({})).unwrap();
+        assert!(result.starts_with("{\n  \"observed\":"));
+        assert!(result.find("\"receipt\"").unwrap() < result.find("\"next\"").unwrap());
         assert_eq!(run_receipt_from_tool_result(&result), Some(receipt.clone()));
         let limits = crate::truncation::TruncationLimits::default();
         let bounded = |result: &str| {

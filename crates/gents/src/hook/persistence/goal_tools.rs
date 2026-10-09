@@ -37,12 +37,11 @@ impl DefraSessionHook {
         let parsed = match serde_json::from_str::<CreateGoalArgs>(args) {
             Ok(parsed) => parsed,
             Err(error) => {
-                let result = json!({
+                let result = super::helpers::json_string(json!({
                     "accepted": false,
                     "disposition": "invalid",
                     "error": format!("invalid create_goal arguments: {error}"),
-                })
-                .to_string();
+                }));
                 return self
                     .complete_control_tool_call(&mut lifecycle, CREATE_GOAL_TOOL_NAME, result)
                     .await;
@@ -81,7 +80,8 @@ impl DefraSessionHook {
                 "error": error.to_string(),
             }),
         };
-        let result = serde_json::to_string_pretty(&outcome)?;
+        let result =
+            crate::tool_output::render(&outcome, &["goal", "error", "accepted", "disposition"])?;
         self.complete_control_tool_call(&mut lifecycle, CREATE_GOAL_TOOL_NAME, result)
             .await
     }
@@ -108,7 +108,7 @@ impl DefraSessionHook {
             .await?;
         lifecycle.start_running().await?;
         let result = if serde_json::from_str::<GetGoalArgs>(args).is_err() {
-            json!({"error": "get_goal expects an empty object"}).to_string()
+            super::helpers::json_string(json!({"error": "get_goal expects an empty object"}))
         } else if let Some(mut goal) =
             load_canonical_goal(&self.node, &self.agent_did, &session_id).await?
         {
@@ -116,9 +116,18 @@ impl DefraSessionHook {
             goal = load_canonical_goal(&self.node, &self.agent_did, &session_id)
                 .await?
                 .unwrap_or(goal);
-            serde_json::to_string_pretty(&GoalSnapshot::from_document(&goal, Utc::now()))?
+            crate::tool_output::render(
+                &GoalSnapshot::from_document(&goal, Utc::now()),
+                &[
+                    "objective",
+                    "status",
+                    "tokens_used",
+                    "token_budget",
+                    "active_time_seconds",
+                ],
+            )?
         } else {
-            json!({"goal": null}).to_string()
+            super::helpers::json_string(json!({"goal": null}))
         };
         self.complete_control_tool_call(&mut lifecycle, GET_GOAL_TOOL_NAME, result)
             .await
@@ -148,8 +157,9 @@ impl DefraSessionHook {
         let parsed = match serde_json::from_str::<UpdateGoalArgs>(args) {
             Ok(parsed) => parsed,
             Err(error) => {
-                let result =
-                    json!({"error": format!("invalid update_goal arguments: {error}")}).to_string();
+                let result = super::helpers::json_string(
+                    json!({"error": format!("invalid update_goal arguments: {error}")}),
+                );
                 return self
                     .complete_control_tool_call(&mut lifecycle, UPDATE_GOAL_TOOL_NAME, result)
                     .await;
@@ -157,7 +167,9 @@ impl DefraSessionHook {
         };
         let Some(goal) = load_canonical_goal(&self.node, &self.agent_did, &session_id).await?
         else {
-            let result = json!({"error": "the current session has no durable goal"}).to_string();
+            let result = super::helpers::json_string(
+                json!({"error": "the current session has no durable goal"}),
+            );
             return self
                 .complete_control_tool_call(&mut lifecycle, UPDATE_GOAL_TOOL_NAME, result)
                 .await;
@@ -166,9 +178,9 @@ impl DefraSessionHook {
         let now = Utc::now();
         let updated_at = escape_graphql_string(&now.to_rfc3339());
         let Some(pre) = goal.state() else {
-            let result =
-                json!({"error": format!("durable goal has unknown status {:?}", goal.status)})
-                    .to_string();
+            let result = super::helpers::json_string(
+                json!({"error": format!("durable goal has unknown status {:?}", goal.status)}),
+            );
             return self
                 .complete_control_tool_call(&mut lifecycle, UPDATE_GOAL_TOOL_NAME, result)
                 .await;
@@ -176,9 +188,9 @@ impl DefraSessionHook {
         let outcome = match parsed.status.trim() {
             "complete" => {
                 let Some(post) = pre.step(GoalAction::Complete) else {
-                    let result =
-                        json!({"error": "complete is not legal from the goal's current status"})
-                            .to_string();
+                    let result = super::helpers::json_string(
+                        json!({"error": "complete is not legal from the goal's current status"}),
+                    );
                     return self
                         .complete_control_tool_call(&mut lifecycle, UPDATE_GOAL_TOOL_NAME, result)
                         .await;
@@ -186,11 +198,10 @@ impl DefraSessionHook {
                 if let Some(gate) = self.output_obligation_gate.as_ref() {
                     let unmet = gate.unmet().await?;
                     if !unmet.is_empty() {
-                        let result = json!({
+                        let result = super::helpers::json_string(json!({
                             "accepted": false,
                             "error": crate::agent::output_obligation::continuation_message(&unmet),
-                        })
-                        .to_string();
+                        }));
                         return self
                             .complete_control_tool_call(
                                 &mut lifecycle,
@@ -229,13 +240,12 @@ impl DefraSessionHook {
             }
             "blocked" => {
                 if pre.status != GoalStatus::Active {
-                    let result = json!({
+                    let result = super::helpers::json_string(json!({
                         "error": format!(
                             "blocked audit is legal only from active; current status is {}",
                             pre.status.as_str()
                         )
-                    })
-                    .to_string();
+                    }));
                     return self
                         .complete_control_tool_call(&mut lifecycle, UPDATE_GOAL_TOOL_NAME, result)
                         .await;
@@ -246,7 +256,9 @@ impl DefraSessionHook {
                     .map(str::trim)
                     .filter(|reason| !reason.is_empty())
                 else {
-                    let result = json!({"error": "blocked requires a non-empty reason identifying the repeated condition"}).to_string();
+                    let result = super::helpers::json_string(
+                        json!({"error": "blocked requires a non-empty reason identifying the repeated condition"}),
+                    );
                     return self
                         .complete_control_tool_call(&mut lifecycle, UPDATE_GOAL_TOOL_NAME, result)
                         .await;
@@ -296,7 +308,8 @@ impl DefraSessionHook {
                 "error": format!("unsupported goal status {other:?}; expected complete or blocked")
             }),
         };
-        let result = serde_json::to_string_pretty(&outcome)?;
+        let result =
+            crate::tool_output::render(&outcome, &["goal", "error", "accepted", "disposition"])?;
         self.complete_control_tool_call(&mut lifecycle, UPDATE_GOAL_TOOL_NAME, result)
             .await
     }

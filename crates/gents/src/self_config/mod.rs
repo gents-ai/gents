@@ -991,7 +991,7 @@ async fn persona_inspect(
         Value::Object(snapshot),
         &["behavior_id", "is_default", "protected"],
     );
-    result.0.push(Ordered::entry(
+    result.push(Ordered::entry(
         "effective_config",
         &Ordered::reading_order(effective, EFFECTIVE_ORDER),
     ));
@@ -2505,11 +2505,14 @@ impl Tool for ListGraphsTool {
                 .as_str()
                 .cmp(&right["definition"]["graph_id"].as_str())
         });
-        serde_json::to_string_pretty(&json!({
-            "agent_did": self.core.agent_did(),
-            "node_bound": true,
-            "graphs": graphs,
-        }))
+        crate::tool_output::render(
+            &json!({
+                "agent_did": self.core.agent_did(),
+                "node_bound": true,
+                "graphs": graphs,
+            }),
+            &["graphs", "agent_did", "node_bound"],
+        )
         .map_err(|error| SelfConfigError(anyhow!(error)))
     }
 }
@@ -2718,7 +2721,19 @@ impl Tool for GetGraphRunTool {
             &args.run_id,
         )
         .await?;
-        serde_json::to_string_pretty(&view).map_err(|error| SelfConfigError(anyhow!(error)))
+        crate::tool_output::render(
+            &view,
+            &[
+                "results",
+                "status",
+                "error",
+                "failure_evidence",
+                "stages",
+                "requests",
+                "run_id",
+            ],
+        )
+        .map_err(|error| SelfConfigError(anyhow!(error)))
     }
 }
 
@@ -2748,7 +2763,19 @@ impl Tool for GetGraphResultTool {
             &args.run_id,
         )
         .await?;
-        serde_json::to_string_pretty(&view).map_err(|error| SelfConfigError(anyhow!(error)))
+        crate::tool_output::render(
+            &view,
+            &[
+                "results",
+                "status",
+                "error",
+                "failure_evidence",
+                "stages",
+                "requests",
+                "run_id",
+            ],
+        )
+        .map_err(|error| SelfConfigError(anyhow!(error)))
     }
 }
 
@@ -2787,7 +2814,19 @@ impl Tool for CancelGraphRunTool {
             args.reason.as_deref(),
         )
         .await?;
-        serde_json::to_string_pretty(&view).map_err(|error| SelfConfigError(anyhow!(error)))
+        crate::tool_output::render(
+            &view,
+            &[
+                "results",
+                "status",
+                "error",
+                "failure_evidence",
+                "stages",
+                "requests",
+                "run_id",
+            ],
+        )
+        .map_err(|error| SelfConfigError(anyhow!(error)))
     }
 }
 

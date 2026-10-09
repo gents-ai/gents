@@ -581,6 +581,17 @@ fn background_not_yet_executable_error(tool_name: &str) -> ToolError {
 }
 
 fn structured_error(error: serde_json::Value) -> ToolError {
-    let message = serde_json::to_string_pretty(&error).unwrap_or_else(|_| error.to_string());
+    let message = crate::tool_output::render(
+        &error,
+        &[
+            "message",
+            "allowed_agents",
+            "ok",
+            "retryable",
+            "failure_class",
+            "path",
+        ],
+    )
+    .unwrap_or_else(|_| error.to_string());
     anyhow!(message).into()
 }
