@@ -67,9 +67,7 @@ export function createDesktopShellPeerActions({
     try {
       return await api.fetchPeerStatus(peerId);
     } catch (err) {
-      const message = formatPeerConnectionError(err, "peer-status");
-      reportFailure(message);
-      throw shownFailure(new Error(message));
+      throw new Error(formatPeerConnectionError(err, "peer-status"));
     }
   }
 
@@ -82,9 +80,7 @@ export function createDesktopShellPeerActions({
       await refreshSnapshot();
       return request;
     } catch (err) {
-      const message = formatPeerConnectionError(err, "peer-status");
-      reportFailure(message);
-      throw shownFailure(new Error(message));
+      throw new Error(formatPeerConnectionError(err, "peer-status"));
     }
   }
 
@@ -110,14 +106,14 @@ export function createDesktopShellPeerActions({
 
   return {
     /**
-     * Asks a peer for its status, with nothing stored. A failure is reported
-     * once, in the peer's words, then rethrown.
+     * Asks a peer for its status, with nothing stored. A failure is thrown
+     * in the peer's words, for the screen to show.
      */
     fetchPeerStatus,
     /**
      * Asks the server at the address to enroll this desktop, starting the
      * client first if it is not running, then reads the client again. A
-     * failure is reported once, then rethrown.
+     * failure is thrown in the peer's words, for the screen to show.
      */
     requestStatusEnrollment,
     /**

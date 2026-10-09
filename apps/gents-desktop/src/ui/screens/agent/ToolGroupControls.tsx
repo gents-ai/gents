@@ -144,7 +144,9 @@ export function ToolGroupControls({
   onCreateTarget: (behaviorId: string) => void;
   onInvalid: (id: string, label: string | null) => void;
 }) {
-  const { api } = useApp();
+  const {
+    actions: { testToolService },
+  } = useApp();
   const groups = parseToolGroups(value);
   if (!groups)
     return (
@@ -412,7 +414,7 @@ export function ToolGroupControls({
                   (row) => row.service_id === service.mcp_service_id,
                 );
                 if (!config) throw new Error("Remote service is unavailable");
-                const result = await api.testToolService({
+                const result = await testToolService({
                   serviceId: config.service_id,
                   hostname: config.hostname ?? null,
                   tailscaleIp: config.tailscale_ip ?? null,

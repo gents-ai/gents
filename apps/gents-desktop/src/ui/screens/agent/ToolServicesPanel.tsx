@@ -27,8 +27,7 @@ function Editor({
   service: ToolServiceRegistry;
 }) {
   const {
-    api,
-    actions: { changeConfig },
+    actions: { changeConfig, testToolService },
   } = useApp();
   const base = {
     name: "agent" as const,
@@ -98,7 +97,7 @@ function Editor({
     }
     try {
       const endpoint = endpointOf(d.draft);
-      const result = await api.testToolService({
+      const result = await testToolService({
         serviceId: service.service_id,
         ...endpoint,
       });

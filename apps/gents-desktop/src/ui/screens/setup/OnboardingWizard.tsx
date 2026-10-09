@@ -131,7 +131,7 @@ export function OnboardingWizard({
   provider?: ProviderId;
 }) {
   const bootstrap = useBootstrap();
-  const { api, stores, actions } = useApp();
+  const { stores, actions } = useApp();
   const { initLocalRuntime, refreshSnapshot, changeConfig } = actions;
   const { diagnosticsHint } = useStartup();
   const { incompatibleHome } = useStartup();
@@ -210,7 +210,7 @@ export function OnboardingWizard({
   const finishProvisioning = async (
     setUp: (snapshot: DesktopClientSnapshot) => NodeView | null | undefined,
   ) => {
-    const next = await api.fetchDesktopSnapshot();
+    const next = await actions.readSnapshot();
     const nextDeployment = setUp(next);
     const steward = nextDeployment ? setupStewardPatches(nextDeployment) : [];
     if (steward.length && nextDeployment) {
@@ -297,7 +297,7 @@ export function OnboardingWizard({
   const enrol = async () => {
     dispatch({ type: "begun", phase: "starting-client" });
     try {
-      await api.requestStatusEnrollment(address.trim());
+      await actions.requestStatusEnrollment(address.trim());
       await finishProvisioning((snapshot) => snapshot.client?.deployments[0]);
     } catch (e) {
       dispatch({ type: "failed", phase: "client-error", error: setupErrorMessage(e) });

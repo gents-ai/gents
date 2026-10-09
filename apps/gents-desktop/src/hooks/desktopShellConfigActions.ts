@@ -67,16 +67,6 @@ export function createDesktopShellConfigActions({
     }
   }
 
-  /** A call that stores nothing: reported the same way, without a re-read. */
-  async function call<T>(label: string, run: () => Promise<T>) {
-    try {
-      return await run();
-    } catch (error) {
-      reportFailure(actionFailure(label, error));
-      throw shownFailure(error);
-    }
-  }
-
   return {
     /**
      * A configuration change: the bridge's write, then a fresh read once it
@@ -86,11 +76,10 @@ export function createDesktopShellConfigActions({
      * the person typed.
      */
     changeConfig,
-    /** Tries a tool service's connection without saving it. A failure is
-        reported once, then rethrown. */
+    /** Tries a tool service's connection without saving it. The screen that
+        asks shows the answer, and a failure, its own way. */
     testToolService: (
       request: ToolServiceTestRequest,
-    ): Promise<ToolServiceTestResult> =>
-      call("test the tool service", () => api.testToolService(request)),
+    ): Promise<ToolServiceTestResult> => api.testToolService(request),
   };
 }

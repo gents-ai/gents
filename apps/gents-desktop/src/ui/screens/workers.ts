@@ -127,7 +127,10 @@ type Held<T> = { scope: string; value: T };
    applied live delta advances storeVersion, so a settled lineage must not
    follow it: that would be one bridge call per streamed chunk. */
 export function useSessionProvenance(): SessionProvenanceView | null {
-  const { api, stores } = useApp();
+  const {
+    stores,
+    actions: { readSessionProvenance },
+  } = useApp();
   const sessionId = useSelectedSessionValue((s) => s?.sessionId ?? null);
   const rowsRevision = useSessionFacts()?.rowsRevision ?? 0;
   const agentDid = stores.selection.use.agentDid();
@@ -184,8 +187,7 @@ export function useSessionProvenance(): SessionProvenanceView | null {
         })?.projectionRevision?.storeVersion ?? null,
     };
     out.current = true;
-    void api
-      .sessionProvenance({ sessionId, agentDid, requesterDid })
+    void readSessionProvenance({ sessionId, agentDid, requesterDid })
       .then(
         (value) => setHeld({ scope, value }),
         () => {
@@ -200,7 +202,7 @@ export function useSessionProvenance(): SessionProvenanceView | null {
         setLanded((n) => n + 1);
       });
   }, [
-    api,
+    readSessionProvenance,
     stores,
     agentDid,
     sessionId,
@@ -216,7 +218,10 @@ export function useSessionProvenance(): SessionProvenanceView | null {
 }
 
 export function useWorkers(provenance: SessionProvenanceView | null): Workers {
-  const { api, stores } = useApp();
+  const {
+    stores,
+    actions: { fetchOperationsSnapshot },
+  } = useApp();
   const facts = useSessionFacts();
   const agentDid = stores.selection.use.agentDid();
   const sessions = useListedScopes(
@@ -243,14 +248,14 @@ export function useWorkers(provenance: SessionProvenanceView | null): Workers {
       return;
     }
     let live = true;
-    void api.fetchOperationsSnapshot({ agentDid }).then(
+    void fetchOperationsSnapshot({ agentDid }).then(
       (o) => live && setHeldOps({ scope: agentDid, value: o }),
       () => live && setHeldOps(null),
     );
     return () => {
       live = false;
     };
-  }, [api, hasProcesses, agentDid, toolsRevision]);
+  }, [fetchOperationsSnapshot, hasProcesses, agentDid, toolsRevision]);
   return useMemo(() => {
     if (!provenance && !ops) return NO_WORKERS;
     const all = provenance ? subagentsOf(provenance, sessions) : [];

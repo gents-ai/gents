@@ -1,6 +1,8 @@
 import type {
   DesktopApiAdapter,
   DesktopClientSnapshot,
+  DesktopOperationsSnapshotRequest,
+  DesktopSessionProvenanceRequest,
 } from "@source-inc/gents-desktop-client";
 
 import { createDesktopShellChatActions } from "./desktopShellChatActions";
@@ -54,6 +56,17 @@ export function createShellActions({
     /** Reads the client without publishing it, for a screen checking what
         its own write left behind. */
     readSnapshot: () => api.fetchDesktopSnapshot(),
+    /* Read for the screen that shows each answer, which keeps it: no store. */
+    fetchOperationsSnapshot: (request: DesktopOperationsSnapshotRequest) =>
+      api.fetchOperationsSnapshot(request),
+    readSessionProvenance: (request: DesktopSessionProvenanceRequest) =>
+      api.sessionProvenance(request),
+    /** Whether this host has a DB explorer window to open. */
+    canOpenDbExplorer: Boolean(api.openDbExplorer),
+    /** Opens the managed runtime's DB explorer window. */
+    openDbExplorer: async () => {
+      await api.openDbExplorer?.();
+    },
     ...createDesktopShellMailboxActions({
       api,
       stores,

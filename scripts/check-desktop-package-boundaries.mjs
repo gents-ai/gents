@@ -649,15 +649,8 @@ for (const [path, maximumLines] of [
    that no longer reaches the bridge must leave it. */
 const componentsReachingBridge = new Set([
   "src/ui/app/platform.ts",
-  "src/ui/app/SettingsMenu.tsx",
   "src/ui/lib/pickDirectory.ts",
   "src/ui/lib/swipe-nav.ts",
-  "src/ui/screens/agent/AgentCard.tsx",
-  "src/ui/screens/agent/ToolGroupControls.tsx",
-  "src/ui/screens/agent/ToolServicesPanel.tsx",
-  "src/ui/screens/AgentsScreen.tsx",
-  "src/ui/screens/setup/OnboardingWizard.tsx",
-  "src/ui/screens/workers.ts",
   "src/ui/theme.ts",
 ]);
 const desktopRoot = join(root, "apps/gents-desktop");
