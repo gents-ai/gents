@@ -133,9 +133,24 @@ describeLive("Tauri app live agent sessions", () => {
         { timeout: 120_000 },
       );
 
-      await waitFor(() => {
-        expect(driver.composer()).toBeInTheDocument();
-      });
+      try {
+        await waitFor(
+          () => {
+            expect(driver.composer()).toBeInTheDocument();
+            expect(driver.cancelButton()).toBeNull();
+            expect(driver.sendButton()).toBeInTheDocument();
+          },
+          { timeout: 30_000 },
+        );
+      } catch (error) {
+        const diagnostics = await runner.fetchRequestDiagnostics(
+          submitted.sessionId,
+          submitted.requestId,
+        );
+        throw new Error(
+          `agent target composer did not recover after terminal observation; diagnostics=${JSON.stringify(diagnostics)}: ${String(error)}`,
+        );
+      }
       await driver.typeComposer(FOLLOW_UP_PROMPT);
       await waitFor(() => {
         expect(driver.sendButton()).toBeEnabled();
