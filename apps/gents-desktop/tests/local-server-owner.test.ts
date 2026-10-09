@@ -308,4 +308,45 @@ describe("the local server's owner", () => {
       vi.useRealTimers();
     }
   });
+  it("aborts queued restore without waiting for or cancelling the active start", async () => {
+    const started = later<ManagedServerStatus>();
+    const startManagedServer = vi.fn(() => started.promise);
+    const managedServerStatus = vi.fn().mockResolvedValue(status("running"));
+    const stopManagedServer = vi.fn().mockResolvedValue(status("stopped"));
+    const { server, store } = owner({
+      startManagedServer,
+      managedServerStatus,
+      stopManagedServer,
+    });
+    const start = server.startLocalServer("Workshop Agent");
+    await vi.waitFor(() => expect(startManagedServer).toHaveBeenCalledOnce());
+    const controller = new AbortController();
+    const restore = server.restoreLocalServer(controller.signal);
+    controller.abort();
+    let result: boolean | null | undefined;
+    void restore.then((value) => {
+      result = value;
+    });
+    await vi.waitFor(() => expect(result).toBe(false));
+    expect(store.getState().operation).toBe("start");
+    expect(managedServerStatus).not.toHaveBeenCalled();
+    started.resolve(status("running"));
+    await start;
+    await server.stopLocalServer();
+    expect(managedServerStatus).not.toHaveBeenCalled();
+  });
+
+  it("does not publish a settling snapshot during an active operation", async () => {
+    const started = later<ManagedServerStatus>();
+    const startManagedServer = vi.fn(() => started.promise);
+    const { server, store } = owner({ startManagedServer });
+    await server.settleLocalServer(status("stopped"));
+    const start = server.startLocalServer("Workshop Agent");
+    await vi.waitFor(() => expect(startManagedServer).toHaveBeenCalledOnce());
+    await server.settleLocalServer(status("running"));
+    expect(store.getState().status?.state).toBe("stopped");
+    started.resolve(status("running"));
+    await start;
+    expect(store.getState().status?.state).toBe("running");
+  });
 });

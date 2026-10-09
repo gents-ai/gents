@@ -235,23 +235,42 @@ export function createLocalServer({ api, store, client }: LocalServerParams) {
         approval, within the bridge's bounds, publishing which wait it is
         in; resolves with the last status. */
     settleLocalServer(status: ManagedServerStatus) {
-      const current = reads.begin();
+      const current = running ? () => false : reads.begin();
       const currentWait = running ? () => false : waits.begin();
       return awaitManagedServerSettled(api, status, (wait) => {
         if (currentWait() && !running) publishWait(wait);
       }).then((next) => {
-        if (current()) localServer.read(store, next);
+        if (current() && !running) localServer.read(store, next);
         return next;
       });
     },
     /** Observes the service at launch (see `restoreManagedServer`),
         publishing which wait it is in. */
     restoreLocalServer(signal?: AbortSignal) {
-      return operate(
+      if (signal?.aborted) return Promise.resolve(false);
+      const pending = operate(
         "restore",
-        () => restoreManagedServer(api, { onWait: publishWait, signal }),
+        () =>
+          signal?.aborted
+            ? Promise.resolve(false)
+            : restoreManagedServer(api, { onWait: publishWait, signal }),
         Symbol("restore"),
       );
+      if (!signal) return pending;
+      return new Promise<boolean | null>((resolve, reject) => {
+        const abort = () => resolve(false);
+        signal.addEventListener("abort", abort, { once: true });
+        pending.then(
+          (result) => {
+            signal.removeEventListener("abort", abort);
+            resolve(result);
+          },
+          (error: unknown) => {
+            signal.removeEventListener("abort", abort);
+            reject(error);
+          },
+        );
+      });
     },
     /** Resolves a tool root as the service will use it, or rejects saying why. */
     validateLocalServerRoot(path: string) {
