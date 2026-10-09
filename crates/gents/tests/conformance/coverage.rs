@@ -179,7 +179,7 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
     );
     assert_eq!(
         lean_contract_snapshot().frontend_client_shell_cases.len(),
-        25
+        27
     );
     assert_eq!(
         lean_contract_snapshot().desktop_client_shell_case_count,
@@ -187,7 +187,7 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
     );
     assert_eq!(
         lean_contract_snapshot().desktop_client_shell_cases.len(),
-        22
+        24
     );
     assert_eq!(lean_contract_snapshot().tool_preflight_cases.len(), 9);
     assert_eq!(lean_contract_snapshot().tool_retry_cases.len(), 72);
@@ -973,6 +973,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         emitted.insert((
             "client_live_delta_cases".to_string(),
             "ClientLiveDeltaCases".to_string(),
+        ));
+    }
+    if !snapshot.client_session_turn_cases.is_empty() {
+        emitted.insert((
+            "client_session_turn_cases".to_string(),
+            "ClientSessionTurnCases".to_string(),
         ));
     }
     if !snapshot.request_lifecycle_operator_ui_cases.is_empty() {

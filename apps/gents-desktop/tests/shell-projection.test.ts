@@ -52,6 +52,8 @@ describe("the shell view", () => {
       turnState: "running",
       latestRequestId: "r1",
       pendingTurn: null,
+      queuedTurns: [],
+      foldedInputs: [],
       hydration: null,
       timelineItems: [{ kind: "liveAssistant", itemKey: "live", content }],
     }) as unknown as DesktopSessionSnapshot;

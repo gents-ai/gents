@@ -384,6 +384,16 @@ pub(super) fn build_session_snapshot_from_store_for_agent_with_transcript(
                 || store.latest_request_id_for_session(session_id),
                 |agent_did| store.latest_request_id_for_session_for_agent(session_id, agent_did),
             )
+        })
+        .map(|request_id| {
+            requests
+                .iter()
+                .find(|row| row.request_id == request_id)
+                .map_or(request_id, |row| {
+                    gents_desktop_core::client::session_turn_request(&requests, row)
+                        .request_id
+                        .clone()
+                })
         });
     let latest_request = latest_request_id
         .as_deref()
@@ -497,6 +507,13 @@ pub(super) fn build_session_snapshot_from_store_for_agent_with_transcript(
         .iter()
         .filter_map(|request| request.doc_id.as_deref().map(|doc_id| (doc_id, *request)))
         .collect();
+    let input_owners: HashMap<(String, String), &str> = requests
+        .iter()
+        .filter_map(|request| {
+            gents::lifecycle::input_message_owner(request)
+                .map(|owner| (owner, request.request_id.as_str()))
+        })
+        .collect();
     let mut observed_messages = transcript
         .messages
         .iter()
@@ -572,6 +589,21 @@ pub(super) fn build_session_snapshot_from_store_for_agent_with_transcript(
                 ),
             };
             let presentation = reconstructed.as_ref().map(present_message);
+            let input_text = match reconstructed.as_ref() {
+                Some(gents_protocol::message::Message::User { content }) => {
+                    let texts = content
+                        .iter()
+                        .filter_map(|item| match item {
+                            gents_protocol::message::UserContent::Text(text) => {
+                                Some(text.text.as_str())
+                            }
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>();
+                    (!texts.is_empty()).then(|| texts.join("\n"))
+                }
+                _ => None,
+            };
 
             MessageView {
                 message_key: row.message.message_key.clone(),
@@ -623,6 +655,13 @@ pub(super) fn build_session_snapshot_from_store_for_agent_with_transcript(
                 reconstruction_error,
                 denied_dependency_doc_id,
                 runtime_control: message_is_runtime_control(row, &requests_by_doc_id),
+                input_request_id: row.message.request_doc_id.as_ref().and_then(|doc| {
+                    input_owners
+                        .get(&(doc.clone(), row.message.message_key.clone()))
+                        .map(|id| (*id).to_owned())
+                }),
+                origin: message_origin(store, row, &requests_by_doc_id),
+                input_text,
                 timestamp: Some(row.message.created_at.clone()),
             }
         })
@@ -710,12 +749,48 @@ pub(super) fn build_session_snapshot_from_store_for_agent_with_transcript(
         || context_store.transcript(session_id),
         |did| context_store.transcript_for_agent(session_id, did),
     );
+    let same_requester = |request: &AgentRequestRow| {
+        session_row.is_none_or(|session| request.requester_did == session.requester_did)
+    };
+    let queued_requests = latest_request
+        .map(|turn| gents_desktop_core::client::queued_behind_turn(&requests, turn))
+        .unwrap_or_default();
+    let queued_turns = queued_requests
+        .iter()
+        .filter(|request| include_live_tail && same_requester(request))
+        .filter_map(|request| {
+            build_pending_turn(
+                store,
+                context_store,
+                agent_did,
+                session_id,
+                &request.request_id,
+            )
+        })
+        .collect::<Vec<_>>();
+    let folded_inputs = gents_desktop_core::client::folded_requests(
+        &requests,
+        session_row
+            .map(|session| session.requester_did.as_deref())
+            .unwrap_or_else(|| latest_request.and_then(|row| row.requester_did.as_deref())),
+    )
+    .into_iter()
+    .filter_map(|request| {
+        Some(crate::types::FoldedInputView {
+            request_id: request.request_id.clone(),
+            folded_into_request_id: gents::lifecycle::folded_into(request)?.to_owned(),
+        })
+    })
+    .collect::<Vec<_>>();
     let pending_turns = requests
         .iter()
         .enumerate()
         .filter_map(|(index, request)| {
             if !owner_absent(request)
-                || session_row.is_some_and(|session| request.requester_did != session.requester_did)
+                || !same_requester(request)
+                || queued_requests
+                    .iter()
+                    .any(|queued| queued.request_id == request.request_id)
             {
                 return None;
             }
@@ -824,6 +899,8 @@ pub(super) fn build_session_snapshot_from_store_for_agent_with_transcript(
         retry_eligibility,
         latest_request_outcome,
         pending_turn,
+        queued_turns,
+        folded_inputs,
         context,
         timeline_items,
         hydration: None,
@@ -1208,6 +1285,144 @@ mod tests {
     use crate::types::RenderedTimelineItem;
     use gents_desktop_core::client::ClientStoreRows;
     use gents_protocol::output::MessageRole;
+
+    /// A completed turn H published folded F; a later turn L is the tip page.
+    /// F's exact owner is H's folded entry, so it never reappears pending, and
+    /// loading H's page shows F once, carrying F as its input identity.
+    #[test]
+    fn a_published_folded_message_stays_owned_outside_and_on_its_original_page() {
+        let request = |id: &str, state, second: u32| AgentRequestRow {
+            purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
+            doc_id: Some(format!("doc-{id}")),
+            request_id: id.into(),
+            session_id: Some("session-1".into()),
+            agent_did: Some("did:test:amy".into()),
+            content: Some(format!("{id} text")),
+            lifecycle_state: Some(state),
+            created_at: Some(format!("2026-04-21T12:00:{second:02}Z")),
+            ..Default::default()
+        };
+        let folded = AgentRequestRow {
+            superseded_by_request: Some("head".into()),
+            superseded_by_request_doc_id: Some("doc-head".into()),
+            failure_reason: Some(gents::lifecycle::FOLDED_REASON.into()),
+            ..request("folded", RequestLifecycleState::Superseded, 1)
+        };
+        let mut rows = ClientStoreRows {
+            requests: vec![
+                request("head", RequestLifecycleState::Completed, 0),
+                folded,
+                request("later", RequestLifecycleState::Completed, 2),
+            ],
+            ..Default::default()
+        };
+        for (key, doc, sequence, role, text) in [
+            (
+                "authored:doc-head:prompt",
+                "doc-head",
+                1,
+                MessageRole::User,
+                "head text",
+            ),
+            (
+                "authored:doc-head:folded:doc-folded",
+                "doc-head",
+                2,
+                MessageRole::User,
+                "folded text",
+            ),
+            (
+                "answer-head",
+                "doc-head",
+                3,
+                MessageRole::Assistant,
+                "answer",
+            ),
+            (
+                "authored:doc-later:prompt",
+                "doc-later",
+                4,
+                MessageRole::User,
+                "later text",
+            ),
+        ] {
+            push_canonical_text_message(
+                &mut rows,
+                key,
+                "session-1",
+                Some(doc),
+                sequence,
+                role,
+                text,
+            );
+        }
+        let full = ClientStore::from_rows(rows.clone());
+        let mut ownership = gents_desktop_core::client::RequestPromptOwnership::default();
+        for (doc, first_sequence) in [("doc-head", 1), ("doc-folded", 2), ("doc-later", 4)] {
+            ownership.by_request_doc_id.insert(
+                doc.into(),
+                gents_desktop_core::client::RequestPromptFact {
+                    agent_did: "did:test:amy".into(),
+                    session_id: "session-1".into(),
+                    requester_did: None,
+                    materialized: true,
+                    first_sequence: Some(first_sequence),
+                },
+            );
+        }
+        let page = |sequences: &[u32]| {
+            let mut page_rows = rows.clone();
+            page_rows
+                .transcript_messages
+                .retain(|row| sequences.contains(&row.message.sequence));
+            ClientStore::from_rows(page_rows)
+        };
+        let snapshot_of = |page: &ClientStore, tip: bool| {
+            build_session_snapshot_from_store_for_agent_with_transcript(
+                &full,
+                page,
+                page,
+                None,
+                Some(&ownership),
+                true,
+                false,
+                false,
+                tip,
+                Some("did:test:amy"),
+                "session-1",
+                None,
+            )
+            .unwrap()
+        };
+        let tip = snapshot_of(&page(&[4]), true);
+        assert!(!tip
+            .timeline_items
+            .iter()
+            .any(|item| matches!(item, RenderedTimelineItem::PendingUserTurn { .. })));
+        let original = snapshot_of(&page(&[1, 2, 3]), false);
+        let inputs = original
+            .timeline_items
+            .iter()
+            .filter_map(|item| match item {
+                RenderedTimelineItem::UserMessage {
+                    input_request_id,
+                    content,
+                    ..
+                } => Some((input_request_id.clone(), content.clone())),
+                RenderedTimelineItem::PendingUserTurn { request_id, .. } => {
+                    panic!("{request_id} resurrected as pending")
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            inputs,
+            [
+                (Some("head".to_owned()), Some("head text".to_owned())),
+                (Some("folded".to_owned()), Some("folded text".to_owned())),
+            ]
+        );
+    }
 
     #[test]
     fn historical_pending_input_is_not_repeated_outside_its_visible_anchor() {

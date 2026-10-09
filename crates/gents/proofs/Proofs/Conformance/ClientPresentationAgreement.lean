@@ -17,7 +17,6 @@ def blockers : List (String × SendBlockedReason) :=
   , ("agentNotSelected", .agentNotSelected)
   , ("submittingRequest", .mutationInFlight)
   , ("waitingForRequestObservation", .awaitingObservation)
-  , ("awaitingTurnTerminality", .awaitingTurnTerminality .running)
   , ("behaviorUnavailable", .sessionBehaviorMismatch)
   , ("sessionMissingFromSnapshot", .sessionAbsent)
   , ("inconsistentTurnObservation", .inconsistentObservation)
@@ -29,6 +28,11 @@ def cases : List PresentationCase :=
     { name := s!"draft_{draftNonEmpty}_ready"
     , draftNonEmpty
     , canonical := .ready
+    , frontendReason := none
+    } ::
+    { name := s!"draft_{draftNonEmpty}_queue"
+    , draftNonEmpty
+    , canonical := .queue .running
     , frontendReason := none
     } :: blockers.map fun (frontendReason, reason) =>
       { name := s!"draft_{draftNonEmpty}_{frontendReason}"
@@ -47,18 +51,27 @@ def optionJson : Option String → String
 def expectedReason (c : PresentationCase) : Option String :=
   match adaptLocalDraft c.draftNonEmpty c.canonical with
   | .ready => none
+  | .queue _ => none
   | .blocked .composerEmpty => some "composerEmpty"
   | .blocked _ => c.frontendReason
 
 def expectedKind (c : PresentationCase) : String :=
   match adaptLocalDraft c.draftNonEmpty c.canonical with
   | .ready => "ready"
+  | .queue _ => "queue"
+  | .blocked _ => "disabled"
+
+def canonicalKind (c : PresentationCase) : String :=
+  match c.canonical with
+  | .ready => "ready"
+  | .queue _ => "queue"
   | .blocked _ => "disabled"
 
 def PresentationCase.toJson (c : PresentationCase) : String :=
   "{" ++
     "\"name\":" ++ jsonString c.name ++ "," ++
     "\"draft_non_empty\":" ++ toString c.draftNonEmpty ++ "," ++
+    "\"canonical_kind\":" ++ jsonString (canonicalKind c) ++ "," ++
     "\"canonical_reason\":" ++ optionJson c.frontendReason ++ "," ++
     "\"expected_kind\":" ++ jsonString (expectedKind c) ++ "," ++
     "\"expected_reason\":" ++ optionJson (expectedReason c) ++

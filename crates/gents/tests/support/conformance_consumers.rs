@@ -1015,6 +1015,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_live_cursor_contract",
         },
         ConformanceConsumer::RustTest {
+            id: "gents_desktop_bridge::snapshot::tests::session_state::session_snapshot_binds_generated_session_turn_cases",
+            package: "gents-desktop-bridge",
+            source_path: "crates/gents-desktop-bridge/src/snapshot/tests/session_state.rs",
+            module_path: "gents_desktop_bridge::snapshot::tests::session_state",
+            function: "session_snapshot_binds_generated_session_turn_cases",
+        },
+        ConformanceConsumer::RustTest {
             id: "gents_desktop_bridge::snapshot::tests::session_state::session_snapshot_binds_request_lifecycle_operator_ui_cases",
             package: "gents-desktop-bridge",
             source_path: "crates/gents-desktop-bridge/src/snapshot/tests/session_state.rs",

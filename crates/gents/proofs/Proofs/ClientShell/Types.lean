@@ -4,12 +4,22 @@ abbrev PeerId := Nat
 
 abbrev AgentDid := Nat
 
+/-- `latestObservedRequest` is the request of the session's current turn and
+`latestTurn` its state. `queuedRequests` are requests admitted behind that
+turn and not yet claimed, in queue order. They do not become the current turn
+while it is non-terminal: the runtime claims them after it, and a claim folds
+the queued user messages directly behind it into the claimed turn
+(`SessionQueue.claimFolding`). `foldedRequests` are the requests a claim
+folded; each is answered by its claimed request and is never a turn.
+`SessionTurn.observe` computes all three from the session's request rows. -/
 structure SessionObservation where
   sessionId             : SessionId
   agentDid              : AgentDid
   behaviorId            : Option BehaviorId
   latestObservedRequest : Option RequestId
   latestTurn            : Option ClientTurnState
+  queuedRequests        : List RequestId := []
+  foldedRequests        : List RequestId := []
   deriving DecidableEq, Repr
 
 /-- Session observations available to the client shell. Transport selection

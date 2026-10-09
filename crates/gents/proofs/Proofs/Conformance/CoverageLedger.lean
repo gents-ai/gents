@@ -1048,6 +1048,11 @@ def caseCoverage : List CoverageEntry :=
       "gents_desktop_bridge::snapshot::tests::session_state::session_snapshot_projection_consumes_generated_client_shell_contract_cases")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
+      "client_session_turn_cases"
+      "ClientSessionTurnCases"
+      "gents_desktop_bridge::snapshot::tests::session_state::session_snapshot_binds_generated_session_turn_cases")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
       "client_behavior_readiness_cases"
       "ClientBehaviorReadinessCases"
       "conformance::client_runtime::generated_behavior_readiness_cases_drive_the_production_projector")

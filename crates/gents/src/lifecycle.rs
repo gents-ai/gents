@@ -142,6 +142,98 @@ pub fn folded_into(row: &gents_protocol::row::AgentRequestRow) -> Option<&str> {
     .filter(|head| !head.trim().is_empty())
 }
 
+/// The transcript key under which the claimed request publishes a message
+/// folded into it.
+pub fn folded_message_key(claimed_request_doc_id: &str, folded_request_doc_id: &str) -> String {
+    crate::session::canonical_rows::authored_message_key(
+        claimed_request_doc_id,
+        &queue::folded_input_key(folded_request_doc_id),
+    )
+}
+
+/// The physical request and transcript key under which a request's input is
+/// published: its own authored prompt, or, once folded, its folded entry under
+/// the request that published it. A row is folded only in the transaction
+/// that publishes that entry; a selected message stays pending until then.
+pub fn input_message_owner(row: &gents_protocol::row::AgentRequestRow) -> Option<(String, String)> {
+    let doc = row
+        .doc_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|doc| !doc.is_empty())?;
+    if folded_into(row).is_some() {
+        let owner = row
+            .superseded_by_request_doc_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|owner| !owner.is_empty())?;
+        return Some((owner.to_owned(), folded_message_key(owner, doc)));
+    }
+    Some((
+        doc.to_owned(),
+        crate::session::canonical_rows::authored_message_key(doc, "prompt"),
+    ))
+}
+
+/// What put a request's content into its session. Only `Person` is typed by
+/// the session's requester; every other origin enters the session without the
+/// person typing it, and its content is still the model's user input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequestOrigin<'a> {
+    Person,
+    /// An `agent_message` or `agent_new` call in another session.
+    SessionMessage {
+        parent_request_doc_id: Option<&'a str>,
+    },
+    /// A trigger delivery: event, schedule or manual Task run.
+    Trigger {
+        trigger_id: &'a str,
+        trigger_kind: Option<&'a str>,
+    },
+    /// The durable goal controller continuing its objective.
+    GoalContinuation {
+        goal_id: Option<&'a str>,
+        sequence: Option<i64>,
+    },
+    /// A wake that delivers finished background work.
+    BackgroundCompletion,
+}
+
+pub fn request_origin(row: &gents_protocol::row::AgentRequestRow) -> RequestOrigin<'_> {
+    fn present(value: &Option<String>) -> Option<&str> {
+        value
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+    let input = row.input.as_ref();
+    let source = input
+        .and_then(|input| input.queue.as_ref())
+        .map(|queue| queue.source);
+    let continuation = input.and_then(|input| input.goal_continuation.as_ref());
+    if continuation.is_some() || source == Some(queue::QueueSource::Goal) {
+        return RequestOrigin::GoalContinuation {
+            goal_id: present(&row.caused_by_trigger_id),
+            sequence: continuation.map(|continuation| continuation.sequence),
+        };
+    }
+    if source == Some(queue::QueueSource::BackgroundCompletion) {
+        return RequestOrigin::BackgroundCompletion;
+    }
+    if present(&row.caused_by_parent_tool_call_doc_id).is_some() {
+        return RequestOrigin::SessionMessage {
+            parent_request_doc_id: present(&row.caused_by_parent_request_doc_id),
+        };
+    }
+    if let Some(trigger_id) = present(&row.caused_by_trigger_id) {
+        return RequestOrigin::Trigger {
+            trigger_id,
+            trigger_kind: present(&row.caused_by_trigger_kind),
+        };
+    }
+    RequestOrigin::Person
+}
+
 /// Whether the request represents a logical user turn.
 pub fn request_owns_user_turn(input: &gents_protocol::request_input::RequestInput) -> bool {
     input.queue.as_ref().is_none_or(|hints| {

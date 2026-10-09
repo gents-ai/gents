@@ -17,8 +17,9 @@ import { presentedComposerSendStatus } from "../../src/ui/screens/SessionScreen"
 type GeneratedPresentationCase = {
   name: string;
   draft_non_empty: boolean;
+  canonical_kind: "ready" | "queue" | "disabled";
   canonical_reason: string | null;
-  expected_kind: "ready" | "disabled";
+  expected_kind: "ready" | "queue" | "disabled";
   expected_reason: string | null;
 };
 
@@ -96,13 +97,15 @@ describe("ClientShell presentation agreement", () => {
     }
     for (const contractCase of cases) {
       const canonical: ChatShellProjection["nonEmptyContentSendStatus"] =
-        contractCase.canonical_reason
+        contractCase.canonical_kind === "disabled"
           ? {
               kind: "disabled",
               reason: contractCase.canonical_reason as never,
               hint: `canonical:${contractCase.canonical_reason}`,
             }
-          : { kind: "ready" };
+          : contractCase.canonical_kind === "queue"
+            ? { kind: "queue", turnState: "running", hint: "canonical:queue" }
+            : { kind: "ready" };
       const actual = presentedComposerSendStatus(
         contractCase.draft_non_empty ? "message" : "",
         canonical,
@@ -111,7 +114,7 @@ describe("ClientShell presentation agreement", () => {
       expect(actual.kind === "disabled" ? actual.reason : null, contractCase.name).toBe(
         contractCase.expected_reason,
       );
-      if (contractCase.draft_non_empty && canonical.kind === "disabled") {
+      if (contractCase.draft_non_empty && canonical.kind !== "ready") {
         expect(actual, contractCase.name).toBe(canonical);
       }
     }

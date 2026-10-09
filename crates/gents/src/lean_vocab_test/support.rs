@@ -133,6 +133,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) frontend_client_shell_cases: Vec<LeanClientShellCase>,
     pub(crate) desktop_client_shell_case_count: usize,
     pub(crate) desktop_client_shell_cases: Vec<LeanClientShellCase>,
+    pub(crate) client_session_turn_cases: Vec<LeanSessionTurnCase>,
     pub(crate) request_lifecycle_operator_ui_cases: Vec<LeanClientShellCase>,
     pub(crate) client_live_delta_cases: Vec<serde_json::Value>,
     pub(crate) runtime_reconcile_cases: Vec<LeanRuntimeReconcileCase>,
@@ -1424,6 +1425,10 @@ pub(crate) fn lean_client_shell_case(name: &str) -> &'static LeanClientShellCase
 
 pub(crate) fn lean_desktop_client_shell_cases() -> &'static [LeanClientShellCase] {
     &lean_contract_snapshot().desktop_client_shell_cases
+}
+
+pub(crate) fn lean_client_session_turn_cases() -> &'static [LeanSessionTurnCase] {
+    &lean_contract_snapshot().client_session_turn_cases
 }
 
 pub(crate) fn lean_request_lifecycle_operator_ui_cases() -> &'static [LeanClientShellCase] {
